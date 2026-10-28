@@ -93,14 +93,28 @@ class GroupModel(_Strict):
         if self.region is None:
             return self.duty_cycle
         from lsim.regions import PROFILES
-        profile = PROFILES[self.region]
-        return min(self.duty_cycle,
-                   profile.duty_cycle_for(self.channel_freq_hz, self.tx_power_dbm))
+        limit = PROFILES[self.region].duty_cycle_limit(self.channel_freq_hz, self.tx_power_dbm)
+        return self.duty_cycle if limit is None else min(self.duty_cycle, limit)
 
     @model_validator(mode="after")
     def _region_known_and_in_plan(self) -> "GroupModel":
         if self.region is None:
             return self
+        from lsim.regions import PROFILES
+        if self.region not in PROFILES:
+            raise ValueError(f"région inconnue : {self.region}")
+        profile = PROFILES[self.region]
+        self.effective_duty_cycle  # lève si le canal est hors sous-bandes
+        if profile.channels:
+            ch = profile.channel_at(self.channel_freq_hz)
+            if ch is None:
+                raise ValueError(f"{self.region} : canal {self.channel_freq_hz} Hz absent du plan")
+            if (profile.power_basis == "eirp" and ch.max_eirp_dbm is not None
+                    and self.tx_power_dbm > ch.max_eirp_dbm + 1e-9):
+                raise ValueError(
+                    f"{self.region} : PIRE {self.tx_power_dbm} dBm au-dessus de la limite "
+                    f"{ch.max_eirp_dbm} dBm du canal")
+        return self
         from lsim.regions import PROFILES
         if self.region not in PROFILES:
             raise ValueError(f"région inconnue : {self.region}")

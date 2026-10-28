@@ -56,20 +56,63 @@ class SubBand:
 
 
 @dataclass(frozen=True)
+class DiscreteChannel:
+    """Canal discret (fréquence centrale, largeur, plage de DR, PIRE optionnelle)."""
+
+    freq_hz: int
+    bw_hz: int                       # 125000, 250000 ou 500000
+    dr_min: int
+    dr_max: int
+    uplink: bool
+    max_eirp_dbm: Optional[float] = None   # None = non documentée dans la source
+    is_default: bool = False               # canal obligatoire (join / diffusion)
+
+    def __post_init__(self) -> None:
+        if not (isinstance(self.freq_hz, int) and self.freq_hz > 0):
+            raise ValueError("fréquence de canal : entier positif en Hz requis")
+        if self.bw_hz not in (125_000, 250_000, 500_000):
+            raise ValueError(f"largeur de canal non LoRa : {self.bw_hz}")
+        if not (isinstance(self.dr_min, int) and isinstance(self.dr_max, int)
+                and 0 <= self.dr_min <= self.dr_max <= 15):
+            raise ValueError(f"plage de DR invalide : {self.dr_min}..{self.dr_max}")
+        if self.max_eirp_dbm is not None and not math.isfinite(self.max_eirp_dbm):
+            raise ValueError("PIRE de canal non finie")
+
+
+POWER_BASES = ("eirp", "conducted", None)
+
+
+@dataclass(frozen=True)
 class RegionProfile:
-    """Profil régional. `source` est obligatoire : référence officielle vérifiée."""
+    """Profil régional. `source` est obligatoire : référence officielle vérifiée.
+
+    `sub_bands` : règles de duty cycle par plage de fréquences (ETSI, etc.).
+    `channels`  : plan de canaux discrets (LoRaWAN Regional Parameters).
+    `power_basis` : base de la PIRE des canaux : "eirp", "conducted" ou None (inconnue).
+    `dwell_time_ms` : temps d'émission maximal par trame (FCC 400 ms), sinon None.
+    `recommended_interval_s` : intervalle recommandé entre émissions (AU915, UplinkDwellTime=1).
+    """
 
     code: str
     source: str
     sub_bands: tuple[SubBand, ...] = field(default_factory=tuple)
+    channels: tuple[DiscreteChannel, ...] = field(default_factory=tuple)
+    power_basis: Optional[str] = None
+    dwell_time_ms: Optional[int] = None
+    recommended_interval_s: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("code de région vide")
         if not self.source.strip():
             raise ValueError(f"région {self.code} : source officielle requise")
-        if not self.sub_bands:
-            raise ValueError(f"région {self.code} : au moins une sous-bande")
+        if not self.sub_bands and not self.channels:
+            raise ValueError(f"région {self.code} : au moins une sous-bande ou un canal")
+        if self.power_basis not in POWER_BASES:
+            raise ValueError(f"région {self.code} : base de puissance inconnue")
+        if self.dwell_time_ms is not None and not (isinstance(self.dwell_time_ms, int)
+                                                   and self.dwell_time_ms > 0):
+            raise ValueError(f"région {self.code} : dwell time invalide")
 
     def applicable(self, freq_hz: int, erp_dbm: float) -> tuple[SubBand, ...]:
         return tuple(b for b in self.sub_bands if b.applies(freq_hz, erp_dbm))
@@ -87,6 +130,19 @@ class RegionProfile:
         if band is None:
             raise ValueError(f"{self.code} : {freq_hz} Hz à {eirp_dbm} dBm EIRP hors plan")
         return band.duty_cycle
+
+    def duty_cycle_limit(self, freq_hz: int, eirp_dbm: float) -> Optional[float]:
+        """Duty cycle réglementaire, ou None si le profil n'en définit pas (sous-bandes absentes)."""
+        if not self.sub_bands:
+            return None
+        return self.duty_cycle_for(freq_hz, eirp_dbm)
+
+    def channel_at(self, freq_hz: int, uplink: bool = True) -> Optional[DiscreteChannel]:
+        """Canal discret à cette fréquence exacte, ou None."""
+        for ch in self.channels:
+            if ch.freq_hz == freq_hz and ch.uplink == uplink:
+                return ch
+        return None
 
 
 def load_profile(code: str, source: Optional[str], bands: Iterable[SubBand]) -> RegionProfile:
@@ -116,5 +172,101 @@ EU868 = load_profile("EU868", EU868_SOURCE, (
     SubBand("QP", 869_700_000, 870_000_000, 1.0, mw_to_dbm(5.0)),
 ))
 
-# Profils livrés. Toute région ajoutée doit passer par load_profile avec sa source.
-PROFILES: dict[str, RegionProfile] = {"EU868": EU868}
+# ------------------------------------------- Plans de canaux (RP002-1.0.0)
+# Toutes les valeurs ci-dessous viennent de LoRaWAN Regional Parameters RP002-1.0.0
+# (LoRa Alliance, 1er novembre 2019). Quand la source ne donne pas une PIRE, elle
+# reste None : aucune valeur n'est inventée.
+
+RP002 = "LoRaWAN Regional Parameters RP002-1.0.0 (2019)"
+
+
+def _ch(freq, bw, dr_min, dr_max, *, uplink=True, eirp=None, default=False):
+    return DiscreteChannel(freq, bw, dr_min, dr_max, uplink, eirp, default)
+
+
+# US902-928 (§2.5.2, §2.5.3) : 64 × 125 kHz (DR0–3), 8 × 500 kHz (DR4), 8 descendants (DR8–13).
+# PIRE documentée en puissance conduite : 30 dBm en mode FHSS (125 kHz, ≥ 50 canaux),
+# 26 dBm en mode DTS (500 kHz). Dwell time 400 ms (FCC).
+US915_CHANNELS = (
+    tuple(_ch(902_300_000 + 200_000 * k, 125_000, 0, 3, eirp=30.0) for k in range(64))
+    + tuple(_ch(903_000_000 + 1_600_000 * k, 500_000, 4, 4, eirp=26.0) for k in range(8))
+    + tuple(_ch(923_300_000 + 600_000 * k, 500_000, 8, 13, uplink=False) for k in range(8))
+)
+US915 = RegionProfile(
+    code="US915", source=RP002 + " §2.5.2–2.5.3 (FCC, dwell time 400 ms)", channels=US915_CHANNELS,
+    power_basis="conducted", dwell_time_ms=400,
+)
+
+# AU915-928 (§2.8.2, §2.8.3) : 64 × 125 kHz (DR0–5), 8 × 500 kHz (DR6), 8 descendants.
+# PIRE maximale documentée : 30 dBm EIRP. UplinkDwellTime = 1 : 20 s recommandées.
+AU915_CHANNELS = (
+    tuple(_ch(915_200_000 + 200_000 * k, 125_000, 0, 5, eirp=30.0) for k in range(64))
+    + tuple(_ch(915_900_000 + 1_600_000 * k, 500_000, 6, 6, eirp=30.0) for k in range(8))
+    + tuple(_ch(923_300_000 + 600_000 * k, 500_000, 8, 13, uplink=False) for k in range(8))
+)
+AU915 = RegionProfile(
+    code="AU915", source=RP002 + " §2.8.2–2.8.3 (PIRE 30 dBm ; UplinkDwellTime, 20 s recommandées)",
+    channels=AU915_CHANNELS, power_basis="eirp", recommended_interval_s=20.0,
+)
+
+# AS923 (§2.10.2, §2.10.3) : canaux par défaut 923,2 et 923,4 MHz (DR0–5, duty cycle < 1 %).
+# PIRE par défaut 16 dBm EIRP ; limites par pays et LBT (Japon, ARIB STD-T108) hors RP002.
+AS923 = RegionProfile(
+    code="AS923",
+    source=RP002 + " §2.10.2–2.10.3 (canaux par défaut ; limites par pays dans les textes locaux)",
+    channels=(
+        _ch(923_200_000, 125_000, 0, 5, eirp=None, default=True),
+        _ch(923_400_000, 125_000, 0, 5, eirp=None, default=True),
+    ),
+    power_basis=None,
+)
+
+# KR920-923 (§2.11.2, §2.11.3) : 13 canaux 920,9 à 923,3 MHz (DR0–5).
+# PIRE end-device : 10 dBm (920,9–921,9 MHz) et 14 dBm (922,1–923,3 MHz). LBT AFA imposé.
+KR920_CHANNELS = tuple(
+    _ch(920_900_000 + 200_000 * k, 125_000, 0, 5,
+        eirp=(10.0 if 920_900_000 + 200_000 * k <= 921_900_000 else 14.0),
+        default=(922_100_000 <= 920_900_000 + 200_000 * k <= 922_500_000))
+    for k in range(13)
+)
+KR920 = RegionProfile(
+    code="KR920",
+    source=RP002 + " §2.11.2 (tableau 68 : PIRE end-device) et §2.11.3 (canaux par défaut 922,1/922,3/922,5 MHz)",
+    channels=KR920_CHANNELS, power_basis="eirp",
+)
+
+# IN865-867 (§2.12.2, §2.12.3) : canaux par défaut, aucune limite de dwell time ni de duty cycle.
+# PIRE maximale non extraite de RP002 : à compléter depuis le texte réglementaire indien.
+IN865 = RegionProfile(
+    code="IN865",
+    source=RP002 + " §2.12.2–2.12.3 (canaux par défaut ; PIRE à compléter, texte indien)",
+    channels=(
+        _ch(865_062_500, 125_000, 0, 5, eirp=None, default=True),
+        _ch(865_402_500, 125_000, 0, 5, eirp=None, default=True),
+        _ch(865_985_000, 125_000, 0, 5, eirp=None, default=True),
+    ),
+    power_basis=None,
+)
+
+# RU864-870 (§2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5, duty cycle < 1 %).
+# Sous-bandes et PIRE par le texte russe : à compléter.
+RU864 = RegionProfile(
+    code="RU864",
+    source=RP002 + " §2.13.2–2.13.3 (canaux par défaut ; sous-bandes et PIRE à compléter, texte russe)",
+    channels=(
+        _ch(868_900_000, 125_000, 0, 5, eirp=None, default=True),
+        _ch(869_100_000, 125_000, 0, 5, eirp=None, default=True),
+    ),
+    power_basis=None,
+)
+
+# Profils livrés. Toute région ajoutée doit passer par load_profile ou RegionProfile avec sa source.
+PROFILES: dict[str, RegionProfile] = {
+    "EU868": EU868,
+    "US915": US915,
+    "AU915": AU915,
+    "AS923": AS923,
+    "KR920": KR920,
+    "IN865": IN865,
+    "RU864": RU864,
+}

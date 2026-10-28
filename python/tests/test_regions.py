@@ -128,3 +128,107 @@ def test_group_region_rejects_channel_outside_plan():
 def test_group_unknown_region_rejected():
     with pytest.raises(ValueError):
         _group(region="US915", channel_freq_hz=868_100_000)
+
+
+# ------------------------------------------- plans de canaux RP002-1.0.0
+
+import pytest as _pt  # noqa: E402  (import local aux blocs de canaux)
+from lsim.regions import DiscreteChannel, US915, AU915, AS923, KR920, IN865, RU864  # noqa: E402
+
+
+@_pt.mark.parametrize("prof", [US915, AU915, AS923, KR920, IN865, RU864])
+def test_every_new_profile_cites_rp002(prof):
+    assert "RP002-1.0.0" in prof.source
+
+
+def test_channel_validation_refuses_invalid_values():
+    with _pt.raises(ValueError):
+        DiscreteChannel(902_300_000, 300_000, 0, 3, True)      # largeur non LoRa
+    with _pt.raises(ValueError):
+        DiscreteChannel(902_300_000, 125_000, 4, 3, True)      # DR inversés
+    with _pt.raises(ValueError):
+        DiscreteChannel(902.3e6, 125_000, 0, 3, True)          # float refusé
+
+
+def test_us915_plan_matches_rp002_frequencies():
+    up125 = [c for c in US915.channels if c.uplink and c.bw_hz == 125_000]
+    up500 = [c for c in US915.channels if c.uplink and c.bw_hz == 500_000]
+    down = [c for c in US915.channels if not c.uplink]
+    assert len(up125) == 64 and len(up500) == 8 and len(down) == 8
+    assert up125[0].freq_hz == 902_300_000 and up125[-1].freq_hz == 914_900_000
+    assert up500[0].freq_hz == 903_000_000 and up500[-1].freq_hz == 914_200_000
+    assert down[0].freq_hz == 923_300_000 and down[-1].freq_hz == 927_500_000
+    assert all((c.dr_min, c.dr_max) == (0, 3) for c in up125)
+    assert all(c.dr_min == c.dr_max == 4 for c in up500)
+    assert all((c.dr_min, c.dr_max) == (8, 13) for c in down)
+
+
+def test_us915_dwell_time_and_conducted_power():
+    assert US915.dwell_time_ms == 400
+    assert US915.power_basis == "conducted"
+    assert US915.channel_at(902_300_000).max_eirp_dbm == pytest.approx(30.0)
+    assert US915.channel_at(903_000_000).max_eirp_dbm == pytest.approx(26.0)
+    assert US915.duty_cycle_limit(902_300_000, 14.0) is None  # pas de duty cycle
+
+
+def test_au915_plan_and_recommended_interval():
+    assert AU915.channel_at(915_200_000).freq_hz == 915_200_000
+    assert AU915.channel_at(927_800_000) is not None
+    assert AU915.channel_at(915_900_000).dr_min == 6
+    assert AU915.channel_at(927_100_000, uplink=True) is not None
+    assert AU915.recommended_interval_s == pytest.approx(20.0)
+    assert AU915.power_basis == "eirp"
+
+
+def test_as923_defaults_and_no_documented_subband():
+    defaults = [c.freq_hz for c in AS923.channels if c.is_default]
+    assert defaults == [923_200_000, 923_400_000]
+    assert AS923.duty_cycle_limit(923_200_000, 16.0) is None
+    assert AS923.power_basis is None  # limites par pays : texte local requis
+
+
+def test_kr920_eirp_by_subrange_and_defaults():
+    assert KR920.channel_at(920_900_000).max_eirp_dbm == pytest.approx(10.0)
+    assert KR920.channel_at(921_900_000).max_eirp_dbm == pytest.approx(10.0)
+    assert KR920.channel_at(922_100_000).max_eirp_dbm == pytest.approx(14.0)
+    assert KR920.channel_at(923_300_000).max_eirp_dbm == pytest.approx(14.0)
+    assert len(KR920.channels) == 13
+    assert [c.freq_hz for c in KR920.channels if c.is_default] == [922_100_000, 922_300_000, 922_500_000]
+
+
+def test_in865_and_ru864_defaults_without_documented_power():
+    assert [c.freq_hz for c in IN865.channels] == [865_062_500, 865_402_500, 865_985_000]
+    assert all(c.max_eirp_dbm is None for c in IN865.channels)
+    assert [c.freq_hz for c in RU864.channels] == [868_900_000, 869_100_000]
+    assert all(c.max_eirp_dbm is None for c in RU864.channels)
+
+
+def test_every_profile_is_registered():
+    from lsim.regions import PROFILES
+    assert set(PROFILES) == {"EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"}
+
+
+# ------------------------------------------- liaison scénario -> canaux
+
+def test_scenario_us915_channel_must_exist_in_plan():
+    _group(region="US915", channel_freq_hz=902_300_000)
+    with pytest.raises(ValueError):
+        _group(region="US915", channel_freq_hz=902_250_000)     # hors grille
+    with pytest.raises(ValueError):
+        _group(region="US915", channel_freq_hz=923_300_000)     # canal descendant seulement
+
+
+def test_scenario_au915_eirp_above_channel_limit_refused():
+    _group(region="AU915", channel_freq_hz=915_200_000, tx_power_dbm=30.0)
+    with pytest.raises(ValueError):
+        _group(region="AU915", channel_freq_hz=915_200_000, tx_power_dbm=31.0)
+
+
+def test_scenario_us915_conducted_power_not_checked_against_eirp():
+    # Base conduite : la PIRE de scénario n'est pas comparée à la limite conduite.
+    _group(region="US915", channel_freq_hz=902_300_000, tx_power_dbm=36.0)
+
+
+def test_scenario_as923_keeps_declared_duty_cycle():
+    g = _group(region="AS923", channel_freq_hz=923_200_000, duty_cycle=0.2)
+    assert g.effective_duty_cycle == pytest.approx(0.2)
