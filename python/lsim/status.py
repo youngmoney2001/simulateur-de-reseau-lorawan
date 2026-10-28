@@ -64,8 +64,12 @@ _NAMES = {
     703: "registre : échec cryptographique",
     704: "registre : compteur non croissant (rejeu)",
     705: "registre : capacité atteinte (nouveau dispositif refusé)",
-    706: "registre : handle inconnu ou fermé",
-    707: "registre : paramètre invalide",
+    706: "registre : tampon de sortie trop petit",
+    707: "registre : sauvegarde falsifiée ou clé d'intégrité fausse (rien chargé)",
+    708: "registre : format de sauvegarde inconnu",
+    709: "registre : sauvegarde incohérente (tailles, doublons)",
+    740: "registre : handle inconnu ou fermé",
+    741: "registre : paramètre invalide",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

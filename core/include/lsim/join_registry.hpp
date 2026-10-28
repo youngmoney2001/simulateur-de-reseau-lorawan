@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <vector>
 
 #include "lsim/join.hpp"
 #include "lsim/rejoin.hpp"
@@ -28,6 +29,10 @@ enum class RegistryStatus : std::int32_t {
     CryptoFailure = 3,
     Replayed = 4,         // compteur non croissant
     CapacityExceeded = 5, // trop de dispositifs
+    BufferTooSmall = 6,   // tampon de sortie insuffisant
+    IntegrityFailure = 7, // MIC de la sauvegarde faux : rien n'est chargé
+    UnsupportedFormat = 8,// magic ou version inconnue
+    CorruptState = 9,     // structure incohérente (tailles, doublons, flags)
 };
 
 inline constexpr std::size_t kMaxRegistryDevices = 10'000;
@@ -52,6 +57,16 @@ public:
     void on_join_accepted(const std::array<std::uint8_t, 8>& dev_eui);
 
     std::size_t device_count() const { return joins_.size() + rjcount0_.size(); }
+    std::size_t max_devices() const { return max_devices_; }
+
+    // Sauvegarde complète, déterministe (ordre des clés), protégée par un MIC AES-CMAC
+    // calculé avec `integrity_key`. Format : voir join_registry.cpp.
+    RegistryStatus export_state(const crypto::Key128& integrity_key, std::vector<std::uint8_t>& out) const;
+
+    // Chargement : le MIC est vérifié avant tout parsing ; `out` n'est remplacé
+    // qu'après un import complet et cohérent.
+    static RegistryStatus import_state(const std::uint8_t* in, std::size_t len,
+                                       const crypto::Key128& integrity_key, JoinRegistry& out);
 
 private:
     using JoinKey = std::array<std::uint8_t, 16>;  // JoinEUI | DevEUI

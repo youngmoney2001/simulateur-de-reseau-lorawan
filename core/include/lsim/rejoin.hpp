@@ -65,6 +65,13 @@ public:
         last_ = 0;
     }
     bool has_last() const { return has_last_; }
+    // Restauration d'un état sauvegardé (import du registre uniquement).
+    static Counter16Guard restore(bool has, std::uint16_t value) {
+        Counter16Guard g;
+        g.has_last_ = has;
+        g.last_ = has ? value : 0;
+        return g;
+    }
     std::uint16_t last() const { return last_; }
 
 private:

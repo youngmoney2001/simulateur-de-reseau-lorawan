@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "check.hpp"
 #include "lsim/join.hpp"
@@ -141,5 +142,67 @@ void run_join_registry_tests() {
         auto a2 = join_request(nwk, 2, 0xE1);
         CHECK_EQ(static_cast<int>(reg.accept_join_request(a2.data(), a2.size(), nwk, out)),
                  static_cast<int>(RegistryStatus::Ok));
+    }
+
+    // --- Persistance : aller-retour conserve la protection anti-rejeu.
+    {
+        const Key128 nwk = key_of(0x01);
+        const Key128 ikey = key_of(0x7A);
+        JoinRegistry reg(50);
+        JoinRequestFields out;
+        auto m5 = join_request(nwk, 5, 0xF1);
+        CHECK_EQ(static_cast<int>(reg.accept_join_request(m5.data(), m5.size(), nwk, out)),
+                 static_cast<int>(RegistryStatus::Ok));
+        Rejoin02Fields r0;
+        const Key128 s = key_of(0x02);
+        std::uint8_t w[kRejoin02Size];
+        std::size_t n = 0;
+        CHECK_EQ(static_cast<int>(encode_rejoin_02(rejoin02(0xF1, 9), s, w, sizeof w, n)),
+                 static_cast<int>(RejoinStatus::Ok));
+        CHECK_EQ(static_cast<int>(reg.accept_rejoin_02(w, n, s, r0)), static_cast<int>(RegistryStatus::Ok));
+
+        std::vector<std::uint8_t> blob;
+        CHECK_EQ(static_cast<int>(reg.export_state(ikey, blob)), static_cast<int>(RegistryStatus::Ok));
+        std::vector<std::uint8_t> blob2;
+        CHECK_EQ(static_cast<int>(reg.export_state(ikey, blob2)), static_cast<int>(RegistryStatus::Ok));
+        CHECK_TRUE(blob == blob2);  // sortie déterministe
+
+        JoinRegistry restored(1);
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(blob.data(), blob.size(), ikey, restored)),
+                 static_cast<int>(RegistryStatus::Ok));
+        CHECK_EQ(restored.max_devices(), std::size_t{50});
+        CHECK_EQ(restored.device_count(), std::size_t{2});
+        // Rejeux refusés après restauration.
+        CHECK_EQ(static_cast<int>(restored.accept_join_request(m5.data(), m5.size(), nwk, out)),
+                 static_cast<int>(RegistryStatus::Replayed));
+        CHECK_EQ(static_cast<int>(restored.accept_rejoin_02(w, n, s, r0)), static_cast<int>(RegistryStatus::Replayed));
+        // Nonce suivant accepté.
+        auto m6 = join_request(nwk, 6, 0xF1);
+        CHECK_EQ(static_cast<int>(restored.accept_join_request(m6.data(), m6.size(), nwk, out)),
+                 static_cast<int>(RegistryStatus::Ok));
+    }
+    // --- Sauvegarde falsifiée, mauvaise clé, tronquée : rien n'est chargé.
+    {
+        const Key128 ikey = key_of(0x7A);
+        JoinRegistry reg;
+        std::vector<std::uint8_t> blob;
+        CHECK_EQ(static_cast<int>(reg.export_state(ikey, blob)), static_cast<int>(RegistryStatus::Ok));
+        JoinRegistry target(3);
+        std::vector<std::uint8_t> tampered = blob;
+        tampered[10] ^= 0x01;  // max_devices altéré : MIC faux
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(tampered.data(), tampered.size(), ikey, target)),
+                 static_cast<int>(RegistryStatus::IntegrityFailure));
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(blob.data(), blob.size(), key_of(0x7B), target)),
+                 static_cast<int>(RegistryStatus::IntegrityFailure));
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(blob.data(), blob.size() - 1  /* registre vide : 36 o minimum */, ikey, target)),
+                 static_cast<int>(RegistryStatus::Malformed));
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(blob.data(), 10, ikey, target)),
+                 static_cast<int>(RegistryStatus::Malformed));
+        std::vector<std::uint8_t> bad_magic = blob;
+        bad_magic[0] = 'X';
+        CHECK_EQ(static_cast<int>(JoinRegistry::import_state(bad_magic.data(), bad_magic.size(), ikey, target)),
+                 static_cast<int>(RegistryStatus::UnsupportedFormat));
+        // Cible inchangée après échecs.
+        CHECK_EQ(target.max_devices(), std::size_t{3});
     }
 }

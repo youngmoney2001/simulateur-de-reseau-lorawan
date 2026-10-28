@@ -9,7 +9,9 @@ strictement croissant ; un MIC faux ne modifie jamais l'état. Les clés sont pa
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
+from pathlib import Path
 
 from lsim._native import LIB, _CJoinRequest, _CRejoin02, _CRejoin1, _U8P
 from lsim.lora import StatusError
@@ -17,6 +19,7 @@ from lsim.rejoin import Rejoin02, Rejoin1
 from lsim.security import JoinRequest
 
 MAX_DEVICES = 10_000
+_STATUS_BUFFER_TOO_SMALL = 706  # 700 + RegistryStatus::BufferTooSmall
 
 
 def _bytes(name: str, value: bytes, size: int) -> ctypes.Array:
@@ -105,3 +108,57 @@ class JoinRegistry:
         with self._lock:
             _check(LIB.lsim_registry_device_count(self._handle, ctypes.byref(count)))
         return count.value
+
+    def export_state(self, integrity_key: bytes) -> bytes:
+        """Sauvegarde protégée par AES-CMAC (clé d'intégrité de 16 octets, fournie par l'appelant)."""
+        key = _bytes("integrity_key", integrity_key, 16)
+        kp = ctypes.cast(key, _U8P)
+        needed = ctypes.c_size_t(0)
+        with self._lock:
+            # Première passe : taille requise (BufferTooSmall attendu, sans écriture).
+            status = LIB.lsim_registry_export(self._handle, kp, None, 0, ctypes.byref(needed))
+            if status not in (0, _STATUS_BUFFER_TOO_SMALL):
+                _check(status)
+            if needed.value == 0:
+                return b""
+            buf = (ctypes.c_uint8 * needed.value)()
+            written = ctypes.c_size_t(0)
+            _check(LIB.lsim_registry_export(self._handle, kp, buf, needed.value, ctypes.byref(written)))
+        return bytes(buf[:written.value])
+
+    @classmethod
+    def import_state(cls, blob: bytes, integrity_key: bytes) -> "JoinRegistry":
+        """Recharge une sauvegarde. Lève StatusError (707 : falsifiée, 708 : format, 709 : incohérente) sans rien créer."""
+        if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
+            raise ValueError("blob doit être une séquence d'octets non vide")
+        key = _bytes("integrity_key", integrity_key, 16)
+        buf, n = _wire(bytes(blob))
+        handle = ctypes.c_uint64(0)
+        _check(LIB.lsim_registry_import(ctypes.cast(key, _U8P), ctypes.cast(buf, _U8P), n, ctypes.byref(handle)))
+        reg = cls.__new__(cls)
+        reg._handle = handle.value
+        reg._lock = threading.Lock()
+        return reg
+
+    def save(self, path: str | os.PathLike, integrity_key: bytes) -> None:
+        """Écriture atomique : fichier temporaire, fsync, puis remplacement (os.replace)."""
+        data = self.export_state(integrity_key)
+        target = Path(path)
+        tmp = target.with_name(target.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @classmethod
+    def load(cls, path: str | os.PathLike, integrity_key: bytes) -> "JoinRegistry":
+        return cls.import_state(Path(path).read_bytes(), integrity_key)

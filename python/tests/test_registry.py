@@ -79,8 +79,49 @@ def test_closed_handle_and_bad_parameters():
     reg.close()
     with pytest.raises(StatusError) as e:
         reg.accept_join_request(_join(1), NWK)
-    assert e.value.code == 706
+    assert e.value.code == 740
     with pytest.raises(ValueError):
         JoinRegistry(max_devices=0)
     with pytest.raises(ValueError):
         JoinRegistry(max_devices=10**9)
+
+
+def test_persistence_roundtrip_keeps_replay_protection(tmp_path):
+    key = bytes(range(16))
+    with JoinRegistry() as reg:
+        reg.accept_join_request(_join(5), NWK)
+        blob = reg.export_state(key)
+        assert blob == reg.export_state(key)  # déterministe
+        path = tmp_path / "reg.bin"
+        reg.save(path, key)
+    with JoinRegistry.load(path, key) as restored:
+        assert restored.device_count == 1
+        with pytest.raises(StatusError) as e:
+            restored.accept_join_request(_join(5), NWK)
+        assert e.value.code == 704
+        restored.accept_join_request(_join(6), NWK)
+    assert not (tmp_path / "reg.bin.tmp").exists()
+
+
+def test_tampered_or_wrong_key_loads_nothing():
+    key = bytes(range(16))
+    with JoinRegistry() as reg:
+        reg.accept_join_request(_join(5), NWK)
+        blob = reg.export_state(key)
+    bad = bytearray(blob)
+    bad[12] ^= 0x01
+    with pytest.raises(StatusError) as e:
+        JoinRegistry.import_state(bytes(bad), key)
+    assert e.value.code == 707
+    with pytest.raises(StatusError) as e:
+        JoinRegistry.import_state(blob, bytes(16))
+    assert e.value.code == 707
+    with pytest.raises(StatusError) as e:
+        JoinRegistry.import_state(blob[:-1], key)
+    assert e.value.code == 707
+    with pytest.raises(StatusError) as e:
+        JoinRegistry.import_state(blob[:10], key)
+    assert e.value.code == 701
+    with pytest.raises(ValueError):
+        JoinRegistry.import_state(b"", key)
+

@@ -28,7 +28,7 @@ extern "C" {
  *   400..449 jointure OTAA (JoinStatus + 400)
  *   600..649 commandes MAC (mac::MacStatus + 600)
  *   650..699 rejoin-request (RejoinStatus + 650)
- *   700..749 registre serveur (RegistryStatus + 700 ; 706 handle inconnu, 707 paramètre invalide)
+ *   700..749 registre serveur (RegistryStatus + 700 ; 740 handle inconnu, 741 paramètre invalide)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -473,6 +473,16 @@ LSIM_API int32_t lsim_registry_accept_rejoin_1(uint64_t handle, const uint8_t* i
 /* Join-accept traité : RJcount0 du dispositif repart de zéro. */
 LSIM_API int32_t lsim_registry_on_join_accepted(uint64_t handle, const uint8_t dev_eui[8]);
 LSIM_API int32_t lsim_registry_device_count(uint64_t handle, uint64_t* count);
+
+/* Sauvegarde : écrit l'état dans out (cap octets) ; *out_len reçoit la taille.
+ * Si cap est insuffisant : statut BufferTooSmall (706 - 700 = 6) et *out_len = taille
+ * requise. integrity_key protège la sauvegarde par AES-CMAC (16 octets). */
+LSIM_API int32_t lsim_registry_export(uint64_t handle, const uint8_t integrity_key[16],
+                                      uint8_t* out, size_t cap, size_t* out_len);
+/* Chargement : crée un nouveau registre à partir d'une sauvegarde. Le MIC est vérifié
+ * avant tout parsing ; en cas d'échec, aucun registre n'est créé. */
+LSIM_API int32_t lsim_registry_import(const uint8_t integrity_key[16], const uint8_t* in,
+                                      size_t len, uint64_t* handle);
 
 #ifdef __cplusplus
 }

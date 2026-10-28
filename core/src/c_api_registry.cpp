@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include "lsim/c_api.h"
 #include "lsim/join_registry.hpp"
@@ -25,8 +26,8 @@ std::mutex g_mu;
 std::uint64_t g_next = 1;
 std::map<std::uint64_t, std::shared_ptr<Entry>> g_table;
 
-constexpr std::int32_t kUnknownHandle = LSIM_STATUS_REGISTRY_BASE + 6;
-constexpr std::int32_t kInvalidParam = LSIM_STATUS_REGISTRY_BASE + 7;
+constexpr std::int32_t kUnknownHandle = LSIM_STATUS_REGISTRY_BASE + 40;
+constexpr std::int32_t kInvalidParam = LSIM_STATUS_REGISTRY_BASE + 41;
 
 std::int32_t map_registry(RegistryStatus s) {
     if (s == RegistryStatus::Ok) {
@@ -190,4 +191,59 @@ int32_t lsim_registry_device_count(uint64_t handle, uint64_t* count) {
     std::lock_guard<std::mutex> lock(e->mu);
     *count = static_cast<std::uint64_t>(e->reg.device_count());
     return 0;
+}
+
+int32_t lsim_registry_export(uint64_t handle, const uint8_t integrity_key[16], uint8_t* out, size_t cap,
+                             size_t* out_len) {
+    if (integrity_key == nullptr || out_len == nullptr || (out == nullptr && cap > 0)) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_len = 0;
+    const auto e = lookup(handle);
+    if (!e) {
+        return kUnknownHandle;
+    }
+    try {
+        std::vector<std::uint8_t> blob;
+        std::lock_guard<std::mutex> lock(e->mu);
+        const auto st = e->reg.export_state(to_key(integrity_key), blob);
+        if (st != RegistryStatus::Ok) {
+            return map_registry(st);
+        }
+        *out_len = blob.size();
+        if (out == nullptr || cap < blob.size()) {
+            return map_registry(RegistryStatus::BufferTooSmall);
+        }
+        std::memcpy(out, blob.data(), blob.size());
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_registry_import(const uint8_t integrity_key[16], const uint8_t* in, size_t len,
+                             uint64_t* handle) {
+    if (integrity_key == nullptr || in == nullptr || handle == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *handle = 0;
+    try {
+        lsim::lorawan::JoinRegistry reg;
+        const auto st = lsim::lorawan::JoinRegistry::import_state(in, len, to_key(integrity_key), reg);
+        if (st != RegistryStatus::Ok) {
+            return map_registry(st);
+        }
+        std::lock_guard<std::mutex> lock(g_mu);
+        if (g_table.size() >= LSIM_REGISTRY_MAX_INSTANCES) {
+            return map_registry(RegistryStatus::CapacityExceeded);
+        }
+        const std::uint64_t id = g_next++;
+        auto entry = std::make_shared<Entry>(reg.max_devices());
+        entry->reg = std::move(reg);
+        g_table.emplace(id, std::move(entry));
+        *handle = id;
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
 }

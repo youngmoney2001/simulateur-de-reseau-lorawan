@@ -372,3 +372,8 @@ LIB.lsim_registry_on_join_accepted.restype = ctypes.c_int32
 LIB.lsim_registry_on_join_accepted.argtypes = [ctypes.c_uint64, _U8P]
 LIB.lsim_registry_device_count.restype = ctypes.c_int32
 LIB.lsim_registry_device_count.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
+LIB.lsim_registry_export.restype = ctypes.c_int32
+LIB.lsim_registry_export.argtypes = [
+    ctypes.c_uint64, _U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_registry_import.restype = ctypes.c_int32
+LIB.lsim_registry_import.argtypes = [_U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint64)]
