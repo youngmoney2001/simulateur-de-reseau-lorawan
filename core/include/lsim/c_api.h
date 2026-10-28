@@ -42,6 +42,7 @@ extern "C" {
 #define LSIM_STATUS_REGISTRY_BASE 700
 #define LSIM_STATUS_ADR_BASE    760
 #define LSIM_STATUS_SESSION_BASE 780
+#define LSIM_STATUS_CLASSB_BASE 800
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -610,6 +611,38 @@ LSIM_API int32_t lsim_session_receive_downlink(uint64_t handle, uint8_t uses_nf,
                                                uint8_t conf_received, uint8_t server_version);
 LSIM_API int32_t lsim_session_end_uplink(uint64_t handle, lsim_session_uplink_end* out);
 LSIM_API int32_t lsim_session_snapshot(uint64_t handle, lsim_session_info* out);
+
+/* ------------------------------------------- Moteur de classe B (beacon, ping slot)
+ * Fonctions sans état : le dispositif est passé et renvoyé par l'appelant. Statut :
+ * 800 + ClassBStatus (0 Ok, 1 paramètre invalide, 2 CRC faux, 3 non synchronisé,
+ * 4 balise perdue depuis 2 h). Temps en nanosecondes entières (horloge locale). */
+typedef struct {
+    uint8_t  synchronized;
+    uint64_t last_beacon_rx_ns;
+    uint32_t last_beacon_time_s;
+    uint32_t dev_addr;
+    uint8_t  periodicity;      /* 0..7 */
+} lsim_classb_device;
+
+typedef struct {
+    uint64_t start_ns;
+    uint32_t slot_index;       /* N, 0..4095 */
+    uint32_t beacon_time_s;
+    uint64_t beacon_period_start_ns;
+} lsim_classb_ping_slot;
+
+/* rfu_len : 2 (EU868) ou 3 (US915). CRC-16 vérifié avant d'écrire time_s. */
+LSIM_API int32_t lsim_classb_decode_beacon(const uint8_t* in, size_t len, uint8_t rfu_len,
+                                           uint32_t* time_s);
+LSIM_API int32_t lsim_classb_ping_offset(uint32_t beacon_time_s, uint32_t dev_addr,
+                                         uint8_t periodicity, uint32_t* offset);
+LSIM_API int32_t lsim_classb_on_beacon(lsim_classb_device* d, uint64_t rx_ns,
+                                       uint32_t beacon_time_s);
+/* state : 0 NotSynchronized, 1 Synchronized, 2 BeaconLess, 3 Lost. */
+LSIM_API int32_t lsim_classb_beacon_state(const lsim_classb_device* d, uint64_t now_ns,
+                                          uint8_t* state);
+LSIM_API int32_t lsim_classb_next_ping_slot(const lsim_classb_device* d, uint64_t now_ns,
+                                            lsim_classb_ping_slot* out);
 
 #ifdef __cplusplus
 }

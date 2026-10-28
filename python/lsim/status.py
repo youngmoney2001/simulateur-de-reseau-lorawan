@@ -79,6 +79,11 @@ _NAMES = {
     784: "session : paramètre invalide",
     785: "session : compteur FCntUp épuisé (rejoin requis)",
     786: "session : handle inconnu ou fermé",
+    # 800..809 : moteur de classe B
+    801: "classe B : paramètre invalide (périodicité, temps, trame trop courte, RFU)",
+    802: "classe B : CRC-16 du beacon faux",
+    803: "classe B : aucun beacon reçu",
+    804: "classe B : balise perdue depuis 2 h (quitter la classe B)",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

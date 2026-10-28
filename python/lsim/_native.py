@@ -154,6 +154,25 @@ class _CSessionUplinkEnd(ctypes.Structure):
     _fields_ = [("state", ctypes.c_uint8)]
 
 
+class _CClassBDevice(ctypes.Structure):
+    _fields_ = [
+        ("synchronized", ctypes.c_uint8),
+        ("last_beacon_rx_ns", ctypes.c_uint64),
+        ("last_beacon_time_s", ctypes.c_uint32),
+        ("dev_addr", ctypes.c_uint32),
+        ("periodicity", ctypes.c_uint8),
+    ]
+
+
+class _CClassBPingSlot(ctypes.Structure):
+    _fields_ = [
+        ("start_ns", ctypes.c_uint64),
+        ("slot_index", ctypes.c_uint32),
+        ("beacon_time_s", ctypes.c_uint32),
+        ("beacon_period_start_ns", ctypes.c_uint64),
+    ]
+
+
 class _CSessionInfo(ctypes.Structure):
     _fields_ = [
         ("state", ctypes.c_uint8),
@@ -490,6 +509,16 @@ LIB.lsim_session_receive_downlink.argtypes = [
     ctypes.c_uint64, ctypes.c_uint8, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint8]
 LIB.lsim_session_end_uplink.restype = ctypes.c_int32
 LIB.lsim_session_end_uplink.argtypes = [ctypes.c_uint64, ctypes.POINTER(_CSessionUplinkEnd)]
+LIB.lsim_classb_decode_beacon.restype = ctypes.c_int32
+LIB.lsim_classb_decode_beacon.argtypes = [_U8P, ctypes.c_size_t, ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint32)]
+LIB.lsim_classb_ping_offset.restype = ctypes.c_int32
+LIB.lsim_classb_ping_offset.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint32)]
+LIB.lsim_classb_on_beacon.restype = ctypes.c_int32
+LIB.lsim_classb_on_beacon.argtypes = [ctypes.POINTER(_CClassBDevice), ctypes.c_uint64, ctypes.c_uint32]
+LIB.lsim_classb_beacon_state.restype = ctypes.c_int32
+LIB.lsim_classb_beacon_state.argtypes = [ctypes.POINTER(_CClassBDevice), ctypes.c_uint64, _U8P]
+LIB.lsim_classb_next_ping_slot.restype = ctypes.c_int32
+LIB.lsim_classb_next_ping_slot.argtypes = [ctypes.POINTER(_CClassBDevice), ctypes.c_uint64, ctypes.POINTER(_CClassBPingSlot)]
 LIB.lsim_session_snapshot.restype = ctypes.c_int32
 LIB.lsim_session_snapshot.argtypes = [ctypes.c_uint64, ctypes.POINTER(_CSessionInfo)]
 LIB.lsim_rekey_server_on_uplink.restype = ctypes.c_int32
