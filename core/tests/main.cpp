@@ -16,6 +16,7 @@ void run_environment_tests();
 void run_mac_commands_tests();
 void run_rejoin_tests();
 void run_join_registry_tests();
+void run_adr_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -30,6 +31,7 @@ int main() {
     run_mac_commands_tests();
     run_rejoin_tests();
     run_join_registry_tests();
+    run_adr_tests();
     std::printf("%d/%d vérifications réussies\n", lsim::test::checks() - lsim::test::failures(),
                 lsim::test::checks());
     return lsim::test::failures() == 0 ? 0 : 1;

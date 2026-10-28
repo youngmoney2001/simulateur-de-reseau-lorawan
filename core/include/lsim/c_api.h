@@ -40,6 +40,7 @@ extern "C" {
 #define LSIM_STATUS_MAC_BASE    600
 #define LSIM_STATUS_REJOIN_BASE 650
 #define LSIM_STATUS_REGISTRY_BASE 700
+#define LSIM_STATUS_ADR_BASE    760
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -495,6 +496,29 @@ LSIM_API int32_t lsim_registry_export(uint64_t handle, const uint8_t integrity_k
  * avant tout parsing ; en cas d'échec, aucun registre n'est créé. */
 LSIM_API int32_t lsim_registry_import(const uint8_t integrity_key[16], const uint8_t* in,
                                       size_t len, uint64_t* handle);
+
+/* ADR serveur (fonction pure) : SNR en dixièmes de dB (-500..500) pour les n_samples
+ * dernières trames (1..20). dr_sf[i] = SF du débit i (7..12), 0 si indisponible.
+ * Statut : 0 ; 761 = paramètre invalide (LSIM_STATUS_ADR_BASE + 1). */
+typedef struct {
+    int32_t snr_tenth_db[20];
+    uint8_t n_samples;
+    uint8_t dr;
+    uint8_t dr_sf[16];
+    uint8_t min_dr;
+    uint8_t max_dr;
+    uint8_t tx_power_index;
+    uint8_t max_tx_power_index;
+    int32_t power_step_tenth_db;          /* 1..100 */
+    int32_t installation_margin_tenth_db; /* -300..300 */
+} lsim_adr_input;
+
+typedef struct {
+    uint8_t dr;
+    uint8_t tx_power_index;
+} lsim_adr_output;
+
+LSIM_API int32_t lsim_adr_decide(const lsim_adr_input* in, lsim_adr_output* out);
 
 #ifdef __cplusplus
 }

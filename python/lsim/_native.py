@@ -84,6 +84,28 @@ class _CMacCommand(ctypes.Structure):
     ]
 
 
+class _CAdrInput(ctypes.Structure):
+    _fields_ = [
+        ("snr_tenth_db", ctypes.c_int32 * 20),
+        ("n_samples", ctypes.c_uint8),
+        ("dr", ctypes.c_uint8),
+        ("dr_sf", ctypes.c_uint8 * 16),
+        ("min_dr", ctypes.c_uint8),
+        ("max_dr", ctypes.c_uint8),
+        ("tx_power_index", ctypes.c_uint8),
+        ("max_tx_power_index", ctypes.c_uint8),
+        ("power_step_tenth_db", ctypes.c_int32),
+        ("installation_margin_tenth_db", ctypes.c_int32),
+    ]
+
+
+class _CAdrOutput(ctypes.Structure):
+    _fields_ = [
+        ("dr", ctypes.c_uint8),
+        ("tx_power_index", ctypes.c_uint8),
+    ]
+
+
 class _CUplinkFrame(ctypes.Structure):
     _fields_ = [
         ("dev_addr", ctypes.c_uint32),
@@ -376,6 +398,8 @@ LIB.lsim_registry_on_join_accepted.restype = ctypes.c_int32
 LIB.lsim_registry_on_join_accepted.argtypes = [ctypes.c_uint64, _U8P]
 LIB.lsim_registry_device_count.restype = ctypes.c_int32
 LIB.lsim_registry_device_count.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
+LIB.lsim_adr_decide.restype = ctypes.c_int32
+LIB.lsim_adr_decide.argtypes = [ctypes.POINTER(_CAdrInput), ctypes.POINTER(_CAdrOutput)]
 LIB.lsim_registry_export.restype = ctypes.c_int32
 LIB.lsim_registry_export.argtypes = [
     ctypes.c_uint64, _U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]

@@ -70,6 +70,8 @@ _NAMES = {
     709: "registre : sauvegarde incohérente (tailles, doublons)",
     740: "registre : handle inconnu ou fermé",
     741: "registre : paramètre invalide",
+    # 760..799 : ADR serveur
+    761: "ADR : paramètre invalide (SNR, plan de débits ou puissance)",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }
