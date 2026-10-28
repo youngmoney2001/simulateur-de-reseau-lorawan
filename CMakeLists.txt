@@ -32,6 +32,8 @@ add_library(lsim_objects OBJECT
     core/src/lorawan_frame.cpp
     core/src/crypto.cpp
     core/src/lorawan_keys.cpp
+    core/src/secure_frame.cpp
+    core/src/engine.cpp
 )
 target_include_directories(lsim_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(lsim_objects PRIVATE mbedcrypto)
@@ -58,6 +60,8 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_link_budget.cpp
         core/tests/test_lorawan_frame.cpp
         core/tests/test_crypto.cpp
+        core/tests/test_secure_frame.cpp
+        core/tests/test_engine.cpp
     )
     target_link_libraries(lsim_tests PRIVATE mbedcrypto)
     target_compile_options(lsim_tests PRIVATE -Wall -Wextra -Wpedantic)
