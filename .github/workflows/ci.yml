@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurer
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLSIM_WARNINGS_AS_ERRORS=ON
+      - name: Compiler
+        run: cmake --build build --parallel
+      - name: Tests C++
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurer (ASan + UBSan)
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Compiler
+        run: cmake --build build-asan --parallel
+      - name: Tests C++ sous sanitizers (inclut le fuzzing du codec)
+        run: ./build-asan/lsim_tests
+
+  python:
+    runs-on: ubuntu-24.04
+    needs: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compiler le cœur natif
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Installer les dépendances de test
+        run: python -m pip install "pytest>=8" "pydantic>=2" "pyyaml>=6" "pyarrow>=14"
+      - name: Tests Python
+        run: PYTHONPATH=python pytest -q python/tests

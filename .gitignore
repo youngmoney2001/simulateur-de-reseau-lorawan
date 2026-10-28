@@ -1,0 +1,12 @@
+build/
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+.DS_Store
+build-*/
+node_modules/
+web/dist/
+web/public/cesium/

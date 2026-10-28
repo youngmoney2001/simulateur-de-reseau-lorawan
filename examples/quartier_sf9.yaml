@@ -1,0 +1,26 @@
+# Exemple de scénario : un quartier de 500 compteurs autour d'une passerelle.
+# Le fichier est validé strictement (champs inconnus refusés) avant simulation.
+schema_version: 1
+name: Quartier 500 compteurs SF9
+seed: 42
+gateway:
+  x_m: 0
+  y_m: 0
+  antenna_gain_dbi: 2.15
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: compteurs
+    count: 500
+    placement:
+      type: disk
+      radius_m: 3000
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 900
+    messages: 10
+    start_spread_s: 900
