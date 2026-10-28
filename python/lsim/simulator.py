@@ -68,9 +68,12 @@ class Propagation:
     reference_distance_m: float = 1.0
     exponent: float = 2.7
     capture_threshold_db: float = 6.0
+    shadowing_sigma_db: float = 0.0
+    shadowing_seed: int = 0
 
     def __post_init__(self) -> None:
-        for name in ("frequency_hz", "reference_distance_m", "exponent", "capture_threshold_db"):
+        for name in ("frequency_hz", "reference_distance_m", "exponent", "capture_threshold_db",
+                     "shadowing_sigma_db"):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f"{name} doit être un nombre fini")
         if self.frequency_hz <= 0 or self.reference_distance_m <= 0:
@@ -79,6 +82,10 @@ class Propagation:
             raise ValueError("exponent doit être compris entre 1 et 6")
         if self.capture_threshold_db < 0:
             raise ValueError("capture_threshold_db doit être positif ou nul")
+        if not 0.0 <= self.shadowing_sigma_db <= 30.0:
+            raise ValueError("shadowing_sigma_db doit être compris entre 0 et 30 dB")
+        if not 0 <= self.shadowing_seed < 2**64:
+            raise ValueError("shadowing_seed doit être un entier sur 64 bits non signé")
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,7 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
 
     Chaque valeur est la distance maximale où la perte totale reste sous
     `max_path_loss_db`. Le calcul et sa borne de travail sont dans le cœur natif.
+    Le shadowing n'est pas appliqué à la couverture (portée médiane déterministe).
     """
     if not 1 <= azimuths <= 720:
         raise ValueError("azimuths doit être compris entre 1 et 720")
@@ -142,7 +150,8 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
         raise ValueError("max_path_loss_db doit être un nombre fini")
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
-                           propagation.exponent, propagation.capture_threshold_db)
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
     keep: list[object] = []
     if environment is None:
         c_env_ref = None
@@ -184,7 +193,8 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
 
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
-                           propagation.exponent, propagation.capture_threshold_db)
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
     c_stats = (_CDeviceStats * n)()
     c_tot = _CDeviceStats()
     if environment is None:

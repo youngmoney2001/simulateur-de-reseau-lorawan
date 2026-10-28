@@ -53,10 +53,34 @@ SimStatus validate_inputs(const GatewaySpec& g, const PropagationSpec& p) {
     if (!finite(p.reference_distance_m) || p.reference_distance_m <= 0.0) return SimStatus::InvalidInput;
     if (!finite(p.exponent) || p.exponent < 1.0 || p.exponent > 6.0) return SimStatus::InvalidInput;
     if (!finite(p.capture_threshold_db) || p.capture_threshold_db < 0.0) return SimStatus::InvalidInput;
+    if (!finite(p.shadowing_sigma_db) || p.shadowing_sigma_db < 0.0 ||
+        p.shadowing_sigma_db > kMaxShadowingSigmaDb) {
+        return SimStatus::InvalidInput;
+    }
     return SimStatus::Ok;
 }
 
+// SplitMix64 : mélange déterministe et sans état, indépendant de la plateforme.
+std::uint64_t splitmix64(std::uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
 }  // namespace
+
+double shadowing_sample_db(std::uint64_t seed, std::uint32_t device_index, double sigma_db) {
+    if (!(sigma_db > 0.0) || !std::isfinite(sigma_db)) return 0.0;
+    const std::uint64_t h1 = splitmix64(seed ^ splitmix64(static_cast<std::uint64_t>(device_index) * 2U));
+    const std::uint64_t h2 = splitmix64(seed ^ splitmix64(static_cast<std::uint64_t>(device_index) * 2U + 1U));
+    // Uniformes dans ]0, 1] et [0, 1[ à partir de 53 bits.
+    const double u1 = (static_cast<double>(h1 >> 11) + 1.0) * 0x1.0p-53;
+    const double u2 = static_cast<double>(h2 >> 11) * 0x1.0p-53;
+    // Transformée de Box-Muller : gaussienne standard.
+    const double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * 3.14159265358979323846 * u2);
+    return sigma_db * z;
+}
 
 // ---------------------------------------------------------------- EventQueue
 
@@ -170,7 +194,9 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             }
             path_loss = pl.value;
         }
-        rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - path_loss;
+        const double shadow = shadowing_sample_db(prop.shadowing_seed, static_cast<std::uint32_t>(i),
+                                                  prop.shadowing_sigma_db);
+        rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - path_loss - shadow;
 
         double s = 0.0;
         if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) != lora::Status::Ok) {

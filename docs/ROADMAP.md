@@ -19,7 +19,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Couverture réelle par azimut (relief et obstacles, dichotomie, borne de travail) ; `model: environment` dans le GeoJSON
 - ✅ Outil de calibrage `python -m lsim calibrate mesures.csv` (exposant, PL0, sigma, R2, avertissements)
 - ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; attenuation des pavés par matériau
-- ⬜ Shadowing log-normal dans la simulation (sigma disponible via calibrage)
+- ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
 - ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864

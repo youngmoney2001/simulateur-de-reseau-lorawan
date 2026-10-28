@@ -83,7 +83,7 @@ void test_seal_open_roundtrip_and_tamper() {
 
 void test_simulate_with_environment() {
     const lsim_gateway g{0.0, 0.0, 0.0};
-    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0};
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
     lsim_end_device d[1] = {{1000.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1}};
     lsim_device_stats per[1]{};
     lsim_sim_stats tot{};
@@ -143,7 +143,7 @@ void test_status_ranges_are_disjoint() {
 
 void test_simulate_totals() {
     const lsim_gateway g{0.0, 0.0, 0.0};
-    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0};
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
     lsim_end_device d[2] = {
         {10.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1},
         {1000000.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1},

@@ -77,7 +77,17 @@ struct PropagationSpec {
     // Seuil de capture : un signal survit à une interférence de même SF s'il
     // est supérieur d'au moins ce seuil (dB).
     double capture_threshold_db = 6.0;
+    // Shadowing log-normal par dispositif (écart-type en dB, 0 = désactivé).
+    // Tirage déterministe : même graine et même index de dispositif donnent la
+    // même valeur. Modèle « évanouissement lent » : constant pour un dispositif.
+    double shadowing_sigma_db = 0.0;
+    std::uint64_t shadowing_seed = 0;
 };
+
+// Valeur de shadowing (dB) du dispositif `device_index`, gaussienne de moyenne
+// nulle et d'écart-type `sigma_db`. Fonction pure, reproductible.
+LSIM_API double shadowing_sample_db(std::uint64_t seed, std::uint32_t device_index,
+                                    double sigma_db);
 
 struct DeviceStats {
     std::uint64_t sent = 0;
@@ -96,6 +106,7 @@ struct SimulationStats {
 // Limites de sécurité / scalabilité.
 inline constexpr std::size_t kMaxEndDevices = 10'000;
 inline constexpr std::uint64_t kMaxTransmissions = 5'000'000;
+inline constexpr double kMaxShadowingSigmaDb = 30.0;
 
 enum class SimStatus : std::int32_t {
     Ok = 0,

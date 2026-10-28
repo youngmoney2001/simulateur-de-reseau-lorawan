@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Moteur à événements discrets et simulation de liaisons montantes.
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "check.hpp"
@@ -183,9 +185,52 @@ void test_device_count_limit() {
              static_cast<int>(SimStatus::TooManyDevices));
 }
 
+void test_shadowing_sample_properties() {
+    // Désactivé : valeur nulle.
+    CHECK_EQ(shadowing_sample_db(42, 7, 0.0), 0.0);
+    // Reproductible : même graine, même index.
+    CHECK_EQ(shadowing_sample_db(42, 7, 6.0), shadowing_sample_db(42, 7, 6.0));
+    // Indépendant selon l'index et la graine.
+    CHECK_TRUE(shadowing_sample_db(42, 7, 6.0) != shadowing_sample_db(42, 8, 6.0));
+    CHECK_TRUE(shadowing_sample_db(42, 7, 6.0) != shadowing_sample_db(43, 7, 6.0));
+    // Distribution : moyenne ~ 0, écart-type ~ sigma sur un grand échantillon.
+    const double sigma = 6.0;
+    const std::uint32_t n = 20000;
+    double sum = 0.0;
+    double sum2 = 0.0;
+    for (std::uint32_t i = 0; i < n; ++i) {
+        const double v = shadowing_sample_db(2026, i, sigma);
+        sum += v;
+        sum2 += v * v;
+    }
+    const double mean = sum / n;
+    const double sd = std::sqrt(sum2 / n - mean * mean);
+    CHECK_NEAR(mean, 0.0, 0.15);
+    CHECK_NEAR(sd, sigma, 0.15);
+}
+
+void test_shadowing_input_limits() {
+    SimulationStats tot;
+    DeviceStats st[1];
+    const EndDeviceSpec ok[] = {device_at(10.0, 7, 0)};
+    const double bad[] = {-1.0, 31.0, std::numeric_limits<double>::quiet_NaN()};
+    for (double sigma : bad) {
+        PropagationSpec p;
+        p.shadowing_sigma_db = sigma;
+        CHECK_EQ(static_cast<int>(simulate_uplinks(ok, 1, gateway(), p, st, tot)),
+                 static_cast<int>(SimStatus::InvalidInput));
+    }
+    PropagationSpec max_ok;
+    max_ok.shadowing_sigma_db = 30.0;
+    CHECK_EQ(static_cast<int>(simulate_uplinks(ok, 1, gateway(), max_ok, st, tot)),
+             static_cast<int>(SimStatus::Ok));
+}
+
 }  // namespace
 
 void run_engine_tests() {
+    test_shadowing_sample_properties();
+    test_shadowing_input_limits();
     test_queue_order_and_capacity();
     test_single_close_device_received();
     test_far_device_below_sensitivity();

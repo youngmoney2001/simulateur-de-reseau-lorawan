@@ -270,6 +270,8 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.shadowing_sigma_db = prop->shadowing_sigma_db;
+        p.shadowing_seed = prop->shadowing_seed;
 
         std::vector<lsim::sim::DeviceStats> stats(device_count);
         lsim::sim::SimulationStats tot;
@@ -375,6 +377,8 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.shadowing_sigma_db = prop->shadowing_sigma_db;
+        p.shadowing_seed = prop->shadowing_seed;
 
         lsim::env::ElevationGrid grid;
         std::vector<lsim::env::Obstacle> obstacles;

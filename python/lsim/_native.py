@@ -92,6 +92,8 @@ class _CPropagation(ctypes.Structure):
         ("reference_distance_m", ctypes.c_double),
         ("exponent", ctypes.c_double),
         ("capture_threshold_db", ctypes.c_double),
+        ("shadowing_sigma_db", ctypes.c_double),
+        ("shadowing_seed", ctypes.c_uint64),
     ]
 
 

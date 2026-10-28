@@ -51,6 +51,10 @@ class PropagationModel(_Strict):
     reference_distance_m: float = Field(1.0, gt=0)
     exponent: float = Field(2.7, ge=1.0, le=6.0)
     capture_threshold_db: float = Field(6.0, ge=0)
+    # Shadowing log-normal par dispositif (0 = désactivé). Graine absente : la
+    # graine du scénario est utilisée, ce qui rend le tirage reproductible.
+    shadowing_sigma_db: float = Field(0.0, ge=0, le=30.0)
+    shadowing_seed: Optional[int] = Field(None, ge=0, le=2**64 - 1)
 
 
 class DiskPlacement(_Strict):
@@ -168,6 +172,11 @@ class Scenario:
             dumped.pop("environment", None)
         elif environment is not None and environment.terrain is not None:
             dumped["environment"]["terrain_sha256"] = environment.terrain.sha256
+        # Shadowing désactivé : champs absents du hash (scénarios antérieurs inchangés).
+        prop = dumped.get("propagation", {})
+        if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
+            prop.pop("shadowing_sigma_db", None)
+            prop.pop("shadowing_seed", None)
         canonical = json.dumps(dumped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         self.sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -204,8 +213,10 @@ class Scenario:
 
     def propagation(self) -> Propagation:
         p = self.model.propagation
+        seed = p.shadowing_seed if p.shadowing_seed is not None else self.model.seed
         return Propagation(frequency_hz=p.frequency_hz, reference_distance_m=p.reference_distance_m,
-                           exponent=p.exponent, capture_threshold_db=p.capture_threshold_db)
+                           exponent=p.exponent, capture_threshold_db=p.capture_threshold_db,
+                           shadowing_sigma_db=p.shadowing_sigma_db, shadowing_seed=seed)
 
 
 def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
