@@ -153,6 +153,24 @@ LSIM_API int32_t lsim_seal_uplink(const lsim_uplink_frame* frame,
                                   const lsim_uplink_context* ctx,
                                   uint8_t* out, size_t cap, size_t* out_written);
 
+/* Contexte downlink : ConfFCnt, NFCntDwn (FPort absent ou 0) et AFCntDwn (FPort > 0). */
+typedef struct lsim_downlink_context {
+    uint16_t conf_fcnt;
+    uint32_t nfcnt32;
+    uint32_t afcnt32;
+} lsim_downlink_context;
+
+/* Scelle / ouvre une trame downlink. lsim_uplink_frame sert aux deux sens
+ * (nom historique). Le compteur retenu dépend du FPort (errata FCntDwn). */
+LSIM_API int32_t lsim_seal_downlink(const lsim_uplink_frame* frame,
+                                    const lsim_session_keys_11* keys,
+                                    const lsim_downlink_context* ctx,
+                                    uint8_t* out, size_t cap, size_t* out_written);
+LSIM_API int32_t lsim_open_downlink(const uint8_t* in, size_t len,
+                                    const lsim_session_keys_11* keys,
+                                    const lsim_downlink_context* ctx,
+                                    lsim_uplink_frame* out);
+
 /* Ouvre une trame uplink : MIC vérifié avant déchiffrement. En cas d'échec,
  * out->payload_len vaut 0 et aucune donnée claire n'est exposée. */
 LSIM_API int32_t lsim_open_uplink(const uint8_t* in, size_t len,

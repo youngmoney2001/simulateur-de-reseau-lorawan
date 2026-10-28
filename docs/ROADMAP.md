@@ -35,7 +35,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Trame sécurisée 1.1 : scellement et ouverture, MIC vérifié avant déchiffrement, compteur 32 bits contrôlé
 - ✅ Crypto et trame sécurisée exposées via l'API C et Python (`lsim.security`)
 - 🔧 Confirmer les vecteurs contre le document officiel TS001-1.1.0 : ✅ document lu (pas de vecteur numérique dans le PDF, seulement le format des blocs) ; ✅ errata « FOpts Encryption, Usage of FCntDwn » (CR de janvier 2018) lu et appliqué
-- 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A1 de l'errata : constante 0x00000001 ou 0x00000002 pour AFCntDwn, compteur de bloc 1) ; vecteurs TTN et calcul openssl concordants ; ✅ câblage uplink dans la trame sécurisée (chiffrement avant MIC, déchiffrement après MIC, API C et Python) ; ⬜ downlink (compteurs NFCntDwn / AFCntDwn selon FPort)
+- 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A1 de l'errata : constante 0x00000001 ou 0x00000002 pour AFCntDwn, compteur de bloc 1) ; vecteurs TTN et calcul openssl concordants ; ✅ câblage uplink dans la trame sécurisée (chiffrement avant MIC, déchiffrement après MIC, API C et Python) ; ✅ downlink (compteur NFCntDwn sans FPort, AFCntDwn avec FPort > 0 ; API C et Python)
 - ⬜ Classes A, B, C
 - ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
 - ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2
@@ -45,7 +45,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Limites connues (à traiter avant commercialisation)
 - Le relief et les obstacles utilisent un modèle simplifié (Deygout à 3 arêtes, pénétration fixe par pavé) : à calibrer par mesures avant usage contractuel.
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
-- Les FOpts sont câblés pour l'uplink uniquement ; le downlink (compteurs NFCntDwn / AFCntDwn) reste à faire.
+- Les FOpts sont câblés en uplink et en downlink (compteurs selon l'errata FCntDwn) ; la simulation ne génère pas encore de MAC commands.
 - La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 

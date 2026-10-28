@@ -241,6 +241,66 @@ int32_t lsim_open_uplink(const uint8_t* in, size_t len, const lsim_session_keys_
     }
 }
 
+lsim::lorawan::DownlinkContext to_down_ctx(const lsim_downlink_context& c) {
+    lsim::lorawan::DownlinkContext d;
+    d.conf_fcnt = c.conf_fcnt;
+    d.nfcnt32 = c.nfcnt32;
+    d.afcnt32 = c.afcnt32;
+    return d;
+}
+
+int32_t lsim_seal_downlink(const lsim_uplink_frame* frame, const lsim_session_keys_11* keys,
+                           const lsim_downlink_context* ctx, uint8_t* out, size_t cap,
+                           size_t* out_written) {
+    if (frame == nullptr || keys == nullptr || ctx == nullptr || out == nullptr ||
+        out_written == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_written = 0;
+    if (frame->payload_len > lsim::lorawan::kMaxFrmPayload || frame->fopts_len > 15) {
+        return map_secure(lsim::lorawan::SecureStatus::InvalidPayload);
+    }
+    try {
+        DataFrame f;
+        to_frame(*frame, f);
+        SessionKeys11 k;
+        load_keys(*keys, k);
+        const auto st = lsim::lorawan::seal_downlink(f, k, to_down_ctx(*ctx), out, cap, *out_written);
+        if (st != lsim::lorawan::SecureStatus::Ok) {
+            *out_written = 0;
+        }
+        return map_secure(st);
+    } catch (...) {
+        *out_written = 0;
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_open_downlink(const uint8_t* in, size_t len, const lsim_session_keys_11* keys,
+                           const lsim_downlink_context* ctx, lsim_uplink_frame* out) {
+    if (in == nullptr || keys == nullptr || ctx == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    try {
+        SessionKeys11 k;
+        load_keys(*keys, k);
+        DataFrame f;
+        const auto st = lsim::lorawan::open_downlink(in, len, k, to_down_ctx(*ctx), f);
+        from_frame(f, *out);
+        if (st != lsim::lorawan::SecureStatus::Ok) {
+            std::memset(out->payload, 0, sizeof out->payload);
+            out->payload_len = 0;
+            std::memset(out->fopts, 0, sizeof out->fopts);
+            out->fopts_len = 0;
+        }
+        return map_secure(st);
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_count,
                               const lsim_gateway* gateway, const lsim_propagation* prop,
                               lsim_device_stats* per_device, lsim_sim_stats* totals) {

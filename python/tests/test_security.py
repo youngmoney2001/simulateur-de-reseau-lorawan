@@ -165,3 +165,44 @@ def test_fopts_tampering_rejected():
 def test_invalid_fopts_refused(kwargs):
     with pytest.raises(ValueError):
         UplinkFrame(**kwargs)
+
+
+def test_downlink_roundtrip_with_fport_and_fopts():
+    from lsim.security import DownlinkContext, open_downlink, seal_downlink
+
+    keys = _ttn_keys()
+    frame = UplinkFrame(dev_addr=0x26011BDA, fcnt=40, payload=b"down", fport=2,
+                        fopts=bytes([0x02, 0x03]), confirmed=True)
+    ctx = DownlinkContext(conf_fcnt=0, nfcnt32=9, afcnt32=40)
+    wire = seal_downlink(frame, keys, ctx)
+    assert b"down" not in wire
+    out = open_downlink(wire, keys, ctx)
+    assert out.payload == b"down"
+    assert out.fopts == bytes([0x02, 0x03])
+    assert out.confirmed is True
+    assert out.fport == 2
+
+
+def test_downlink_without_fport_uses_nfcntdwn():
+    from lsim.security import DownlinkContext, open_downlink, seal_downlink
+
+    keys = _ttn_keys()
+    frame = UplinkFrame(dev_addr=1, fcnt=9, fopts=b"\x05")
+    ctx = DownlinkContext(nfcnt32=9, afcnt32=77)
+    wire = seal_downlink(frame, keys, ctx)
+    out = open_downlink(wire, keys, ctx)
+    assert out.fopts == b"\x05" and out.fport is None and out.confirmed is False
+
+
+def test_downlink_wrong_counter_or_tamper_rejected():
+    from lsim.security import DownlinkContext, open_downlink, seal_downlink
+
+    keys = _ttn_keys()
+    ctx = DownlinkContext(afcnt32=40)
+    wire = bytearray(seal_downlink(UplinkFrame(dev_addr=1, fcnt=40, payload=b"x", fport=1),
+                                   keys, ctx))
+    with pytest.raises(StatusError):
+        open_downlink(bytes(wire), keys, DownlinkContext(afcnt32=41))
+    wire[-1] ^= 0x01
+    with pytest.raises(StatusError):
+        open_downlink(bytes(wire), keys, ctx)

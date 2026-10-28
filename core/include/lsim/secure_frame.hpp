@@ -52,4 +52,27 @@ LSIM_API SecureStatus open_uplink(const std::uint8_t* in, std::size_t len,
                                   const SessionKeys11& keys, const UplinkContext& ctx,
                                   DataFrame& out);
 
+// Contexte downlink fourni par le serveur de réseau (LoRaWAN 1.1).
+//   conf_fcnt : ConfFCnt du MIC downlink (0 sans ACK) ;
+//   nfcnt32   : NFCntDwn, compteur de downlink sans FPort (ou FPort 0) ;
+//   afcnt32   : AFCntDwn, compteur de downlink avec FPort > 0.
+// Le compteur retenu dépend du FPort (errata FCntDwn) ; le FCnt 16 bits de la
+// trame doit correspondre à ce compteur.
+struct DownlinkContext {
+    std::uint16_t conf_fcnt = 0;
+    std::uint32_t nfcnt32 = 0;
+    std::uint32_t afcnt32 = 0;
+};
+
+// Scelle une trame downlink : chiffrement des FOpts (NwkSEncKey) et de
+// FRMPayload (AppSKey si FPort > 0, NwkSEncKey si FPort == 0), puis MIC 1.1.
+LSIM_API SecureStatus seal_downlink(const DataFrame& frame, const SessionKeys11& keys,
+                                    const DownlinkContext& ctx, std::uint8_t* out,
+                                    std::size_t cap, std::size_t& out_written);
+
+// Ouvre une trame downlink : décode, vérifie le MIC puis déchiffre.
+LSIM_API SecureStatus open_downlink(const std::uint8_t* in, std::size_t len,
+                                    const SessionKeys11& keys, const DownlinkContext& ctx,
+                                    DataFrame& out);
+
 }  // namespace lsim::lorawan

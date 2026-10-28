@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include "check.hpp"
 #include "lsim/lorawan_keys.hpp"
@@ -231,9 +232,105 @@ void test_fopts_tampering_rejected_before_exposure() {
     CHECK_EQ(static_cast<int>(out.fopts_len), 0);
 }
 
+DataFrame make_down(std::optional<std::uint8_t> fport, std::uint16_t fcnt, const char* text) {
+    DataFrame f;
+    f.mtype = MType::UnconfirmedDataDown;
+    f.dev_addr = 0x01020304u;
+    f.fcnt = fcnt;
+    f.has_fport = fport.has_value();
+    f.fport = fport.value_or(0);
+    const std::size_t n = std::strlen(text);
+    f.frm_payload_len = static_cast<std::uint8_t>(n);
+    std::memcpy(f.frm_payload.data(), text, n);
+    return f;
+}
+
+void test_downlink_fport_uses_afcntdwn_and_roundtrips() {
+    const SessionKeys11 k = reference_keys();
+    DataFrame in = make_down(std::uint8_t{2}, 40, "down");
+    in.fopts_len = 2;
+    in.fopts[0] = 0x02;
+    in.fopts[1] = 0x03;
+    DownlinkContext ctx;
+    ctx.conf_fcnt = 0;
+    ctx.afcnt32 = 40;
+    ctx.nfcnt32 = 9;  // ignoré : FPort > 0
+    std::uint8_t wire[255];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_downlink(in, k, ctx, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(std::memcmp(wire + 9, "down", 4) != 0);
+    // Les FOpts utilisent la constante 0x00000002 (AFCntDwn) : concordance avec la primitive.
+    std::uint8_t expect[2] = {0x02, 0x03};
+    CHECK_EQ(static_cast<int>(lsim::crypto::crypt_fopts(
+                 k.nwk_s_enc_key, lsim::crypto::Direction::Downlink, 0x01020304u, 40u,
+                 lsim::crypto::FOptsCounter::AFCntDwn, expect, 2)),
+             static_cast<int>(lsim::crypto::CryptoStatus::Ok));
+    CHECK_TRUE(std::memcmp(wire + 8, expect, 2) == 0);
+
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_downlink(wire, n, k, ctx, out)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_EQ(static_cast<int>(out.fopts_len), 2);
+    CHECK_TRUE(out.fopts[0] == 0x02 && out.fopts[1] == 0x03);
+    CHECK_TRUE(std::memcmp(out.frm_payload.data(), "down", 4) == 0);
+}
+
+void test_downlink_without_fport_uses_nfcntdwn() {
+    const SessionKeys11 k = reference_keys();
+    DataFrame in = make_down(std::nullopt, 9, "");
+    in.fopts_len = 1;
+    in.fopts[0] = 0x05;
+    DownlinkContext ctx;
+    ctx.nfcnt32 = 9;
+    ctx.afcnt32 = 77;  // ignoré : pas de FPort
+    std::uint8_t wire[255];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_downlink(in, k, ctx, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    std::uint8_t expect[1] = {0x05};
+    CHECK_EQ(static_cast<int>(lsim::crypto::crypt_fopts(
+                 k.nwk_s_enc_key, lsim::crypto::Direction::Downlink, 0x01020304u, 9u,
+                 lsim::crypto::FOptsCounter::FCntUpOrNFCntDwn, expect, 1)),
+             static_cast<int>(lsim::crypto::CryptoStatus::Ok));
+    CHECK_TRUE(wire[8] == expect[0]);
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_downlink(wire, n, k, ctx, out)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(out.fopts[0] == 0x05);
+}
+
+void test_downlink_tamper_and_counter_checks() {
+    const SessionKeys11 k = reference_keys();
+    DataFrame in = make_down(std::uint8_t{1}, 40, "x");
+    DownlinkContext ctx;
+    ctx.afcnt32 = 40;
+    std::uint8_t wire[255];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_downlink(in, k, ctx, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    wire[n - 1] ^= 0x80;  // altération du MIC
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_downlink(wire, n, k, ctx, out)),
+             static_cast<int>(SecureStatus::MicMismatch));
+    CHECK_EQ(static_cast<int>(out.frm_payload_len), 0);
+
+    // Compteur de contexte incohérent avec le FCnt transmis : rejet avant MIC.
+    std::uint8_t good[255];
+    std::size_t m = 0;
+    seal_downlink(in, k, ctx, good, sizeof good, m);
+    DownlinkContext other = ctx;
+    other.afcnt32 = 41;
+    CHECK_EQ(static_cast<int>(open_downlink(good, m, k, other, out)),
+             static_cast<int>(SecureStatus::FCntMismatch));
+}
+
 }  // namespace
 
 void run_secure_frame_tests() {
+    test_downlink_fport_uses_afcntdwn_and_roundtrips();
+    test_downlink_without_fport_uses_nfcntdwn();
+    test_downlink_tamper_and_counter_checks();
     test_fopts_roundtrip_and_encryption_on_wire();
     test_fopts_tampering_rejected_before_exposure();
     test_roundtrip_app_payload();

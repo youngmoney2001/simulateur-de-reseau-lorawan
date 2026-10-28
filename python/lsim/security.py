@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lsim._native import (
+    _CDownlinkContext,
     LIB,
     _CJoinAccept,
     _CJoinKeys,
@@ -211,7 +212,68 @@ def open_uplink(wire: bytes, keys: SessionKeys11, ctx: UplinkContext) -> UplinkF
         payload=bytes(out.payload[:n]),
         fopts=bytes(out.fopts[:out.fopts_len]),
         fport=out.fport if out.has_fport else None,
-        confirmed=out.mtype == 4,
+        confirmed=out.mtype in (4, 5),
+        adr=bool(out.adr),
+        adr_ack_req=bool(out.adr_ack_req),
+        ack=bool(out.ack),
+        class_b=bool(out.class_b),
+    )
+
+
+@dataclass(frozen=True)
+class DownlinkContext:
+    """Contexte downlink 1.1 : ConfFCnt, NFCntDwn (sans FPort ou FPort 0), AFCntDwn (FPort > 0)."""
+
+    conf_fcnt: int = 0
+    nfcnt32: int = 0
+    afcnt32: int = 0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.conf_fcnt <= 0xFFFF:
+            raise ValueError("conf_fcnt doit tenir sur 16 bits")
+        for name in ("nfcnt32", "afcnt32"):
+            if not 0 <= getattr(self, name) <= 0xFFFFFFFF:
+                raise ValueError(f"{name} doit tenir sur 32 bits")
+
+    def _to_c(self) -> _CDownlinkContext:
+        c = _CDownlinkContext()
+        c.conf_fcnt = self.conf_fcnt
+        c.nfcnt32 = self.nfcnt32
+        c.afcnt32 = self.afcnt32
+        return c
+
+
+def seal_downlink(frame: UplinkFrame, keys: SessionKeys11, ctx: DownlinkContext) -> bytes:
+    """Chiffre FOpts et charge (compteur selon FPort), puis calcule le MIC downlink 1.1."""
+    cap = 1 + 7 + len(frame.fopts) + 1 + len(frame.payload) + 4
+    buf = (_U8 * cap)()
+    written = ctypes.c_size_t(0)
+    cf = frame._to_c()
+    ck = keys._to_c()
+    cc = ctx._to_c()
+    _check(LIB.lsim_seal_downlink(ctypes.byref(cf), ctypes.byref(ck), ctypes.byref(cc),
+                                  buf, cap, ctypes.byref(written)))
+    return bytes(buf[:written.value])
+
+
+def open_downlink(wire: bytes, keys: SessionKeys11, ctx: DownlinkContext) -> UplinkFrame:
+    """Vérifie le MIC downlink puis déchiffre. Lève StatusError si le MIC est faux."""
+    if not isinstance(wire, (bytes, bytearray)) or not 12 <= len(wire) <= 255:
+        raise ValueError("trame PHY de 12 à 255 octets attendue")
+    src = (_U8 * len(wire)).from_buffer_copy(bytes(wire))
+    ck = keys._to_c()
+    cc = ctx._to_c()
+    out = _CUplinkFrame()
+    _check(LIB.lsim_open_downlink(ctypes.cast(src, ctypes.POINTER(_U8)), len(wire),
+                                  ctypes.byref(ck), ctypes.byref(cc), ctypes.byref(out)))
+    n = out.payload_len
+    return UplinkFrame(
+        dev_addr=out.dev_addr,
+        fcnt=out.fcnt,
+        payload=bytes(out.payload[:n]),
+        fopts=bytes(out.fopts[:out.fopts_len]),
+        fport=out.fport if out.has_fport else None,
+        confirmed=out.mtype in (4, 5),
         adr=bool(out.adr),
         adr_ack_req=bool(out.adr_ack_req),
         ack=bool(out.ack),

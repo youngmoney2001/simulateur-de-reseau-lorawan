@@ -67,6 +67,14 @@ class _CUplinkContext(ctypes.Structure):
     ]
 
 
+class _CDownlinkContext(ctypes.Structure):
+    _fields_ = [
+        ("conf_fcnt", ctypes.c_uint16),
+        ("nfcnt32", ctypes.c_uint32),
+        ("afcnt32", ctypes.c_uint32),
+    ]
+
+
 class _CEndDevice(ctypes.Structure):
     _fields_ = [
         ("x_m", ctypes.c_double),
@@ -234,6 +242,15 @@ LIB.lsim_open_uplink.restype = ctypes.c_int32
 LIB.lsim_open_uplink.argtypes = [
     _U8P, ctypes.c_size_t, ctypes.POINTER(_CSessionKeys11),
     ctypes.POINTER(_CUplinkContext), ctypes.POINTER(_CUplinkFrame)]
+LIB.lsim_seal_downlink.restype = ctypes.c_int32
+LIB.lsim_seal_downlink.argtypes = [
+    ctypes.POINTER(_CUplinkFrame), ctypes.POINTER(_CSessionKeys11),
+    ctypes.POINTER(_CDownlinkContext), _U8P, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_open_downlink.restype = ctypes.c_int32
+LIB.lsim_open_downlink.argtypes = [
+    _U8P, ctypes.c_size_t, ctypes.POINTER(_CSessionKeys11),
+    ctypes.POINTER(_CDownlinkContext), ctypes.POINTER(_CUplinkFrame)]
 LIB.lsim_simulate_uplinks.restype = ctypes.c_int32
 LIB.lsim_simulate_uplinks.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
