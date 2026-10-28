@@ -37,6 +37,7 @@ add_library(lsim_objects OBJECT
     core/src/c_api_ext.cpp
     core/src/join.cpp
     core/src/mac_commands.cpp
+    core/src/c_api_mac.cpp
     core/src/environment.cpp
 )
 target_include_directories(lsim_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)

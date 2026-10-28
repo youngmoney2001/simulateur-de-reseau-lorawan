@@ -26,6 +26,7 @@ extern "C" {
  *   250..299 codec de trame (FrameStatus + 250)
  *   300..399 simulateur (SimStatus + 300)
  *   400..449 jointure OTAA (JoinStatus + 400)
+ *   600..649 commandes MAC (mac::MacStatus + 600)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -34,6 +35,7 @@ extern "C" {
 #define LSIM_STATUS_SIM_BASE    300
 #define LSIM_STATUS_ENV_BASE    500
 #define LSIM_STATUS_JOIN_BASE   400
+#define LSIM_STATUS_MAC_BASE    600
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -323,6 +325,62 @@ LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_
 LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                                      double max_path_loss_db, const lsim_environment* env,
                                      double step_m, size_t azimuths, double* radii_out);
+
+
+/* ------------------------------------------------- Commandes MAC 1.1 */
+
+/* Sens d'une commande : uplink (appareil -> serveur) ou downlink. */
+#define LSIM_MAC_UPLINK   0
+#define LSIM_MAC_DOWNLINK 1
+
+/* Type de commande. Le sens est implicite dans le type (LinkCheckReq et
+ * LinkCheckAns partagent le CID 0x02). */
+#define LSIM_MAC_LINK_CHECK_REQ    1  /* up, sans charge */
+#define LSIM_MAC_LINK_CHECK_ANS    2  /* down : margin, gw_cnt */
+#define LSIM_MAC_LINK_ADR_REQ      3  /* down : data_rate, tx_power, ch_mask, ch_mask_cntl, nb_trans */
+#define LSIM_MAC_LINK_ADR_ANS      4  /* up : ack_channel_mask, ack_data_rate, ack_power */
+#define LSIM_MAC_DUTY_CYCLE_REQ    5  /* down : max_dcycle */
+#define LSIM_MAC_DUTY_CYCLE_ANS    6  /* up, sans charge */
+#define LSIM_MAC_DEV_STATUS_REQ    7  /* down, sans charge */
+#define LSIM_MAC_DEV_STATUS_ANS    8  /* up : battery, dev_margin */
+#define LSIM_MAC_REKEY_IND         9  /* up : lorawan_minor (1) */
+#define LSIM_MAC_REKEY_CONF       10  /* down : lorawan_minor (1) */
+
+/* Commande à plat : seuls les champs du type indiqué par `kind` sont lus. */
+typedef struct lsim_mac_command {
+    uint8_t  kind;              /* LSIM_MAC_* */
+    uint8_t  margin;            /* LinkCheckAns : 0..254 dB */
+    uint8_t  gw_cnt;            /* LinkCheckAns */
+    uint8_t  data_rate;         /* LinkADRReq : 0..15 */
+    uint8_t  tx_power;          /* LinkADRReq : 0..15 (15 = ignorer) */
+    uint16_t ch_mask;           /* LinkADRReq : bit 0 = canal 1 */
+    uint8_t  ch_mask_cntl;      /* LinkADRReq : 0..7 */
+    uint8_t  nb_trans;          /* LinkADRReq : 0..15 (0 = inchangé) */
+    uint8_t  ack_channel_mask;  /* LinkADRAns : 0 ou 1 */
+    uint8_t  ack_data_rate;     /* LinkADRAns : 0 ou 1 */
+    uint8_t  ack_power;         /* LinkADRAns : 0 ou 1 */
+    uint8_t  max_dcycle;        /* DutyCycleReq : 0..15 (duty = 1/2^n) */
+    uint8_t  battery;           /* DevStatusAns : 0 externe, 255 non mesuré */
+    int8_t   dev_margin;        /* DevStatusAns : -32..31 dB */
+    uint8_t  lorawan_minor;     /* Rekey : 1 (LoRaWAN 1.1) */
+} lsim_mac_command;
+
+/* Plus grande commande MAC (CID compris) : 6 octets. */
+#define LSIM_MAC_MAX_COMMAND_BYTES 6
+
+/* Encode une commande (CID compris) dans out ; *out_len reçoit 1..6. */
+LSIM_API int32_t lsim_mac_encode(const lsim_mac_command* cmd,
+                                 uint8_t out[LSIM_MAC_MAX_COMMAND_BYTES], size_t* out_len);
+
+/* Décode la première commande de `in` selon le sens ; *consumed reçoit sa taille.
+ * Un CID non implémenté renvoie LSIM_STATUS_MAC_BASE + UnknownCommand. */
+LSIM_API int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction,
+                                 lsim_mac_command* out, size_t* consumed);
+
+/* Ajoute une commande encodée au champ FOpts (fopts : 15 octets, *fopts_len
+ * en entrée et sortie). Refuse tout dépassement sans modifier fopts. */
+LSIM_API int32_t lsim_mac_append_fopts(uint8_t fopts[15], uint8_t* fopts_len,
+                                       const uint8_t* cmd, size_t cmd_len);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "check.hpp"
+#include "lsim/c_api.h"
 #include "lsim/mac_commands.hpp"
 
 namespace {
@@ -192,5 +193,62 @@ void run_mac_commands_tests() {
         CHECK_EQ(static_cast<int>(append_to_fopts(fopts, fopts_len, cmd, len)),
                  static_cast<int>(MacStatus::BufferTooSmall));
         CHECK_EQ(fopts_len, std::uint8_t{13});
+    }
+
+    // --- Surface C : mêmes octets, statuts 600+, FOpts borné.
+    {
+        lsim_mac_command c{};
+        c.kind = LSIM_MAC_LINK_ADR_REQ;
+        c.data_rate = 5;
+        c.tx_power = 2;
+        c.ch_mask = 0x00FF;
+        c.nb_trans = 1;
+        std::uint8_t out[LSIM_MAC_MAX_COMMAND_BYTES] = {};
+        std::size_t n = 0;
+        CHECK_EQ(lsim_mac_encode(&c, out, &n), 0);
+        CHECK_EQ(n, std::size_t{5});
+        CHECK_EQ(out[1], std::uint8_t{0x52});
+
+        lsim_mac_command back{};
+        std::size_t used = 0;
+        CHECK_EQ(lsim_mac_decode(out, n, LSIM_MAC_DOWNLINK, &back, &used), 0);
+        CHECK_EQ(back.kind, std::uint8_t{LSIM_MAC_LINK_ADR_REQ});
+        CHECK_EQ(back.ch_mask, std::uint16_t{0x00FF});
+        CHECK_EQ(used, std::size_t{5});
+
+        // Même octet 0x02 : sens différent, charge différente.
+        const std::uint8_t lc_down[3] = {0x02, 0x10, 0x01};
+        CHECK_EQ(lsim_mac_decode(lc_down, 3, LSIM_MAC_DOWNLINK, &back, &used), 0);
+        CHECK_EQ(back.kind, std::uint8_t{LSIM_MAC_LINK_CHECK_ANS});
+        CHECK_EQ(back.margin, std::uint8_t{0x10});
+        CHECK_EQ(lsim_mac_decode(lc_down, 1, LSIM_MAC_DOWNLINK, &back, &used),
+                 LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::MalformedPayload));
+        CHECK_EQ(back.kind, std::uint8_t{0});
+
+        // CID non implémenté (RXParamSetup 0x05).
+        const std::uint8_t rx[6] = {0x05, 0, 0, 0, 0, 0};
+        CHECK_EQ(lsim_mac_decode(rx, 6, LSIM_MAC_DOWNLINK, &back, &used),
+                 LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
+
+        // Type inconnu à l'encodage.
+        lsim_mac_command bogus{};
+        bogus.kind = 99;
+        CHECK_EQ(lsim_mac_encode(&bogus, out, &n),
+                 LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
+        CHECK_EQ(n, std::size_t{0});
+
+        // Pointeurs nuls : statut NullOutput, pas de plantage.
+        CHECK_EQ(lsim_mac_encode(nullptr, out, &n), static_cast<int>(lsim::lora::Status::NullOutput));
+
+        // FOpts : 14 octets + une commande de 2 : refus sans modification.
+        std::uint8_t fopts[kMaxFOpts] = {};
+        std::uint8_t flen = 14;
+        const std::uint8_t ack[2] = {0x03, 0x07};
+        CHECK_EQ(lsim_mac_append_fopts(fopts, &flen, ack, 2),
+                 LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::BufferTooSmall));
+        CHECK_EQ(flen, std::uint8_t{14});
+        CHECK_EQ(lsim_mac_append_fopts(fopts, &flen, ack, 1) , 0);
+        CHECK_EQ(flen, std::uint8_t{15});
+        CHECK_EQ(fopts[14], std::uint8_t{0x03});
     }
 }

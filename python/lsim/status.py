@@ -45,6 +45,11 @@ _NAMES = {
     504: "trop d'obstacles (limite 10 000)",
     505: "environnement : entrée invalide (pointeur nul avec obstacles déclarés)",
     506: "couverture : travail de calcul trop grand (azimuts x portée x obstacles)",
+    # 600..649 : commandes MAC
+    601: "commande MAC : tampon trop petit ou FOpts plein",
+    602: "commande MAC : charge utile tronquée ou bit RFU non nul",
+    603: "commande MAC : champ hors domaine",
+    604: "commande MAC : CID non implémenté",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

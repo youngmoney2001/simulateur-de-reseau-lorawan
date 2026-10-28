@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: Apache-2.0
+// Surface C des commandes MAC LoRaWAN 1.1 (voir lsim/c_api.h).
+// Chaque fonction intercepte les exceptions : aucune ne traverse la frontière C.
+#include <array>
+#include <cstring>
+
+#include "lsim/c_api.h"
+#include "lsim/lora_phy.hpp"
+#include "lsim/mac_commands.hpp"
+
+namespace {
+
+using lsim::lorawan::kMaxFOpts;
+using namespace lsim::lorawan::mac;
+using Buf = std::array<std::uint8_t, kMaxCommandBytes>;
+
+std::int32_t map_mac(MacStatus s) {
+    if (s == MacStatus::Ok) {
+        return 0;
+    }
+    return LSIM_STATUS_MAC_BASE + static_cast<std::int32_t>(s);
+}
+
+// Champs de charge utile lus d'un lsim_mac_command selon son kind.
+bool to_cpp_and_encode(const lsim_mac_command& c, Buf& out, std::size_t& len, MacStatus& st) {
+    switch (c.kind) {
+        case LSIM_MAC_LINK_CHECK_REQ:
+            st = encode_empty(Cid::LinkCheck, Direction::Uplink, out, len);
+            return true;
+        case LSIM_MAC_LINK_CHECK_ANS: {
+            LinkCheckAns v;
+            v.margin = c.margin;
+            v.gw_cnt = c.gw_cnt;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_LINK_ADR_REQ: {
+            LinkAdrReq v;
+            v.data_rate = c.data_rate;
+            v.tx_power = c.tx_power;
+            v.ch_mask = c.ch_mask;
+            v.ch_mask_cntl = c.ch_mask_cntl;
+            v.nb_trans = c.nb_trans;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_LINK_ADR_ANS: {
+            LinkAdrAns v;
+            v.channel_mask_ack = c.ack_channel_mask != 0;
+            v.data_rate_ack = c.ack_data_rate != 0;
+            v.power_ack = c.ack_power != 0;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_DUTY_CYCLE_REQ: {
+            DutyCycleReq v;
+            v.max_dcycle = c.max_dcycle;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_DUTY_CYCLE_ANS:
+            st = encode_empty(Cid::DutyCycle, Direction::Uplink, out, len);
+            return true;
+        case LSIM_MAC_DEV_STATUS_REQ:
+            st = encode_empty(Cid::DevStatus, Direction::Downlink, out, len);
+            return true;
+        case LSIM_MAC_DEV_STATUS_ANS: {
+            DevStatusAns v;
+            v.battery = c.battery;
+            v.margin = c.dev_margin;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_REKEY_IND:
+        case LSIM_MAC_REKEY_CONF: {
+            Rekey v;
+            v.minor = c.lorawan_minor;
+            st = encode(v, c.kind == LSIM_MAC_REKEY_IND ? Direction::Uplink : Direction::Downlink, out, len);
+            return true;
+        }
+        default:
+            st = MacStatus::UnknownCommand;
+            return false;
+    }
+}
+
+}  // namespace
+
+int32_t lsim_mac_encode(const lsim_mac_command* cmd, uint8_t out[LSIM_MAC_MAX_COMMAND_BYTES], size_t* out_len) {
+    if (cmd == nullptr || out == nullptr || out_len == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_len = 0;
+    std::memset(out, 0, LSIM_MAC_MAX_COMMAND_BYTES);
+    try {
+        Buf buf{};
+        std::size_t len = 0;
+        MacStatus st = MacStatus::UnknownCommand;
+        to_cpp_and_encode(*cmd, buf, len, st);
+        if (st != MacStatus::Ok) {
+            return map_mac(st);
+        }
+        std::memcpy(out, buf.data(), len);
+        *out_len = len;
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_mac_command* out,
+                        size_t* consumed) {
+    if (in == nullptr || out == nullptr || consumed == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    *consumed = 0;
+    try {
+        const Direction dir = direction == LSIM_MAC_DOWNLINK ? Direction::Downlink : Direction::Uplink;
+        std::size_t size = 0;
+        MacStatus st = command_size(dir, in, len, size);
+        if (st != MacStatus::Ok) {
+            return map_mac(st);
+        }
+        const std::uint8_t cid = in[0];
+        const std::uint8_t* p = in;
+        const std::size_t n = size;
+        if (dir == Direction::Uplink) {
+            switch (cid) {
+                case 0x02: out->kind = LSIM_MAC_LINK_CHECK_REQ; break;
+                case 0x03: {
+                    LinkAdrAns v;
+                    st = decode(p, n, v);
+                    out->ack_channel_mask = v.channel_mask_ack;
+                    out->ack_data_rate = v.data_rate_ack;
+                    out->ack_power = v.power_ack;
+                    out->kind = LSIM_MAC_LINK_ADR_ANS;
+                    break;
+                }
+                case 0x04: out->kind = LSIM_MAC_DUTY_CYCLE_ANS; break;
+                case 0x06: {
+                    DevStatusAns v;
+                    st = decode(p, n, v);
+                    out->battery = v.battery;
+                    out->dev_margin = v.margin;
+                    out->kind = LSIM_MAC_DEV_STATUS_ANS;
+                    break;
+                }
+                case 0x0B: {
+                    Rekey v;
+                    st = decode(p, n, v, Direction::Uplink);
+                    out->lorawan_minor = v.minor;
+                    out->kind = LSIM_MAC_REKEY_IND;
+                    break;
+                }
+                default: st = MacStatus::UnknownCommand; break;
+            }
+        } else {
+            switch (cid) {
+                case 0x02: {
+                    LinkCheckAns v;
+                    st = decode(p, n, v);
+                    out->margin = v.margin;
+                    out->gw_cnt = v.gw_cnt;
+                    out->kind = LSIM_MAC_LINK_CHECK_ANS;
+                    break;
+                }
+                case 0x03: {
+                    LinkAdrReq v;
+                    st = decode(p, n, v);
+                    out->data_rate = v.data_rate;
+                    out->tx_power = v.tx_power;
+                    out->ch_mask = v.ch_mask;
+                    out->ch_mask_cntl = v.ch_mask_cntl;
+                    out->nb_trans = v.nb_trans;
+                    out->kind = LSIM_MAC_LINK_ADR_REQ;
+                    break;
+                }
+                case 0x04: {
+                    DutyCycleReq v;
+                    st = decode(p, n, v);
+                    out->max_dcycle = v.max_dcycle;
+                    out->kind = LSIM_MAC_DUTY_CYCLE_REQ;
+                    break;
+                }
+                case 0x06: out->kind = LSIM_MAC_DEV_STATUS_REQ; break;
+                case 0x0B: {
+                    Rekey v;
+                    st = decode(p, n, v, Direction::Downlink);
+                    out->lorawan_minor = v.minor;
+                    out->kind = LSIM_MAC_REKEY_CONF;
+                    break;
+                }
+                default: st = MacStatus::UnknownCommand; break;
+            }
+        }
+        if (st != MacStatus::Ok) {
+            std::memset(out, 0, sizeof *out);
+            return map_mac(st);
+        }
+        *consumed = size;
+        return 0;
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_mac_append_fopts(uint8_t fopts[15], uint8_t* fopts_len, const uint8_t* cmd, size_t cmd_len) {
+    if (fopts == nullptr || fopts_len == nullptr || cmd == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    if (cmd_len == 0 || cmd_len > kMaxCommandBytes || *fopts_len > kMaxFOpts) {
+        return map_mac(MacStatus::MalformedPayload);
+    }
+    try {
+        std::array<std::uint8_t, kMaxFOpts> buf{};
+        std::memcpy(buf.data(), fopts, kMaxFOpts);
+        std::uint8_t len = *fopts_len;
+        Buf c{};
+        std::memcpy(c.data(), cmd, cmd_len);
+        const MacStatus st = append_to_fopts(buf, len, c, cmd_len);
+        if (st != MacStatus::Ok) {
+            return map_mac(st);
+        }
+        std::memcpy(fopts, buf.data(), kMaxFOpts);
+        *fopts_len = len;
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}

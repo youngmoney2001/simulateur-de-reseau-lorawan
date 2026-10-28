@@ -39,6 +39,26 @@ class _CSessionKeys11(ctypes.Structure):
     ]
 
 
+class _CMacCommand(ctypes.Structure):
+    _fields_ = [
+        ("kind", ctypes.c_uint8),
+        ("margin", ctypes.c_uint8),
+        ("gw_cnt", ctypes.c_uint8),
+        ("data_rate", ctypes.c_uint8),
+        ("tx_power", ctypes.c_uint8),
+        ("ch_mask", ctypes.c_uint16),
+        ("ch_mask_cntl", ctypes.c_uint8),
+        ("nb_trans", ctypes.c_uint8),
+        ("ack_channel_mask", ctypes.c_uint8),
+        ("ack_data_rate", ctypes.c_uint8),
+        ("ack_power", ctypes.c_uint8),
+        ("max_dcycle", ctypes.c_uint8),
+        ("battery", ctypes.c_uint8),
+        ("dev_margin", ctypes.c_int8),
+        ("lorawan_minor", ctypes.c_uint8),
+    ]
+
+
 class _CUplinkFrame(ctypes.Structure):
     _fields_ = [
         ("dev_addr", ctypes.c_uint32),
@@ -279,3 +299,13 @@ LIB.lsim_encode_join_accept.argtypes = [
 LIB.lsim_decode_join_accept.restype = ctypes.c_int32
 LIB.lsim_decode_join_accept.argtypes = [
     _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, _U8P, ctypes.POINTER(_CJoinAccept)]
+LIB.lsim_mac_encode.restype = ctypes.c_int32
+LIB.lsim_mac_encode.argtypes = [
+    ctypes.POINTER(_CMacCommand), _U8P, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_mac_decode.restype = ctypes.c_int32
+LIB.lsim_mac_decode.argtypes = [
+    _U8P, ctypes.c_size_t, ctypes.c_uint8, ctypes.POINTER(_CMacCommand),
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_mac_append_fopts.restype = ctypes.c_int32
+LIB.lsim_mac_append_fopts.argtypes = [
+    _U8P, ctypes.POINTER(ctypes.c_uint8), _U8P, ctypes.c_size_t]
