@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lsim — carte des résultats</title>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <aside id="panel" aria-label="Résultats">
+      <h1>Résultats de simulation</h1>
+      <label class="file">
+        Charger un GeoJSON
+        <input id="file" type="file" accept=".geojson,.json,application/geo+json,application/json" />
+      </label>
+      <dl id="summary">
+        <dt>Scénario</dt><dd id="s-name">—</dd>
+        <dt>Empreinte (SHA-256)</dt><dd id="s-hash">—</dd>
+        <dt>Émises / reçues</dt><dd id="s-counts">—</dd>
+        <dt>Taux de livraison</dt><dd id="s-pdr">—</dd>
+        <dt>Dispositifs</dt><dd id="s-devices">—</dd>
+      </dl>
+      <ul id="legend" aria-label="Légende du taux de livraison">
+        <li><span style="background:#2e7d32"></span>≥ 95 %</li>
+        <li><span style="background:#9ccc65"></span>80 à 95 %</li>
+        <li><span style="background:#ff9800"></span>50 à 80 %</li>
+        <li><span style="background:#d32f2f"></span>&lt; 50 %</li>
+        <li><span style="background:#9e9e9e"></span>sans émission</li>
+      </ul>
+      <section id="detail" aria-live="polite">Cliquez un dispositif pour le détail.</section>
+      <p id="error" role="alert"></p>
+    </aside>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

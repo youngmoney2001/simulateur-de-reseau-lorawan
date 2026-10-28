@@ -7,3 +7,6 @@ __pycache__/
 *.egg-info/
 .DS_Store
 build-*/
+node_modules/
+web/dist/
+web/public/cesium/

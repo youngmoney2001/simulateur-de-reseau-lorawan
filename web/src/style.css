@@ -1,0 +1,17 @@
+html, body, #cesiumContainer { margin: 0; height: 100%; width: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+#panel {
+  position: absolute; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px);
+  overflow: auto; background: rgba(255, 255, 255, 0.94); border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); font-size: 14px; color: #1b1b1b;
+}
+#panel h1 { font-size: 16px; margin: 0 0 8px; }
+#panel label.file { display: block; margin-bottom: 10px; }
+#panel input[type="file"] { display: block; margin-top: 4px; width: 100%; }
+#summary { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0 0 10px; }
+#summary dt { color: #555; }
+#summary dd { margin: 0; word-break: break-all; }
+#legend { list-style: none; padding: 0; margin: 0 0 10px; }
+#legend li { display: flex; align-items: center; gap: 6px; }
+#legend span { display: inline-block; width: 14px; height: 14px; border-radius: 3px; }
+#detail { border-top: 1px solid #ddd; padding-top: 8px; min-height: 2em; }
+#error { color: #b00020; min-height: 1em; }

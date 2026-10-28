@@ -50,6 +50,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ⬜ Notebooks pour les bureaux d'études
 
 ## Jalon 4 — Visualisation 3D et produit
-- ⬜ Carte 3D CesiumJS (Apache-2.0) : nœuds, gateways, zones de couverture
+- ✅ Carte 3D CesiumJS (Apache-2.0) : passerelle, zones de couverture natives, dispositifs colorés par PDR (PointPrimitiveCollection), détail au clic, chargement GeoJSON validé
+- ⬜ Terrain et obstacles dans la carte (aujourd'hui terrain plat)
+- ⬜ Fournisseur de tuiles sous contrat pour l'usage commercial
 - ⬜ Rapports PDF/Excel, gestion multi-utilisateurs
 - ⬜ Empaquetage, documentation, cycle de release
