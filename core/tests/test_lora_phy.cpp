@@ -63,7 +63,7 @@ void test_sensitivity_125khz_table() {
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, s)), 0);
     CHECK_NEAR(s, -123.0, 1e-9);
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw125kHz, s)), 0);
-    CHECK_NEAR(s, -137.0, 1e-9);
+    CHECK_NEAR(s, -136.0, 1e-9);
     // Sensibilité décroissante (plus négative) quand SF augmente.
     double prev = 0.0;
     receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, prev);

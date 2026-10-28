@@ -43,10 +43,10 @@ void test_log_distance_matches_free_space_when_n_is_2() {
 }
 
 void test_mapl_and_range_roundtrip() {
-    // Budget : +14 dBm, antennes 0 dBi, sensibilité SF12 -137 dBm, marge 0.
+    // Budget : +14 dBm, antennes 0 dBi, sensibilité SF12 -136 dBm, marge 0.
     LinkBudget b;
-    const BudgetResult mapl = maximum_allowable_path_loss_db(b, -137.0);
-    CHECK_NEAR(mapl.value, 151.0, 1e-9);
+    const BudgetResult mapl = maximum_allowable_path_loss_db(b, -136.0);
+    CHECK_NEAR(mapl.value, 150.0, 1e-9);
 
     LogDistanceModel m;
     m.exponent = 2.7;
@@ -62,8 +62,8 @@ void test_fade_margin_reduces_range() {
     LinkBudget no_margin;
     LinkBudget with_margin;
     with_margin.fade_margin_db = 10.0;
-    const double r0 = max_range_m(m, maximum_allowable_path_loss_db(no_margin, -137.0).value).value;
-    const double r1 = max_range_m(m, maximum_allowable_path_loss_db(with_margin, -137.0).value).value;
+    const double r0 = max_range_m(m, maximum_allowable_path_loss_db(no_margin, -136.0).value).value;
+    const double r1 = max_range_m(m, maximum_allowable_path_loss_db(with_margin, -136.0).value).value;
     CHECK_TRUE(r1 < r0);
 }
 

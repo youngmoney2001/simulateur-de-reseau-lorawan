@@ -11,7 +11,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Tests sous ASan + UBSan, fuzzing déterministe du codec de trame
 
 ## Jalon 1 — Couche radio et propagation
-- ✅ Sensibilité SX1276 125/250/500 kHz (SF7–SF12) : blocs RFS_L*_HF du datasheet Rev. 4 (LnaBoost, bande 1, chemin Rx/Tx séparé). ⬜ Écart à vérifier : les valeurs 125 kHz SF11/SF12 du code (−134,5 / −137 dBm) diffèrent du datasheet fourni (−133 / −136 dBm) ; non modifiées sans décision
+- ✅ Sensibilité SX1276 125/250/500 kHz (SF7–SF12) : blocs RFS_L*_HF du datasheet Rev. 4 (LnaBoost, bande 1, chemin Rx/Tx séparé). Valeurs 125 kHz SF11/SF12 alignées sur le datasheet (−133 / −136 dBm, au lieu de −134,5 / −137 dBm)
 - ✅ Perte espace libre, log-distance, perte maximale admissible (MAPL), portée inverse
 - ✅ Sensibilités 250/500 kHz vérifiées sur le datasheet SX1276 Rev. 4 fourni (Table 10, RFS_L250_HF et RFS_L500_HF) et encodées (SF7–SF12) ; conditions LnaBoost / bande 1 / chemin Rx/Tx séparé, identiques au bloc 125 kHz
 - ✅ Relief (grille d'altitudes bilinéaire, MNT CSV) et obstacles (pavés) : perte log-distance + diffraction de couteau unique (Lee, seulement si l'obstruction dépasse la ligne de visée) + pénétration ; API C `lsim_simulate_uplinks_env`, scénario YAML `environment:`

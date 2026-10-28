@@ -9,15 +9,14 @@ namespace {
 // (LoRa Receiver Specification), blocs RFS_L125_HF, RFS_L250_HF, RFS_L500_HF.
 // Conditions communes : « highest LNA gain, LnaBoost for Band 1, using split
 // Rx/Tx path », valeurs typiques, SF6..SF12 dans l'ordre du tableau (SF6 non
-// exposé ici). Le bloc 125 kHz est conservé tel quel ; ses valeurs SF11 et SF12
-// diffèrent de ce datasheet (voir docs/ROADMAP.md).
+// exposé ici). Bloc RFS_L125_HF : SF11 = −133, SF12 = −136 dBm.
 constexpr double kSensitivity125[] = {
     -123.0,  // SF7
     -126.0,  // SF8
     -129.0,  // SF9
     -132.0,  // SF10
-    -134.5,  // SF11
-    -137.0,  // SF12
+    -133.0,  // SF11
+    -136.0,  // SF12
 };
 constexpr double kSensitivity250[] = {
     -120.0,  // SF7
