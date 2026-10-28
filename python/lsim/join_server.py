@@ -13,7 +13,10 @@ ne génère pas le join-accept qui les suit. La spec LoRaWAN 1.1 (§6.2.4.1, §6
 tableaux 13 et 14) ne définit ni DevNonce ni JoinEUI pour ce join-accept (type 0/2 : ni JoinEUI
 ni DevNonce ; type 1 : pas de DevNonce) : le MIC JSIntKey et le chiffrement JSEncKey ne peuvent pas
 être encodés sans entrée inventée. Levée par un erratum officiel, pas par ce module.
-Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé.
+Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé de racine.
+La session de données (clés de session 1.1 et compteurs) est créée dans la même transaction que
+le join-accept : une jointure acceptée sans session est impossible. Sans AppKey, AppSKey n'est
+pas utilisable (FPort > 0 refusé par la couche données).
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from typing import Callable, Optional, Union
 
 from lsim.join_store import DurableJoinStore
 from lsim.rejoin import Rejoin02, Rejoin1
-from lsim.security import JoinAccept, encode_join_accept
+from lsim.security import JoinAccept, derive_session_keys_11, encode_join_accept
 
 _JOIN_REQUEST_LEN = 23
 _REJOIN_02_LEN = 19
@@ -39,9 +42,10 @@ class DeviceKeys:
     nwk_key: bytes = field(repr=False)                           # join-request, join-accept
     s_nwk_s_int_key: Optional[bytes] = field(default=None, repr=False)   # rejoin types 0 et 2
     js_int_key: Optional[bytes] = field(default=None, repr=False)        # rejoin type 1
+    app_key: Optional[bytes] = field(default=None, repr=False)           # dérivation AppSKey
 
     def __post_init__(self) -> None:
-        for name in ("nwk_key", "s_nwk_s_int_key", "js_int_key"):
+        for name in ("nwk_key", "app_key", "s_nwk_s_int_key", "js_int_key"):
             value = getattr(self, name)
             if value is None and name != "nwk_key":
                 continue
@@ -94,11 +98,17 @@ class JoinServer:
             dev_addr = (self._nwk_id << 25) | nwk_addr
             tx.registry.on_join_accepted(req.dev_eui)
             tx.set_device_address(req.dev_eui, dev_addr)
+            join_nonce_wire = join_nonce.to_bytes(3, "little")
             accept = encode_join_accept(
-                JoinAccept(join_nonce=join_nonce.to_bytes(3, "little"), net_id=self._net_id,
+                JoinAccept(join_nonce=join_nonce_wire, net_id=self._net_id,
                            dev_addr=dev_addr, dl_settings=self._dl_settings,
                            rx_delay=self._rx_delay),
                 keys.nwk_key, req.dev_eui, req.join_eui, req.dev_nonce)
+            # AppSKey ne dépend que de AppKey : sans AppKey, elle n'est pas exploitable.
+            session = derive_session_keys_11(
+                keys.nwk_key, keys.app_key or bytes(16), join_nonce_wire, req.join_eui,
+                req.dev_nonce)
+            tx.put_session(req.dev_eui, dev_addr, session, has_app_key=keys.app_key is not None)
         return JoinOutcome(dev_eui=req.dev_eui, join_eui=req.join_eui, dev_nonce=req.dev_nonce,
                            join_nonce=join_nonce, dev_addr=dev_addr, accept_wire=accept)
 

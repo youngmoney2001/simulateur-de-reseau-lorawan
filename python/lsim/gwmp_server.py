@@ -6,8 +6,10 @@ Comportement :
 - PULL_DATA : enregistrement de la route de la passerelle, PULL_ACK ;
 - join-request valide : join-accept en PULL_RESP, à rxpk.tmst + JOIN_ACCEPT_DELAY1 (5 s,
   RP002-1.0.2 §2.3), même fréquence et même débit que l'émission (RX1DROffset 0) ;
-- rejoin (types 0, 1, 2) et données : comptés, sans réponse (limites documentées) ;
+- uplink de données valide : voir `lsim.uplink` (ACK et downlink en file, en RX1 à +1 s) ;
+- rejoin (types 0, 1, 2) : comptés, sans réponse (limites documentées) ;
 - tout ce qui est invalide est compté et jeté, sans réponse (pas d'amplification).
+- une livraison (uplink de données accepté) est transmise au callback `on_delivery`.
 
 Le traitement crypto/persistance est synchrone (SQLite) : il tourne dans un pool de threads,
 avec un plafond de paquets en cours (`max_inflight`) : au-delà, les paquets sont comptés
@@ -29,6 +31,7 @@ from lsim import gwmp
 from lsim.gwmp import ProtocolError, PullData, PushData, Rxpk, TxAck, Txpk
 from lsim.join_server import JoinServer
 from lsim.lora import StatusError
+from lsim.uplink import Delivery, Outcome
 
 log = logging.getLogger("lsim.gwmp")
 
@@ -48,30 +51,29 @@ def _same_channel(rxpk: Rxpk) -> float:
 
 
 class JoinUplinkHandler:
-    """Transforme une join-request reçue en join-accept (ou None)."""
+    """Transforme une join-request reçue en join-accept (ou rejet)."""
 
     def __init__(self, join_server: JoinServer, *,
                  rx1_frequency: Rx1Frequency = _same_channel) -> None:
         self._join = join_server
         self._rx1 = rx1_frequency
 
-    def handle(self, rxpk: Rxpk) -> tuple[str, Optional[Txpk]]:
-        """Retourne (issue, downlink). Issue : « join_accepted », « rejected », « unhandled »..."""
+    def handle(self, rxpk: Rxpk) -> Outcome:
         if not rxpk.payload:
-            return "invalid", None
+            return Outcome("invalid")
         mtype = rxpk.payload[0] >> 5
         if mtype == MTYPE_JOIN_REQUEST:
             try:
                 outcome = self._join.handle_join_request(rxpk.payload)
             except (StatusError, KeyError, ValueError):
-                return "join_rejected", None
+                return Outcome("join_rejected")
             tmst = (rxpk.tmst + JOIN_ACCEPT_DELAY1_US) % (2**32)
             txpk = Txpk(tmst=tmst, freq_mhz=self._rx1(rxpk), datr=rxpk.datr, codr=rxpk.codr,
                         payload=outcome.accept_wire)
-            return "join_accepted", txpk
+            return Outcome("join_accepted", txpk=txpk)
         if mtype == MTYPE_REJOIN_REQUEST:
-            return "rejoin_unanswered", None
-        return "data_unhandled", None
+            return Outcome("rejoin_unanswered")
+        return Outcome("data_unhandled")
 
 
 @dataclass
@@ -81,12 +83,14 @@ class _Route:
 
 
 class GwmpServer(asyncio.DatagramProtocol):
-    def __init__(self, handler: JoinUplinkHandler, *,
+    def __init__(self, handler, *,
                  pull_timeout_s: float = DEFAULT_PULL_TIMEOUT_S,
                  max_inflight: int = DEFAULT_MAX_INFLIGHT,
                  executor: Optional[ThreadPoolExecutor] = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 on_delivery: Optional[Callable[[Delivery], None]] = None) -> None:
         self._handler = handler
+        self._on_delivery = on_delivery
         self._pull_timeout = pull_timeout_s
         self._max_inflight = max_inflight
         self._executor = executor
@@ -149,16 +153,22 @@ class GwmpServer(asyncio.DatagramProtocol):
                 continue
             self._inflight += 1
             try:
-                issue, txpk = await loop.run_in_executor(self._executor, self._handler.handle, rxpk)
+                outcome = await loop.run_in_executor(self._executor, self._handler.handle, rxpk)
             except Exception:  # noqa: BLE001 - une erreur interne ne doit pas arrêter le serveur
                 self.stats["handler_error"] += 1
                 log.exception("erreur de traitement d'un paquet")
                 continue
             finally:
                 self._inflight -= 1
-            self.stats[issue] += 1
-            if txpk is not None:
-                self._downlink(msg.gateway_eui, txpk)
+            self.stats[outcome.issue] += 1
+            if outcome.txpk is not None:
+                self._downlink(msg.gateway_eui, outcome.txpk)
+            if outcome.delivery is not None and self._on_delivery is not None:
+                try:
+                    self._on_delivery(outcome.delivery)
+                except Exception:  # noqa: BLE001 - un consommateur défaillant ne bloque pas le serveur
+                    self.stats["delivery_callback_error"] += 1
+                    log.exception("erreur dans le consommateur des livraisons")
 
     def _downlink(self, gateway_eui: bytes, txpk: Txpk) -> None:
         route = self._routes.get(gateway_eui)
@@ -187,7 +197,7 @@ class GwmpServer(asyncio.DatagramProtocol):
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
 
-async def start_server(handler: JoinUplinkHandler, host: str, port: int, **kwargs
+async def start_server(handler, host: str, port: int, **kwargs
                        ) -> tuple[asyncio.DatagramTransport, GwmpServer]:
     loop = asyncio.get_running_loop()
     protocol = GwmpServer(handler, **kwargs)

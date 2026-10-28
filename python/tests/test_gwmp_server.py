@@ -171,8 +171,9 @@ def test_rx1_timestamp_wraps_modulo_32_bits(tmp_path):
     from lsim.gwmp import Rxpk
     rx = Rxpk(tmst=2**32 - 1, freq_mhz=868.1, chan=0, rfch=0, crc_ok=True, datr="SF7BW125",
               codr="4/5", rssi=-60, lsnr=7.0, payload=_join_wire(9))
-    issue, txpk = handler.handle(rx)
-    assert issue == "join_accepted"
+    outcome = handler.handle(rx)
+    assert outcome.issue == "join_accepted"
+    txpk = outcome.txpk
     assert txpk.tmst == (2**32 - 1 + JOIN_ACCEPT_DELAY1_US) % 2**32
 
 
@@ -183,5 +184,7 @@ def test_rejoin_and_data_are_counted_not_answered(tmp_path):
     def rx(payload):
         return Rxpk(tmst=1, freq_mhz=868.1, chan=0, rfch=0, crc_ok=True, datr="SF7BW125",
                     codr="4/5", rssi=-60, lsnr=7.0, payload=payload)
-    assert handler.handle(rx(bytes([0xC0]) + b"\x00" * 18)) == ("rejoin_unanswered", None)
-    assert handler.handle(rx(bytes([0x40]) + b"\x00" * 10)) == ("data_unhandled", None)
+    outcome = handler.handle(rx(bytes([0xC0]) + b"\x00" * 18))
+    assert (outcome.issue, outcome.txpk) == ("rejoin_unanswered", None)
+    outcome = handler.handle(rx(bytes([0x40]) + b"\x00" * 10))
+    assert (outcome.issue, outcome.txpk) == ("data_unhandled", None)

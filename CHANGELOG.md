@@ -29,7 +29,9 @@
 
 ### Passerelles
 - Codec Semtech UDP (GWMP v2) et serveur UDP : join-accept livré à la passerelle en PULL_RESP (fenêtre JOIN_ACCEPT_DELAY1 = 5 s), routes et traitements bornés.
-- Commande `lsim serve` ; Basic Station et trames de données : à venir.
+- Commande `lsim serve` ; Basic Station : à venir.
+- Trames de données EU868 : compteur 32 bits, rejeu refusé, MIC avec TxDr/TxCh, ACK downlink en RX1 à +1 s, retransmission confirmée ré-acquittée, file de downlinks (`lsim downlink`), session créée avec la jointure.
+- Base SQLite créée en mode 0600 ; refus si elle est accessible à d'autres utilisateurs.
 
 ### Données
 - Paramètres de propagation indoor (Université de Siegen, CC BY 4.0) déposés dans

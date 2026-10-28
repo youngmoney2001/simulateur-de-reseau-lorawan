@@ -48,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--db", required=True, help="base SQLite du registre de jointure")
     srv.add_argument("--keys", required=True, help="fichier JSON des clés (mode 600)")
     srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")
+    dl = sub.add_parser("downlink", help="mettre un downlink en file pour un dispositif")
+    dl.add_argument("--db", required=True, help="base SQLite du registre de jointure")
+    dl.add_argument("--dev-eui", required=True, help="DevEUI, 8 octets en hexadécimal")
+    dl.add_argument("--fport", type=int, required=True, help="FPort applicatif (1 à 223)")
+    dl.add_argument("--payload-hex", default="", help="charge utile en hexadécimal")
+    dl.add_argument("--confirmed", action="store_true", help="downlink confirmé")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")
     cal.add_argument("measures", help="CSV : distance_m,path_loss_db")
@@ -61,6 +67,16 @@ def main(argv: list[str] | None = None) -> int:
         return _calibrate(args)
     if args.command == "report":
         return _report(args)
+    if args.command == "downlink":
+        from lsim.serve import enqueue_downlink
+        try:
+            length = enqueue_downlink(Path(args.db), args.dev_eui, args.fport, args.payload_hex,
+                                      args.confirmed)
+        except (ValueError, OSError, KeyError, OverflowError) as exc:
+            print(f"erreur : {exc}", file=sys.stderr)
+            return 2
+        print(f"downlink en file (file : {length})")
+        return 0
     if args.command == "serve":
         from lsim.serve import run as serve_run
         try:

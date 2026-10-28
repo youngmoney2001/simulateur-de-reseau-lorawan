@@ -2,9 +2,14 @@
 
 Secrets :
 - clé d'intégrité du registre : variable d'environnement LSIM_INTEGRITY_KEY (32 caractères hex) ;
-- clés des dispositifs : fichier JSON `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>"}}}`,
+- clés des dispositifs : fichier JSON
+  `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`,
   refusé si accessible au groupe ou aux autres (mode 0600 attendu).
-Aucun secret n'est écrit dans les journaux.
+  Sans app_key : les uplinks FPort 0 sont vérifiés, mais FPort > 0 n'est pas déchiffré ni livré.
+Aucun secret n'est écrit dans les journaux ; les charges utiles ne sont pas journalisées.
+
+Couche données : plan EU868 uniquement (voir `lsim.eu868`). `lsim downlink` met un downlink en
+file ; il est émis au prochain uplink du dispositif (classe A).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from pathlib import Path
 from lsim.gwmp_server import JoinUplinkHandler, start_server
 from lsim.join_server import DeviceKeys, JoinServer
 from lsim.join_store import DurableJoinStore
+from lsim.uplink import DataUplinkHandler, Delivery, UplinkRouter
 
 INTEGRITY_ENV = "LSIM_INTEGRITY_KEY"
 DEFAULT_PORT = 1700          # port conventionnel des passerelles Semtech (choix de déploiement)
@@ -47,24 +53,61 @@ def load_keys_file(path: Path) -> dict[bytes, DeviceKeys]:
         dev_eui = _hex(dev_hex, 8, "DevEUI")
         if not isinstance(entry, dict):
             raise ValueError("entrée de dispositif non objet")
-        table[dev_eui] = DeviceKeys(_hex(entry.get("nwk_key"), 16, f"nwk_key {dev_hex}"))
+        nwk_key = _hex(entry.get("nwk_key"), 16, f"nwk_key {dev_hex}")
+        app_key = None
+        if entry.get("app_key") is not None:
+            app_key = _hex(entry["app_key"], 16, f"app_key {dev_hex}")
+        table[dev_eui] = DeviceKeys(nwk_key, app_key=app_key)
     return table
 
 
-def build_handler(db_path: Path, keys: dict[bytes, DeviceKeys], net_id: bytes) -> JoinUplinkHandler:
+def open_store(db_path: Path) -> DurableJoinStore:
     integrity_hex = os.environ.get(INTEGRITY_ENV)
     if integrity_hex is None:
         raise ValueError(f"variable {INTEGRITY_ENV} absente")
-    integrity = _hex(integrity_hex, 16, INTEGRITY_ENV)
-    store = DurableJoinStore(db_path, integrity)
+    return DurableJoinStore(db_path, _hex(integrity_hex, 16, INTEGRITY_ENV))
 
+
+def build_handler(store: DurableJoinStore, keys: dict[bytes, DeviceKeys], net_id: bytes
+                  ) -> UplinkRouter:
     def provider(dev_eui: bytes) -> DeviceKeys:
         try:
             return keys[dev_eui]
         except KeyError:
             raise KeyError("dispositif inconnu") from None
 
-    return JoinUplinkHandler(JoinServer(store, net_id, provider))
+    return UplinkRouter(JoinUplinkHandler(JoinServer(store, net_id, provider)),
+                        DataUplinkHandler(store))
+
+
+def enqueue_downlink(db_path: Path, dev_eui_hex: str, fport: int, payload_hex: str,
+                     confirmed: bool) -> int:
+    """Met un downlink en file pour un dispositif ; retourne la longueur de la file."""
+    from lsim.eu868 import MAX_QUEUED_PAYLOAD
+
+    dev_eui = _hex(dev_eui_hex, 8, "DevEUI")
+    payload = bytes.fromhex(payload_hex) if payload_hex else b""
+    if not 1 <= fport <= 223:
+        raise ValueError("FPort applicatif : 1 à 223")
+    if len(payload) > MAX_QUEUED_PAYLOAD:
+        raise ValueError(f"charge limitée à {MAX_QUEUED_PAYLOAD} octets (DR0, plan EU868)")
+    store = open_store(db_path)
+    store.enqueue_downlink(dev_eui, fport, confirmed, payload)
+    with store.transaction() as tx:
+        return tx.queue_length(dev_eui)
+
+
+def _log_delivery(delivery: Delivery) -> None:
+    """Journal d'une livraison : sans contenu applicatif (seulement la taille)."""
+    if delivery.payload is None:
+        content = "non déchiffrée" if delivery.fport else "aucune"
+    else:
+        content = f"{len(delivery.payload)} octets"
+    logging.getLogger("lsim.serve").info(
+        "uplink dispositif %s : FCnt %d, FPort %s, %s, charge %s",
+        delivery.dev_eui.hex(), delivery.fcnt,
+        "-" if delivery.fport is None else delivery.fport,
+        "confirmé" if delivery.confirmed else "non confirmé", content)
 
 
 def run(host: str, port: int, db_path: Path, keys_path: Path, net_id_hex: str) -> int:
@@ -73,10 +116,10 @@ def run(host: str, port: int, db_path: Path, keys_path: Path, net_id_hex: str) -
     # multi-octets sont en petit-boutiste (LoRaWAN 1.1 §4.3 : « little endian »).
     net_id = _hex(net_id_hex, 3, "NetID")[::-1]
     keys = load_keys_file(keys_path)
-    handler = build_handler(db_path, keys, net_id)
+    handler = build_handler(open_store(db_path), keys, net_id)
 
     async def main() -> None:
-        transport, protocol = await start_server(handler, host, port)
+        transport, protocol = await start_server(handler, host, port, on_delivery=_log_delivery)
         logging.getLogger("lsim.serve").info(
             "écoute UDP %s:%s, %d dispositif(s)", host, port, len(keys))
         try:
