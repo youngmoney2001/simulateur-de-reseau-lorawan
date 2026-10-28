@@ -26,11 +26,9 @@ def test_sensitivity_decreases_with_sf():
     assert values == sorted(values, reverse=True)
 
 
-@pytest.mark.parametrize("bw", [250_000, 500_000])
-def test_uncalibrated_bandwidth_is_refused_explicitly(bw):
-    with pytest.raises(StatusError) as err:
-        receiver_sensitivity_dbm(7, bw)
-    assert err.value.code == 7  # UncalibratedSensitivity
+@pytest.mark.parametrize("bw,expected", [(250_000, -120.0), (500_000, -116.0)])
+def test_sensitivity_250_500_datasheet_values(bw, expected):
+    assert receiver_sensitivity_dbm(7, bw) == pytest.approx(expected)
 
 
 def test_free_space_reference_values():

@@ -21,9 +21,11 @@ void run_rekey_tests();
 void run_session_tests();
 void run_class_b_tests();
 void run_downlink_tests();
+void run_materials_tests();
 
 int main() {
     run_lora_phy_tests();
+    run_materials_tests();
     run_link_budget_tests();
     run_lorawan_frame_tests();
     run_crypto_tests();

@@ -11,14 +11,14 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Tests sous ASan + UBSan, fuzzing déterministe du codec de trame
 
 ## Jalon 1 — Couche radio et propagation
-- ✅ Sensibilité SX1276 125 kHz (SF7–SF12) ; 250/500 kHz refusées tant que non vérifiées
+- ✅ Sensibilité SX1276 125/250/500 kHz (SF7–SF12) : blocs RFS_L*_HF du datasheet Rev. 4 (LnaBoost, bande 1, chemin Rx/Tx séparé). ⬜ Écart à vérifier : les valeurs 125 kHz SF11/SF12 du code (−134,5 / −137 dBm) diffèrent du datasheet fourni (−133 / −136 dBm) ; non modifiées sans décision
 - ✅ Perte espace libre, log-distance, perte maximale admissible (MAPL), portée inverse
-- ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel : extraits concordants des révisions 4, 5 et 7 (copies Adafruit, Mouser, SparkFun) mais table complète non lisible (récupération du PDF impossible depuis le sandbox) ; aucune valeur encodée à partir d'extraits mélangés
+- ✅ Sensibilités 250/500 kHz vérifiées sur le datasheet SX1276 Rev. 4 fourni (Table 10, RFS_L250_HF et RFS_L500_HF) et encodées (SF7–SF12) ; conditions LnaBoost / bande 1 / chemin Rx/Tx séparé, identiques au bloc 125 kHz
 - ✅ Relief (grille d'altitudes bilinéaire, MNT CSV) et obstacles (pavés) : perte log-distance + diffraction de couteau unique (Lee, seulement si l'obstruction dépasse la ligne de visée) + pénétration ; API C `lsim_simulate_uplinks_env`, scénario YAML `environment:`
 - ✅ Diffraction multi-arêtes (Deygout, 3 arêtes) à la place du couteau unique
 - ✅ Couverture réelle par azimut (relief et obstacles, dichotomie, borne de travail) ; `model: environment` dans le GeoJSON
 - ✅ Outil de calibrage `python -m lsim calibrate mesures.csv` (exposant, PL0, sigma, R2, avertissements)
-- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; ⬜ atténuation des pavés par matériau (source de valeurs par matériau à retenir avant encodage)
+- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; ✅ atténuation par matériau (`core/src/materials.cpp`) : UIT-R P.2040-4 Tableau 3 (diélectriques) et éq. 27a, A = 1636·σ/√ε′ dB/m ; ⬜ branchement sur les pavés (`attenuation_db` aujourd’hui saisi par l’utilisateur) ; plages non strictes : 868 MHz hors plage pour béton/verre (signalé `extrapolated`)
 - ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
