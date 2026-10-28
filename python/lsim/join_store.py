@@ -18,8 +18,9 @@ dans la même transaction que l'acceptation de la jointure.
 
 Sessions et file de downlinks (couche données) : la session (clés de session 1.1 et compteurs)
 est créée dans la transaction du join-accept ; l'ancienne session du même DevEUI est supprimée
-dans la même transaction. Les clés de session sont stockées en clair : le fichier est créé en
-mode 0600 et son mode est vérifié à l'ouverture. Ce choix est à valider (voir la documentation).
+dans la même transaction. Les clés de session, les compteurs et les charges en file sont chiffrés
+au repos (AES-256-GCM, `lsim.sealed`) avec une clé de données distincte, fournie par l'appelant.
+Le fichier est créé en mode 0600 et son mode est vérifié à l'ouverture.
 
 Sécurité du fichier : une base existante accessible par le groupe ou les autres est refusée.
 """
@@ -27,6 +28,7 @@ Sécurité du fichier : une base existante accessible par le groupe ou les autre
 from __future__ import annotations
 
 import os
+import struct
 import sqlite3
 import stat
 from contextlib import contextmanager
@@ -36,6 +38,8 @@ from typing import Iterator, Optional, Union
 
 from lsim.registry import JoinRegistry
 from lsim.rejoin import Rejoin02, Rejoin1
+from lsim.sealed import RecordSealer
+from lsim.plan import Plan, get_plan
 from lsim.security import JoinRequest, SessionKeys11
 
 _SCHEMA = """
@@ -56,21 +60,14 @@ CREATE TABLE IF NOT EXISTS device_addresses (
 CREATE TABLE IF NOT EXISTS sessions (
     dev_addr INTEGER PRIMARY KEY,
     dev_eui BLOB NOT NULL UNIQUE,
-    f_nwk_s_int_key BLOB NOT NULL,
-    s_nwk_s_int_key BLOB NOT NULL,
-    nwk_s_enc_key BLOB NOT NULL,
-    app_s_key BLOB,
-    fcnt_up INTEGER NOT NULL,
-    nfcnt_down INTEGER NOT NULL,
-    afcnt_down INTEGER NOT NULL,
-    pending_conf INTEGER
+    sealed BLOB NOT NULL            -- clés et compteurs, chiffrés (lsim.sealed)
 );
 CREATE TABLE IF NOT EXISTS downlink_queue (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     dev_eui BLOB NOT NULL,
     fport INTEGER NOT NULL,
     confirmed INTEGER NOT NULL,
-    payload BLOB NOT NULL
+    payload BLOB NOT NULL           -- charge applicative, chiffrée (lsim.sealed)
 );
 CREATE INDEX IF NOT EXISTS downlink_queue_eui ON downlink_queue (dev_eui, seq);
 """
@@ -108,9 +105,11 @@ class QueueFullError(OverflowError):
 class Transaction:
     """Accès au registre et aux compteurs, à l'intérieur d'une transaction d'écriture."""
 
-    def __init__(self, conn: sqlite3.Connection, registry: JoinRegistry) -> None:
+    def __init__(self, conn: sqlite3.Connection, registry: JoinRegistry,
+                 sealer: Optional[RecordSealer]) -> None:
         self._conn = conn
         self.registry = registry
+        self._sealer = sealer
 
     def next_value(self, name: str, scope: bytes, limit: int) -> int:
         """Retourne la valeur courante puis l'incrémente ; OverflowError à `limit`."""
@@ -136,19 +135,27 @@ class Transaction:
             "SELECT dev_addr FROM device_addresses WHERE dev_eui = ?", (dev_eui,)).fetchone()
         return row[0] if row else None
 
-    # Sessions
+    # Sessions (chiffrées) : un enregistrement scellé par dispositif, compteurs inclus.
+
+    def _need_sealer(self) -> RecordSealer:
+        if self._sealer is None:
+            raise RuntimeError("clé de données absente : sessions et file indisponibles")
+        return self._sealer
+
+    @staticmethod
+    def _session_aad(dev_addr: int, dev_eui: bytes) -> bytes:
+        return b"lsim/session/v1" + dev_addr.to_bytes(4, "big") + bytes(dev_eui)
 
     def put_session(self, dev_eui: bytes, dev_addr: int, keys: SessionKeys11,
                     has_app_key: bool) -> None:
         """Remplace la session du dispositif (rejoin : l'ancienne disparaît dans la transaction)."""
+        sealer = self._need_sealer()
         self._conn.execute("DELETE FROM sessions WHERE dev_eui = ? OR dev_addr = ?",
                            (dev_eui, dev_addr))
+        plain = _encode_session(keys, has_app_key, fcnt_up=-1, nfcnt=0, afcnt=0, pending=None)
         self._conn.execute(
-            "INSERT INTO sessions (dev_addr, dev_eui, f_nwk_s_int_key, s_nwk_s_int_key,"
-            " nwk_s_enc_key, app_s_key, fcnt_up, nfcnt_down, afcnt_down, pending_conf)"
-            " VALUES (?, ?, ?, ?, ?, ?, -1, 0, 0, NULL)",
-            (dev_addr, dev_eui, keys.f_nwk_s_int_key, keys.s_nwk_s_int_key, keys.nwk_s_enc_key,
-             keys.app_s_key if has_app_key else None))
+            "INSERT INTO sessions (dev_addr, dev_eui, sealed) VALUES (?, ?, ?)",
+            (dev_addr, dev_eui, sealer.seal(plain, self._session_aad(dev_addr, dev_eui))))
         # Une file de la session précédente ne doit pas survivre au rejoin.
         self._conn.execute("DELETE FROM downlink_queue WHERE dev_eui = ?", (dev_eui,))
 
@@ -159,38 +166,43 @@ class Transaction:
         return self._session("WHERE dev_eui = ?", dev_eui)
 
     def _session(self, where: str, value) -> Optional[SessionRecord]:
+        sealer = self._need_sealer()
         row = self._conn.execute(
-            "SELECT dev_addr, dev_eui, f_nwk_s_int_key, s_nwk_s_int_key, nwk_s_enc_key,"
-            " app_s_key, fcnt_up, nfcnt_down, afcnt_down, pending_conf FROM sessions " + where,
-            (value,)).fetchone()
+            "SELECT dev_addr, dev_eui, sealed FROM sessions " + where, (value,)).fetchone()
         if row is None:
             return None
-        has_app = row[5] is not None
-        keys = SessionKeys11(
-            f_nwk_s_int_key=bytes(row[2]), s_nwk_s_int_key=bytes(row[3]),
-            nwk_s_enc_key=bytes(row[4]),
-            app_s_key=bytes(row[5]) if has_app else bytes(16))
-        return SessionRecord(dev_addr=row[0], dev_eui=bytes(row[1]), keys=keys,
-                             has_app_key=has_app, fcnt_up=row[6], nfcnt_down=row[7],
-                             afcnt_down=row[8], pending_conf=row[9])
+        dev_addr, dev_eui, blob = row[0], bytes(row[1]), bytes(row[2])
+        plain = sealer.open(blob, self._session_aad(dev_addr, dev_eui))
+        return _decode_session(dev_addr, dev_eui, plain)
 
     def save_counters(self, dev_addr: int, fcnt_up: int, nfcnt_down: int, afcnt_down: int,
                       pending_conf: Optional[int]) -> None:
-        self._conn.execute(
-            "UPDATE sessions SET fcnt_up = ?, nfcnt_down = ?, afcnt_down = ?, pending_conf = ?"
-            " WHERE dev_addr = ?",
-            (fcnt_up, nfcnt_down, afcnt_down, pending_conf, dev_addr))
+        rec = self.session_by_addr(dev_addr)
+        if rec is None:
+            raise KeyError("aucune session à mettre à jour")
+        sealer = self._need_sealer()
+        plain = _encode_session(rec.keys, rec.has_app_key, fcnt_up=fcnt_up,
+                                nfcnt=nfcnt_down, afcnt=afcnt_down, pending=pending_conf)
+        self._conn.execute("UPDATE sessions SET sealed = ? WHERE dev_addr = ?",
+                           (sealer.seal(plain, self._session_aad(dev_addr, rec.dev_eui)),
+                            dev_addr))
 
-    # File de downlinks
+    # File de downlinks (charges chiffrées, liées à DevEUI, FPort et ConfirmedFlag)
+
+    @staticmethod
+    def _queue_aad(dev_eui: bytes, fport: int, confirmed: bool) -> bytes:
+        return b"lsim/queue/v1" + bytes(dev_eui) + bytes([fport, 1 if confirmed else 0])
 
     def enqueue(self, dev_eui: bytes, fport: int, confirmed: bool, payload: bytes) -> int:
+        sealer = self._need_sealer()
         count = self._conn.execute(
             "SELECT COUNT(*) FROM downlink_queue WHERE dev_eui = ?", (dev_eui,)).fetchone()[0]
         if count >= QUEUE_LIMIT:
             raise QueueFullError(f"file pleine ({QUEUE_LIMIT} downlinks)")
+        sealed = sealer.seal(payload, self._queue_aad(dev_eui, fport, confirmed))
         cur = self._conn.execute(
             "INSERT INTO downlink_queue (dev_eui, fport, confirmed, payload) VALUES (?, ?, ?, ?)",
-            (dev_eui, fport, 1 if confirmed else 0, payload))
+            (dev_eui, fport, 1 if confirmed else 0, sealed))
         return cur.lastrowid
 
     def queue_head(self, dev_eui: bytes) -> Optional[QueueItem]:
@@ -199,7 +211,9 @@ class Transaction:
             " ORDER BY seq LIMIT 1", (dev_eui,)).fetchone()
         if row is None:
             return None
-        return QueueItem(seq=row[0], fport=row[1], confirmed=bool(row[2]), payload=bytes(row[3]))
+        fport, confirmed = row[1], bool(row[2])
+        payload = self._need_sealer().open(bytes(row[3]), self._queue_aad(dev_eui, fport, confirmed))
+        return QueueItem(seq=row[0], fport=fport, confirmed=confirmed, payload=payload)
 
     def dequeue(self, seq: int) -> None:
         self._conn.execute("DELETE FROM downlink_queue WHERE seq = ?", (seq,))
@@ -209,18 +223,49 @@ class Transaction:
             "SELECT COUNT(*) FROM downlink_queue WHERE dev_eui = ?", (dev_eui,)).fetchone()[0]
 
 
+# Format interne d'une session (clair avant scellement) : clés, has_app, FCntUp, NFCntDown,
+# AFCntDown, drapeau et valeur de la confirmation en attente.
+_SESSION_FMT = ">16s16s16s16sBqIIBI"
+
+
+def _encode_session(keys: SessionKeys11, has_app: bool, *, fcnt_up: int, nfcnt: int,
+                    afcnt: int, pending: Optional[int]) -> bytes:
+    return struct.pack(
+        _SESSION_FMT, keys.f_nwk_s_int_key, keys.s_nwk_s_int_key, keys.nwk_s_enc_key,
+        keys.app_s_key if has_app else bytes(16), 1 if has_app else 0,
+        fcnt_up, nfcnt, afcnt, 0 if pending is None else 1, 0 if pending is None else pending)
+
+
+def _decode_session(dev_addr: int, dev_eui: bytes, plain: bytes) -> SessionRecord:
+    f_nwk, s_nwk, nwk_enc, app, has_app, fcnt_up, nfcnt, afcnt, pend_flag, pend = \
+        struct.unpack(_SESSION_FMT, plain)
+    keys = SessionKeys11(f_nwk_s_int_key=f_nwk, s_nwk_s_int_key=s_nwk, nwk_s_enc_key=nwk_enc,
+                         app_s_key=app)
+    return SessionRecord(dev_addr=dev_addr, dev_eui=dev_eui, keys=keys,
+                         has_app_key=bool(has_app), fcnt_up=fcnt_up, nfcnt_down=nfcnt,
+                         afcnt_down=afcnt, pending_conf=pend if pend_flag else None)
+
+
 class DurableJoinStore:
     """Registre de jointure persistant. Plusieurs processus peuvent l'ouvrir simultanément."""
 
-    def __init__(self, path: Union[str, Path], integrity_key: bytes) -> None:
+    def __init__(self, path: Union[str, Path], integrity_key: bytes,
+                 data_key: Optional[bytes] = None) -> None:
+        """`data_key` (32 octets) chiffre sessions et file ; sans elle, ces opérations sont refusées."""
         self._path = str(path)
         self._key = _check_key(integrity_key)
+        self._sealer = RecordSealer(data_key) if data_key is not None else None
         _secure_file(self._path)
         conn = self._connect()
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=FULL")
             conn.executescript(_SCHEMA)
+            cols = [row[1] for row in conn.execute("PRAGMA table_info(sessions)")]
+            if "sealed" not in cols:
+                raise ValueError(
+                    "base au format de développement (sessions en clair) : supprimer le fichier "
+                    "et relancer la jointure ; le format chiffré est requis")
         finally:
             conn.close()
 
@@ -241,7 +286,7 @@ class DurableJoinStore:
             conn.execute("BEGIN IMMEDIATE")
             registry = self._load(conn)
             try:
-                yield Transaction(conn, registry)
+                yield Transaction(conn, registry, self._sealer)
                 blob = registry.export_state(self._key)
             finally:
                 registry.close()
@@ -275,13 +320,23 @@ class DurableJoinStore:
             tx.registry.on_join_accepted(dev_eui)
 
     def enqueue_downlink(self, dev_eui: bytes, fport: int, confirmed: bool,
-                         payload: bytes) -> int:
-        """Ajoute un downlink à la file ; refuse si la session n'a pas la clé applicative (FPort > 0)."""
+                         payload: bytes, plan: Optional[Plan] = None) -> int:
+        """Ajoute un downlink à la file.
+
+        Refuse : session absente ; FPort hors 1..223 ; FPort > 0 sans clé applicative ; charge
+        au-delà de `plan.queue_payload_max` (la fenêtre RX1 la plus étroite du plan).
+        """
+        plan = plan if plan is not None else get_plan("EU868")
+        if not 1 <= fport <= 223:
+            raise ValueError("FPort applicatif : 1 à 223")
+        if len(payload) > plan.queue_payload_max:
+            raise ValueError(
+                f"charge limitée à {plan.queue_payload_max} octets (plan {plan.name})")
         with self.transaction() as tx:
             session = tx.session_by_eui(dev_eui)
             if session is None:
                 raise KeyError("aucune session pour ce DevEUI")
-            if fport > 0 and not session.has_app_key:
+            if not session.has_app_key:
                 raise ValueError("clé applicative absente : FPort > 0 impossible")
             return tx.enqueue(dev_eui, fport, confirmed, payload)
 

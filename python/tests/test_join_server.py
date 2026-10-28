@@ -14,6 +14,7 @@ from lsim.security import JoinRequest, decode_join_accept, encode_join_request
 NET_ID = bytes([0x13, 0x00, 0x00])
 JOIN_EUI = bytes.fromhex("1122334455667788")
 INTEGRITY_KEY = bytes(range(16))
+DATA_KEY = bytes(range(0x80, 0xA0))
 NWK_KEY = bytes(range(0x10, 0x20))
 SINT_KEY = bytes(range(0x30, 0x40))
 JSINT_KEY = bytes(range(0x50, 0x60))
@@ -39,7 +40,7 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def server(db_path):
-    return JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY), NET_ID, _keys)
+    return JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
 
 
 def _raw_blob(path) -> bytes:
@@ -97,14 +98,14 @@ def test_join_nonce_increments_per_device(server):
 
 
 def test_state_survives_restart(db_path):
-    s1 = JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY), NET_ID, _keys)
+    s1 = JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
     s1.handle_join_request(_join(DEV_A, 9))
-    s2 = JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY), NET_ID, _keys)
+    s2 = JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
     with pytest.raises(StatusError):
         s2.handle_join_request(_join(DEV_A, 9))        # le DevNonce est mémorisé
     out = s2.handle_join_request(_join(DEV_A, 10))
     assert out.join_nonce == 1                        # le compteur continue
-    assert DurableJoinStore(db_path, INTEGRITY_KEY).device_count() == 1
+    assert DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY).device_count() == 1
 
 
 def test_tampered_database_is_refused(server, db_path):
@@ -116,7 +117,7 @@ def test_tampered_database_is_refused(server, db_path):
     conn.commit()
     conn.close()
     with pytest.raises(StatusError):
-        DurableJoinStore(db_path, INTEGRITY_KEY).device_count()
+        DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY).device_count()
 
 
 def test_wrong_integrity_key_is_refused(server, db_path):
@@ -134,7 +135,7 @@ def test_rejoin_type_0_replay_is_rejected(server):
 
 
 def test_invalid_inputs_are_rejected(db_path):
-    store = DurableJoinStore(db_path, INTEGRITY_KEY)
+    store = DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY)
     with pytest.raises(ValueError):
         JoinServer(store, b"\x13\x00", _keys)
     with pytest.raises(ValueError):
@@ -147,7 +148,7 @@ def test_invalid_inputs_are_rejected(db_path):
 # --- Concurrence entre processus -------------------------------------------------------
 
 def _race_worker(path, wire, barrier, queue):
-    server = JoinServer(DurableJoinStore(path, INTEGRITY_KEY), NET_ID, _keys)
+    server = JoinServer(DurableJoinStore(path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
     barrier.wait()
     try:
         server.handle_join_request(wire)
@@ -157,7 +158,7 @@ def _race_worker(path, wire, barrier, queue):
 
 
 def _distinct_worker(path, devices, queue):
-    server = JoinServer(DurableJoinStore(path, INTEGRITY_KEY), NET_ID, _keys)
+    server = JoinServer(DurableJoinStore(path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
     addrs = []
     for dev in devices:
         addrs.append(server.handle_join_request(_join(dev, 1)).dev_addr)
@@ -166,7 +167,7 @@ def _distinct_worker(path, devices, queue):
 
 @pytest.mark.skipif("fork" not in mp.get_all_start_methods(), reason="fork indisponible")
 def test_same_join_request_accepted_exactly_once_across_processes(db_path):
-    DurableJoinStore(db_path, INTEGRITY_KEY)           # création du schéma
+    DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY)           # création du schéma
     ctx = mp.get_context("fork")
     n = 8
     barrier = ctx.Barrier(n)
@@ -185,7 +186,7 @@ def test_same_join_request_accepted_exactly_once_across_processes(db_path):
 
 @pytest.mark.skipif("fork" not in mp.get_all_start_methods(), reason="fork indisponible")
 def test_concurrent_distinct_devices_all_registered_with_unique_addresses(db_path):
-    DurableJoinStore(db_path, INTEGRITY_KEY)
+    DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY)
     ctx = mp.get_context("fork")
     queue = ctx.Queue()
     groups = [[bytes([0xAA, p, d, 0, 0, 0, 0, 1]) for d in range(5)] for p in range(4)]
@@ -199,4 +200,4 @@ def test_concurrent_distinct_devices_all_registered_with_unique_addresses(db_pat
         p.join(timeout=120)
     assert len(addrs) == 20
     assert len(set(addrs)) == 20
-    assert DurableJoinStore(db_path, INTEGRITY_KEY).device_count() == 20
+    assert DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY).device_count() == 20

@@ -6,7 +6,7 @@ import os
 import pytest
 
 from lsim.__main__ import main
-from lsim.serve import INTEGRITY_ENV, load_keys_file
+from lsim.serve import DATA_ENV, INTEGRITY_ENV, load_keys_file
 
 DEV = "0102030405060708"
 NWK = "10" * 16
@@ -53,6 +53,7 @@ def test_serve_refuses_without_integrity_key(tmp_path, monkeypatch, capsys):
 
 def test_serve_refuses_bad_net_id(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(INTEGRITY_ENV, "00" * 16)
+    monkeypatch.setenv(DATA_ENV, "11" * 32)
     p = _write_keys(tmp_path / "keys.json", {"devices": {DEV: {"nwk_key": NWK}}})
     rc = main(["serve", "--db", str(tmp_path / "j.sqlite"), "--keys", str(p), "--net-id", "13"])
     assert rc == 2
@@ -61,9 +62,10 @@ def test_serve_refuses_bad_net_id(tmp_path, monkeypatch, capsys):
 def test_net_id_is_sent_little_endian(tmp_path, monkeypatch):
     from lsim import serve
     monkeypatch.setenv(INTEGRITY_ENV, "00" * 16)
+    monkeypatch.setenv(DATA_ENV, "11" * 32)
     captured = {}
 
-    def fake_build(db, keys, net_id):
+    def fake_build(db, keys, net_id, plan):
         captured["net_id"] = net_id
         raise SystemExit(0)
     monkeypatch.setattr(serve, "build_handler", fake_build)

@@ -13,8 +13,8 @@ multi-passerelles) :
    confirmation de downlink en attente considérée close, downlink de la file émis en RX1 ;
 5. uplink confirmé : le downlink porte le bit ACK (ACK seul si la file est vide).
 
-Downlinks : un seul par uplink, émis en RX1 à rxpk.tmst + 1 s, même canal et même débit que
-l'uplink (RP002-1.0.2 §2.4.7, RX1DROffset 0). Les compteurs NFCntDown / AFCntDown ne sont
+Downlinks : un seul par uplink, émis en RX1 à rxpk.tmst + 1 s, sur le canal et au débit RX1 du
+plan régional (`lsim.plan` : EU868 même canal ; US915 canal modulo 8, RX1DROffset 0). Les compteurs NFCntDown / AFCntDown ne sont
 consommés que si le downlink est effectivement produit, dans la transaction de l'uplink.
 Livraison au mieux : un downlink est retiré de la file à l'émission ; il n'y a pas de
 retransmission. Un downlink confirmé attend l'acquittement : l'uplink suivant (ACK ou non)
@@ -32,10 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
-from lsim import eu868
 from lsim.gwmp import Rxpk, Txpk
 from lsim.join_store import DurableJoinStore, QueueItem, Transaction
 from lsim.lora import StatusError
+from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.security import (
     DownlinkContext, UplinkContext, UplinkFrame, open_uplink, seal_downlink,
 )
@@ -97,8 +97,9 @@ def reconstruct_fcnt32(last: int, fcnt16: int) -> tuple[int, bool]:
 class DataUplinkHandler:
     """Traite les uplinks de données EU868 ; persiste dans le même magasin que la jointure."""
 
-    def __init__(self, store: DurableJoinStore) -> None:
+    def __init__(self, store: DurableJoinStore, plan: Optional[Plan] = None) -> None:
         self._store = store
+        self._plan = plan if plan is not None else get_plan("EU868")
 
     def handle(self, rxpk: Rxpk) -> Outcome:
         wire = rxpk.payload
@@ -107,8 +108,9 @@ class DataUplinkHandler:
         if (wire[0] >> 5) not in (MTYPE_UNCONFIRMED_UP, MTYPE_CONFIRMED_UP):
             return Outcome("data_unhandled")
         try:
-            tx_dr = eu868.data_rate_index(rxpk.datr)
-            tx_ch = eu868.channel_index(rxpk.freq_mhz)
+            tx_dr = self._plan.data_rate_index(rxpk.datr)
+            tx_ch = self._plan.channel_index(rxpk.freq_mhz)
+            rx1 = self._plan.rx1(tx_dr, tx_ch)
         except ValueError:
             return Outcome("data_unsupported_channel")
         dev_addr = int.from_bytes(wire[1:5], "little")
@@ -116,12 +118,12 @@ class DataUplinkHandler:
         fcnt16 = int.from_bytes(wire[6:8], "little")
         try:
             with self._store.transaction() as tx:
-                return self._process(tx, rxpk, wire, dev_addr, ack, fcnt16, tx_dr, tx_ch)
+                return self._process(tx, rxpk, wire, dev_addr, ack, fcnt16, tx_dr, tx_ch, rx1)
         except _Reject as rej:
             return Outcome(rej.issue)
 
     def _process(self, tx: Transaction, rxpk: Rxpk, wire: bytes, dev_addr: int, ack: bool,
-                 fcnt16: int, tx_dr: int, tx_ch: int) -> Outcome:
+                 fcnt16: int, tx_dr: int, tx_ch: int, rx1: tuple[float, str]) -> Outcome:
         rec = tx.session_by_addr(dev_addr)
         if rec is None:
             raise _Reject("data_unknown_addr")
@@ -140,7 +142,8 @@ class DataUplinkHandler:
                 raise _Reject("data_replay")
             # Retransmission d'un confirmé déjà accepté : seul l'acquittement est renvoyé.
             # Aucun changement d'état hormis le compteur NFCntDown consommé par l'ACK.
-            txpk, sent = _build_downlink(rxpk, rec, ack_for=cand, send=None)
+            txpk, sent = _build_downlink(rxpk, rec, rx1, ack_for=cand, send=None,
+                                         max_payload=self._plan.queue_payload_max)
             _save(tx, rec, fcnt_up=rec.fcnt_up, pending=rec.pending_conf, sent=sent)
             return Outcome("data_ack_repeated", txpk=txpk)
 
@@ -154,7 +157,8 @@ class DataUplinkHandler:
         sent = None
         if head is not None or frame.confirmed:
             txpk, sent = _build_downlink(
-                rxpk, rec, ack_for=cand if frame.confirmed else None, send=head)
+                rxpk, rec, rx1, ack_for=cand if frame.confirmed else None, send=head,
+                max_payload=self._plan.queue_payload_max)
             if head is not None:
                 tx.dequeue(head.seq)
         # Nouvelle trame valide : toute confirmation en attente est close (acquittée ou perdue).
@@ -172,11 +176,14 @@ class _Sent:
     confirmed: bool
 
 
-def _build_downlink(rxpk: Rxpk, rec, ack_for: Optional[int], send: Optional[QueueItem]
-                    ) -> tuple[Txpk, _Sent]:
-    """Chiffre et signe le downlink, sans rien persister. RX1 : tmst + 1 s, même canal et débit."""
+def _build_downlink(rxpk: Rxpk, rec, rx1: tuple[float, str], ack_for: Optional[int],
+                    send: Optional[QueueItem], max_payload: int) -> tuple[Txpk, _Sent]:
+    """Chiffre et signe le downlink, sans rien persister. RX1 : tmst + 1 s, canal et débit du plan."""
     fport = send.fport if send is not None else None
     payload = send.payload if send is not None else b""
+    if len(payload) > max_payload:
+        # Impossible par construction : la file refuse les charges au-dessus de queue_payload_max.
+        raise ValueError("charge en file au-delà de la limite du plan")
     af = fport is not None and fport > 0
     counter = rec.afcnt_down if af else rec.nfcnt_down
     confirmed = bool(send is not None and send.confirmed)
@@ -186,8 +193,9 @@ def _build_downlink(rxpk: Rxpk, rec, ack_for: Optional[int], send: Optional[Queu
     wire_dl = seal_downlink(frame, rec.keys, DownlinkContext(
         conf_fcnt=(ack_for & 0xFFFF) if ack_for is not None else 0,
         nfcnt32=rec.nfcnt_down, afcnt32=rec.afcnt_down))
-    txpk = Txpk(tmst=(rxpk.tmst + eu868.RECEIVE_DELAY1_US) % (2**32), freq_mhz=rxpk.freq_mhz,
-                datr=rxpk.datr, codr=rxpk.codr, payload=wire_dl)
+    rx1_freq, rx1_datr = rx1
+    txpk = Txpk(tmst=(rxpk.tmst + RECEIVE_DELAY1_US) % (2**32), freq_mhz=rx1_freq,
+                datr=rx1_datr, codr=rxpk.codr, payload=wire_dl)
     return txpk, _Sent(counter=counter, af=af, confirmed=confirmed)
 
 

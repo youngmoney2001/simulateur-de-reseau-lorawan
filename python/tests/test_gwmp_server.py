@@ -19,6 +19,7 @@ DEV = bytes.fromhex("0102030405060708")
 GW = bytes.fromhex("aabbccddeeff0011")
 NWK = bytes(range(0x10, 0x20))
 INTEGRITY = bytes(range(16))
+DATA_KEY = bytes(range(0x80, 0xA0))
 
 
 def _keys(dev_eui):
@@ -33,7 +34,7 @@ def _join_wire(dev_nonce: int = 1) -> bytes:
 
 
 def _handler(tmp_path) -> JoinUplinkHandler:
-    store = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY)
+    store = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY, DATA_KEY)
     return JoinUplinkHandler(JoinServer(store, NET_ID, _keys))
 
 

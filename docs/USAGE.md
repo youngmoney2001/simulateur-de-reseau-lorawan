@@ -96,33 +96,42 @@ Le hash du scénario est stable : deux exécutions avec la même graine donnent 
 ## 5bis. Serveur de jointure pour passerelles (Semtech UDP)
 
 ```bash
+pip install -e 'python[serve]'          # installe cryptography (chiffrement au repos)
 export LSIM_INTEGRITY_KEY=<32 caractères hexadécimaux, stockés hors dépôt>
-python -m lsim serve --host 0.0.0.0 --port 1700 --db joins.sqlite --keys keys.json --net-id 000013
+export LSIM_DATA_KEY=<64 caractères hexadécimaux, AES-256, stockée hors dépôt et hors base>
+python -m lsim serve --host 0.0.0.0 --port 1700 --db joins.sqlite --keys keys.json --net-id 000013 --region EU868
 ```
+
+Le plan régional (`--region`) doit être celui de la passerelle : `EU868` (défaut) ou `US915`.
 
 - `keys.json` : `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`, mode 600 exigé.
 - Passerelle : pointer le packet forwarder vers ce serveur (`server_address`, ports up/down).
-- Jointure : join-request valide → join-accept en PULL_RESP, à `tmst + 5 s` (RP002-1.0.2 §2.3), même fréquence et débit que l'émission. La session de données (clés de session 1.1, compteurs) est créée dans la même transaction.
-- Données (plan EU868 uniquement, `lsim.eu868`) :
-  - uplink confirmé ou non confirmé vérifié avec le compteur 32 bits reconstruit depuis le FCnt 16 bits, TxDr et TxCh (canaux par défaut 868,10 / 868,30 / 868,50 MHz) ;
+- Jointure : join-request valide → join-accept en PULL_RESP, à `tmst + 5 s` (RP002 §2.3), sur la fenêtre RX1 du plan (`lsim.plan`). La session de données (clés de session 1.1, compteurs) est créée dans la même transaction.
+- Données :
+  - uplink confirmé ou non confirmé vérifié avec le compteur 32 bits reconstruit depuis le FCnt 16 bits, TxDr et TxCh du plan ;
   - rejeu, compteur ancien et MIC faux : rejetés, sans changement d'état ;
-  - uplink confirmé : ACK en downlink RX1 à `tmst + 1 s`, même canal et débit ; retransmission identique ré-acquittée ;
-  - downlink mis en file avec `lsim downlink`, émis en RX1 au prochain uplink (un seul par uplink). Charge limitée à 51 octets (DR0, RP002-1.0.2 tableau 12) ; FPort 1 à 223 ; FPort > 0 exige `app_key`.
-- Fichier de base SQLite créé en mode 0600 ; une base accessible par d'autres utilisateurs est refusée. Les clés de session y sont stockées en clair (décision à valider).
+  - uplink confirmé : ACK en downlink RX1 à `tmst + 1 s` ; retransmission identique ré-acquittée ;
+  - downlink mis en file avec `lsim downlink`, émis en RX1 au prochain uplink (un seul par uplink) ; FPort 1 à 223 ; FPort > 0 exige `app_key`.
+- Chiffrement au repos : clés de session, compteurs et charges en file sont chiffrés (AES-256-GCM, `lsim/sealed.py`) avec `LSIM_DATA_KEY`. Chaque enregistrement est lié à son DevAddr ou DevEUI : un enregistrement déplacé ou modifié est refusé. Une base créée avant ce format est refusée (aucune base de production n'existait).
+- Fichier de base SQLite créé en mode 0600 ; une base accessible par d'autres utilisateurs est refusée.
 
 ```bash
-python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 1 --payload-hex 0102
+python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 1 --payload-hex 0102 --region US915
 python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 2 --payload-hex 00 --confirmed
 ```
+
+Charges maximales en file (fenêtres RX1 atteignables, plus petite valeur N du plan) : EU868 51 octets, US915 222 octets.
 
 Limites des trames de données :
 
 - Livraison au mieux : un downlink est retiré de la file à son émission ; pas de retransmission. Un downlink confirmé sans acquittement à l'uplink suivant est considéré perdu.
 - Une seule copie est traitée : avec plusieurs passerelles, les copies suivantes sont rejetées comme rejeu.
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
-- Canal non par défaut ou débit hors DR0-DR6 : rejet (le MIC 1.1 exige TxCh).
+- Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
+- US915 : pas de sous-bandes choisies par masque de canaux (LinkADRReq) ni LR-FHSS (DR5, DR6). Le dispositif rejoint sur les 72 canaux par défaut, sans CFList.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
-- Basic Station : pas encore pris en charge ; autres plans régionaux : non pris en charge pour les données.
+- Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
+- Basic Station : pas encore pris en charge. AU915 et autres plans : à ajouter (même interface `Plan`).
 
 ## 6. Limites connues
 

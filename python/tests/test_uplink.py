@@ -5,9 +5,11 @@ clés de session dérivées comme le ferait le dispositif (même JoinNonce, DevN
 """
 
 import os
+import sqlite3
 import stat
 
 import pytest
+
 
 from lsim.gwmp import Rxpk
 from lsim.join_server import DeviceKeys, JoinServer
@@ -17,6 +19,8 @@ from lsim.security import (
     DownlinkContext, JoinRequest, UplinkContext, UplinkFrame, derive_session_keys_11,
     encode_join_request, open_downlink, seal_uplink,
 )
+from lsim.plan import get_plan
+from lsim.sealed import IntegrityError
 from lsim.uplink import DataUplinkHandler, UplinkRouter, reconstruct_fcnt32
 
 NET_ID = bytes([0x13, 0x00, 0x00])
@@ -25,16 +29,20 @@ DEV = bytes.fromhex("0102030405060708")
 NWK = bytes(range(0x10, 0x20))
 APP = bytes(range(0x40, 0x50))
 INTEGRITY = bytes(range(16))
+DATA_KEY = bytes(range(0x80, 0xA0))
 TX_DR = 5          # SF7BW125 (DR5, RP002-1.0.2 tableau 8)
 TX_CH = 0          # 868,10 MHz (canal par défaut 0)
 TMST = 1_000_000
 
 
 class Env:
-    def __init__(self, tmp_path, app_key=APP):
-        self.store = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY)
-        self.join = JoinServer(self.store, NET_ID, self._keys(app_key))
-        self.router = UplinkRouter(JoinUplinkHandler(self.join), DataUplinkHandler(self.store))
+    def __init__(self, tmp_path, app_key=APP, plan=None, data_key=DATA_KEY):
+        self.plan = plan if plan is not None else get_plan("EU868")
+        self.store = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY, data_key)
+        self.join = JoinServer(self.store, NET_ID, self._keys(app_key),
+                               dl_settings=self.plan.dl_settings)
+        self.router = UplinkRouter(JoinUplinkHandler(self.join, self.plan),
+                                   DataUplinkHandler(self.store, self.plan))
 
     @staticmethod
     def _keys(app_key):
@@ -313,6 +321,7 @@ def test_database_open_to_others_is_refused(tmp_path):
 def test_enqueue_cli_helper_validates_input(tmp_path, monkeypatch):
     from lsim import serve
     monkeypatch.setenv("LSIM_INTEGRITY_KEY", INTEGRITY.hex())
+    monkeypatch.setenv("LSIM_DATA_KEY", DATA_KEY.hex())
     env = Env(tmp_path)
     env.join_device()
     db = tmp_path / "join.sqlite"
@@ -379,3 +388,119 @@ def test_confirmed_uplink_over_udp_gets_ack_in_pull_resp(tmp_path):
             transport.close()
 
     asyncio.run(scenario())
+
+
+# Région US915 de bout en bout : jointure sur canal 64, ACK et file selon le plan.
+
+def test_us915_join_ack_and_queue_limit(tmp_path):
+    from lsim.us915 import US915
+    env = Env(tmp_path, plan=US915)
+    # Jointure sur le canal 64 (903,0 MHz, DR4) : join-accept en RX1 à 923,3 MHz, DR13.
+    wire = encode_join_request(JoinRequest(JOIN_EUI, DEV, (1).to_bytes(2, "little")), NWK)
+    outcome = env.router.handle(Rxpk(tmst=TMST, freq_mhz=903.0, chan=64, rfch=0, crc_ok=True,
+                                     datr="SF8BW500", codr="4/5", rssi=-60, lsnr=7.0,
+                                     payload=wire))
+    assert outcome.issue == "join_accepted"
+    assert outcome.txpk.freq_mhz == pytest.approx(923.3)
+    assert outcome.txpk.datr == "SF7BW500"
+    addr, keys = env.join_device(dev_nonce=2)
+    # Uplink confirmé sur 902,3 MHz (canal 0, DR0) : ACK en RX1 sur 923,3 MHz / SF10 500 kHz.
+    ack_outcome = env.router.handle(Rxpk(
+        tmst=TMST, freq_mhz=902.3, chan=0, rfch=0, crc_ok=True, datr="SF10BW125", codr="4/5",
+        rssi=-60, lsnr=7.0,
+        payload=up(keys, addr, 0, b"us", fport=1, confirmed=True, dr=0, ch=0)))
+    assert ack_outcome.issue == "data_accepted"
+    assert ack_outcome.txpk.freq_mhz == pytest.approx(923.3)
+    assert ack_outcome.txpk.datr == "SF10BW500"
+    assert open_dl(ack_outcome.txpk, keys, conf=0, nfcnt=0).ack is True
+    # File : 222 octets acceptés, 223 refusés (plus petite N des fenêtres RX1 du plan).
+    env.store.enqueue_downlink(DEV, 1, False, b"\x00" * 222, US915)
+    with pytest.raises(ValueError):
+        env.store.enqueue_downlink(DEV, 1, False, b"\x00" * 223, US915)
+
+
+# Chiffrement au repos (lsim.sealed)
+
+def test_session_keys_are_not_plaintext_in_database(env):
+    addr, keys = env.join_device()
+    env.store.enqueue_downlink(DEV, 1, False, b"SECRET-PAYLOAD")
+    raw = bytearray()
+    conn = sqlite3.connect(env.store._path)
+    try:
+        for (blob,) in conn.execute("SELECT sealed FROM sessions"):
+            raw += bytes(blob)
+        for (blob,) in conn.execute("SELECT payload FROM downlink_queue"):
+            raw += bytes(blob)
+    finally:
+        conn.close()
+    for secret in (keys.nwk_s_enc_key, keys.f_nwk_s_int_key, keys.s_nwk_s_int_key, keys.app_s_key):
+        assert bytes(secret) not in bytes(raw)
+    assert b"SECRET-PAYLOAD" not in bytes(raw)
+
+
+def test_moved_session_record_is_refused(env):
+    addr_a, _ = env.join_device(dev_nonce=1)
+    conn = sqlite3.connect(env.store._path)
+    try:
+        conn.execute("UPDATE sessions SET dev_addr = dev_addr + 1 WHERE dev_addr = ?", (addr_a,))
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(IntegrityError):
+        env.session(addr_a + 1)
+
+
+def test_tampered_session_record_is_refused(env):
+    addr, _ = env.join_device()
+    conn = sqlite3.connect(env.store._path)
+    try:
+        (blob,) = conn.execute("SELECT sealed FROM sessions WHERE dev_addr = ?", (addr,)).fetchone()
+        bad = bytearray(blob)
+        bad[-1] ^= 0x01
+        conn.execute("UPDATE sessions SET sealed = ? WHERE dev_addr = ?", (bytes(bad), addr))
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(IntegrityError):
+        env.session(addr)
+
+
+def test_wrong_data_key_is_refused(tmp_path):
+    env = Env(tmp_path)
+    addr, _ = env.join_device()
+    other = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY, bytes(range(1, 33)))
+    with pytest.raises(IntegrityError):
+        with other.transaction() as tx:
+            tx.session_by_addr(addr)
+
+
+def test_store_without_data_key_refuses_sessions(tmp_path):
+    store = DurableJoinStore(tmp_path / "nokey.sqlite", INTEGRITY)
+    with pytest.raises(RuntimeError):
+        with store.transaction() as tx:
+            tx.session_by_addr(1)
+
+
+def test_data_key_must_be_32_bytes(tmp_path):
+    with pytest.raises(ValueError):
+        DurableJoinStore(tmp_path / "bad.sqlite", INTEGRITY, bytes(16))
+
+
+def test_legacy_plaintext_database_is_refused(tmp_path):
+    path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE sessions (dev_addr INTEGER PRIMARY KEY, dev_eui BLOB NOT NULL, "
+                 "f_nwk_s_int_key BLOB NOT NULL)")
+    conn.commit()
+    conn.close()
+    os.chmod(path, 0o600)
+    with pytest.raises(ValueError, match="format de développement"):
+        DurableJoinStore(path, INTEGRITY, DATA_KEY)
+
+
+def test_serve_requires_data_key(tmp_path, monkeypatch):
+    from lsim import serve
+    monkeypatch.setenv("LSIM_INTEGRITY_KEY", INTEGRITY.hex())
+    monkeypatch.delenv("LSIM_DATA_KEY", raising=False)
+    with pytest.raises(ValueError, match="LSIM_DATA_KEY"):
+        serve.open_store(tmp_path / "x.sqlite")

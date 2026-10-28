@@ -54,3 +54,14 @@
 - Usage : format des messages PUSH_DATA, PULL_DATA, PULL_RESP, TX_ACK et de leurs champs JSON (`python/lsim/gwmp.py`). Seul le format des messages est repris ; aucun code source n'est copié.
 - Source : `PROTOCOL.TXT`, dépôt https://github.com/Lora-net/packet_forwarder (© 2013 Semtech, révision v1.4).
 - Licence du dépôt : BSD (conditions de redistribution du fichier LICENSE du dépôt).
+
+## cryptography (chiffrement au repos du serveur, extra `serve`)
+
+- Bibliothèque Python `cryptography` (PyCA), licence Apache-2.0 ou BSD-3-Clause, dépendance
+  optionnelle : utilisée pour AES-256-GCM (`python/lsim/sealed.py`). Aucun code copié.
+
+## Plans régionaux US902-928 (valeurs seulement)
+
+- Tableaux DR, charges maximales et règle RX1 extraits des Regional Parameters RP002 (LoRa
+  Alliance) et de la page The Things Network « US902-928 MHz Band ». Valeurs numériques
+  reprises, aucun texte copié. Source de référence : `python/lsim/us915.py`.

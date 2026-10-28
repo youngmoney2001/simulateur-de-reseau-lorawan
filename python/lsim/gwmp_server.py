@@ -5,7 +5,7 @@ Comportement :
   puis traitement des paquets hors de la boucle réseau ;
 - PULL_DATA : enregistrement de la route de la passerelle, PULL_ACK ;
 - join-request valide : join-accept en PULL_RESP, à rxpk.tmst + JOIN_ACCEPT_DELAY1 (5 s,
-  RP002-1.0.2 §2.3), même fréquence et même débit que l'émission (RX1DROffset 0) ;
+  RP002-1.0.2 §2.3), sur la fenêtre RX1 du plan régional (`lsim.plan`) ;
 - uplink de données valide : voir `lsim.uplink` (ACK et downlink en file, en RX1 à +1 s) ;
 - rejoin (types 0, 1, 2) : comptés, sans réponse (limites documentées) ;
 - tout ce qui est invalide est compté et jeté, sans réponse (pas d'amplification).
@@ -31,6 +31,7 @@ from lsim import gwmp
 from lsim.gwmp import ProtocolError, PullData, PushData, Rxpk, TxAck, Txpk
 from lsim.join_server import JoinServer
 from lsim.lora import StatusError
+from lsim.plan import Plan, get_plan
 from lsim.uplink import Delivery, Outcome
 
 log = logging.getLogger("lsim.gwmp")
@@ -42,21 +43,13 @@ MAX_GATEWAYS = 4096                    # bornes mémoire de la table des passere
 DEFAULT_PULL_TIMEOUT_S = 60.0          # route considérée morte au-delà (paramètre de conception)
 DEFAULT_MAX_INFLIGHT = 64
 
-Rx1Frequency = Callable[[Rxpk], float]
-
-
-def _same_channel(rxpk: Rxpk) -> float:
-    """RX1 sur le canal d'émission : vrai pour les régions où RX1 = canal montant."""
-    return rxpk.freq_mhz
-
 
 class JoinUplinkHandler:
-    """Transforme une join-request reçue en join-accept (ou rejet)."""
+    """Transforme une join-request reçue en join-accept (ou rejet). RX1 selon le plan régional."""
 
-    def __init__(self, join_server: JoinServer, *,
-                 rx1_frequency: Rx1Frequency = _same_channel) -> None:
+    def __init__(self, join_server: JoinServer, plan: Optional[Plan] = None) -> None:
         self._join = join_server
-        self._rx1 = rx1_frequency
+        self._plan = plan if plan is not None else get_plan("EU868")
 
     def handle(self, rxpk: Rxpk) -> Outcome:
         if not rxpk.payload:
@@ -64,11 +57,17 @@ class JoinUplinkHandler:
         mtype = rxpk.payload[0] >> 5
         if mtype == MTYPE_JOIN_REQUEST:
             try:
+                tx_dr = self._plan.data_rate_index(rxpk.datr)
+                tx_ch = self._plan.channel_index(rxpk.freq_mhz)
+                rx1_freq, rx1_datr = self._plan.rx1(tx_dr, tx_ch)
+            except ValueError:
+                return Outcome("join_unsupported_channel")
+            try:
                 outcome = self._join.handle_join_request(rxpk.payload)
             except (StatusError, KeyError, ValueError):
                 return Outcome("join_rejected")
             tmst = (rxpk.tmst + JOIN_ACCEPT_DELAY1_US) % (2**32)
-            txpk = Txpk(tmst=tmst, freq_mhz=self._rx1(rxpk), datr=rxpk.datr, codr=rxpk.codr,
+            txpk = Txpk(tmst=tmst, freq_mhz=rx1_freq, datr=rx1_datr, codr=rxpk.codr,
                         payload=outcome.accept_wire)
             return Outcome("join_accepted", txpk=txpk)
         if mtype == MTYPE_REJOIN_REQUEST:
