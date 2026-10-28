@@ -114,6 +114,31 @@ void test_frm_payload_roundtrip_all_lengths() {
     }
 }
 
+// FOpts LoRaWAN 1.1 : vecteurs calculés avec openssl (AES-128-ECB sur le bloc A
+// de la spécification TS001-1.1.0 §4.3.1.6), indépendamment de mbedTLS.
+void test_fopts_encryption_vectors() {
+    const Key128 key = from_hex<16>("01010101010101010101010101010101");
+    std::uint8_t p[4];
+    const std::uint8_t plain[4] = {1, 2, 3, 4};
+    std::memcpy(p, plain, 4);
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1, p, 4)),
+             static_cast<int>(CryptoStatus::Ok));
+    CHECK_TRUE(equals_hex<4>(p, "33c92622"));
+    // Symétrie : un second passage restitue le clair.
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1, p, 4)),
+             static_cast<int>(CryptoStatus::Ok));
+    CHECK_TRUE(equals_hex<4>(p, "01020304"));
+    std::memcpy(p, plain, 4);
+    crypt_fopts(key, Direction::Downlink, 0x01020304u, 1, p, 4);
+    CHECK_TRUE(equals_hex<4>(p, "ca6fdaba"));
+    // Bornes : plus de 15 octets refusés ; pointeur nul refusé pour len > 0.
+    std::uint8_t big[16] = {};
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u, big, 16)),
+             static_cast<int>(CryptoStatus::InvalidLength));
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u, nullptr, 4)),
+             static_cast<int>(CryptoStatus::InvalidLength));
+}
+
 // Vecteurs TTN (clé = 0x01 répété, DevAddr 01020304, FCnt 1, données 01 02 03 04).
 void test_encryption_vectors_with_and_without_frame_type() {
     const Key128 key = from_hex<16>("01010101010101010101010101010101");
@@ -239,6 +264,7 @@ void run_crypto_tests() {
     test_real_frame_mic_and_decryption();
     test_frm_payload_roundtrip_all_lengths();
     test_encryption_vectors_with_and_without_frame_type();
+    test_fopts_encryption_vectors();
     test_mic_vectors_legacy_and_11();
     test_session_keys_11_ttn_vectors();
     test_session_keys_11_structure();

@@ -34,8 +34,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Chiffrement avec identifiant de type de trame (base du chiffrement FOpts) : vecteurs TTN
 - ✅ Trame sécurisée 1.1 : scellement et ouverture, MIC vérifié avant déchiffrement, compteur 32 bits contrôlé
 - ✅ Crypto et trame sécurisée exposées via l'API C et Python (`lsim.security`)
-- ⬜ Confirmer les vecteurs contre le document officiel TS001 de la LoRa Alliance (non accessible ici)
-- ⬜ Chiffrement FOpts 1.1 avec NwkSEncKey (câblage dans le codec de trame ; vecteurs à trouver)
+- 🔧 Confirmer les vecteurs contre le document officiel TS001-1.1.0 : ✅ document lu (pas de vecteur numérique dans le PDF, seulement le format des blocs) ; ⬜ errata « FOpts Encryption, Usage of FCntDwn » à lire et à appliquer
+- 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A du §4.3.1.6, vecteurs calculés avec openssl) ; ⬜ câblage dans le codec de trame ; ⬜ trancher l'écart avec les vecteurs TTN « type de trame 00000001 » (le PDF impose quatre octets nuls)
 - ⬜ Classes A, B, C
 - ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
 - ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2
@@ -45,7 +45,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Limites connues (à traiter avant commercialisation)
 - Le relief et les obstacles utilisent un modèle simplifié (Deygout à 3 arêtes, pénétration fixe par pavé) : à calibrer par mesures avant usage contractuel.
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
-- Les FOpts ne sont pas exposés par l'API C ; le chiffrement FOpts 1.1 (NwkSEncKey) n'est pas câblé.
+- Les FOpts ne sont pas exposés par l'API C ; le chiffrement FOpts 1.1 (NwkSEncKey) a sa primitive mais n'est pas câblé dans le codec.
 - La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 

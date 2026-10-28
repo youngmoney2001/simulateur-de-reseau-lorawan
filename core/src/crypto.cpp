@@ -109,6 +109,40 @@ CryptoStatus aes_cmac(const Key128& key, const std::uint8_t* data, std::size_t l
     return rc == 0 ? CryptoStatus::Ok : CryptoStatus::InternalError;
 }
 
+CryptoStatus crypt_fopts(const Key128& nwk_s_enc_key, Direction dir, std::uint32_t dev_addr,
+                         std::uint32_t fcnt32, std::uint8_t* fopts, std::size_t len) {
+    constexpr std::size_t kMaxFOpts = 15;  // LoRaWAN 1.1 §4.3.1.6
+    if (len > kMaxFOpts) {
+        return CryptoStatus::InvalidLength;
+    }
+    if (len == 0) {
+        return CryptoStatus::Ok;
+    }
+    if (fopts == nullptr) {
+        return CryptoStatus::InvalidLength;
+    }
+    // Bloc A des FOpts : identifiant de type nul, compteur de bloc 0.
+    const FrameTypeConstant zero_type{};
+    Block16 a{};
+    Block16 s{};
+    build_a_block(zero_type, dir, dev_addr, fcnt32, 0, a);
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    CryptoStatus status = CryptoStatus::Ok;
+    if (mbedtls_aes_setkey_enc(&ctx, nwk_s_enc_key.data(), 128) != 0 ||
+        mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_ENCRYPT, a.data(), s.data()) != 0) {
+        status = CryptoStatus::InternalError;
+    } else {
+        for (std::size_t j = 0; j < len; ++j) {
+            fopts[j] = static_cast<std::uint8_t>(fopts[j] ^ s[j]);
+        }
+    }
+    mbedtls_aes_free(&ctx);
+    mbedtls_platform_zeroize(a.data(), a.size());
+    mbedtls_platform_zeroize(s.data(), s.size());
+    return status;
+}
+
 CryptoStatus crypt_frm_payload(const Key128& key, Direction dir, std::uint32_t dev_addr,
                                std::uint32_t fcnt32, std::uint8_t* payload, std::size_t len,
                                const FrameTypeConstant& frame_type) {
