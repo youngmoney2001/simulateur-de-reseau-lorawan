@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Surface binaire publique de lsim_core : seuls les symboles lsim_* sont exportés.
+ * Tout le reste (dont mbedTLS lié statiquement) reste local.
+ */
+{
+  global:
+    lsim_*;
+  local:
+    *;
+};

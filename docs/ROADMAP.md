@@ -22,9 +22,14 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 
 ## Jalon 2 — MAC LoRaWAN 1.1
 - ✅ Codec de trame (MHDR, FHDR, FPort, FRMPayload, MIC) : encodage canonique, bornes vérifiées
-- ⬜ Chiffrement FRMPayload et calcul/vérification du MIC (AES-CTR / AES-CMAC, vecteurs de test officiels)
+- ✅ Primitives AES-128 et AES-CMAC via mbedTLS 3.6.4 (vecteurs FIPS-197 et RFC 4493)
+- ✅ Chiffrement FRMPayload et MIC de données, validés sur une trame réelle 1.0.x (MIC 2B11FF0D, « test »)
+- ✅ Dérivation des clés de session 1.1 (formules concordantes des sources, structure testée)
+- ⬜ Valider la dérivation 1.1 contre les vecteurs officiels LoRa Alliance (TS001)
+- ⬜ MIC 1.1 : split uplink (SNwkSIntKey + FNwkSIntKey) et downlink, chiffrement FOpts avec NwkSEncKey
+- ⬜ Exposer le module crypto via l'API C et Python
 - ⬜ Classes A, B, C
-- ⬜ Dérivation de clés 1.1 (NwkSKey, AppSKey, JSEncKey, JSIntKey) et join OTAA
+- ⬜ Join OTAA 1.1 (join-request/accept, JoinNonce, DevNonce)
 - ⬜ ADR, ACK, commandes MAC, rekey
 - ⬜ Moteur d'événements discrets (file de priorité déterministe)
 

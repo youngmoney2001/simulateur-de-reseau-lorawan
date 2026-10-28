@@ -20,6 +20,11 @@ Principes :
 - **Performance** : arithmétique entière, aucune allocation dynamique dans le cœur.
 - **Déterminisme** : temps en nanosecondes entières, résultats reproductibles.
 
+## Dépendances
+
+- Compilateur C++17, CMake ≥ 3.20, Python ≥ 3.10.
+- mbedTLS 3.6.4 (Apache-2.0) est récupéré automatiquement depuis GitHub à la configuration (accès réseau requis la première fois). Voir [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Compilation et tests
 
 ```bash
