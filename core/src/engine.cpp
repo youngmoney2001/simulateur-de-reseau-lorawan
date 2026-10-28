@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "lsim/environment.hpp"
 #include "lsim/link_budget.hpp"
 
 namespace lsim::sim {
@@ -95,7 +96,8 @@ bool EventQueue::pop(Event& out) {
 
 SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                            const GatewaySpec& gateway, const PropagationSpec& prop,
-                           DeviceStats* per_device, SimulationStats& totals) {
+                           DeviceStats* per_device, SimulationStats& totals,
+                           const env::Environment* environment) {
     totals = SimulationStats{};
     if (device_count > kMaxEndDevices) {
         return SimStatus::TooManyDevices;
@@ -106,6 +108,17 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     const SimStatus gs = validate_inputs(gateway, prop);
     if (gs != SimStatus::Ok) {
         return gs;
+    }
+    const env::Environment no_environment{};
+    const env::Environment& envr = environment != nullptr ? *environment : no_environment;
+    if (environment != nullptr) {
+        if (env::validate_environment(envr) != env::EnvStatus::Ok) {
+            return SimStatus::InvalidEnvironment;
+        }
+        const std::uint64_t checks = static_cast<std::uint64_t>(device_count) * envr.obstacle_count;
+        if (checks > env::kMaxObstacleChecks) {
+            return SimStatus::EnvironmentWorkLimit;
+        }
     }
 
     // Précalcul par dispositif : airtime, RSSI à la passerelle, sensibilité.
@@ -142,11 +155,22 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         const double dx = d.position.x_m - gateway.position.x_m;
         const double dy = d.position.y_m - gateway.position.y_m;
         const double dist = std::max(std::hypot(dx, dy), prop.reference_distance_m);
-        const radio::BudgetResult pl = radio::log_distance_path_loss_db(model, dist);
-        if (pl.status != lora::Status::Ok) {
-            return SimStatus::InvalidInput;
+        double path_loss = 0.0;
+        if (environment != nullptr) {
+            env::PathLoss pl{};
+            if (env::path_loss_db(model, d.position.x_m, d.position.y_m, gateway.position.x_m,
+                                  gateway.position.y_m, envr, pl) != env::EnvStatus::Ok) {
+                return SimStatus::InvalidEnvironment;
+            }
+            path_loss = pl.total_db;
+        } else {
+            const radio::BudgetResult pl = radio::log_distance_path_loss_db(model, dist);
+            if (pl.status != lora::Status::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            path_loss = pl.value;
         }
-        rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - pl.value;
+        rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - path_loss;
 
         double s = 0.0;
         if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) != lora::Status::Ok) {

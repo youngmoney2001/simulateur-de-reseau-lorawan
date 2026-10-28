@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
 
 namespace lsim::sim {
@@ -102,12 +103,16 @@ enum class SimStatus : std::int32_t {
     TooManyDevices = 2,
     TooManyTransmissions = 3,
     QueueFull = 4,
+    InvalidEnvironment = 5,
+    EnvironmentWorkLimit = 6,
 };
 
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
+// `environment` optionnel : relief et obstacles (nullptr = terrain plat sans obstacle).
 LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                                     const GatewaySpec& gateway, const PropagationSpec& prop,
-                                    DeviceStats* per_device, SimulationStats& totals);
+                                    DeviceStats* per_device, SimulationStats& totals,
+                                    const env::Environment* environment = nullptr);
 
 }  // namespace lsim::sim

@@ -36,6 +36,7 @@ add_library(lsim_objects OBJECT
     core/src/engine.cpp
     core/src/c_api_ext.cpp
     core/src/join.cpp
+    core/src/environment.cpp
 )
 target_include_directories(lsim_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(lsim_objects PRIVATE mbedcrypto)
@@ -66,6 +67,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_engine.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp
+        core/tests/test_environment.cpp
     )
     target_link_libraries(lsim_tests PRIVATE mbedcrypto)
     target_compile_options(lsim_tests PRIVATE -Wall -Wextra -Wpedantic)
