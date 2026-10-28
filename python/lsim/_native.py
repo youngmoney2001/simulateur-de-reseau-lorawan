@@ -124,6 +124,14 @@ class _CAdrUplinkOutcome(ctypes.Structure):
     ]
 
 
+class _CRekeyDevice(ctypes.Structure):
+    _fields_ = [("state", ctypes.c_uint8), ("uplinks", ctypes.c_uint64)]
+
+
+class _CRekeyServer(ctypes.Structure):
+    _fields_ = [("awaiting", ctypes.c_uint8)]
+
+
 class _CUplinkFrame(ctypes.Structure):
     _fields_ = [
         ("dev_addr", ctypes.c_uint32),
@@ -421,6 +429,18 @@ LIB.lsim_adr_device_uplink.argtypes = [
     ctypes.POINTER(_CAdrDeviceState), ctypes.c_uint8, ctypes.c_uint8, ctypes.POINTER(_CAdrUplinkOutcome)]
 LIB.lsim_adr_device_downlink.restype = ctypes.c_int32
 LIB.lsim_adr_device_downlink.argtypes = [ctypes.POINTER(_CAdrDeviceState)]
+LIB.lsim_rekey_device_join_accepted.restype = ctypes.c_int32
+LIB.lsim_rekey_device_join_accepted.argtypes = [ctypes.POINTER(_CRekeyDevice)]
+LIB.lsim_rekey_device_uplink_completed.restype = ctypes.c_int32
+LIB.lsim_rekey_device_uplink_completed.argtypes = [
+    ctypes.POINTER(_CRekeyDevice), ctypes.c_uint64, ctypes.c_uint8, ctypes.c_uint8]
+LIB.lsim_rekey_device_must_send_rekey_ind.restype = ctypes.c_int32
+LIB.lsim_rekey_device_must_send_rekey_ind.argtypes = [ctypes.POINTER(_CRekeyDevice), _U8P]
+LIB.lsim_rekey_server_join_accepted.restype = ctypes.c_int32
+LIB.lsim_rekey_server_join_accepted.argtypes = [ctypes.POINTER(_CRekeyServer)]
+LIB.lsim_rekey_server_on_uplink.restype = ctypes.c_int32
+LIB.lsim_rekey_server_on_uplink.argtypes = [
+    ctypes.POINTER(_CRekeyServer), ctypes.c_uint8, ctypes.c_uint8, _U8P]
 LIB.lsim_adr_decide.restype = ctypes.c_int32
 LIB.lsim_adr_decide.argtypes = [ctypes.POINTER(_CAdrInput), ctypes.POINTER(_CAdrOutput)]
 LIB.lsim_registry_export.restype = ctypes.c_int32

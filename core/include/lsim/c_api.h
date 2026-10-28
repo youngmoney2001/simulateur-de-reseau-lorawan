@@ -541,6 +541,25 @@ LSIM_API int32_t lsim_adr_device_uplink(lsim_adr_device_state* st, uint8_t limit
                                         lsim_adr_uplink_outcome* out);
 LSIM_API int32_t lsim_adr_device_downlink(lsim_adr_device_state* st);
 
+/* Rekey (LoRaWAN 1.1 §5.10). Dispositif : state 0 Idle, 1 Pending, 2 Confirmed, 3 NeedsJoin. */
+typedef struct {
+    uint8_t  state;
+    uint64_t uplinks;   /* uplinks depuis le join-accept */
+} lsim_rekey_device;
+
+typedef struct {
+    uint8_t awaiting;   /* 0 ou 1 */
+} lsim_rekey_server;
+
+/* action serveur : 0 Accept, 1 AcceptAndConfirm (RekeyConf à émettre), 2 Discard. */
+LSIM_API int32_t lsim_rekey_device_join_accepted(lsim_rekey_device* d);
+LSIM_API int32_t lsim_rekey_device_uplink_completed(lsim_rekey_device* d, uint64_t admin_limit,
+                                                    uint8_t conf_received, uint8_t server_version);
+LSIM_API int32_t lsim_rekey_device_must_send_rekey_ind(const lsim_rekey_device* d, uint8_t* out);
+LSIM_API int32_t lsim_rekey_server_join_accepted(lsim_rekey_server* s);
+LSIM_API int32_t lsim_rekey_server_on_uplink(lsim_rekey_server* s, uint8_t new_context,
+                                             uint8_t has_rekey_ind, uint8_t* action);
+
 #ifdef __cplusplus
 }
 #endif

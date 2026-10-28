@@ -44,6 +44,8 @@ add_library(lsim_objects OBJECT
     core/src/c_api_registry.cpp
     core/src/adr.cpp
     core/src/c_api_adr.cpp
+    core/src/rekey.cpp
+    core/src/c_api_rekey.cpp
     core/src/environment.cpp
 )
 target_include_directories(lsim_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
@@ -79,6 +81,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_rejoin.cpp
         core/tests/test_join_registry.cpp
         core/tests/test_adr.cpp
+        core/tests/test_rekey.cpp
         core/tests/test_environment.cpp
     )
     target_link_libraries(lsim_tests PRIVATE mbedcrypto)
