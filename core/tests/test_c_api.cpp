@@ -109,6 +109,47 @@ void test_simulate_totals() {
     CHECK_EQ(tot.sent, uint64_t{0});
 }
 
+
+void test_join_roundtrip_and_vectors() {
+    const uint8_t key[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    const uint8_t eui[8] = {0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
+    lsim_join_request req{};
+    std::memcpy(req.join_eui, eui, 8);
+    std::memcpy(req.dev_eui, eui, 8);
+    req.dev_nonce[0] = 0x02;
+    req.dev_nonce[1] = 0x01;
+    uint8_t wire[23];
+    CHECK_EQ(lsim_encode_join_request(&req, key, wire), 0);
+    CHECK_TRUE(std::memcmp(wire + 19, "\xe6\xe1\x0c\x55", 4) == 0);  // MIC TTN
+    lsim_join_request back{};
+    CHECK_EQ(lsim_decode_join_request(wire, 23, key, &back), 0);
+    CHECK_TRUE(std::memcmp(back.dev_eui, eui, 8) == 0);
+    wire[3] ^= 0x01;
+    CHECK_EQ(lsim_decode_join_request(wire, 23, key, &back), 400 + 4);  // MicMismatch
+    CHECK_EQ(back.dev_nonce[0], 0);
+
+    lsim_join_accept acc{};
+    acc.join_nonce[0] = 0x03; acc.join_nonce[1] = 0x02; acc.join_nonce[2] = 0x01;
+    acc.net_id[0] = 0x03; acc.net_id[1] = 0x02; acc.net_id[2] = 0x01;
+    acc.dev_addr = 0x01020304u;
+    acc.rx_delay = 1;
+    const uint8_t jnonce[2] = {0x01, 0x02};
+    const uint8_t join_eui_wire[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+    uint8_t ja[33];
+    size_t n = 0;
+    CHECK_EQ(lsim_encode_join_accept(&acc, key, eui, join_eui_wire, jnonce, ja, sizeof ja, &n), 0);
+    CHECK_EQ(n, size_t{17});
+    CHECK_TRUE(std::memcmp(ja + 1, "\xc9\xfb\xb2\x59", 4) == 0);  // chiffré TTN
+    lsim_join_accept got{};
+    CHECK_EQ(lsim_decode_join_accept(ja, n, key, eui, join_eui_wire, jnonce, &got), 0);
+    CHECK_EQ(got.dev_addr, 0x01020304u);
+    CHECK_EQ(lsim_encode_join_accept(&acc, key, eui, join_eui_wire, jnonce, ja, 16, &n), 400 + 1);
+    CHECK_EQ(n, size_t{0});
+    ja[7] ^= 0x40;
+    CHECK_EQ(lsim_decode_join_accept(ja, 17, key, eui, join_eui_wire, jnonce, &got), 400 + 4);
+    CHECK_EQ(got.dev_addr, 0u);
+}
+
 }  // namespace
 
 void run_c_api_tests() {
@@ -117,4 +158,5 @@ void run_c_api_tests() {
     test_seal_open_roundtrip_and_tamper();
     test_status_ranges_are_disjoint();
     test_simulate_totals();
+    test_join_roundtrip_and_vectors();
 }

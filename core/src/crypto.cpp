@@ -82,6 +82,18 @@ CryptoStatus aes128_encrypt_block(const Key128& key, const Block16& in, Block16&
     return status;
 }
 
+CryptoStatus aes128_decrypt_block(const Key128& key, const Block16& in, Block16& out) {
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    CryptoStatus status = CryptoStatus::InternalError;
+    if (mbedtls_aes_setkey_dec(&ctx, key.data(), 128) == 0 &&
+        mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_DECRYPT, in.data(), out.data()) == 0) {
+        status = CryptoStatus::Ok;
+    }
+    mbedtls_aes_free(&ctx);
+    return status;
+}
+
 CryptoStatus aes_cmac(const Key128& key, const std::uint8_t* data, std::size_t len, Block16& out) {
     if (len > 0 && data == nullptr) {
         return CryptoStatus::InvalidLength;

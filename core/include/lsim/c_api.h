@@ -25,12 +25,14 @@ extern "C" {
  *   200..249 trame sécurisée (SecureStatus + 200)
  *   250..299 codec de trame (FrameStatus + 250)
  *   300..399 simulateur (SimStatus + 300)
+ *   400..449 jointure OTAA (JoinStatus + 400)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
 #define LSIM_STATUS_SECURE_BASE 200
 #define LSIM_STATUS_FRAME_BASE  250
 #define LSIM_STATUS_SIM_BASE    300
+#define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -154,6 +156,53 @@ LSIM_API int32_t lsim_open_uplink(const uint8_t* in, size_t len,
                                   const lsim_session_keys_11* keys,
                                   const lsim_uplink_context* ctx,
                                   lsim_uplink_frame* out);
+
+/* ------------------------------------------------------ Jointure OTAA 1.1 */
+
+/* Join-request décodée : tous les champs en ordre de transmission (LSB first). */
+typedef struct lsim_join_request {
+    uint8_t join_eui[8];
+    uint8_t dev_eui[8];
+    uint8_t dev_nonce[2];
+} lsim_join_request;
+
+/* Join-accept en clair. dev_addr en valeur numérique ; l'encodage LE est interne. */
+typedef struct lsim_join_accept {
+    uint8_t  join_nonce[3];
+    uint8_t  net_id[3];
+    uint32_t dev_addr;
+    uint8_t  dl_settings;      /* bit 7 = OptNeg */
+    uint8_t  rx_delay;
+    uint8_t  has_cflist;       /* 0 ou 1 */
+    uint8_t  cflist[16];
+} lsim_join_accept;
+
+/* Encode une join-request (23 octets exactement). */
+LSIM_API int32_t lsim_encode_join_request(const lsim_join_request* req,
+                                          const uint8_t nwk_key[16],
+                                          uint8_t out[23]);
+
+/* Décode et vérifie le MIC d'une join-request (côté serveur). */
+LSIM_API int32_t lsim_decode_join_request(const uint8_t* in, size_t len,
+                                          const uint8_t nwk_key[16],
+                                          lsim_join_request* out);
+
+/* Encode un join-accept côté serveur : out doit contenir 33 octets ;
+ * *out_len reçoit 17 ou 33. */
+LSIM_API int32_t lsim_encode_join_accept(const lsim_join_accept* accept,
+                                         const uint8_t nwk_key[16],
+                                         const uint8_t dev_eui[8],
+                                         const uint8_t join_eui[8],
+                                         const uint8_t dev_nonce[2],
+                                         uint8_t* out, size_t cap, size_t* out_len);
+
+/* Ouvre un join-accept côté device : MIC vérifié avant exposition des champs. */
+LSIM_API int32_t lsim_decode_join_accept(const uint8_t* in, size_t len,
+                                         const uint8_t nwk_key[16],
+                                         const uint8_t dev_eui[8],
+                                         const uint8_t join_eui[8],
+                                         const uint8_t dev_nonce[2],
+                                         lsim_join_accept* out);
 
 /* -------------------------------------------------------------- Simulateur */
 

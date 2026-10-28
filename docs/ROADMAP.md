@@ -30,15 +30,17 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Trame sécurisée 1.1 : scellement et ouverture, MIC vérifié avant déchiffrement, compteur 32 bits contrôlé
 - ✅ Crypto et trame sécurisée exposées via l'API C et Python (`lsim.security`)
 - ⬜ Confirmer les vecteurs contre le document officiel TS001 de la LoRa Alliance (non accessible ici)
-- ⬜ Chiffrement FOpts 1.1 avec NwkSEncKey (câblage dans le codec de trame)
+- ⬜ Chiffrement FOpts 1.1 avec NwkSEncKey (câblage dans le codec de trame ; vecteurs à trouver)
 - ⬜ Classes A, B, C
-- ⬜ Join OTAA 1.1 (join-request/accept, JoinNonce, DevNonce)
+- ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
+- ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2
 - ⬜ ADR, ACK, commandes MAC, rekey
 - ✅ Moteur d'événements discrets : file bornée déterministe, simulation des uplinks (`lsim.simulator`)
 
 ## Limites connues (à traiter avant commercialisation)
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
 - Les FOpts ne sont pas exposés par l'API C ; le chiffrement FOpts 1.1 (NwkSEncKey) n'est pas câblé.
+- La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 
 ## Jalon 3 — Scénarios, résultats et analyse

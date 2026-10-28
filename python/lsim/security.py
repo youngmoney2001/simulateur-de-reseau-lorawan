@@ -14,7 +14,9 @@ from typing import Optional
 
 from lsim._native import (
     LIB,
+    _CJoinAccept,
     _CJoinKeys,
+    _CJoinRequest,
     _CSessionKeys11,
     _CUplinkContext,
     _CUplinkFrame,
@@ -206,4 +208,132 @@ def open_uplink(wire: bytes, keys: SessionKeys11, ctx: UplinkContext) -> UplinkF
         adr_ack_req=bool(out.adr_ack_req),
         ack=bool(out.ack),
         class_b=bool(out.class_b),
+    )
+
+
+# ------------------------------------------------------------- Jointure 1.1
+
+
+@dataclass(frozen=True)
+class JoinRequest:
+    """Join-request : identifiants en ordre de transmission (LSB first)."""
+
+    join_eui: bytes
+    dev_eui: bytes
+    dev_nonce: bytes
+
+    def __post_init__(self) -> None:
+        _bytes_arg("join_eui", self.join_eui, 8)
+        _bytes_arg("dev_eui", self.dev_eui, 8)
+        _bytes_arg("dev_nonce", self.dev_nonce, 2)
+
+    def _to_c(self) -> _CJoinRequest:
+        c = _CJoinRequest()
+        c.join_eui[:] = list(self.join_eui)
+        c.dev_eui[:] = list(self.dev_eui)
+        c.dev_nonce[:] = list(self.dev_nonce)
+        return c
+
+
+@dataclass(frozen=True)
+class JoinAccept:
+    """Join-accept en clair. dl_settings bit 7 = OptNeg (1.1 si 1)."""
+
+    join_nonce: bytes
+    net_id: bytes
+    dev_addr: int
+    dl_settings: int = 0
+    rx_delay: int = 0
+    cflist: Optional[bytes] = None
+
+    def __post_init__(self) -> None:
+        _bytes_arg("join_nonce", self.join_nonce, 3)
+        _bytes_arg("net_id", self.net_id, 3)
+        if not 0 <= self.dev_addr <= 0xFFFFFFFF:
+            raise ValueError("dev_addr doit tenir sur 32 bits")
+        if not 0 <= self.dl_settings <= 255 or not 0 <= self.rx_delay <= 255:
+            raise ValueError("dl_settings et rx_delay doivent tenir sur 8 bits")
+        if self.cflist is not None:
+            _bytes_arg("cflist", self.cflist, 16)
+
+    def __repr__(self) -> str:
+        return (f"JoinAccept(dev_addr=0x{self.dev_addr:08X}, "
+                f"optneg={bool(self.dl_settings & 0x80)}, "
+                f"cflist={self.cflist is not None})")
+
+    def _to_c(self) -> _CJoinAccept:
+        c = _CJoinAccept()
+        c.join_nonce[:] = list(self.join_nonce)
+        c.net_id[:] = list(self.net_id)
+        c.dev_addr = self.dev_addr
+        c.dl_settings = self.dl_settings
+        c.rx_delay = self.rx_delay
+        c.has_cflist = 0 if self.cflist is None else 1
+        if self.cflist is not None:
+            c.cflist[:] = list(self.cflist)
+        return c
+
+
+def encode_join_request(req: JoinRequest, nwk_key: bytes) -> bytes:
+    """Join-request complète (23 octets), MIC 1.1 calculé avec NwkKey."""
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    out = (_U8 * 23)()
+    _check(LIB.lsim_encode_join_request(ctypes.byref(req._to_c()),
+                                        ctypes.cast(key, ctypes.POINTER(_U8)), out))
+    return bytes(out)
+
+
+def decode_join_request(wire: bytes, nwk_key: bytes) -> JoinRequest:
+    """Vérifie le MIC d'une join-request (serveur). Lève StatusError sinon."""
+    if not isinstance(wire, (bytes, bytearray)):
+        raise ValueError("wire doit être de type bytes")
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    src = (_U8 * max(len(wire), 1)).from_buffer_copy(bytes(wire) or b"\x00")
+    out = _CJoinRequest()
+    _check(LIB.lsim_decode_join_request(ctypes.cast(src, ctypes.POINTER(_U8)), len(wire),
+                                        ctypes.cast(key, ctypes.POINTER(_U8)),
+                                        ctypes.byref(out)))
+    return JoinRequest(bytes(out.join_eui), bytes(out.dev_eui), bytes(out.dev_nonce))
+
+
+def encode_join_accept(accept: JoinAccept, nwk_key: bytes, dev_eui: bytes,
+                       join_eui: bytes, dev_nonce: bytes) -> bytes:
+    """Join-accept chiffré côté serveur : 17 octets, ou 33 avec CFList."""
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    deui = _bytes_arg("dev_eui", dev_eui, 8)
+    jeui = _bytes_arg("join_eui", join_eui, 8)
+    dn = _bytes_arg("dev_nonce", dev_nonce, 2)
+    cap = 33
+    out = (_U8 * cap)()
+    written = ctypes.c_size_t(0)
+    _check(LIB.lsim_encode_join_accept(
+        ctypes.byref(accept._to_c()), ctypes.cast(key, ctypes.POINTER(_U8)),
+        ctypes.cast(deui, ctypes.POINTER(_U8)), ctypes.cast(jeui, ctypes.POINTER(_U8)),
+        ctypes.cast(dn, ctypes.POINTER(_U8)), out, cap, ctypes.byref(written)))
+    return bytes(out[:written.value])
+
+
+def decode_join_accept(wire: bytes, nwk_key: bytes, dev_eui: bytes, join_eui: bytes,
+                       dev_nonce: bytes) -> JoinAccept:
+    """Ouvre un join-accept côté device. MIC vérifié avant exposition des champs."""
+    if not isinstance(wire, (bytes, bytearray)) or len(wire) not in (17, 33):
+        raise ValueError("join-accept de 17 ou 33 octets attendu")
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    deui = _bytes_arg("dev_eui", dev_eui, 8)
+    jeui = _bytes_arg("join_eui", join_eui, 8)
+    dn = _bytes_arg("dev_nonce", dev_nonce, 2)
+    src = (_U8 * len(wire)).from_buffer_copy(bytes(wire))
+    out = _CJoinAccept()
+    _check(LIB.lsim_decode_join_accept(
+        ctypes.cast(src, ctypes.POINTER(_U8)), len(wire),
+        ctypes.cast(key, ctypes.POINTER(_U8)), ctypes.cast(deui, ctypes.POINTER(_U8)),
+        ctypes.cast(jeui, ctypes.POINTER(_U8)), ctypes.cast(dn, ctypes.POINTER(_U8)),
+        ctypes.byref(out)))
+    return JoinAccept(
+        join_nonce=bytes(out.join_nonce),
+        net_id=bytes(out.net_id),
+        dev_addr=out.dev_addr,
+        dl_settings=out.dl_settings,
+        rx_delay=out.rx_delay,
+        cflist=bytes(out.cflist) if out.has_cflist else None,
     )

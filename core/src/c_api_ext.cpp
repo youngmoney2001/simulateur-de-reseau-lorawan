@@ -7,6 +7,7 @@
 
 #include "lsim/c_api.h"
 #include "lsim/engine.hpp"
+#include "lsim/join.hpp"
 #include "lsim/lorawan_keys.hpp"
 #include "lsim/secure_frame.hpp"
 
@@ -83,6 +84,48 @@ void from_frame(const DataFrame& in, lsim_uplink_frame& out) {
     out.payload_len = in.frm_payload_len;
     std::memcpy(out.payload, in.frm_payload.data(), in.frm_payload_len);
     std::memcpy(out.mic, in.mic.data(), 4);
+}
+
+std::int32_t map_join(lsim::lorawan::JoinStatus s) {
+    if (s == lsim::lorawan::JoinStatus::Ok) {
+        return 0;
+    }
+    return LSIM_STATUS_JOIN_BASE + static_cast<std::int32_t>(s);
+}
+
+std::array<std::uint8_t, 8> arr8(const std::uint8_t* p) {
+    std::array<std::uint8_t, 8> a;
+    std::memcpy(a.data(), p, 8);
+    return a;
+}
+
+std::array<std::uint8_t, 2> arr2(const std::uint8_t* p) {
+    std::array<std::uint8_t, 2> a;
+    std::memcpy(a.data(), p, 2);
+    return a;
+}
+
+lsim::lorawan::JoinAcceptFields to_accept(const lsim_join_accept& in) {
+    lsim::lorawan::JoinAcceptFields f;
+    std::memcpy(f.join_nonce.data(), in.join_nonce, 3);
+    std::memcpy(f.net_id.data(), in.net_id, 3);
+    f.dev_addr = in.dev_addr;
+    f.dl_settings = in.dl_settings;
+    f.rx_delay = in.rx_delay;
+    f.has_cflist = in.has_cflist != 0;
+    std::memcpy(f.cflist.data(), in.cflist, 16);
+    return f;
+}
+
+void from_accept(const lsim::lorawan::JoinAcceptFields& f, lsim_join_accept& out) {
+    std::memset(&out, 0, sizeof out);
+    std::memcpy(out.join_nonce, f.join_nonce.data(), 3);
+    std::memcpy(out.net_id, f.net_id.data(), 3);
+    out.dev_addr = f.dev_addr;
+    out.dl_settings = f.dl_settings;
+    out.rx_delay = f.rx_delay;
+    out.has_cflist = f.has_cflist ? 1 : 0;
+    std::memcpy(out.cflist, f.cflist.data(), 16);
 }
 
 }  // namespace
@@ -246,6 +289,101 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         }
         return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
     } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_encode_join_request(const lsim_join_request* req, const uint8_t nwk_key[16],
+                                 uint8_t out[23]) {
+    if (req == nullptr || nwk_key == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    try {
+        lsim::lorawan::JoinRequestFields f;
+        std::memcpy(f.join_eui.data(), req->join_eui, 8);
+        std::memcpy(f.dev_eui.data(), req->dev_eui, 8);
+        std::memcpy(f.dev_nonce.data(), req->dev_nonce, 2);
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        std::size_t n = 0;
+        const auto st = lsim::lorawan::encode_join_request(f, k, out, 23, n);
+        if (st != lsim::lorawan::JoinStatus::Ok) {
+            std::memset(out, 0, 23);
+        }
+        return map_join(st);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_decode_join_request(const uint8_t* in, size_t len, const uint8_t nwk_key[16],
+                                 lsim_join_request* out) {
+    if (in == nullptr || nwk_key == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    try {
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        lsim::lorawan::JoinRequestFields f;
+        const auto st = lsim::lorawan::decode_join_request(in, len, k, f);
+        if (st == lsim::lorawan::JoinStatus::Ok) {
+            std::memcpy(out->join_eui, f.join_eui.data(), 8);
+            std::memcpy(out->dev_eui, f.dev_eui.data(), 8);
+            std::memcpy(out->dev_nonce, f.dev_nonce.data(), 2);
+        }
+        return map_join(st);
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_encode_join_accept(const lsim_join_accept* accept, const uint8_t nwk_key[16],
+                                const uint8_t dev_eui[8], const uint8_t join_eui[8],
+                                const uint8_t dev_nonce[2], uint8_t* out, size_t cap,
+                                size_t* out_len) {
+    if (accept == nullptr || nwk_key == nullptr || dev_eui == nullptr || join_eui == nullptr ||
+        dev_nonce == nullptr || out == nullptr || out_len == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_len = 0;
+    try {
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        std::size_t n = 0;
+        const auto st = lsim::lorawan::encode_join_accept(to_accept(*accept), k, arr8(dev_eui),
+                                                          arr8(join_eui), arr2(dev_nonce), out,
+                                                          cap, n);
+        if (st == lsim::lorawan::JoinStatus::Ok) {
+            *out_len = n;
+        }
+        return map_join(st);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_decode_join_accept(const uint8_t* in, size_t len, const uint8_t nwk_key[16],
+                                const uint8_t dev_eui[8], const uint8_t join_eui[8],
+                                const uint8_t dev_nonce[2], lsim_join_accept* out) {
+    if (in == nullptr || nwk_key == nullptr || dev_eui == nullptr || join_eui == nullptr ||
+        dev_nonce == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    try {
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        lsim::lorawan::JoinAcceptFields f;
+        const auto st = lsim::lorawan::decode_join_accept(in, len, k, arr8(dev_eui), arr8(join_eui),
+                                                          arr2(dev_nonce), f);
+        if (st == lsim::lorawan::JoinStatus::Ok) {
+            from_accept(f, *out);
+        }
+        return map_join(st);
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
         return LSIM_STATUS_INTERNAL;
     }
 }

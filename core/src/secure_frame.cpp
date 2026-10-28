@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lsim/secure_frame.hpp"
 
+#include "lsim/constant_time.hpp"
+
 #include <array>
 
 #include <mbedtls/platform_util.h>
 
 namespace lsim::lorawan {
 namespace {
-
-// Comparaison en temps constant : aucun arrêt anticipé selon le contenu.
-bool constant_time_equal(const std::uint8_t* a, const std::uint8_t* b, std::size_t n) {
-    std::uint8_t diff = 0;
-    for (std::size_t i = 0; i < n; ++i) {
-        diff = static_cast<std::uint8_t>(diff | (a[i] ^ b[i]));
-    }
-    return diff == 0;
-}
 
 SecureStatus from_frame(FrameStatus s) {
     switch (s) {
@@ -100,7 +93,7 @@ SecureStatus open_uplink(const std::uint8_t* in, std::size_t len, const SessionK
     if (st != crypto::CryptoStatus::Ok) {
         return SecureStatus::CryptoFailure;
     }
-    if (!constant_time_equal(expected.data(), out.mic.data(), 4)) {
+    if (!lsim::constant_time_equal(expected.data(), out.mic.data(), 4)) {
         // Ne rien exposer d'une trame non authentifiée.
         mbedtls_platform_zeroize(out.frm_payload.data(), out.frm_payload.size());
         out.frm_payload_len = 0;

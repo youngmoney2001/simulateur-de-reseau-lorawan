@@ -39,6 +39,11 @@ enum class Direction : std::uint8_t { Uplink = 0, Downlink = 1 };
 // AES-128 : chiffrement d'un bloc de 16 octets (ECB, usage interne uniquement).
 LSIM_API CryptoStatus aes128_encrypt_block(const Key128& key, const Block16& in, Block16& out);
 
+// AES-128 : déchiffrement d'un bloc de 16 octets (ECB, usage interne uniquement).
+// Utilisé par le serveur pour chiffrer un join-accept (le device le déchiffre
+// en appliquant le chiffrement AES).
+LSIM_API CryptoStatus aes128_decrypt_block(const Key128& key, const Block16& in, Block16& out);
+
 // AES-CMAC (RFC 4493) sur un message de longueur quelconque.
 LSIM_API CryptoStatus aes_cmac(const Key128& key, const std::uint8_t* data, std::size_t len,
                                Block16& out);

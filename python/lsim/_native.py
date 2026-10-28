@@ -104,6 +104,26 @@ class _CDeviceStats(ctypes.Structure):
     ]
 
 
+class _CJoinRequest(ctypes.Structure):
+    _fields_ = [
+        ("join_eui", ctypes.c_uint8 * 8),
+        ("dev_eui", ctypes.c_uint8 * 8),
+        ("dev_nonce", ctypes.c_uint8 * 2),
+    ]
+
+
+class _CJoinAccept(ctypes.Structure):
+    _fields_ = [
+        ("join_nonce", ctypes.c_uint8 * 3),
+        ("net_id", ctypes.c_uint8 * 3),
+        ("dev_addr", ctypes.c_uint32),
+        ("dl_settings", ctypes.c_uint8),
+        ("rx_delay", ctypes.c_uint8),
+        ("has_cflist", ctypes.c_uint8),
+        ("cflist", ctypes.c_uint8 * 16),
+    ]
+
+
 _CSimStats = _CDeviceStats  # même disposition (quatre uint64)
 
 
@@ -174,3 +194,16 @@ LIB.lsim_simulate_uplinks.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDeviceStats),
     ctypes.POINTER(_CSimStats)]
+LIB.lsim_encode_join_request.restype = ctypes.c_int32
+LIB.lsim_encode_join_request.argtypes = [
+    ctypes.POINTER(_CJoinRequest), _U8P, _U8P]
+LIB.lsim_decode_join_request.restype = ctypes.c_int32
+LIB.lsim_decode_join_request.argtypes = [
+    _U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CJoinRequest)]
+LIB.lsim_encode_join_accept.restype = ctypes.c_int32
+LIB.lsim_encode_join_accept.argtypes = [
+    ctypes.POINTER(_CJoinAccept), _U8P, _U8P, _U8P, _U8P, _U8P, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_decode_join_accept.restype = ctypes.c_int32
+LIB.lsim_decode_join_accept.argtypes = [
+    _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, _U8P, ctypes.POINTER(_CJoinAccept)]
