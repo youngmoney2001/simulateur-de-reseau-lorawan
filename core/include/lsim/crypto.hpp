@@ -23,6 +23,9 @@ namespace lsim::crypto {
 
 using Key128 = std::array<std::uint8_t, 16>;
 using Block16 = std::array<std::uint8_t, 16>;
+// Identifiant de type de trame (positions 1..4 du bloc Ai). Zéro par défaut ;
+// utilisé en LoRaWAN 1.1 pour distinguer le chiffrement des FOpts.
+using FrameTypeConstant = std::array<std::uint8_t, 4>;
 
 enum class CryptoStatus : std::int32_t {
     Ok = 0,
@@ -44,13 +47,33 @@ LSIM_API CryptoStatus aes_cmac(const Key128& key, const std::uint8_t* data, std:
 // fcnt32 : compteur de trame étendu sur 32 bits (FCntUp ou FCntDown).
 LSIM_API CryptoStatus crypt_frm_payload(const Key128& key, Direction dir,
                                         std::uint32_t dev_addr, std::uint32_t fcnt32,
-                                        std::uint8_t* payload, std::size_t len);
+                                        std::uint8_t* payload, std::size_t len,
+                                        const FrameTypeConstant& frame_type = FrameTypeConstant{});
 
-// MIC d'une trame de données (1.0.x et 1.1 pour la clé NwkSKey / SNwkSIntKey
-// en mode 1.0 compatible). `msg` = MHDR | FHDR | FPort | FRMPayload (sans MIC).
+// MIC d'une trame de données LoRaWAN 1.0.x (clé NwkSKey). `msg` = MHDR | FHDR |
+// FPort | FRMPayload, sans le MIC. Pour 1.1, voir compute_uplink_mic_11 et
+// compute_downlink_mic_11.
 LSIM_API CryptoStatus compute_data_mic(const Key128& key, Direction dir,
                                        std::uint32_t dev_addr, std::uint32_t fcnt32,
                                        const std::uint8_t* msg, std::size_t msg_len,
                                        std::array<std::uint8_t, 4>& mic_out);
+
+// MIC uplink LoRaWAN 1.1 : MIC = CMAC_S[0..1] || CMAC_F[0..1], où
+//   CMAC_S = CMAC(SNwkSIntKey, B1 | msg) avec ConfFCnt, TxDr, TxCh,
+//   CMAC_F = CMAC(FNwkSIntKey, B0 | msg) avec ConfFCnt = 0.
+LSIM_API CryptoStatus compute_uplink_mic_11(const Key128& s_nwk_s_int_key,
+                                            const Key128& f_nwk_s_int_key,
+                                            std::uint16_t conf_fcnt, std::uint8_t tx_dr,
+                                            std::uint8_t tx_ch, std::uint32_t dev_addr,
+                                            std::uint32_t fcnt32, const std::uint8_t* msg,
+                                            std::size_t msg_len,
+                                            std::array<std::uint8_t, 4>& mic_out);
+
+// MIC downlink LoRaWAN 1.1 : CMAC(SNwkSIntKey, B0 | msg) avec ConfFCnt, dir = 1.
+LSIM_API CryptoStatus compute_downlink_mic_11(const Key128& s_nwk_s_int_key,
+                                              std::uint16_t conf_fcnt, std::uint32_t dev_addr,
+                                              std::uint32_t fcnt32, const std::uint8_t* msg,
+                                              std::size_t msg_len,
+                                              std::array<std::uint8_t, 4>& mic_out);
 
 }  // namespace lsim::crypto

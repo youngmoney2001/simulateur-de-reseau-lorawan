@@ -24,9 +24,11 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Codec de trame (MHDR, FHDR, FPort, FRMPayload, MIC) : encodage canonique, bornes vérifiées
 - ✅ Primitives AES-128 et AES-CMAC via mbedTLS 3.6.4 (vecteurs FIPS-197 et RFC 4493)
 - ✅ Chiffrement FRMPayload et MIC de données, validés sur une trame réelle 1.0.x (MIC 2B11FF0D, « test »)
-- ✅ Dérivation des clés de session 1.1 (formules concordantes des sources, structure testée)
-- ⬜ Valider la dérivation 1.1 contre les vecteurs officiels LoRa Alliance (TS001)
-- ⬜ MIC 1.1 : split uplink (SNwkSIntKey + FNwkSIntKey) et downlink, chiffrement FOpts avec NwkSEncKey
+- ✅ Dérivation des clés de session 1.1 et JSIntKey/JSEncKey : vecteurs TTN (Apache-2.0), recalculés indépendamment
+- ✅ MIC 1.1 uplink (split SNwkSIntKey / FNwkSIntKey) et downlink : vecteurs TTN
+- ✅ Chiffrement avec identifiant de type de trame (base du chiffrement FOpts) : vecteurs TTN
+- ⬜ Confirmer les vecteurs contre le document officiel TS001 de la LoRa Alliance (non accessible ici)
+- ⬜ Chiffrement FOpts 1.1 avec NwkSEncKey (câblage dans le codec de trame)
 - ⬜ Exposer le module crypto via l'API C et Python
 - ⬜ Classes A, B, C
 - ⬜ Join OTAA 1.1 (join-request/accept, JoinNonce, DevNonce)

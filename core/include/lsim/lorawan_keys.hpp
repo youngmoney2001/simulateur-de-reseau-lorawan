@@ -6,9 +6,10 @@
 //   0x05 JSEncKey, 0x06 JSIntKey.
 //
 // Convention d'ordre des octets : les identifiants et nonces sont passés dans
-// l'ordre de transmission sur les ondes (little-endian), tel que défini par la
-// spécification. Ce module n'a PAS encore été validé contre les vecteurs de
-// test officiels LoRa Alliance : c'est une étape ouverte (voir ROADMAP.md).
+// l'ordre de transmission sur les ondes (little-endian). C'est l'inverse de
+// l'ordre d'affichage (ex. DevEUI 00-42-00-42-13-42-43-41 s'écrit 41-43-42-13-42-00-42-00).
+// Validé par les vecteurs de TheThingsNetwork/lorawan-stack (Apache-2.0), recalculés
+// indépendamment ; tests dans core/tests/test_crypto.cpp.
 #pragma once
 
 #include <array>
