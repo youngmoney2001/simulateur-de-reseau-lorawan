@@ -36,6 +36,39 @@ LSIM_API int32_t lsim_time_on_air_ns(const lsim_radio_config* cfg,
                             uint32_t payload_bytes,
                             int64_t* out_ns);
 
+/* Sensibilité récepteur (dBm), 125 kHz uniquement pour l'instant. */
+LSIM_API int32_t lsim_receiver_sensitivity_dbm(uint8_t spreading_factor,
+                                               uint32_t bandwidth_hz,
+                                               double* out_dbm);
+
+/* Perte en espace libre (dB) : distance en m, fréquence en Hz. */
+LSIM_API int32_t lsim_free_space_path_loss_db(double distance_m,
+                                              double frequency_hz,
+                                              double* out_db);
+
+/* Perte log-distance (dB) avec distance de référence d0 (m) et exposant n. */
+LSIM_API int32_t lsim_log_distance_path_loss_db(double distance_m,
+                                                double frequency_hz,
+                                                double reference_distance_m,
+                                                double exponent,
+                                                double* out_db);
+
+/* Perte maximale admissible (dB) à partir d'un bilan de liaison (dBm, dBi, dB). */
+LSIM_API int32_t lsim_max_allowable_path_loss_db(double tx_power_dbm,
+                                                 double tx_antenna_gain_dbi,
+                                                 double rx_antenna_gain_dbi,
+                                                 double cable_losses_db,
+                                                 double fade_margin_db,
+                                                 double rx_sensitivity_dbm,
+                                                 double* out_db);
+
+/* Portée maximale (m) pour une perte maximale donnée (modèle log-distance). */
+LSIM_API int32_t lsim_max_range_m(double max_path_loss_db,
+                                  double frequency_hz,
+                                  double reference_distance_m,
+                                  double exponent,
+                                  double* out_m);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,9 +7,7 @@ le natif gère les calculs. Les entrées sont validées avant l'appel natif.
 from __future__ import annotations
 
 import ctypes
-import os
 from dataclasses import dataclass
-from pathlib import Path
 
 _VALID_BW_HZ = (125_000, 250_000, 500_000)
 _STATUS_NAMES = {
@@ -29,18 +27,6 @@ class StatusError(ValueError):
     def __init__(self, code: int) -> None:
         self.code = code
         super().__init__(f"lsim: {_STATUS_NAMES.get(code, 'erreur inconnue')} (code {code})")
-
-
-class _CRadioConfig(ctypes.Structure):
-    _fields_ = [
-        ("spreading_factor", ctypes.c_uint8),
-        ("bandwidth_hz", ctypes.c_uint32),
-        ("coding_rate", ctypes.c_uint8),
-        ("preamble_symbols", ctypes.c_uint16),
-        ("crc_on", ctypes.c_uint8),
-        ("explicit_header", ctypes.c_uint8),
-        ("low_data_rate_optimize", ctypes.c_uint8),
-    ]
 
 
 @dataclass(frozen=True)
@@ -78,38 +64,7 @@ class RadioConfig:
         )
 
 
-def _load_library() -> ctypes.CDLL:
-    """Charge la bibliothèque native. Chemin surchargeable via LSIM_LIBRARY."""
-    override = os.environ.get("LSIM_LIBRARY")
-    candidates = [Path(override)] if override else []
-    root = Path(__file__).resolve().parents[2]
-    candidates += [
-        root / "build" / "liblsim_core.so",
-        root / "build" / "liblsim_core.dylib",
-        root / "build" / "Release" / "lsim_core.dll",
-    ]
-    for path in candidates:
-        if path.is_file():
-            lib = ctypes.CDLL(str(path))
-            break
-    else:
-        raise OSError(
-            "bibliothèque native lsim introuvable : compilez le cœur "
-            "(cmake -S . -B build && cmake --build build) ou définissez LSIM_LIBRARY"
-        )
-
-    lib.lsim_version.restype = ctypes.c_uint32
-    lib.lsim_version.argtypes = []
-    lib.lsim_time_on_air_ns.restype = ctypes.c_int32
-    lib.lsim_time_on_air_ns.argtypes = [
-        ctypes.POINTER(_CRadioConfig),
-        ctypes.c_uint32,
-        ctypes.POINTER(ctypes.c_int64),
-    ]
-    return lib
-
-
-_LIB = _load_library()
+from lsim._native import LIB as _LIB, _CRadioConfig  # noqa: E402
 
 
 def native_version() -> str:

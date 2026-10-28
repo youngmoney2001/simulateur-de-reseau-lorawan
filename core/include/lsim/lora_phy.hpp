@@ -29,6 +29,8 @@ enum class Status : std::int32_t {
     InvalidPayloadSize = 4,      // charge utile hors de 0..255 octets
     InvalidPreamble = 5,         // préambule hors de 6..65535 symboles
     NullOutput = 6,              // pointeur de sortie nul (API C)
+    UncalibratedSensitivity = 7, // sensibilité non vérifiée pour cette BW
+    InvalidParameter = 8,        // paramètre physique non fini ou hors domaine
 };
 
 // Largeur de bande supportée par la modulation LoRa.
@@ -59,6 +61,13 @@ struct AirtimeResult {
 // Durée d'un symbole en nanosecondes : 2^SF / BW.
 // Entier exact pour toutes les BW standard (voir lora_phy.cpp).
 LSIM_API std::int64_t symbol_duration_ns(std::uint8_t spreading_factor, Bandwidth bw);
+
+// Sensibilité récepteur (dBm) à PER 1 %, SX1276 mode LoRa, 125 kHz, CR 4/5.
+// Valeurs issues du datasheet Semtech SX1276/77/78/79 (SF7 à SF12).
+// Seule la bande 125 kHz est calibrée : 250/500 kHz renvoient
+// UncalibratedSensitivity tant que le datasheet n'est pas vérifié.
+LSIM_API Status receiver_sensitivity_dbm(std::uint8_t spreading_factor,
+                                         Bandwidth bw, double& out_dbm);
 
 // Vérifie la cohérence d'une configuration radio.
 LSIM_API Status validate(const RadioConfig& cfg, std::uint32_t payload_bytes);

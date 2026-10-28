@@ -1,27 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Tests unitaires du cœur (harnais minimal, sans dépendance externe).
+// Tests unitaires : couche physique LoRa (temps d'antenne, sensibilité).
 #include <cstdint>
 #include <cstdio>
 
+#include "check.hpp"
 #include "lsim/lora_phy.hpp"
 
 namespace {
-
-int g_failures = 0;
-int g_checks = 0;
-
-#define CHECK_EQ(actual, expected)                                              \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        const auto a_ = (actual);                                               \
-        const auto e_ = (expected);                                             \
-        if (!(a_ == e_)) {                                                      \
-            ++g_failures;                                                       \
-            std::fprintf(stderr, "FAIL %s:%d: %s == %s (obtenu %lld, attendu %lld)\n", \
-                         __FILE__, __LINE__, #actual, #expected,                \
-                         static_cast<long long>(a_), static_cast<long long>(e_)); \
-        }                                                                       \
-    } while (0)
 
 using namespace lsim::lora;
 
@@ -34,51 +19,70 @@ RadioConfig make(std::uint8_t sf, Bandwidth bw, std::uint8_t cr = 1) {
 }
 
 void test_symbol_duration_exact() {
-    // 2^7 / 125 kHz = 1.024 ms
     CHECK_EQ(symbol_duration_ns(7, Bandwidth::Bw125kHz), std::int64_t{1'024'000});
-    // 2^12 / 125 kHz = 32.768 ms
     CHECK_EQ(symbol_duration_ns(12, Bandwidth::Bw125kHz), std::int64_t{32'768'000});
-    // 2^7 / 500 kHz = 256 us
     CHECK_EQ(symbol_duration_ns(7, Bandwidth::Bw500kHz), std::int64_t{256'000});
 }
 
 void test_known_airtime_sf7_10_bytes() {
-    // SF7, 125 kHz, CR 4/5, 10 octets, CRC, en-tête explicite :
-    // préambule 12,544 ms + charge utile 28,672 ms = 41,216 ms.
+    // SF7, 125 kHz, CR 4/5, 10 octets : 12,544 ms préambule + 28,672 ms charge utile.
     const AirtimeResult r = time_on_air(make(7, Bandwidth::Bw125kHz), 10);
     CHECK_EQ(static_cast<int>(r.status), 0);
     CHECK_EQ(r.nanoseconds, std::int64_t{41'216'000});
 }
 
-void test_airtime_sf12_uses_low_dr_optimisation() {
+void test_airtime_sf12_low_dr() {
     RadioConfig c = make(12, Bandwidth::Bw125kHz);
-    CHECK_EQ(low_data_rate_required(12, Bandwidth::Bw125kHz), true);
+    CHECK_TRUE(low_data_rate_required(12, Bandwidth::Bw125kHz));
     c.low_data_rate_optimize = true;
     const AirtimeResult r = time_on_air(c, 10);
     CHECK_EQ(static_cast<int>(r.status), 0);
-    // Calcul détaillé : préambule 8 + 4,25 symboles = 401,408 ms ;
-    // charge utile 8 + 2 * 5 = 18 symboles = 589,824 ms ; total 991,232 ms.
+    // 401,408 ms préambule + 18 symboles * 32,768 ms = 991,232 ms.
     CHECK_EQ(r.nanoseconds, std::int64_t{991'232'000});
 }
 
-void test_airtime_monotonic_in_payload() {
+void test_airtime_monotonic() {
     const RadioConfig c = make(9, Bandwidth::Bw125kHz);
     std::int64_t prev = 0;
     for (std::uint32_t n = 0; n <= 255; ++n) {
         const AirtimeResult r = time_on_air(c, n);
         CHECK_EQ(static_cast<int>(r.status), 0);
-        CHECK_EQ(r.nanoseconds >= prev, true);
+        CHECK_TRUE(r.nanoseconds >= prev);
+        prev = r.nanoseconds;
+    }
+    prev = 0;
+    for (std::uint8_t sf = 7; sf <= 12; ++sf) {
+        const AirtimeResult r = time_on_air(make(sf, Bandwidth::Bw125kHz), 20);
+        CHECK_TRUE(r.nanoseconds > prev);
         prev = r.nanoseconds;
     }
 }
 
-void test_airtime_monotonic_in_sf() {
-    std::int64_t prev = 0;
-    for (std::uint8_t sf = 7; sf <= 12; ++sf) {
-        const AirtimeResult r = time_on_air(make(sf, Bandwidth::Bw125kHz), 20);
-        CHECK_EQ(r.nanoseconds > prev, true);
-        prev = r.nanoseconds;
+void test_sensitivity_125khz_table() {
+    double s = 0.0;
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, s)), 0);
+    CHECK_NEAR(s, -123.0, 1e-9);
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw125kHz, s)), 0);
+    CHECK_NEAR(s, -137.0, 1e-9);
+    // Sensibilité décroissante (plus négative) quand SF augmente.
+    double prev = 0.0;
+    receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, prev);
+    for (std::uint8_t sf = 8; sf <= 12; ++sf) {
+        double cur = 0.0;
+        receiver_sensitivity_dbm(sf, Bandwidth::Bw125kHz, cur);
+        CHECK_TRUE(cur < prev);
+        prev = cur;
     }
+}
+
+void test_sensitivity_uncalibrated_bandwidths_refused() {
+    double s = 0.0;
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw250kHz, s)),
+             static_cast<int>(Status::UncalibratedSensitivity));
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw500kHz, s)),
+             static_cast<int>(Status::UncalibratedSensitivity));
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(13, Bandwidth::Bw125kHz, s)),
+             static_cast<int>(Status::InvalidSpreadingFactor));
 }
 
 void test_rejects_invalid_inputs() {
@@ -102,14 +106,13 @@ void test_rejects_invalid_inputs() {
 
 }  // namespace
 
-int main() {
+// Point d'entrée unique : chaque suite est appelée depuis lsim_tests (main.cpp).
+void run_lora_phy_tests() {
     test_symbol_duration_exact();
     test_known_airtime_sf7_10_bytes();
-    test_airtime_sf12_uses_low_dr_optimisation();
-    test_airtime_monotonic_in_payload();
-    test_airtime_monotonic_in_sf();
+    test_airtime_sf12_low_dr();
+    test_airtime_monotonic();
+    test_sensitivity_125khz_table();
+    test_sensitivity_uncalibrated_bandwidths_refused();
     test_rejects_invalid_inputs();
-
-    std::printf("%d/%d vérifications réussies\n", g_checks - g_failures, g_checks);
-    return g_failures == 0 ? 0 : 1;
 }

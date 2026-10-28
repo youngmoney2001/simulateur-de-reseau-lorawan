@@ -8,15 +8,21 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Validation des entrées, statuts explicites, aucune exception traversant la frontière C
 - ✅ API C stable + binding Python `ctypes` (aucun code de calcul en Python)
 - ✅ Tests : valeurs de référence + différence avec une implémentation indépendante (1 008 cas)
-- ⬜ Sensibilité par SF/BW (datasheet SX1276) et marge de liaison
+- ✅ Tests sous ASan + UBSan, fuzzing déterministe du codec de trame
 
 ## Jalon 1 — Couche radio et propagation
-- ⬜ Modèles de propagation (log-distance, obstacles, masques de terrain)
+- ✅ Sensibilité SX1276 125 kHz (SF7–SF12) ; 250/500 kHz refusées tant que non vérifiées
+- ✅ Perte espace libre, log-distance, perte maximale admissible (MAPL), portée inverse
+- ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel
+- ⬜ Obstacles, masques de terrain, shadowing
+
 - ⬜ Collisions et capture effect, orthogonalité inter-SF
 - ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864
 - ⬜ Duty cycle et temps d'attente réglementaires
 
 ## Jalon 2 — MAC LoRaWAN 1.1
+- ✅ Codec de trame (MHDR, FHDR, FPort, FRMPayload, MIC) : encodage canonique, bornes vérifiées
+- ⬜ Chiffrement FRMPayload et calcul/vérification du MIC (AES-CTR / AES-CMAC, vecteurs de test officiels)
 - ⬜ Classes A, B, C
 - ⬜ Dérivation de clés 1.1 (NwkSKey, AppSKey, JSEncKey, JSIntKey) et join OTAA
 - ⬜ ADR, ACK, commandes MAC, rekey

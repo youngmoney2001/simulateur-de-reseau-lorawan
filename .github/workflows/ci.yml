@@ -19,6 +19,21 @@ jobs:
       - name: Tests C++
         run: ctest --test-dir build --output-on-failure
 
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurer (ASan + UBSan)
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Compiler
+        run: cmake --build build-asan --parallel
+      - name: Tests C++ sous sanitizers (inclut le fuzzing du codec)
+        run: ./build-asan/lsim_tests
+
   python:
     runs-on: ubuntu-24.04
     needs: core
