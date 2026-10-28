@@ -13,6 +13,7 @@ void run_engine_tests();
 void run_c_api_tests();
 void run_join_tests();
 void run_environment_tests();
+void run_mac_commands_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -24,6 +25,7 @@ int main() {
     run_c_api_tests();
     run_join_tests();
     run_environment_tests();
+    run_mac_commands_tests();
     std::printf("%d/%d vérifications réussies\n", lsim::test::checks() - lsim::test::failures(),
                 lsim::test::checks());
     return lsim::test::failures() == 0 ? 0 : 1;

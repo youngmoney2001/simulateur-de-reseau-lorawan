@@ -39,13 +39,13 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ⬜ Classes A, B, C
 - ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
 - ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2
-- ⬜ ADR, ACK, commandes MAC, rekey
+- 🔧 Commandes MAC : ✅ codec C++ LinkCheck, LinkADR, DutyCycle, DevStatus, Rekey (`core/src/mac_commands.cpp`, RFU vérifiés, FOpts borné à 15 octets) ; ⬜ RXParamSetup, NewChannel ; ⬜ API C et binding Python ; ⬜ ADR côté serveur, ACK, rekey effectif
 - ✅ Moteur d'événements discrets : file bornée déterministe, simulation des uplinks (`lsim.simulator`)
 
 ## Limites connues (à traiter avant commercialisation)
 - Le relief et les obstacles utilisent un modèle simplifié (Deygout à 3 arêtes, pénétration fixe par pavé) : à calibrer par mesures avant usage contractuel.
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
-- Les FOpts sont câblés en uplink et en downlink (compteurs selon l'errata FCntDwn) ; la simulation ne génère pas encore de MAC commands.
+- Les FOpts sont câblés en uplink et en downlink (compteurs selon l'errata FCntDwn) ; le codec des commandes MAC existe (`mac_commands.hpp`) mais la simulation n'en génère pas encore.
 - La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 
