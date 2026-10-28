@@ -94,6 +94,7 @@ struct DeviceStats {
     std::uint64_t received = 0;
     std::uint64_t lost_sensitivity = 0;  // sous le seuil de sensibilité
     std::uint64_t lost_collision = 0;    // détruite par une collision non capturée
+    std::uint64_t airtime_ns = 0;        // temps d'antenne cumulé des trames émises
 };
 
 struct SimulationStats {
@@ -101,6 +102,11 @@ struct SimulationStats {
     std::uint64_t received = 0;
     std::uint64_t lost_sensitivity = 0;
     std::uint64_t lost_collision = 0;
+    std::uint64_t airtime_ns = 0;             // somme des temps d'antenne
+    std::uint64_t gateway_busy_ns = 0;        // durée où la passerelle reçoit au moins une trame (union)
+    std::uint64_t gateway_peak_concurrent = 0;  // nombre maximal de trames simultanées
+    std::int64_t observation_ns = 0;          // fin de la dernière trame - début de la première
+    double gateway_utilization = 0.0;         // gateway_busy_ns / observation_ns, dans [0, 1]
 };
 
 // Limites de sécurité / scalabilité.

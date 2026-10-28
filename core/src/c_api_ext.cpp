@@ -281,11 +281,17 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         totals->received = tot.received;
         totals->lost_sensitivity = tot.lost_sensitivity;
         totals->lost_collision = tot.lost_collision;
+        totals->airtime_ns = tot.airtime_ns;
+        totals->gateway_busy_ns = tot.gateway_busy_ns;
+        totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
+        totals->observation_ns = tot.observation_ns;
+        totals->gateway_utilization = tot.gateway_utilization;
         for (size_t i = 0; i < device_count; ++i) {
             per_device[i].sent = stats[i].sent;
             per_device[i].received = stats[i].received;
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].airtime_ns = stats[i].airtime_ns;
         }
         if (st == lsim::sim::SimStatus::Ok) {
             return 0;
@@ -399,11 +405,17 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
         totals->received = tot.received;
         totals->lost_sensitivity = tot.lost_sensitivity;
         totals->lost_collision = tot.lost_collision;
+        totals->airtime_ns = tot.airtime_ns;
+        totals->gateway_busy_ns = tot.gateway_busy_ns;
+        totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
+        totals->observation_ns = tot.observation_ns;
+        totals->gateway_utilization = tot.gateway_utilization;
         for (size_t i = 0; i < device_count; ++i) {
             per_device[i].sent = stats[i].sent;
             per_device[i].received = stats[i].received;
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].airtime_ns = stats[i].airtime_ns;
         }
         return 0;
     } catch (...) {

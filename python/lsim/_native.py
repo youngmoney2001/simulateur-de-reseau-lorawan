@@ -103,6 +103,21 @@ class _CDeviceStats(ctypes.Structure):
         ("received", ctypes.c_uint64),
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
+        ("airtime_ns", ctypes.c_uint64),
+    ]
+
+
+class _CSimStats(ctypes.Structure):
+    _fields_ = [
+        ("sent", ctypes.c_uint64),
+        ("received", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("airtime_ns", ctypes.c_uint64),
+        ("gateway_busy_ns", ctypes.c_uint64),
+        ("gateway_peak_concurrent", ctypes.c_uint64),
+        ("observation_ns", ctypes.c_int64),
+        ("gateway_utilization", ctypes.c_double),
     ]
 
 
@@ -152,7 +167,6 @@ class _CEnvironment(ctypes.Structure):
     ]
 
 
-_CSimStats = _CDeviceStats  # même disposition (quatre uint64)
 
 
 def _load_library() -> ctypes.CDLL:

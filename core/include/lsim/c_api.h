@@ -238,6 +238,7 @@ typedef struct lsim_device_stats {
     uint64_t received;
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
+    uint64_t airtime_ns;        /* temps d'antenne cumulé (ns) */
 } lsim_device_stats;
 
 typedef struct lsim_sim_stats {
@@ -245,6 +246,11 @@ typedef struct lsim_sim_stats {
     uint64_t received;
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
+    uint64_t airtime_ns;                 /* somme des temps d'antenne (ns) */
+    uint64_t gateway_busy_ns;            /* union des réceptions passerelle (ns) */
+    uint64_t gateway_peak_concurrent;    /* trames simultanées maximales */
+    int64_t  observation_ns;             /* fin dernière trame - début première */
+    double   gateway_utilization;        /* busy / observation, dans [0, 1] */
 } lsim_sim_stats;
 
 /* Simule les liaisons montantes. per_device doit contenir device_count entrées ;

@@ -240,7 +240,49 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         t.sf = devices[i].spreading_factor;
         t.rssi_dbm = rssi[i];
         max_airtime = std::max(max_airtime, airtime[i]);
+        per_device[i].airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+        totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
         txs.push_back(t);
+    }
+
+    // Métriques passerelle : union des intervalles, pic de simultanéité, charge.
+    // `txs` est trié par début ; les fins sont triées à part (deux pointeurs).
+    if (!txs.empty()) {
+        SimTime busy = 0;
+        SimTime cur_s = txs[0].start;
+        SimTime cur_e = txs[0].end;
+        SimTime last_end = txs[0].end;
+        for (std::size_t k = 1; k < txs.size(); ++k) {
+            last_end = std::max(last_end, txs[k].end);
+            if (txs[k].start > cur_e) {
+                busy += cur_e - cur_s;
+                cur_s = txs[k].start;
+                cur_e = txs[k].end;
+            } else {
+                cur_e = std::max(cur_e, txs[k].end);
+            }
+        }
+        busy += cur_e - cur_s;
+
+        std::vector<SimTime> ends;
+        ends.reserve(txs.size());
+        for (const Tx& t : txs) ends.push_back(t.end);
+        std::sort(ends.begin(), ends.end());
+
+        std::uint64_t peak = 0;
+        std::size_t ended = 0;
+        for (std::size_t k = 0; k < txs.size(); ++k) {
+            while (ended < ends.size() && ends[ended] <= txs[k].start) ++ended;
+            const std::uint64_t active = static_cast<std::uint64_t>(k + 1 - ended);
+            peak = std::max(peak, active);
+        }
+
+        const SimTime observation = last_end - txs[0].start;
+        totals.gateway_busy_ns = static_cast<std::uint64_t>(busy);
+        totals.gateway_peak_concurrent = peak;
+        totals.observation_ns = observation;
+        totals.gateway_utilization =
+            observation > 0 ? static_cast<double>(busy) / static_cast<double>(observation) : 0.0;
     }
 
     // Évaluation : sensibilité, puis collision avec capture.

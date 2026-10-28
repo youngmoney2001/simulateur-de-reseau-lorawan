@@ -226,9 +226,45 @@ void test_shadowing_input_limits() {
              static_cast<int>(SimStatus::Ok));
 }
 
+void test_gateway_load_metrics() {
+    // Deux trames simultanées (t = 0) et une trame isolée (t = 1 s), même SF et charge.
+    const EndDeviceSpec d[] = {device_at(10.0, 7, 0), device_at(10.0, 7, 0),
+                               device_at(10.0, 7, 1'000'000'000)};
+    DeviceStats st[3];
+    SimulationStats tot;
+    CHECK_EQ(static_cast<int>(simulate_uplinks(d, 3, gateway(), PropagationSpec{}, st, tot)),
+             static_cast<int>(SimStatus::Ok));
+    const auto airtime = static_cast<SimTime>(st[0].airtime_ns);
+    CHECK_TRUE(airtime > 0);
+    CHECK_EQ(st[1].airtime_ns, st[0].airtime_ns);
+    CHECK_EQ(st[2].airtime_ns, st[0].airtime_ns);
+    CHECK_EQ(tot.airtime_ns, 3 * st[0].airtime_ns);
+    // Union : [0, A) couvre les deux trames simultanées, puis [1 s, 1 s + A).
+    CHECK_EQ(static_cast<SimTime>(tot.gateway_busy_ns), 2 * airtime);
+    CHECK_EQ(tot.observation_ns, 1'000'000'000 + airtime);
+    CHECK_EQ(tot.gateway_peak_concurrent, std::uint64_t{2});
+    CHECK_NEAR(tot.gateway_utilization,
+               static_cast<double>(2 * airtime) / static_cast<double>(1'000'000'000 + airtime), 1e-12);
+}
+
+void test_gateway_load_without_traffic() {
+    SimulationStats tot;
+    DeviceStats st[1];
+    const EndDeviceSpec none[] = {device_at(10.0, 7, 0)};
+    simulate_uplinks(none, 1, gateway(), PropagationSpec{}, st, tot);
+    CHECK_TRUE(tot.gateway_utilization >= 0.0 && tot.gateway_utilization <= 1.0);
+    SimulationStats empty;
+    simulate_uplinks(nullptr, 0, gateway(), PropagationSpec{}, nullptr, empty);
+    CHECK_EQ(empty.gateway_busy_ns, std::uint64_t{0});
+    CHECK_EQ(empty.gateway_peak_concurrent, std::uint64_t{0});
+    CHECK_NEAR(empty.gateway_utilization, 0.0, 0.0);
+}
+
 }  // namespace
 
 void run_engine_tests() {
+    test_gateway_load_metrics();
+    test_gateway_load_without_traffic();
     test_shadowing_sample_properties();
     test_shadowing_input_limits();
     test_queue_order_and_capacity();

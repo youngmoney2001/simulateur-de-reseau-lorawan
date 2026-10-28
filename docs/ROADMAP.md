@@ -52,7 +52,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Jalon 3 — Scénarios, résultats et analyse
 - ✅ Scénarios YAML validés (Pydantic, champs inconnus refusés, bornes 10 000 dispositifs / 5 000 000 transmissions), déploiement déterministe par graine, hash SHA-256 du scénario
 - ✅ Export Parquet par dispositif avec métadonnées de traçabilité ; CLI `python -m lsim run`
-- ⬜ Métriques avancées (énergie, charge gateway, latence)
+- 🔧 Métriques avancées : ✅ temps d'antenne par dispositif (cœur, API C, Parquet) ; ✅ charge passerelle (temps occupé en union, pic de trames simultanées, taux d'occupation) ; ✅ latence = temps d'antenne (aucune file ni backhaul modélisés) ; ⬜ énergie (exige les courants réels de l'émetteur, non inventés)
 - ⬜ Notebooks pour les bureaux d'études
 
 ## Jalon 4 — Visualisation 3D et produit

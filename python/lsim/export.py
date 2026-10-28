@@ -13,7 +13,7 @@ from typing import Optional, Union
 from lsim import __version__
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
-from lsim.simulator import Counters, simulate_uplinks
+from lsim.simulator import Counters, GatewayLoad, simulate_uplinks
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,7 @@ class DeviceRow:
     received: int
     lost_sensitivity: int
     lost_collision: int
+    airtime_ns: int
 
     @property
     def pdr(self) -> Optional[float]:
@@ -41,6 +42,7 @@ class RunResult:
     seed: int
     rows: tuple[DeviceRow, ...]
     totals: Counters
+    gateway: GatewayLoad
 
     @property
     def pdr(self) -> Optional[float]:
@@ -64,6 +66,7 @@ def run_scenario(scenario: Scenario) -> RunResult:
             received=c.received,
             lost_sensitivity=c.lost_sensitivity,
             lost_collision=c.lost_collision,
+            airtime_ns=c.airtime_ns,
         )
         for i, (dev, c) in enumerate(zip(devices, result.per_device))
     )
@@ -73,6 +76,7 @@ def run_scenario(scenario: Scenario) -> RunResult:
         seed=scenario.model.seed,
         rows=rows,
         totals=result.totals,
+        gateway=result.gateway,
     )
 
 
@@ -93,6 +97,7 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         "received": pa.array([r.received for r in rows], pa.uint64()),
         "lost_sensitivity": pa.array([r.lost_sensitivity for r in rows], pa.uint64()),
         "lost_collision": pa.array([r.lost_collision for r in rows], pa.uint64()),
+        "airtime_ns": pa.array([r.airtime_ns for r in rows], pa.uint64()),
         "pdr": pa.array([r.pdr for r in rows], pa.float64()),
     })
     metadata = {
@@ -104,6 +109,10 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         b"lsim.native_version": native_version().encode("ascii"),
         b"lsim.total_sent": str(run.totals.sent).encode("ascii"),
         b"lsim.total_received": str(run.totals.received).encode("ascii"),
+        b"lsim.total_airtime_ns": str(run.totals.airtime_ns).encode("ascii"),
+        b"lsim.gateway_busy_ns": str(run.gateway.busy_ns).encode("ascii"),
+        b"lsim.gateway_peak_concurrent": str(run.gateway.peak_concurrent).encode("ascii"),
+        b"lsim.gateway_utilization": repr(run.gateway.utilization).encode("ascii"),
     }
     table = table.replace_schema_metadata(metadata)
     pq.write_table(table, str(path), compression="zstd")

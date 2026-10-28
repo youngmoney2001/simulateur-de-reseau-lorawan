@@ -15,6 +15,7 @@ from typing import Optional, Sequence
 from lsim._native import (
     LIB,
     _CDeviceStats,
+    _CSimStats,
     _CEndDevice,
     _CEnvironment,
     _CGateway,
@@ -94,12 +95,23 @@ class Counters:
     received: int = 0
     lost_sensitivity: int = 0
     lost_collision: int = 0
+    airtime_ns: int = 0  # temps d'antenne cumulé des trames émises
+
+
+@dataclass(frozen=True)
+class GatewayLoad:
+    """Charge de la passerelle, calculée par le cœur natif."""
+    busy_ns: int = 0            # durée où au moins une trame arrive (union, sans double comptage)
+    peak_concurrent: int = 0    # nombre maximal de trames simultanées
+    observation_ns: int = 0     # fin de la dernière trame - début de la première
+    utilization: float = 0.0    # busy_ns / observation_ns, dans [0, 1]
 
 
 @dataclass(frozen=True)
 class SimulationResult:
     per_device: tuple[Counters, ...]
     totals: Counters
+    gateway: GatewayLoad = GatewayLoad()
 
 
 def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
@@ -196,7 +208,7 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
     c_stats = (_CDeviceStats * n)()
-    c_tot = _CDeviceStats()
+    c_tot = _CSimStats()
     if environment is None:
         c_env_ref, keep = None, []
     else:
@@ -210,7 +222,11 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         raise StatusError(status)
 
     per = tuple(
-        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision) for s in c_stats
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns)
+        for s in c_stats
     )
-    tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision)
-    return SimulationResult(per_device=per, totals=tot)
+    tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
+                   c_tot.airtime_ns)
+    load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
+                       c_tot.observation_ns, c_tot.gateway_utilization)
+    return SimulationResult(per_device=per, totals=tot, gateway=load)
