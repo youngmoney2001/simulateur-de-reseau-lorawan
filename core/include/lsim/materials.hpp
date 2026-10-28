@@ -34,6 +34,9 @@ enum class Material : std::uint8_t {
     BituminousAsphalt,
 };
 
+// Nombre de matériaux (identifiants 0 .. kMaterialCount-1, ordre de l'enum).
+inline constexpr std::uint32_t kMaterialCount = 15;
+
 struct AttenuationResult {
     double relative_permittivity = 0.0;  // ε′ à la fréquence demandée
     double conductivity_s_per_m = 0.0;   // σ à la fréquence demandée

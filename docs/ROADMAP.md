@@ -18,7 +18,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Diffraction multi-arêtes (Deygout, 3 arêtes) à la place du couteau unique
 - ✅ Couverture réelle par azimut (relief et obstacles, dichotomie, borne de travail) ; `model: environment` dans le GeoJSON
 - ✅ Outil de calibrage `python -m lsim calibrate mesures.csv` (exposant, PL0, sigma, R2, avertissements)
-- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; ✅ atténuation par matériau (`core/src/materials.cpp`) : UIT-R P.2040-4 Tableau 3 (diélectriques) et éq. 27a, A = 1636·σ/√ε′ dB/m ; ⬜ branchement sur les pavés (`attenuation_db` aujourd’hui saisi par l’utilisateur) ; plages non strictes : 868 MHz hors plage pour béton/verre (signalé `extrapolated`)
+- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; ✅ atténuation par matériau (`core/src/materials.cpp`) : UIT-R P.2040-4 Tableau 3 (diélectriques) et éq. 27a, A = 1636·σ/√ε′ dB/m ; ✅ branchement sur les pavés : `material` + `thickness_m` dans `environment.obstacles` (calcul natif `lsim_material_traversal_loss_db` à `propagation.frequency_hz`, `attenuation_db` exclusif) ; avertissement si la fréquence est hors plage documentée (868 MHz pour béton/verre) ; ⬜ validation de ces valeurs contre des mesures de pénétration
 - ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)

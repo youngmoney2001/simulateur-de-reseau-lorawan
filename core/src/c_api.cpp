@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lsim/c_api.h"
+#include "lsim/materials.hpp"
 
 #include "lsim/link_budget.hpp"
 #include "lsim/lora_phy.hpp"
@@ -58,6 +59,37 @@ int32_t lsim_receiver_sensitivity_dbm(uint8_t spreading_factor,
     const lsim::lora::Status st = lsim::lora::receiver_sensitivity_dbm(
         spreading_factor, to_bandwidth(bandwidth_hz), *out_dbm);
     return static_cast<int32_t>(st);
+}
+
+uint32_t lsim_material_count(void) {
+    return lsim::materials::kMaterialCount;
+}
+
+int32_t lsim_material_traversal_loss_db(uint32_t material_id, double frequency_hz,
+                                        double thickness_m, double* out_db,
+                                        int32_t* out_extrapolated) {
+    if (out_db == nullptr || out_extrapolated == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_db = 0.0;
+    *out_extrapolated = 0;
+    if (material_id >= lsim::materials::kMaterialCount) {
+        return static_cast<int32_t>(lsim::lora::Status::InvalidParameter);
+    }
+    const auto material = static_cast<lsim::materials::Material>(material_id);
+    lsim::materials::AttenuationResult r;
+    const lsim::lora::Status st = lsim::materials::attenuation_db_per_m(material, frequency_hz, r);
+    if (st != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st);
+    }
+    double loss = 0.0;
+    const lsim::lora::Status st2 = lsim::materials::traversal_loss_db(material, frequency_hz, thickness_m, loss);
+    if (st2 != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st2);
+    }
+    *out_db = loss;
+    *out_extrapolated = r.extrapolated ? 1 : 0;
+    return static_cast<int32_t>(lsim::lora::Status::Ok);
 }
 
 int32_t lsim_free_space_path_loss_db(double distance_m, double frequency_hz, double* out_db) {

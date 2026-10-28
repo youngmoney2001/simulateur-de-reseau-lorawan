@@ -15,12 +15,14 @@ import hashlib
 import json
 import math
 import random
+import warnings
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lsim.materials import MATERIAL_NAMES, traversal_loss
 from lsim.environment import (
     MAX_OBSTACLES,
     Environment,
@@ -144,12 +146,26 @@ class ObstacleModel(_Strict):
     x_max_m: float
     y_max_m: float
     height_m: float = Field(gt=0, le=1000)
+    # Soit `attenuation_db` (perte saisie), soit `material` + `thickness_m`
+    # (perte calculée par UIT-R P.2040-4 à la fréquence de la propagation).
     attenuation_db: float = Field(0.0, ge=0, le=200)
+    material: Optional[str] = Field(None, max_length=32)
+    thickness_m: Optional[float] = Field(None, gt=0, le=10)
 
     @model_validator(mode="after")
     def _box_not_empty(self) -> "ObstacleModel":
         if not (self.x_min_m < self.x_max_m and self.y_min_m < self.y_max_m):
             raise ValueError("emprise de l'obstacle vide (min doit être < max)")
+        if self.material is None:
+            if self.thickness_m is not None:
+                raise ValueError("thickness_m exige material")
+        else:
+            if self.thickness_m is None:
+                raise ValueError("material exige thickness_m")
+            if "attenuation_db" in self.model_fields_set:
+                raise ValueError("attenuation_db et material sont exclusifs")
+            if self.material not in MATERIAL_NAMES:
+                raise ValueError(f"matériau inconnu : {self.material!r}")
         return self
 
 
@@ -217,6 +233,12 @@ class Scenario:
             if group.get("region") is None:
                 group.pop("region", None)
                 group.pop("channel_freq_hz", None)
+        # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
+        for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
+            for ob in env_dump.get("obstacles", []):
+                if ob.get("material") is None:
+                    ob.pop("material", None)
+                    ob.pop("thickness_m", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
@@ -277,7 +299,21 @@ def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
     return out
 
 
-def _build_environment(model: EnvironmentModel, base_dir: Path) -> Environment:
+def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float) -> float:
+    if o.material is None:
+        return o.attenuation_db
+    loss, extrapolated = traversal_loss(o.material, frequency_hz, o.thickness_m)
+    if extrapolated:
+        warnings.warn(
+            f"matériau {o.material} : fréquence {frequency_hz:g} Hz hors de la plage documentée "
+            "(UIT-R P.2040-4, Tableau 3)", stacklevel=3)
+    if loss > 200.0:
+        raise ValueError(f"atténuation calculée {loss:.1f} dB > 200 dB (matériau {o.material})")
+    return loss
+
+
+def _build_environment(model: EnvironmentModel, base_dir: Path,
+                       frequency_hz: float) -> Environment:
     terrain: Optional[Terrain] = None
     if model.terrain is not None:
         root = base_dir.resolve()
@@ -288,7 +324,8 @@ def _build_environment(model: EnvironmentModel, base_dir: Path) -> Environment:
             raise ValueError(f"fichier de relief introuvable : {model.terrain.path}")
         terrain = load_dem_csv(target)
     obstacles = tuple(
-        Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m, o.attenuation_db)
+        Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m,
+                 _obstacle_attenuation(o, frequency_hz))
         for o in model.obstacles)
     return Environment(terrain=terrain, obstacles=obstacles,
                        gateway_height_m=model.gateway_height_m,
@@ -314,5 +351,6 @@ def load_scenario(source: Union[str, Path]) -> Scenario:
     if not isinstance(data, dict):
         raise ValueError("le scénario doit être un mapping YAML")
     model = ScenarioModel.model_validate(data)
-    env = _build_environment(model.environment, base_dir) if model.environment else None
+    env = (_build_environment(model.environment, base_dir, model.propagation.frequency_hz)
+           if model.environment else None)
     return Scenario(model, env)

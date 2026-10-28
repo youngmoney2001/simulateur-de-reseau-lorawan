@@ -64,10 +64,19 @@ LSIM_API int32_t lsim_time_on_air_ns(const lsim_radio_config* cfg,
                             uint32_t payload_bytes,
                             int64_t* out_ns);
 
-/* Sensibilité récepteur (dBm), 125 kHz uniquement pour l'instant. */
+/* Sensibilité récepteur (dBm), 125/250/500 kHz, SF7..SF12. */
 LSIM_API int32_t lsim_receiver_sensitivity_dbm(uint8_t spreading_factor,
                                                uint32_t bandwidth_hz,
                                                double* out_dbm);
+
+/* Atténuation des matériaux (UIT-R P.2040-4). material_id dans [0, count) ;
+ * out_extrapolated = 1 si la fréquence est hors de la plage documentée. */
+LSIM_API uint32_t lsim_material_count(void);
+LSIM_API int32_t lsim_material_traversal_loss_db(uint32_t material_id,
+                                                 double frequency_hz,
+                                                 double thickness_m,
+                                                 double* out_db,
+                                                 int32_t* out_extrapolated);
 
 /* Perte en espace libre (dB) : distance en m, fréquence en Hz. */
 LSIM_API int32_t lsim_free_space_path_loss_db(double distance_m,

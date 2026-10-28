@@ -401,6 +401,11 @@ LIB = _load_library()
 
 LIB.lsim_receiver_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_receiver_sensitivity_dbm.argtypes = [ctypes.c_uint8, ctypes.c_uint32, _DBL]
+LIB.lsim_material_count.restype = ctypes.c_uint32
+LIB.lsim_material_count.argtypes = []
+LIB.lsim_material_traversal_loss_db.restype = ctypes.c_int32
+LIB.lsim_material_traversal_loss_db.argtypes = [
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_double, _DBL, ctypes.POINTER(ctypes.c_int32)]
 LIB.lsim_free_space_path_loss_db.restype = ctypes.c_int32
 LIB.lsim_free_space_path_loss_db.argtypes = [ctypes.c_double, ctypes.c_double, _DBL]
 LIB.lsim_log_distance_path_loss_db.restype = ctypes.c_int32
