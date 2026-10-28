@@ -53,6 +53,8 @@ class _CUplinkFrame(ctypes.Structure):
         ("payload_len", ctypes.c_uint8),
         ("payload", ctypes.c_uint8 * 242),
         ("mic", ctypes.c_uint8 * 4),
+        ("fopts_len", ctypes.c_uint8),
+        ("fopts", ctypes.c_uint8 * 15),
     ]
 
 

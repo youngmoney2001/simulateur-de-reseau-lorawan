@@ -120,7 +120,7 @@ LSIM_API int32_t lsim_derive_session_keys_11(const uint8_t nwk_key[16],
 
 /* ------------------------------------------------------- Trame sécurisée */
 
-/* Trame uplink à plat. Les FOpts ne sont pas exposés par l'API C. */
+/* Trame uplink à plat. FOpts (LoRaWAN 1.1) : chiffrés/déchiffrés avec NwkSEncKey. */
 typedef struct lsim_uplink_frame {
     uint32_t dev_addr;
     uint8_t  mtype;          /* 2 = unconfirmed up, 4 = confirmed up */
@@ -134,6 +134,8 @@ typedef struct lsim_uplink_frame {
     uint8_t  payload_len;    /* <= 242 */
     uint8_t  payload[242];   /* entrée de seal : clair ; sortie de open : clair */
     uint8_t  mic[4];         /* sortie de seal ; ignoré à l'entrée (recalculé) */
+    uint8_t  fopts_len;      /* 0..15 ; FOpts interdits avec FPort 0 */
+    uint8_t  fopts[15];      /* entrée de seal : clair ; sortie de open : clair */
 } lsim_uplink_frame;
 
 /* Contexte du MIC et du chiffrement uplink 1.1, fourni par le serveur de réseau. */

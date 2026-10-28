@@ -46,6 +46,17 @@ SecureStatus seal_uplink(const DataFrame& frame, const SessionKeys11& keys,
         }
     }
 
+    // FOpts (LoRaWAN 1.1) : chiffrés avec NwkSEncKey, compteur FCntUp (constante 1).
+    if (work.fopts_len > 0) {
+        const crypto::CryptoStatus fst = crypto::crypt_fopts(
+            keys.nwk_s_enc_key, crypto::Direction::Uplink, work.dev_addr, ctx.fcnt32,
+            crypto::FOptsCounter::FCntUpOrNFCntDwn, work.fopts.data(), work.fopts_len);
+        if (fst != crypto::CryptoStatus::Ok) {
+            mbedtls_platform_zeroize(work.frm_payload.data(), work.frm_payload.size());
+            return SecureStatus::CryptoFailure;
+        }
+    }
+
     std::size_t n = 0;
     const FrameStatus enc = encode(work, out, cap, n);
     if (enc != FrameStatus::Ok) {
@@ -97,10 +108,21 @@ SecureStatus open_uplink(const std::uint8_t* in, std::size_t len, const SessionK
         // Ne rien exposer d'une trame non authentifiée.
         mbedtls_platform_zeroize(out.frm_payload.data(), out.frm_payload.size());
         out.frm_payload_len = 0;
+        mbedtls_platform_zeroize(out.fopts.data(), out.fopts.size());
+        out.fopts_len = 0;
         return SecureStatus::MicMismatch;
     }
 
     // 2) Déchiffrement seulement si le MIC est authentique.
+    if (out.fopts_len > 0) {
+        const crypto::CryptoStatus fst = crypto::crypt_fopts(
+            keys.nwk_s_enc_key, crypto::Direction::Uplink, out.dev_addr, ctx.fcnt32,
+            crypto::FOptsCounter::FCntUpOrNFCntDwn, out.fopts.data(), out.fopts_len);
+        if (fst != crypto::CryptoStatus::Ok) {
+            mbedtls_platform_zeroize(out.fopts.data(), out.fopts.size());
+            return SecureStatus::CryptoFailure;
+        }
+    }
     if (out.has_fport && out.frm_payload_len > 0) {
         const crypto::CryptoStatus dst = crypto::crypt_frm_payload(
             payload_key(keys, out.fport), crypto::Direction::Uplink, out.dev_addr, ctx.fcnt32,

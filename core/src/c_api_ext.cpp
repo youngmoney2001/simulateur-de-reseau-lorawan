@@ -67,8 +67,9 @@ void to_frame(const lsim_uplink_frame& in, DataFrame& out) {
     out.fport = in.fport;
     out.frm_payload_len = in.payload_len;
     std::memcpy(out.frm_payload.data(), in.payload, in.payload_len);
-    // FOpts : non exposés par l'API C, toujours vides.
-    out.fopts_len = 0;
+    // FOpts : bornés par l'appelant (voir lsim_seal_uplink).
+    out.fopts_len = in.fopts_len;
+    std::memcpy(out.fopts.data(), in.fopts, in.fopts_len);
 }
 
 void from_frame(const DataFrame& in, lsim_uplink_frame& out) {
@@ -84,6 +85,8 @@ void from_frame(const DataFrame& in, lsim_uplink_frame& out) {
     out.fport = in.fport;
     out.payload_len = in.frm_payload_len;
     std::memcpy(out.payload, in.frm_payload.data(), in.frm_payload_len);
+    out.fopts_len = in.fopts_len;
+    std::memcpy(out.fopts, in.fopts.data(), in.fopts_len);
     std::memcpy(out.mic, in.mic.data(), 4);
 }
 
@@ -193,7 +196,7 @@ int32_t lsim_seal_uplink(const lsim_uplink_frame* frame, const lsim_session_keys
         return static_cast<int32_t>(lsim::lora::Status::NullOutput);
     }
     *out_written = 0;
-    if (frame->payload_len > lsim::lorawan::kMaxFrmPayload) {
+    if (frame->payload_len > lsim::lorawan::kMaxFrmPayload || frame->fopts_len > 15) {
         return map_secure(lsim::lorawan::SecureStatus::InvalidPayload);
     }
     try {
@@ -228,6 +231,8 @@ int32_t lsim_open_uplink(const uint8_t* in, size_t len, const lsim_session_keys_
             // Aucune donnée claire ne sort d'une trame rejetée.
             std::memset(out->payload, 0, sizeof out->payload);
             out->payload_len = 0;
+            std::memset(out->fopts, 0, sizeof out->fopts);
+            out->fopts_len = 0;
         }
         return map_secure(st);
     } catch (...) {

@@ -131,3 +131,37 @@ def test_invalid_frames_refused_before_native(kwargs):
 def test_invalid_key_length_refused():
     with pytest.raises(ValueError):
         derive_session_keys_11(b"\x00" * 15, TTN_KEY, TTN_JN, TTN_JEUI, TTN_DN)
+
+
+def test_fopts_roundtrip_encrypted_on_wire():
+    keys = _ttn_keys()
+    fopts = bytes([0x02, 0x03, 0x04])  # MAC commands (valeurs arbitraires de test)
+    frame = UplinkFrame(dev_addr=0x26011BDA, fcnt=5, payload=b"app", fport=2, fopts=fopts)
+    ctx = UplinkContext(fcnt32=5)
+    wire = seal_uplink(frame, keys, ctx)
+    # FOpts commencent à l'octet 8 : chiffrés sur le fil.
+    assert wire[8:11] != fopts
+    out = open_uplink(wire, keys, ctx)
+    assert out.fopts == fopts
+    assert out.payload == b"app"
+
+
+def test_fopts_tampering_rejected():
+    keys = _ttn_keys()
+    frame = UplinkFrame(dev_addr=1, fcnt=5, fopts=b"\x02\x03")
+    wire = bytearray(seal_uplink(frame, keys, UplinkContext(fcnt32=5)))
+    wire[8] ^= 0x01
+    with pytest.raises(StatusError):
+        open_uplink(bytes(wire), keys, UplinkContext(fcnt32=5))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(dev_addr=1, fcnt=0, fopts=b"x" * 16, fport=1),
+        dict(dev_addr=1, fcnt=0, fopts=b"\x02", fport=0),
+    ],
+)
+def test_invalid_fopts_refused(kwargs):
+    with pytest.raises(ValueError):
+        UplinkFrame(**kwargs)

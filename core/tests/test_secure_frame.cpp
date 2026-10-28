@@ -186,9 +186,56 @@ void test_fuzz_open_rejects_random_frames() {
     CHECK_EQ(accepted, 0);
 }
 
+void test_fopts_roundtrip_and_encryption_on_wire() {
+    const SessionKeys11 k = reference_keys();
+    DataFrame in = make_frame(1, "data");
+    in.fopts_len = 3;
+    in.fopts[0] = 0x02;  // LinkCheckReq
+    in.fopts[1] = 0x03;
+    in.fopts[2] = 0x04;
+    std::uint8_t wire[255];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_uplink(in, k, ctx_for(5), wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    // FOpts commencent à l'octet 8 (MHDR, DevAddr, FCtrl, FCnt) : chiffrés sur le fil.
+    CHECK_TRUE(wire[8] != 0x02 || wire[9] != 0x03 || wire[10] != 0x04);
+    // Concordance avec la primitive directe (même compteur, constante 1).
+    std::uint8_t expect[3] = {0x02, 0x03, 0x04};
+    CHECK_EQ(static_cast<int>(lsim::crypto::crypt_fopts(
+                 k.nwk_s_enc_key, lsim::crypto::Direction::Uplink, 0x01020304u, 5u,
+                 lsim::crypto::FOptsCounter::FCntUpOrNFCntDwn, expect, 3)),
+             static_cast<int>(lsim::crypto::CryptoStatus::Ok));
+    CHECK_TRUE(std::memcmp(wire + 8, expect, 3) == 0);
+
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_uplink(wire, n, k, ctx_for(5), out)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_EQ(static_cast<int>(out.fopts_len), 3);
+    CHECK_TRUE(out.fopts[0] == 0x02 && out.fopts[1] == 0x03 && out.fopts[2] == 0x04);
+}
+
+void test_fopts_tampering_rejected_before_exposure() {
+    const SessionKeys11 k = reference_keys();
+    DataFrame in = make_frame(1, "data");
+    in.fopts_len = 2;
+    in.fopts[0] = 0x02;
+    in.fopts[1] = 0x03;
+    std::uint8_t wire[255];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_uplink(in, k, ctx_for(5), wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    wire[8] ^= 0x01;  // altération d'un octet de FOpts
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_uplink(wire, n, k, ctx_for(5), out)),
+             static_cast<int>(SecureStatus::MicMismatch));
+    CHECK_EQ(static_cast<int>(out.fopts_len), 0);
+}
+
 }  // namespace
 
 void run_secure_frame_tests() {
+    test_fopts_roundtrip_and_encryption_on_wire();
+    test_fopts_tampering_rejected_before_exposure();
     test_roundtrip_app_payload();
     test_roundtrip_mac_port0_and_no_payload();
     test_seal_does_not_modify_plaintext();

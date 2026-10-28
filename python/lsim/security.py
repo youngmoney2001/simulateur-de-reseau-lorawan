@@ -107,6 +107,7 @@ class UplinkFrame:
     fcnt: int
     payload: bytes = b""
     fport: Optional[int] = None
+    fopts: bytes = b""  # MAC commands piggybackés, 0..15 octets, interdits avec FPort 0
     confirmed: bool = False
     adr: bool = False
     adr_ack_req: bool = False
@@ -122,11 +123,15 @@ class UplinkFrame:
             raise ValueError("payload doit être de type bytes")
         if len(self.payload) > MAX_FRM_PAYLOAD:
             raise ValueError(f"payload limité à {MAX_FRM_PAYLOAD} octets")
+        if not isinstance(self.fopts, (bytes, bytearray)) or len(self.fopts) > 15:
+            raise ValueError("fopts doit être de type bytes, 15 octets au plus")
         if self.fport is None:
             if self.payload:
                 raise ValueError("une charge sans FPort est interdite")
         elif not 0 <= self.fport <= 255:
             raise ValueError("fport doit être compris entre 0 et 255")
+        if self.fport == 0 and self.fopts:
+            raise ValueError("FOpts interdits avec FPort 0")
 
     def __repr__(self) -> str:
         return (f"UplinkFrame(dev_addr=0x{self.dev_addr:08X}, fcnt={self.fcnt}, "
@@ -145,6 +150,8 @@ class UplinkFrame:
         c.fport = 0 if self.fport is None else self.fport
         c.payload_len = len(self.payload)
         c.payload[:len(self.payload)] = list(self.payload)
+        c.fopts_len = len(self.fopts)
+        c.fopts[:len(self.fopts)] = list(self.fopts)
         return c
 
 
@@ -176,7 +183,7 @@ class UplinkContext:
 
 def seal_uplink(frame: UplinkFrame, keys: SessionKeys11, ctx: UplinkContext) -> bytes:
     """Chiffre la charge puis calcule le MIC 1.1 ; retourne la trame PHY."""
-    cap = 1 + 7 + 1 + len(frame.payload) + 4  # MHDR, FHDR sans FOpts, FPort, charge, MIC
+    cap = 1 + 7 + len(frame.fopts) + 1 + len(frame.payload) + 4  # MHDR, FHDR, FOpts, FPort, charge, MIC
     buf = (_U8 * cap)()
     written = ctypes.c_size_t(0)
     cf = frame._to_c()
@@ -202,6 +209,7 @@ def open_uplink(wire: bytes, keys: SessionKeys11, ctx: UplinkContext) -> UplinkF
         dev_addr=out.dev_addr,
         fcnt=out.fcnt,
         payload=bytes(out.payload[:n]),
+        fopts=bytes(out.fopts[:out.fopts_len]),
         fport=out.fport if out.has_fport else None,
         confirmed=out.mtype == 4,
         adr=bool(out.adr),
