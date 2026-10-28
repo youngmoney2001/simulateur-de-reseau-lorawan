@@ -2,6 +2,7 @@
 #include "lsim/materials.hpp"
 
 #include <cmath>
+#include <complex>
 #include <cstddef>
 
 namespace lsim::materials {
@@ -59,6 +60,9 @@ constexpr Row kRows[] = {
 
 // Constante de l'éq. (27a) : A = 1636 · σ / √ε′ (dB/m).
 constexpr double kAttenuationConstant = 1636.0;
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kEpsilon0 = 8.8541878128e-12;  // F/m
+constexpr double kSpeedOfLight = 299792458.0;    // m/s
 
 }  // namespace
 
@@ -106,6 +110,20 @@ lora::Status attenuation_db_per_m(Material material, double frequency_hz,
     return lora::Status::Ok;
 }
 
+lora::Status material_only_loss_db(Material material, double frequency_hz,
+                                  double thickness_m, double& out_db) {
+    if (!std::isfinite(thickness_m) || thickness_m < 0.0) {
+        return lora::Status::InvalidParameter;
+    }
+    AttenuationResult r;
+    const lora::Status st = attenuation_db_per_m(material, frequency_hz, r);
+    if (st != lora::Status::Ok) {
+        return st;
+    }
+    out_db = r.db_per_m * thickness_m;
+    return lora::Status::Ok;
+}
+
 lora::Status traversal_loss_db(Material material, double frequency_hz,
                                double thickness_m, double& out_db) {
     if (!std::isfinite(thickness_m) || thickness_m < 0.0) {
@@ -116,7 +134,26 @@ lora::Status traversal_loss_db(Material material, double frequency_hz,
     if (st != lora::Status::Ok) {
         return st;
     }
-    out_db = r.db_per_m * thickness_m;
+    // Permittivité complexe ε_rc = ε′ − jσ/(ωε₀) (éq. 10-11).
+    const double omega = 2.0 * kPi * frequency_hz;
+    const std::complex<double> eps_c(r.relative_permittivity,
+                                     -r.conductivity_s_per_m / (omega * kEpsilon0));
+    const std::complex<double> sqrt_eps = std::sqrt(eps_c);
+    // Éq. 37a (θ = 0) : coefficient de réflexion de l'interface air/dalle.
+    const std::complex<double> r_prime = (1.0 - sqrt_eps) / (1.0 + sqrt_eps);
+    // Éq. 44 : q = 2π d / λ · √ε_rc, avec λ = c / f.
+    const double wavelength_m = kSpeedOfLight / frequency_hz;
+    const std::complex<double> q = (2.0 * kPi * thickness_m / wavelength_m) * sqrt_eps;
+    const std::complex<double> minus_j(0.0, -1.0);
+    const std::complex<double> e1 = std::exp(minus_j * q);
+    const std::complex<double> e2 = e1 * e1;
+    // Éq. 43b : coefficient de transmission de la dalle (air → air).
+    const std::complex<double> t = (1.0 - r_prime * r_prime) * e1 / (1.0 - r_prime * r_prime * e2);
+    const double mag = std::abs(t);
+    if (!(mag > 0.0) || !std::isfinite(mag)) {
+        return lora::Status::InvalidParameter;
+    }
+    out_db = -20.0 * std::log10(mag);
     return lora::Status::Ok;
 }
 

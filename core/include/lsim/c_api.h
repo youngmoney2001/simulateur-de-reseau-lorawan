@@ -70,6 +70,7 @@ LSIM_API int32_t lsim_receiver_sensitivity_dbm(uint8_t spreading_factor,
                                                double* out_dbm);
 
 /* Atténuation des matériaux (UIT-R P.2040-4). material_id dans [0, count) ;
+ * perte totale d'une dalle monocouche en incidence normale (interfaces incluses) ;
  * out_extrapolated = 1 si la fréquence est hors de la plage documentée. */
 LSIM_API uint32_t lsim_material_count(void);
 LSIM_API int32_t lsim_material_traversal_loss_db(uint32_t material_id,

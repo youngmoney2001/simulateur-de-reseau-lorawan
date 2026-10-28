@@ -49,9 +49,14 @@ struct AttenuationResult {
 lora::Status attenuation_db_per_m(Material material, double frequency_hz,
                                      AttenuationResult& out);
 
-// Perte traversée pour une épaisseur donnée (mètres) : A × épaisseur.
-// Ne compte pas les pertes aux interfaces (réflexion), non traitées par cette formule.
+// Perte totale d'une traversée de dalle monocouche en incidence normale, air → dalle → air
+// (UIT-R P.2040-4, éq. 43b avec θ = 0, ε_rc = ε′ − jσ/(ωε₀), éq. 10-11 et 44) : pertes aux
+// deux interfaces (éq. 37a) et réflexions multiples inclus. Vaut 0 pour une épaisseur nulle.
 lora::Status traversal_loss_db(Material material, double frequency_hz,
-                                  double thickness_m, double& out_db);
+                               double thickness_m, double& out_db);
+
+// Terme « matériau seul » : A × épaisseur (éq. 27a), sans pertes aux interfaces.
+lora::Status material_only_loss_db(Material material, double frequency_hz,
+                                   double thickness_m, double& out_db);
 
 }  // namespace lsim::materials
