@@ -17,7 +17,8 @@ docs/            Feuille de route
 Principes :
 - **Sécurité** : entrées validées à chaque frontière, statuts d'erreur explicites,
   aucune exception ni UB traversant l'API C, surface exportée minimale (`LSIM_API`).
-- **Performance** : arithmétique entière, aucune allocation dynamique dans le cœur.
+- **Performance** : arithmétique entière ; allocations dimensionnées à partir de limites
+  explicites (10 000 dispositifs, 5 000 000 transmissions), jamais en croissance non bornée.
 - **Déterminisme** : temps en nanosecondes entières, résultats reproductibles.
 
 ## Dépendances
@@ -39,7 +40,13 @@ Exemple :
 ```python
 from lsim import RadioConfig, time_on_air_ns
 time_on_air_ns(RadioConfig(spreading_factor=7), 10)   # 41216000 ns
+
+from lsim.simulator import EndDevice, Gateway, Propagation, simulate_uplinks
+simulate_uplinks([EndDevice(x_m=10.0)], Gateway(), Propagation()).totals.received   # 1
 ```
+
+Les clés et trames 1.1 sont dans `lsim.security` (`derive_session_keys_11`,
+`seal_uplink`, `open_uplink`). Convention : identifiants et nonces en ordre de transmission (LSB first).
 
 Tests C++ sous AddressSanitizer et UBSan (inclut le fuzzing du codec de trame) :
 
@@ -53,8 +60,10 @@ cmake --build build-asan && ./build-asan/lsim_tests
 
 ## Statut
 
-Jalons 0 et 1 en grande partie faits, jalon 2 (MAC) en cours : le codec de trame est
-prêt, le chiffrement et la vérification du MIC LoRaWAN 1.1 suivent.
+Jalons 0 et 1 en grande partie faits. Jalon 2 (LoRaWAN 1.1) en cours : codec, crypto,
+dérivation de clés et trame sécurisée (MIC vérifié avant déchiffrement) sont prêts ;
+la jointure OTAA et le chiffrement FOpts suivent. Un moteur d'événements et une
+simulation des liaisons montantes sont disponibles (modèle de base).
 Voir [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Licence

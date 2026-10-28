@@ -9,16 +9,9 @@ from __future__ import annotations
 import ctypes
 from dataclasses import dataclass
 
+from lsim.status import describe
+
 _VALID_BW_HZ = (125_000, 250_000, 500_000)
-_STATUS_NAMES = {
-    0: "ok",
-    1: "spreading_factor invalide (7..12)",
-    2: "bande passante invalide (125/250/500 kHz)",
-    3: "coding_rate invalide (1..4)",
-    4: "taille de charge utile invalide (0..255)",
-    5: "préambule invalide (>= 6)",
-    6: "pointeur de sortie nul",
-}
 
 
 class StatusError(ValueError):
@@ -26,7 +19,7 @@ class StatusError(ValueError):
 
     def __init__(self, code: int) -> None:
         self.code = code
-        super().__init__(f"lsim: {_STATUS_NAMES.get(code, 'erreur inconnue')} (code {code})")
+        super().__init__(f"lsim: {describe(code)} (code {code})")
 
 
 @dataclass(frozen=True)

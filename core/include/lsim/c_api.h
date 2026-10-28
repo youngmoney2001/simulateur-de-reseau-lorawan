@@ -5,6 +5,7 @@
 #ifndef LSIM_C_API_H
 #define LSIM_C_API_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #if defined(_WIN32)
@@ -16,6 +17,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Codes de statut par domaine (plages disjointes) :
+ *   0        succès
+ *   1..99    PHY et lien radio (lora::Status, valeur directe)
+ *   100..199 crypto (crypto::CryptoStatus + 100)
+ *   200..249 trame sécurisée (SecureStatus + 200)
+ *   250..299 codec de trame (FrameStatus + 250)
+ *   300..399 simulateur (SimStatus + 300)
+ *   900      erreur interne (exception interceptée à la frontière)
+ */
+#define LSIM_STATUS_CRYPTO_BASE 100
+#define LSIM_STATUS_SECURE_BASE 200
+#define LSIM_STATUS_FRAME_BASE  250
+#define LSIM_STATUS_SIM_BASE    300
+#define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
     uint8_t  spreading_factor;     /* 7..12 */
@@ -68,6 +84,124 @@ LSIM_API int32_t lsim_max_range_m(double max_path_loss_db,
                                   double reference_distance_m,
                                   double exponent,
                                   double* out_m);
+
+/* ---------------------------------------------------------------- Clés 1.1 */
+
+/* Clés de jointure dérivées de NwkKey et DevEUI. */
+typedef struct lsim_join_keys {
+    uint8_t js_enc_key[16];
+    uint8_t js_int_key[16];
+} lsim_join_keys;
+
+/* Clés de session LoRaWAN 1.1. */
+typedef struct lsim_session_keys_11 {
+    uint8_t f_nwk_s_int_key[16];
+    uint8_t s_nwk_s_int_key[16];
+    uint8_t nwk_s_enc_key[16];
+    uint8_t app_s_key[16];
+} lsim_session_keys_11;
+
+/* Dérivation des clés de jointure. DevEUI en ordre de transmission (LSB first). */
+LSIM_API int32_t lsim_derive_join_keys(const uint8_t nwk_key[16],
+                                       const uint8_t dev_eui[8],
+                                       lsim_join_keys* out);
+
+/* Dérivation des clés de session 1.1. join_nonce 3 octets, join_eui 8,
+ * dev_nonce 2 octets, tous en ordre de transmission (LSB first). */
+LSIM_API int32_t lsim_derive_session_keys_11(const uint8_t nwk_key[16],
+                                             const uint8_t app_key[16],
+                                             const uint8_t join_nonce[3],
+                                             const uint8_t join_eui[8],
+                                             const uint8_t dev_nonce[2],
+                                             lsim_session_keys_11* out);
+
+/* ------------------------------------------------------- Trame sécurisée */
+
+/* Trame uplink à plat. Les FOpts ne sont pas exposés par l'API C. */
+typedef struct lsim_uplink_frame {
+    uint32_t dev_addr;
+    uint8_t  mtype;          /* 2 = unconfirmed up, 4 = confirmed up */
+    uint8_t  adr;
+    uint8_t  adr_ack_req;
+    uint8_t  ack;
+    uint8_t  class_b;
+    uint16_t fcnt;           /* 16 bits de poids faible */
+    uint8_t  has_fport;
+    uint8_t  fport;
+    uint8_t  payload_len;    /* <= 242 */
+    uint8_t  payload[242];   /* entrée de seal : clair ; sortie de open : clair */
+    uint8_t  mic[4];         /* sortie de seal ; ignoré à l'entrée (recalculé) */
+} lsim_uplink_frame;
+
+/* Contexte du MIC et du chiffrement uplink 1.1, fourni par le serveur de réseau. */
+typedef struct lsim_uplink_context {
+    uint16_t conf_fcnt;
+    uint8_t  tx_dr;
+    uint8_t  tx_ch;
+    uint32_t fcnt32;         /* compteur complet 32 bits */
+} lsim_uplink_context;
+
+/* Scelle une trame uplink (chiffrement puis MIC 1.1). *out_written reçoit la
+ * taille écrite, 0 en cas d'erreur. */
+LSIM_API int32_t lsim_seal_uplink(const lsim_uplink_frame* frame,
+                                  const lsim_session_keys_11* keys,
+                                  const lsim_uplink_context* ctx,
+                                  uint8_t* out, size_t cap, size_t* out_written);
+
+/* Ouvre une trame uplink : MIC vérifié avant déchiffrement. En cas d'échec,
+ * out->payload_len vaut 0 et aucune donnée claire n'est exposée. */
+LSIM_API int32_t lsim_open_uplink(const uint8_t* in, size_t len,
+                                  const lsim_session_keys_11* keys,
+                                  const lsim_uplink_context* ctx,
+                                  lsim_uplink_frame* out);
+
+/* -------------------------------------------------------------- Simulateur */
+
+typedef struct lsim_end_device {
+    double   x_m;
+    double   y_m;
+    uint8_t  spreading_factor;   /* 7..12 */
+    uint32_t payload_bytes;      /* 0..255 */
+    double   tx_power_dbm;
+    int64_t  start_offset_ns;    /* >= 0 */
+    int64_t  period_ns;          /* > 0 */
+    uint32_t messages;           /* >= 1 */
+} lsim_end_device;
+
+typedef struct lsim_gateway {
+    double x_m;
+    double y_m;
+    double antenna_gain_dbi;
+} lsim_gateway;
+
+typedef struct lsim_propagation {
+    double frequency_hz;
+    double reference_distance_m;
+    double exponent;             /* 1..6 */
+    double capture_threshold_db; /* >= 0 */
+} lsim_propagation;
+
+typedef struct lsim_device_stats {
+    uint64_t sent;
+    uint64_t received;
+    uint64_t lost_sensitivity;
+    uint64_t lost_collision;
+} lsim_device_stats;
+
+typedef struct lsim_sim_stats {
+    uint64_t sent;
+    uint64_t received;
+    uint64_t lost_sensitivity;
+    uint64_t lost_collision;
+} lsim_sim_stats;
+
+/* Simule les liaisons montantes. per_device doit contenir device_count entrées ;
+ * totals reçoit la somme. */
+LSIM_API int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_count,
+                                       const lsim_gateway* gateway,
+                                       const lsim_propagation* prop,
+                                       lsim_device_stats* per_device,
+                                       lsim_sim_stats* totals);
 
 #ifdef __cplusplus
 }

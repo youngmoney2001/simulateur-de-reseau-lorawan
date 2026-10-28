@@ -16,7 +16,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel
 - ⬜ Obstacles, masques de terrain, shadowing
 
-- ⬜ Collisions et capture effect, orthogonalité inter-SF
+- ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
 - ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864
 - ⬜ Duty cycle et temps d'attente réglementaires
 
@@ -27,13 +27,19 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Dérivation des clés de session 1.1 et JSIntKey/JSEncKey : vecteurs TTN (Apache-2.0), recalculés indépendamment
 - ✅ MIC 1.1 uplink (split SNwkSIntKey / FNwkSIntKey) et downlink : vecteurs TTN
 - ✅ Chiffrement avec identifiant de type de trame (base du chiffrement FOpts) : vecteurs TTN
+- ✅ Trame sécurisée 1.1 : scellement et ouverture, MIC vérifié avant déchiffrement, compteur 32 bits contrôlé
+- ✅ Crypto et trame sécurisée exposées via l'API C et Python (`lsim.security`)
 - ⬜ Confirmer les vecteurs contre le document officiel TS001 de la LoRa Alliance (non accessible ici)
 - ⬜ Chiffrement FOpts 1.1 avec NwkSEncKey (câblage dans le codec de trame)
-- ⬜ Exposer le module crypto via l'API C et Python
 - ⬜ Classes A, B, C
 - ⬜ Join OTAA 1.1 (join-request/accept, JoinNonce, DevNonce)
 - ⬜ ADR, ACK, commandes MAC, rekey
-- ⬜ Moteur d'événements discrets (file de priorité déterministe)
+- ✅ Moteur d'événements discrets : file bornée déterministe, simulation des uplinks (`lsim.simulator`)
+
+## Limites connues (à traiter avant commercialisation)
+- Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
+- Les FOpts ne sont pas exposés par l'API C ; le chiffrement FOpts 1.1 (NwkSEncKey) n'est pas câblé.
+- Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 
 ## Jalon 3 — Scénarios, résultats et analyse
 - ⬜ Scénarios YAML validés (Pydantic)

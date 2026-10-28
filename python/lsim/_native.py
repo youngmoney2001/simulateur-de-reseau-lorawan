@@ -23,6 +23,89 @@ class _CRadioConfig(ctypes.Structure):
     ]
 
 
+class _CJoinKeys(ctypes.Structure):
+    _fields_ = [
+        ("js_enc_key", ctypes.c_uint8 * 16),
+        ("js_int_key", ctypes.c_uint8 * 16),
+    ]
+
+
+class _CSessionKeys11(ctypes.Structure):
+    _fields_ = [
+        ("f_nwk_s_int_key", ctypes.c_uint8 * 16),
+        ("s_nwk_s_int_key", ctypes.c_uint8 * 16),
+        ("nwk_s_enc_key", ctypes.c_uint8 * 16),
+        ("app_s_key", ctypes.c_uint8 * 16),
+    ]
+
+
+class _CUplinkFrame(ctypes.Structure):
+    _fields_ = [
+        ("dev_addr", ctypes.c_uint32),
+        ("mtype", ctypes.c_uint8),
+        ("adr", ctypes.c_uint8),
+        ("adr_ack_req", ctypes.c_uint8),
+        ("ack", ctypes.c_uint8),
+        ("class_b", ctypes.c_uint8),
+        ("fcnt", ctypes.c_uint16),
+        ("has_fport", ctypes.c_uint8),
+        ("fport", ctypes.c_uint8),
+        ("payload_len", ctypes.c_uint8),
+        ("payload", ctypes.c_uint8 * 242),
+        ("mic", ctypes.c_uint8 * 4),
+    ]
+
+
+class _CUplinkContext(ctypes.Structure):
+    _fields_ = [
+        ("conf_fcnt", ctypes.c_uint16),
+        ("tx_dr", ctypes.c_uint8),
+        ("tx_ch", ctypes.c_uint8),
+        ("fcnt32", ctypes.c_uint32),
+    ]
+
+
+class _CEndDevice(ctypes.Structure):
+    _fields_ = [
+        ("x_m", ctypes.c_double),
+        ("y_m", ctypes.c_double),
+        ("spreading_factor", ctypes.c_uint8),
+        ("payload_bytes", ctypes.c_uint32),
+        ("tx_power_dbm", ctypes.c_double),
+        ("start_offset_ns", ctypes.c_int64),
+        ("period_ns", ctypes.c_int64),
+        ("messages", ctypes.c_uint32),
+    ]
+
+
+class _CGateway(ctypes.Structure):
+    _fields_ = [
+        ("x_m", ctypes.c_double),
+        ("y_m", ctypes.c_double),
+        ("antenna_gain_dbi", ctypes.c_double),
+    ]
+
+
+class _CPropagation(ctypes.Structure):
+    _fields_ = [
+        ("frequency_hz", ctypes.c_double),
+        ("reference_distance_m", ctypes.c_double),
+        ("exponent", ctypes.c_double),
+        ("capture_threshold_db", ctypes.c_double),
+    ]
+
+
+class _CDeviceStats(ctypes.Structure):
+    _fields_ = [
+        ("sent", ctypes.c_uint64),
+        ("received", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+    ]
+
+
+_CSimStats = _CDeviceStats  # même disposition (quatre uint64)
+
 
 def _load_library() -> ctypes.CDLL:
     """Charge la bibliothèque native. Chemin surchargeable via LSIM_LIBRARY."""
@@ -55,8 +138,8 @@ def _load_library() -> ctypes.CDLL:
     return lib
 
 
-
 _DBL = ctypes.POINTER(ctypes.c_double)
+_U8P = ctypes.POINTER(ctypes.c_uint8)
 
 LIB = _load_library()
 
@@ -71,3 +154,23 @@ LIB.lsim_max_allowable_path_loss_db.restype = ctypes.c_int32
 LIB.lsim_max_allowable_path_loss_db.argtypes = [ctypes.c_double] * 6 + [_DBL]
 LIB.lsim_max_range_m.restype = ctypes.c_int32
 LIB.lsim_max_range_m.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, _DBL]
+
+LIB.lsim_derive_join_keys.restype = ctypes.c_int32
+LIB.lsim_derive_join_keys.argtypes = [_U8P, _U8P, ctypes.POINTER(_CJoinKeys)]
+LIB.lsim_derive_session_keys_11.restype = ctypes.c_int32
+LIB.lsim_derive_session_keys_11.argtypes = [
+    _U8P, _U8P, _U8P, _U8P, _U8P, ctypes.POINTER(_CSessionKeys11)]
+LIB.lsim_seal_uplink.restype = ctypes.c_int32
+LIB.lsim_seal_uplink.argtypes = [
+    ctypes.POINTER(_CUplinkFrame), ctypes.POINTER(_CSessionKeys11),
+    ctypes.POINTER(_CUplinkContext), _U8P, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_open_uplink.restype = ctypes.c_int32
+LIB.lsim_open_uplink.argtypes = [
+    _U8P, ctypes.c_size_t, ctypes.POINTER(_CSessionKeys11),
+    ctypes.POINTER(_CUplinkContext), ctypes.POINTER(_CUplinkFrame)]
+LIB.lsim_simulate_uplinks.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDeviceStats),
+    ctypes.POINTER(_CSimStats)]
