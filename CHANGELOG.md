@@ -21,6 +21,10 @@
 - Deux profils au choix : `rak4631` et `sx1262-stm32l072` (`--energy-profile`).
 - Classe A : fenêtres RX1/RX2 au préambule (durée configurable).
 
+### Serveur de jointure
+- Registre de jointure durable, partageable entre processus (SQLite WAL, transactions `BEGIN IMMEDIATE`, état protégé par MIC).
+- Serveur de jointure : join-request acceptée et join-accept produit en une transaction ; rejoin vérifié sans join-accept généré.
+
 ### Données
 - Paramètres de propagation indoor (Université de Siegen, CC BY 4.0) déposés dans
   `python/lsim/reference/`, sans les données brutes.
