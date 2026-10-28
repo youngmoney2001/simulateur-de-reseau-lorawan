@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from lsim.export import run_scenario, write_parquet
+from lsim.report import write_pdf, write_xlsx
 from lsim.calibration import calibrate_path_loss, format_report
 from lsim.geo import to_dem_document, to_geojson
 from lsim.scenario import load_scenario
@@ -26,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="origine latitude,longitude de la passerelle (défaut : Douala)")
     geo.add_argument("--dem", default=None,
                      help="fichier JSON de MNT à écrire (scénarios avec relief uniquement)")
+    rep = sub.add_parser("report", help="exécuter un scénario et écrire un rapport PDF ou Excel")
+    rep.add_argument("scenario", help="fichier YAML du scénario")
+    rep.add_argument("-o", "--output", required=True, help="fichier de sortie (.pdf ou .xlsx)")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")
     cal.add_argument("measures", help="CSV : distance_m,path_loss_db")
@@ -37,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         return _geojson(args)
     if args.command == "calibrate":
         return _calibrate(args)
+    if args.command == "report":
+        return _report(args)
 
     try:
         scenario = load_scenario(args.scenario)
@@ -52,6 +59,25 @@ def main(argv: list[str] | None = None) -> int:
     print(f"émises {t.sent}, reçues {t.received}, PDR {pdr}")
     print(f"pertes : sensibilité {t.lost_sensitivity}, collision {t.lost_collision}")
     print(f"résultats : {args.output}")
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    suffix = Path(args.output).suffix.lower()
+    if suffix not in (".pdf", ".xlsx"):
+        print("erreur : la sortie doit être en .pdf ou .xlsx", file=sys.stderr)
+        return 2
+    try:
+        scenario = load_scenario(args.scenario)
+        result = run_scenario(scenario)
+        if suffix == ".pdf":
+            write_pdf(result, args.output)
+        else:
+            write_xlsx(result, args.output)
+    except (ValueError, OSError) as exc:
+        print(f"erreur : {exc}", file=sys.stderr)
+        return 2
+    print(f"rapport : {args.output}")
     return 0
 
 

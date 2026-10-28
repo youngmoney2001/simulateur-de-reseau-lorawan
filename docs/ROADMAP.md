@@ -13,12 +13,12 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Jalon 1 — Couche radio et propagation
 - ✅ Sensibilité SX1276 125 kHz (SF7–SF12) ; 250/500 kHz refusées tant que non vérifiées
 - ✅ Perte espace libre, log-distance, perte maximale admissible (MAPL), portée inverse
-- ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel
+- ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel : extraits concordants des révisions 4, 5 et 7 (copies Adafruit, Mouser, SparkFun) mais table complète non lisible (récupération du PDF impossible depuis le sandbox) ; aucune valeur encodée à partir d'extraits mélangés
 - ✅ Relief (grille d'altitudes bilinéaire, MNT CSV) et obstacles (pavés) : perte log-distance + diffraction de couteau unique (Lee, seulement si l'obstruction dépasse la ligne de visée) + pénétration ; API C `lsim_simulate_uplinks_env`, scénario YAML `environment:`
 - ✅ Diffraction multi-arêtes (Deygout, 3 arêtes) à la place du couteau unique
 - ✅ Couverture réelle par azimut (relief et obstacles, dichotomie, borne de travail) ; `model: environment` dans le GeoJSON
 - ✅ Outil de calibrage `python -m lsim calibrate mesures.csv` (exposant, PL0, sigma, R2, avertissements)
-- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; attenuation des pavés par matériau
+- ⬜ Calibrage effectif sur mesures terrain (données réelles requises, aucune valeur inventée) ; ⬜ atténuation des pavés par matériau (source de valeurs par matériau à retenir avant encodage)
 - ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
@@ -52,14 +52,15 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Jalon 3 — Scénarios, résultats et analyse
 - ✅ Scénarios YAML validés (Pydantic, champs inconnus refusés, bornes 10 000 dispositifs / 5 000 000 transmissions), déploiement déterministe par graine, hash SHA-256 du scénario
 - ✅ Export Parquet par dispositif avec métadonnées de traçabilité ; CLI `python -m lsim run`
-- 🔧 Métriques avancées : ✅ temps d'antenne par dispositif (cœur, API C, Parquet) ; ✅ charge passerelle (temps occupé en union, pic de trames simultanées, taux d'occupation) ; ✅ latence = temps d'antenne (aucune file ni backhaul modélisés) ; ⬜ énergie (exige les courants réels de l'émetteur, non inventés)
-- ⬜ Notebooks pour les bureaux d'études
+- 🔧 Métriques avancées : ✅ temps d'antenne par dispositif (cœur, API C, Parquet) ; ✅ charge passerelle (temps occupé en union, pic de trames simultanées, taux d'occupation) ; ✅ latence = temps d'antenne (aucune file ni backhaul modélisés) ; ⬜ énergie (exige les courants réels de l'émetteur, non inventés : données fabricant requises)
+- ✅ Notebook pour les bureaux d'études (`notebooks/analyse_scenario.ipynb`, exécuté : indicateurs, PDR par distance, sensibilité au shadowing, avec note sur l'effet de capture)
 
 ## Jalon 4 — Visualisation 3D et produit
 - ✅ Carte 3D CesiumJS (Apache-2.0) : passerelle, zones de couverture natives, dispositifs colorés par PDR (PointPrimitiveCollection), détail au clic, chargement GeoJSON validé
 - ✅ Obstacles extrudés dans la carte (export GeoJSON `kind: obstacle`, hauteur en mètres)
 - ✅ Relief dans la carte : terrain CesiumJS local (CustomHeightmapTerrainProvider) à partir du MNT `lsim-dem-v1` ; appareils, passerelle et obstacles posés au sol
-- ⬜ Vérification du rendu en gros plan (obstacles et terrain) ; altitudes : le MNT doit être dans le même référentiel que l'ellipsoïde (géoïde à corriger pour les MNT réels)
-- ⬜ Fournisseur de tuiles sous contrat pour l'usage commercial
-- ⬜ Rapports PDF/Excel, gestion multi-utilisateurs
-- ⬜ Empaquetage, documentation, cycle de release
+- ⬜ Vérification du rendu en gros plan (obstacles et terrain) (vérification visuelle dans un navigateur requise) ; altitudes : le MNT doit être dans le même référentiel que l'ellipsoïde (géoïde à corriger pour les MNT réels)
+- ⬜ Fournisseur de tuiles sous contrat pour l'usage commercial (décision commerciale et contrat requis, aucun fournisseur choisi à ce stade)
+- ✅ Rapports PDF et Excel (`python -m lsim report scenario.yaml -o rapport.pdf|.xlsx` ; feuille Synthèse et une ligne par dispositif ; textes du scénario neutralisés contre l'injection de formules ; extras `report`)
+- ⬜ Gestion multi-utilisateurs (authentification, rôles, espaces de travail : décision produit et d'architecture requise)
+- 🔧 Empaquetage, documentation, cycle de release : ✅ `pyproject.toml` avec extras `data`, `report`, `test` ; ⬜ version et politique de release, ⬜ documentation d'utilisation hors README, ⬜ paquet binaire du cœur natif
