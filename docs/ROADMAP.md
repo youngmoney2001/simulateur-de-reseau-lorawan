@@ -22,7 +22,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
-- ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864
+- 🔧 Profils régionaux data-driven : ✅ cadre (sous-bandes, validation, source obligatoire, `python/lsim/regions.py`) ; ⬜ valeurs EU868 en attente de la source officielle (LoRaWAN Regional Parameters RP002 + ETSI EN 300 220-2) ; ⬜ US915, AS923, AU915, KR920, IN865, RU864
 - 🔧 Duty cycle : ✅ mécanisme (rapport cyclique par dispositif, attente airtime·(1−d)/d, scénario `duty_cycle` par groupe) ; ⬜ valeurs réglementaires par région (dans les profils P6)
 
 ## Jalon 2 — MAC LoRaWAN 1.1
