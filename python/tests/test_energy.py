@@ -7,21 +7,21 @@ from lsim.energy import device_energy, profile
 SECOND = 1_000_000_000
 
 
-def test_profile_matches_documented_sources():
+def test_profile_matches_rak4631_datasheet():
     p = profile()
-    assert p.supply_v == pytest.approx(3.3)
-    assert p.rx_ma_125khz == pytest.approx(10.3)   # SX1276 Table 10, bande 1, 125 kHz
-    assert p.rx_ma_250khz == pytest.approx(11.1)
-    assert p.rx_ma_500khz == pytest.approx(12.6)
-    assert p.sleep_ua == pytest.approx(0.63)       # 0,2 µA radio + 0,43 µA MCU Stop
-    assert p.mcu_run_ma == pytest.approx(93e-3 * 32)
+    assert p.supply_v == pytest.approx(3.3)        # RAK4631, tension nominale
+    assert p.rx_ma_125khz == pytest.approx(17.0)   # RAK4631, Rx LoRa
+    assert p.rx_ma_250khz == pytest.approx(17.0)
+    assert p.rx_ma_500khz == pytest.approx(17.0)
+    assert p.sleep_ua == pytest.approx(2.0)        # RAK4631, veille LoRa et BLE
+    assert p.mcu_run_ma == pytest.approx(0.0)      # inclus dans les courants module
 
 
 def test_one_second_tx_then_sleep_matches_hand_computation():
-    # 1 s à 14 dBm (estimation 87 mA), 3599 s de veille à 0,63 µA, 3,3 V.
+    # 1 s à 14 dBm (point module 17 dBm, 92 mA), 3599 s de veille à 2,0 µA, 3,3 V.
     r = device_energy(tx_power_dbm=14.0, bandwidth_hz=125_000,
                       airtime_ns=SECOND, total_ns=3600 * SECOND)
-    charge = 0.087 + 0.63e-6 * 3599
+    charge = 0.092 + 2.0e-6 * 3599
     assert r.energy_j == pytest.approx(3.3 * charge, rel=1e-9)
     assert r.average_current_ua == pytest.approx(charge / 3600 * 1e6, rel=1e-9)
 
@@ -37,7 +37,7 @@ def test_energy_is_monotonic_in_airtime():
 def test_no_activity_gives_sleep_current_only():
     r = device_energy(tx_power_dbm=14.0, bandwidth_hz=125_000, airtime_ns=0,
                       total_ns=1000 * SECOND)
-    assert r.average_current_ua == pytest.approx(0.63, rel=1e-9)
+    assert r.average_current_ua == pytest.approx(2.0, rel=1e-9)
 
 
 @pytest.mark.parametrize("kwargs", [

@@ -12,12 +12,10 @@ struct TxPoint {
     double current_ma;
 };
 
-// SX1276 Table 6, IDDT typ. (PA_BOOST pour +20 et +17 dBm ; RFO pour +13 et +7 dBm).
+// Fiche RAK4631 (PA_BOOST) : +17 dBm 92 mA ; +20 dBm 125 mA.
 constexpr TxPoint kTxPoints[] = {
-    {7.0, 20.0},
-    {13.0, 29.0},
-    {17.0, 87.0},
-    {20.0, 120.0},
+    {17.0, 92.0},
+    {20.0, 125.0},
 };
 
 }  // namespace
@@ -26,7 +24,7 @@ lora::Status tx_current_ma(double tx_power_dbm, double& out_ma) {
     if (!std::isfinite(tx_power_dbm) || tx_power_dbm > 20.0) {
         return lora::Status::InvalidParameter;
     }
-    // Point du datasheet dont la puissance est >= la puissance demandée (conservateur).
+    // Point de la fiche dont la puissance est >= la puissance demandée (conservateur).
     for (const TxPoint& p : kTxPoints) {
         if (p.rfo_dbm >= tx_power_dbm) {
             out_ma = p.current_ma;

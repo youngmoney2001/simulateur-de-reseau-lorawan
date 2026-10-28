@@ -1,10 +1,9 @@
 """Bilan énergétique d'un dispositif, calculé par le cœur natif.
 
-Sources des courants (détail dans `core/include/lsim/energy.hpp`) :
-- SX1276 datasheet Rev. 4 : émission (Table 6, typ.), réception LoRa bande 1 (Table 10),
-  veille (Table 6, 0,2 µA typ.) ;
-- microcontrôleur de référence STM32L072 (fiche ST, valeurs « à partir de ») ;
-- alimentation 3,3 V : hypothèse de référence.
+Profil par défaut : module RAKwireless RAK4631 (nRF52840 + Semtech SX1262), fiche RAK
+(3,3 V nominal ; Tx 92 mA à +17 dBm, 125 mA à +20 dBm ; Rx 17 mA ; veille 2,0 µA).
+Contrôle croisé : SX1262 seul (Semtech, réglage PA par défaut) 90 mA à +14 dBm.
+Détail des sources dans `core/include/lsim/energy.hpp`.
 
 Le temps d'antenne vient des résultats de simulation (`airtime_ns` par dispositif).
 Les durées de réception et de traitement MCU ne sont pas issues du moteur : elles sont

@@ -35,3 +35,10 @@
 
 - Usage : valeurs attendues des tests `core/tests/test_join.cpp` et `python/tests/test_join.py` (join-request, join-accept, MIC 1.0.x et 1.1, chiffrement du join-accept). Seules les valeurs numériques sont reprises.
 - Source : `pkg/crypto/join_messages_test.go`, licence Apache-2.0.
+
+## Jeu de données LoRaWAN en intérieur, Université de Siegen (paramètres de propagation)
+
+- Usage : paramètres ajustés des modèles de perte de parcours (LDPLM-MW, COST231-MWM, LDPLM-MW-EP) dans `python/lsim/reference/siegen_indoor_lorawan.json`. Le jeu brut n'est pas copié dans ce dépôt.
+- Auteurs : Nahshon Mokua Obiri, Kristof Van Laerhoven. Article : https://doi.org/10.1109/ACCESS.2025.3569164 (IEEE Access, vol. 13, 2025).
+- Jeu de données : https://doi.org/10.5281/zenodo.15349730 ; code : https://github.com/nahshonmokua/LoRaWAN-Indoor-PathLoss-Dataset-IEEEACCESS (commit `7fa0327c8ed65a5823f4923f6d62301fff69d935`).
+- Licence : CC BY 4.0 (section « License » du README du dépôt ; aucun fichier LICENSE séparé). Attribution requise dans tout produit qui reprend ces paramètres.

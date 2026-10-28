@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "title": "A Comprehensive Data Description for LoRaWAN Path Loss Measurements in an Indoor Office Setting: Effects of Environmental Factors",
+    "authors": [
+      "Nahshon Mokua Obiri",
+      "Kristof Van Laerhoven"
+    ],
+    "article_doi": "10.1109/ACCESS.2025.3569164",
+    "article_reference": "IEEE Access, vol. 13, pp. 83148–83170, 2025",
+    "arxiv": "arXiv:2505.06375",
+    "dataset_doi": "10.5281/zenodo.15349730",
+    "code_repository": "https://github.com/nahshonmokua/LoRaWAN-Indoor-PathLoss-Dataset-IEEEACCESS",
+    "code_commit": "7fa0327c8ed65a5823f4923f6d62301fff69d935",
+    "licence": "CC BY 4.0",
+    "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    "copyright": "© 2025 Nahshon Mokua Obiri and Kristof Van Laerhoven"
+  },
+  "campaign": {
+    "site": "Université de Siegen (campus), bureaux intérieurs",
+    "end_devices": 6,
+    "gateways": "une passerelle (kerlink001)",
+    "frequency_mhz": 868,
+    "period": "2024-09-26 13:00 au 2025-04-01 10:00 (heure de Berlin), d'après Timeline for dataset used.txt",
+    "transmit_power": "non réglée par les dispositifs (ADR TTN) : 14 dBm pour environ deux tiers des liaisons montantes, 12 dBm pour environ un tiers",
+    "fields_in_article_dataset": 1328334
+  },
+  "source_notebook": {
+    "file": "06_Log-Distance Path Loss Modeling.ipynb",
+    "note": "valeurs relevées dans les sorties enregistrées du notebook (version du commit ci-dessus)"
+  },
+  "models": {
+    "LDPLM-MW": {
+      "equation": "PL = PL(d0) + 10·n·log10(d / d0) + c_walls·L_c + w_walls·L_w, avec d0 = 1 m",
+      "parameters": {
+        "PL_d0_db": 16.233661,
+        "n": 4.914496,
+        "L_c_db": 7.103567,
+        "L_w_db": 1.140166
+      },
+      "test_rmse_db": 6.007,
+      "test_r2": 0.88
+    },
+    "COST231-MWM": {
+      "equation": "PL = FSPL(d, f) + L_const + c_walls·L_c + w_walls·L_w (exposant fixé à 2)",
+      "parameters": {
+        "L_const_db": 12.463817,
+        "L_c_db": 10.82787,
+        "L_w_db": 5.20959
+      },
+      "test_rmse_db": 6.893,
+      "test_r2": 0.842
+    },
+    "LDPLM-MW-EP": {
+      "equation": "modèle LDPLM-MW augmenté de termes environnementaux linéaires (CO2, humidité, PM2.5, pression, température)",
+      "parameters": {
+        "PL_d0_db": -35.323236,
+        "n": 4.907911,
+        "L_c_db": 7.216703,
+        "L_w_db": 1.122211,
+        "a_co2_db_per_unit": -0.00269,
+        "a_hum_db_per_unit": -0.10634,
+        "a_pm25_db_per_unit": -0.004084,
+        "a_pres_db_per_unit": 0.001648,
+        "a_temp_db_per_unit": -0.143669
+      },
+      "test_rmse_db": 5.949,
+      "test_r2": 0.882
+    }
+  },
+  "caveats": [
+    "PL(d0) = 16,2 dB pour LDPLM-MW (et -35,3 dB pour LDPLM-MW-EP) : ordonnée à l'origine ajustée, incohérente avec la perte en espace libre à 1 m à 868 MHz (31,2 dB). Ne pas la combiner avec une autre référence FSPL.",
+    "L'exposant n ≈ 4,9 décrit un bureau instrumenté avec parois ; il ne se généralise pas à l'extérieur ni à d'autres bâtiments.",
+    "Les colonnes c_walls et w_walls ne sont pas définies dans le README du dépôt ; le notebook les étiquette « brick » et « wood ». Les valeurs sont reprises avec ces étiquettes, à confirmer auprès des auteurs.",
+    "L'article (arXiv) annonce des pertes de paroi différentes (brique 9,0 dB ; bois 2,6 à 3,0 dB) de celles du notebook final utilisé ici (7,1 dB ; 1,1 dB). L'écart est à signaler.",
+    "Données dérivées : une passerelle, six dispositifs, une seule bande (868 MHz), un seul site.",
+    "Le jeu de données brut (environ 1,3 million de champs) n'est pas copié dans ce dépôt : il est sur Zenodo (DOI ci-dessus) et ne doit pas être versionné dans Git."
+  ]
+}

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Bilan énergétique d'un dispositif (charge et énergie par état).
 //
-// Sources des courants par défaut :
-//   - Émetteur (IDDT, typ., Table 6) et récepteur LoRa (IDDR_L, bande 1, LnaBoost off,
-//     Table 10), veille (IDDSL, Table 6) : Semtech SX1276 datasheet Rev. 4.
-//       Tx : +20 dBm PA_BOOST 120 mA ; +17 dBm PA_BOOST 87 mA ; +13 dBm RFO 29 mA ;
-//            +7 dBm RFO 20 mA.
-//       Rx : 9,9 / 10,3 / 11,1 / 12,6 mA pour 7,8-62,5 / 125 / 250 / 500 kHz (bande 1).
-//       Veille : 0,2 µA (typ.).
-//   - Microcontrôleur de référence STM32L072 (fiche ST, « Down to 93 µA/MHz in Run mode »,
-//     « 0.43 µA Stop mode ») : valeurs « à partir de » (cas optimal), à remplacer par la
-//     table de consommation du modèle retenu.
-// Alimentation 3,3 V : hypothèse de référence, à remplacer.
+// Profil par défaut : module RAKwireless RAK4631 (nRF52840 + Semtech SX1262), fiche RAK :
+//   - tension nominale VBAT_SX / VDD_NRF : 3,3 V (plage 2,0 à 3,7 V) ;
+//   - émission LoRa, PA_BOOST : +17 dBm 92 mA ; +20 dBm 125 mA ;
+//   - réception LoRa (37,5 kbit/s) : 17 mA, appliquée à toutes les largeurs de bande
+//     (pas de valeur par largeur dans la fiche : estimation conservatrice) ;
+//   - veille LoRa et BLE : 2,0 µA.
+// Les courants module incluent le microcontrôleur pendant l'émission et la réception :
+// aucun terme MCU séparé par défaut (mcu_run_current_ma = 0).
+// Contrôle croisé : Semtech SX1262 (datasheet v2.1, réglage PA par défaut) : +14 dBm 90 mA,
+// +17 dBm 95 mA, +20 dBm 102 mA, +22 dBm 118 mA (puce seule, sans nRF52840).
+//
+// Règle d'émission : pour une puissance demandée P, on prend le point de la fiche module
+// dont la puissance est supérieure ou égale à P (conservateur). P = 14 dBm donne 92 mA.
 #pragma once
 
 #include <cstdint>
@@ -21,12 +23,12 @@
 namespace lsim::energy {
 
 struct Profile {
-    double supply_v = 3.3;                 // hypothèse de référence
-    double rx_current_ma_125khz = 10.3;    // SX1276, bande 1, LnaBoost off (typ.)
-    double rx_current_ma_250khz = 11.1;
-    double rx_current_ma_500khz = 12.6;
-    double sleep_current_ua = 0.2 + 0.43;  // radio (0,2 µA) + MCU en Stop (0,43 µA)
-    double mcu_run_current_ma = 93e-3 * 32.0;  // 93 µA/MHz × 32 MHz (valeur optimale)
+    double supply_v = 3.3;                 // RAK4631, tension nominale
+    double rx_current_ma_125khz = 17.0;    // RAK4631, Rx LoRa (valeur unique)
+    double rx_current_ma_250khz = 17.0;
+    double rx_current_ma_500khz = 17.0;
+    double sleep_current_ua = 2.0;         // RAK4631, veille LoRa et BLE
+    double mcu_run_current_ma = 0.0;       // inclus dans les courants module
 };
 
 struct Result {
@@ -35,8 +37,8 @@ struct Result {
     double average_current_ua = 0.0;
 };
 
-// Courant d'émission (mA) pour une puissance demandée : point du datasheet le plus proche
-// par valeur supérieure ou égale (estimation conservatrice). Puissance > 20 dBm refusée.
+// Courant d'émission (mA) : point de la fiche module, puissance >= demandée (conservateur).
+// Puissance > 20 dBm refusée (point non publié dans la fiche).
 lora::Status tx_current_ma(double tx_power_dbm, double& out_ma);
 
 // Courant de réception LoRa (mA) pour une largeur de bande.

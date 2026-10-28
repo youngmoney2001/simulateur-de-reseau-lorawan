@@ -17,7 +17,10 @@ test = ["pytest>=8", "pydantic>=2", "pyyaml>=6", "pyarrow>=14", "openpyxl>=3.1",
 
 [tool.setuptools]
 package-dir = { "" = "." }
-packages = ["lsim"]
+packages = ["lsim", "lsim.reference"]
+
+[tool.setuptools.package-data]
+"lsim.reference" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
