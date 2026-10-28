@@ -193,7 +193,7 @@ US915_CHANNELS = (
     + tuple(_ch(923_300_000 + 600_000 * k, 500_000, 8, 13, uplink=False) for k in range(8))
 )
 US915 = RegionProfile(
-    code="US915", source=RP002 + " §2.5.2–2.5.3 (FCC, dwell time 400 ms)", channels=US915_CHANNELS,
+    code="US915", source=RP002 + " §2.5.2–2.5.3 ; FCC 47 CFR 15.247 (govinfo, édition 2013 : FHSS ≥ 50 canaux 1 W, numérique ≥ 500 kHz, dwell 0,4 s)", channels=US915_CHANNELS,
     power_basis="conducted", dwell_time_ms=400,
 )
 
