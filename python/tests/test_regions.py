@@ -1,12 +1,14 @@
-"""Cadre des profils régionaux : validation, sous-bandes, refus sans source."""
+"""Profils régionaux : validation, règle du plus restrictif, profil EU868."""
+
+import math
 
 import pytest
 
-from lsim.regions import RegionProfile, SubBand, load_profile
+from lsim.regions import EU868, PROFILES, RegionProfile, SubBand, erp_from_eirp, load_profile
 
 TEST_BANDS = (
-    SubBand("A", 863_000_000, 865_000_000, 0.001, 25.0),
-    SubBand("B", 865_000_001, 868_000_000, 0.01, 25.0),
+    SubBand("A", 863_000_000, 865_000_000, 0.001, 14.0),
+    SubBand("B", 865_000_001, 868_000_000, 0.01, 14.0),
 )
 
 
@@ -18,19 +20,24 @@ def test_profile_requires_official_source():
     assert load_profile("XX", "source de test", TEST_BANDS).code == "XX"
 
 
-def test_band_lookup():
+def test_band_lookup_and_outside_plan():
     prof = load_profile("XX", "source de test", TEST_BANDS)
-    assert prof.band_for(864_000_000).name == "A"
-    assert prof.band_for(866_000_000).name == "B"
-    assert prof.band_for(900_000_000) is None
-
-
-def test_overlapping_subbands_refused():
+    assert prof.band_for(864_000_000, 10.0).name == "A"
+    assert prof.band_for(866_000_000, 10.0).name == "B"
+    assert prof.band_for(900_000_000, 10.0) is None
     with pytest.raises(ValueError):
-        RegionProfile("XX", "src", (
-            SubBand("A", 863_000_000, 865_000_000, 0.01, 14.0),
-            SubBand("B", 864_000_000, 868_000_000, 0.01, 14.0),
-        ))
+        prof.duty_cycle_for(900_000_000, 14.0)
+
+
+def test_most_restrictive_applicable_band_wins():
+    prof = RegionProfile("XX", "src", (
+        SubBand("LOOSE", 863_000_000, 870_000_000, 0.10, 27.0),
+        SubBand("TIGHT", 868_000_000, 868_600_000, 0.01, 14.0),
+    ))
+    # Dans les deux sous-bandes : la plus restrictive gouverne.
+    assert prof.band_for(868_100_000, 10.0).name == "TIGHT"
+    # Puissance au-dessus de la PIRE de TIGHT : seule LOOSE s'applique.
+    assert prof.band_for(868_100_000, 20.0).name == "LOOSE"
 
 
 @pytest.mark.parametrize("dc", [0.0, -0.1, 1.5, float("nan")])
@@ -43,10 +50,48 @@ def test_invalid_frequency_bounds_refused():
     with pytest.raises(ValueError):
         SubBand("A", 865_000_000, 863_000_000, 0.01, 14.0)
     with pytest.raises(ValueError):
-        SubBand("A", 863.0e6, 865_000_000, 0.01, 14.0)  # type float refusé
+        SubBand("A", 863.0e6, 865_000_000, 0.01, 14.0)  # float refusé
 
 
-def test_no_region_shipped_without_verified_values():
-    # Tant que la source officielle n'est pas vérifiée, aucun profil n'est livré.
-    import lsim.regions as regions
-    assert not any(isinstance(v, RegionProfile) for v in vars(regions).values())
+# ------------------------------------------------------------------- EU868
+
+def test_eu868_is_registered_with_full_source():
+    assert PROFILES["EU868"] is EU868
+    assert "ETSI EN 300 220-2 V3.2.1" in EU868.source
+    assert "RP002" in EU868.source
+
+
+@pytest.mark.parametrize("freq", [868_100_000, 868_300_000, 868_500_000])
+def test_eu868_default_channels_are_one_percent(freq):
+    # Canaux par défaut (RP002 §2.4.2) : sous-bande M, 1 % à 16 dBm EIRP.
+    assert EU868.duty_cycle_for(freq, 16.0) == pytest.approx(0.01)
+
+
+def test_eu868_rx2_is_most_restrictive_subband_at_869_525():
+    # RX2 869,525 MHz (RP002 §2.4.8) : sous-bandes O (0,1 %) et P (10 %) se recouvrent.
+    # Une émission à 16 dBm EIRP (ERP 13,85 dBm) reste dans O ; P exige plus de 25 mW.
+    band = EU868.band_for(869_525_000, erp_from_eirp(16.0))
+    assert band.name in {"O", "P", "QP"}
+    assert EU868.duty_cycle_for(869_525_000, 16.0) == pytest.approx(0.001)
+
+
+def test_eu868_p_band_requires_high_power():
+    # Au-delà de 25 mW ERP, seule la sous-bande P (500 mW) s'applique.
+    band = EU868.band_for(869_500_000, 20.0)
+    assert band.name == "P"
+    assert band.duty_cycle == pytest.approx(0.10)
+
+
+def test_eu868_max_eirp_is_within_25mw_erp():
+    # EIRP maximal 16 dBm => ERP 13,85 dBm, sous 25 mW (13,98 dBm).
+    assert erp_from_eirp(16.0) <= 10 * math.log10(25.0)
+
+
+def test_eu868_gap_between_subbands_is_outside_plan():
+    # 869,2 à 869,4 MHz : aucune sous-bande dans la table ETSI.
+    assert EU868.band_for(869_300_000, 10.0) is None
+
+
+def test_eu868_boundary_865_uses_most_restrictive():
+    # 865,0 MHz : appartient à K (0,1 %) et à L (1 %) ; K gouverne.
+    assert EU868.duty_cycle_for(865_000_000, 14.0) == pytest.approx(0.001)
