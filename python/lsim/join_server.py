@@ -19,7 +19,7 @@ Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Union
+from typing import Callable, Optional, Union
 
 from lsim.join_store import DurableJoinStore
 from lsim.rejoin import Rejoin02, Rejoin1
@@ -35,13 +35,16 @@ _DL_SETTINGS_OPTNEG = 0x80        # bit 7 = OptNeg : mode LoRaWAN 1.1
 
 @dataclass(frozen=True)
 class DeviceKeys:
-    nwk_key: bytes = field(repr=False)            # NwkKey (join-request, join-accept)
-    s_nwk_s_int_key: bytes = field(repr=False)    # rejoin types 0 et 2
-    js_int_key: bytes = field(repr=False)         # rejoin type 1
+    """Clés d'un dispositif. Le join n'exige que `nwk_key` ; les rejoins exigent leur clé."""
+    nwk_key: bytes = field(repr=False)                           # join-request, join-accept
+    s_nwk_s_int_key: Optional[bytes] = field(default=None, repr=False)   # rejoin types 0 et 2
+    js_int_key: Optional[bytes] = field(default=None, repr=False)        # rejoin type 1
 
     def __post_init__(self) -> None:
         for name in ("nwk_key", "s_nwk_s_int_key", "js_int_key"):
             value = getattr(self, name)
+            if value is None and name != "nwk_key":
+                continue
             if not isinstance(value, (bytes, bytearray)) or len(value) != 16:
                 raise ValueError(f"{name} doit faire 16 octets")
 
@@ -108,10 +111,14 @@ class JoinServer:
             if len(wire) != _REJOIN_02_LEN:
                 raise ValueError("rejoin-request de type 0/2 : 19 octets attendus")
             keys = self._keys(bytes(wire[5:13]))
+            if keys.s_nwk_s_int_key is None:
+                raise ValueError("clé SNwkSIntKey absente : rejoin type 0/2 impossible")
             return self._store.accept_rejoin_02(bytes(wire), keys.s_nwk_s_int_key)
         if rejoin_type == 1:
             if len(wire) != _REJOIN_1_LEN:
                 raise ValueError("rejoin-request de type 1 : 24 octets attendus")
             keys = self._keys(bytes(wire[10:18]))
+            if keys.js_int_key is None:
+                raise ValueError("clé JSIntKey absente : rejoin type 1 impossible")
             return self._store.accept_rejoin_1(bytes(wire), keys.js_int_key)
         raise ValueError("type de rejoin-request inconnu")

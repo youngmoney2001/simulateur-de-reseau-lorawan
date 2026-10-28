@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from lsim.energy_report import DEFAULT_ENERGY_PROFILE, ENERGY_PROFILES
+from lsim.serve import DEFAULT_PORT
 from lsim.export import run_scenario, write_parquet
 from lsim.report import write_pdf, write_xlsx
 from lsim.calibration import calibrate_path_loss, format_report
@@ -40,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
                      help="profil énergie : rak4631 (module, MCU inclus) ou "
                           "sx1262-stm32l072 (puce + MCU séparé) ; prime sur energy.profile du "
                           f"YAML ; sans l'un ni l'autre : {DEFAULT_ENERGY_PROFILE}")
+    srv = sub.add_parser("serve", help="serveur de jointure pour passerelles Semtech UDP")
+    srv.add_argument("--host", default="127.0.0.1",
+                     help="adresse d'écoute (défaut : boucle locale ; 0.0.0.0 pour le réseau)")
+    srv.add_argument("--port", type=int, default=DEFAULT_PORT, help="port UDP (défaut : %(default)s)")
+    srv.add_argument("--db", required=True, help="base SQLite du registre de jointure")
+    srv.add_argument("--keys", required=True, help="fichier JSON des clés (mode 600)")
+    srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")
     cal.add_argument("measures", help="CSV : distance_m,path_loss_db")
@@ -53,6 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         return _calibrate(args)
     if args.command == "report":
         return _report(args)
+    if args.command == "serve":
+        from lsim.serve import run as serve_run
+        try:
+            return serve_run(args.host, args.port, Path(args.db), Path(args.keys), args.net_id)
+        except (ValueError, OSError) as exc:
+            print(f"erreur : {exc}", file=sys.stderr)
+            return 2
 
     try:
         scenario = load_scenario(args.scenario)

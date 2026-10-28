@@ -48,3 +48,9 @@
 - Semtech SX1262 : datasheet (Rev. 1.2 et v2.1, copies publiques) : courants d'émission, réception LoRa 125 kHz 4,6 mA, veille « SLEEP warm start » 600 nA (configuration conservée ; source secondaire : copie de la datasheet Rev. 2.2). Utilisé dans `core/src/energy.cpp` (profil 1).
 - STM32L072xx : fiche technique ST (DocID027100), Stop 0,43 µA typ., « jusqu'à » 93 µA/MHz en Run. Utilisé dans `core/src/energy.cpp` (profil 1).
 - RAKwireless RAK4631 : documentation RAKwireless (tension 3,3 V nominale, courants Tx/Rx/veille module). Utilisé dans `core/src/energy.cpp` (profil 0).
+
+## Protocole passerelle Semtech UDP (GWMP v2)
+
+- Usage : format des messages PUSH_DATA, PULL_DATA, PULL_RESP, TX_ACK et de leurs champs JSON (`python/lsim/gwmp.py`). Seul le format des messages est repris ; aucun code source n'est copié.
+- Source : `PROTOCOL.TXT`, dépôt https://github.com/Lora-net/packet_forwarder (© 2013 Semtech, révision v1.4).
+- Licence du dépôt : BSD (conditions de redistribution du fichier LICENSE du dépôt).

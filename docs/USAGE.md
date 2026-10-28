@@ -93,6 +93,19 @@ print(result.rows[0].energy_per_message_j)
 
 Le hash du scénario est stable : deux exécutions avec la même graine donnent les mêmes compteurs.
 
+## 5bis. Serveur de jointure pour passerelles (Semtech UDP)
+
+```bash
+export LSIM_INTEGRITY_KEY=<32 caractères hexadécimaux, stockés hors dépôt>
+python -m lsim serve --host 0.0.0.0 --port 1700 --db joins.sqlite --keys keys.json --net-id 000013
+```
+
+- `keys.json` : `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>"}}}`, mode 600 exigé.
+- Passerelle : pointer le packet forwarder vers ce serveur (`server_address`, ports up/down).
+- Accepté : join-request valide → join-accept en PULL_RESP, à `tmst + 5 s` (RP002-1.0.2 §2.3), même fréquence et débit que l'émission (valable pour les régions où RX1 = canal montant).
+- Non traité (compté, sans réponse) : rejoin-request (la spec 1.1 ne définit pas DevNonce ni JoinEUI pour le join-accept correspondant), trames de données, FSK.
+- Basic Station : pas encore pris en charge.
+
 ## 6. Limites connues
 
 Voir `docs/ROADMAP.md`. Points notables pour l'usage :

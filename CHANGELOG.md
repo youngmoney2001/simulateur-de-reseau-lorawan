@@ -27,6 +27,10 @@
 - Serveur de jointure : join-request acceptée et join-accept produit en une transaction ; rejoin vérifié sans join-accept généré (la spec 1.1 ne définit pas DevNonce ni JoinEUI pour ce join-accept).
 - Périmètre : fichier SQLite local, un seul hôte (pas de NFS ni SMB).
 
+### Passerelles
+- Codec Semtech UDP (GWMP v2) et serveur UDP : join-accept livré à la passerelle en PULL_RESP (fenêtre JOIN_ACCEPT_DELAY1 = 5 s), routes et traitements bornés.
+- Commande `lsim serve` ; Basic Station et trames de données : à venir.
+
 ### Données
 - Paramètres de propagation indoor (Université de Siegen, CC BY 4.0) déposés dans
   `python/lsim/reference/`, sans les données brutes.
