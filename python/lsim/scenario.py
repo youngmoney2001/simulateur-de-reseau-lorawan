@@ -189,6 +189,11 @@ class EnvironmentModel(_Strict):
     obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
 
 
+class EnergyModel(_Strict):
+    """Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace)."""
+    profile: Literal["rak4631", "sx1262-stm32l072"]
+
+
 class ScenarioModel(_Strict):
     schema_version: Literal[1]
     name: str = Field(min_length=1, max_length=128)
@@ -196,6 +201,7 @@ class ScenarioModel(_Strict):
     gateway: GatewayModel = GatewayModel()
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
+    energy: Optional[EnergyModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -226,6 +232,9 @@ class Scenario:
             dumped.pop("environment", None)
         elif environment is not None and environment.terrain is not None:
             dumped["environment"]["terrain_sha256"] = environment.terrain.sha256
+        # Profil énergie absent : hash des scénarios antérieurs inchangé.
+        if model.energy is None:
+            dumped.pop("energy", None)
         # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
         for group in dumped.get("groups", []):
             if group.get("duty_cycle") == 1.0:
@@ -249,6 +258,11 @@ class Scenario:
     @property
     def name(self) -> str:
         return self.model.name
+
+    @property
+    def energy_profile(self) -> Optional[str]:
+        """Profil énergie déclaré dans le YAML, ou None."""
+        return self.model.energy.profile if self.model.energy is not None else None
 
     def deploy(self) -> tuple[list[EndDevice], list[str], list[int]]:
         """Retourne (dispositifs, nom de groupe par dispositif, index dans le groupe).

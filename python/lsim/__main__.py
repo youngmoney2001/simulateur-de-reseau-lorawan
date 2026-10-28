@@ -23,7 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("-o", "--output", required=True, help="fichier Parquet de sortie")
     run.add_argument("--energy-profile", choices=list(ENERGY_PROFILES), default=None,
                      help="ajoute l'énergie par message et le courant moyen au Parquet "
-                          "(rak4631 ou sx1262-stm32l072) ; absent : pas de colonnes énergie")
+                          "(rak4631 ou sx1262-stm32l072) ; prime sur energy.profile du YAML ; "
+                          "absent des deux : pas de colonnes énergie")
     geo = sub.add_parser("geojson", help="exporter les résultats en GeoJSON géoréférencé")
     geo.add_argument("scenario", help="fichier YAML du scénario")
     geo.add_argument("-o", "--output", required=True, help="fichier GeoJSON de sortie")
@@ -35,10 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     rep = sub.add_parser("report", help="exécuter un scénario et écrire un rapport PDF ou Excel")
     rep.add_argument("scenario", help="fichier YAML du scénario")
     rep.add_argument("-o", "--output", required=True, help="fichier de sortie (.pdf ou .xlsx)")
-    rep.add_argument("--energy-profile", choices=list(ENERGY_PROFILES),
-                     default=DEFAULT_ENERGY_PROFILE,
+    rep.add_argument("--energy-profile", choices=list(ENERGY_PROFILES), default=None,
                      help="profil énergie : rak4631 (module, MCU inclus) ou "
-                          "sx1262-stm32l072 (puce + MCU séparé) ; défaut : %(default)s")
+                          "sx1262-stm32l072 (puce + MCU séparé) ; prime sur energy.profile du "
+                          f"YAML ; sans l'un ni l'autre : {DEFAULT_ENERGY_PROFILE}")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")
     cal.add_argument("measures", help="CSV : distance_m,path_loss_db")
@@ -55,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         scenario = load_scenario(args.scenario)
-        result = run_scenario(scenario, energy_profile=args.energy_profile)
+        profile = args.energy_profile or scenario.energy_profile
+        result = run_scenario(scenario, energy_profile=profile)
         write_parquet(result, args.output)
     except (ValueError, OSError) as exc:
         print(f"erreur : {exc}", file=sys.stderr)
@@ -77,7 +79,8 @@ def _report(args: argparse.Namespace) -> int:
         return 2
     try:
         scenario = load_scenario(args.scenario)
-        result = run_scenario(scenario, energy_profile=args.energy_profile)
+        profile = args.energy_profile or scenario.energy_profile or DEFAULT_ENERGY_PROFILE
+        result = run_scenario(scenario, energy_profile=profile)
         if suffix == ".pdf":
             write_pdf(result, args.output)
         else:

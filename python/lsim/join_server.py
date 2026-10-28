@@ -8,8 +8,11 @@ Pour chaque join-request valide, dans une seule transaction :
 5. le join-accept est chiffré avec NwkKey.
 Si une étape échoue, la transaction est annulée : aucun DevNonce ni compteur n'est consommé.
 
-Limite : les rejoin-requests (types 0, 1, 2) sont vérifiés et comptés, mais ce module ne
-génère pas le join-accept qui les suit (le format dépend du type et n'est pas encodé ici).
+Limite (source) : les rejoin-requests (types 0, 1, 2) sont vérifiés et comptés, mais ce module
+ne génère pas le join-accept qui les suit. La spec LoRaWAN 1.1 (§6.2.4.1, §6.2.4.2, §6.2.3,
+tableaux 13 et 14) ne définit ni DevNonce ni JoinEUI pour ce join-accept (type 0/2 : ni JoinEUI
+ni DevNonce ; type 1 : pas de DevNonce) : le MIC JSIntKey et le chiffrement JSEncKey ne peuvent pas
+être encodés sans entrée inventée. Levée par un erratum officiel, pas par ce module.
 Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé.
 """
 

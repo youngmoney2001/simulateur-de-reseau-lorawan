@@ -9,6 +9,10 @@ Principe :
   et rien n'est écrit ;
 - l'import vérifie le MIC de l'état avant tout usage : une base falsifiée est refusée.
 
+Périmètre : un fichier sur un système local, partagé par des processus d'une même machine.
+Le verrouillage SQLite n'est pas fiable sur NFS ou SMB : un déploiement multi-hôtes doit passer
+par un unique processus serveur qui possède la base.
+
 Les compteurs annexes (JoinNonce par dispositif, prochaine adresse) vivent dans la même base,
 dans la même transaction que l'acceptation de la jointure.
 """

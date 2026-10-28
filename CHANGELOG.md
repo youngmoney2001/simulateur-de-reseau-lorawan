@@ -20,10 +20,12 @@
 ### Énergie
 - Deux profils au choix : `rak4631` et `sx1262-stm32l072` (`--energy-profile`).
 - Classe A : fenêtres RX1/RX2 au préambule (durée configurable).
+- Profil choisi dans le scénario YAML (`energy.profile`) ; l'option CLI le remplace. Absent du hash si non renseigné.
 
 ### Serveur de jointure
 - Registre de jointure durable, partageable entre processus (SQLite WAL, transactions `BEGIN IMMEDIATE`, état protégé par MIC).
-- Serveur de jointure : join-request acceptée et join-accept produit en une transaction ; rejoin vérifié sans join-accept généré.
+- Serveur de jointure : join-request acceptée et join-accept produit en une transaction ; rejoin vérifié sans join-accept généré (la spec 1.1 ne définit pas DevNonce ni JoinEUI pour ce join-accept).
+- Périmètre : fichier SQLite local, un seul hôte (pas de NFS ni SMB).
 
 ### Données
 - Paramètres de propagation indoor (Université de Siegen, CC BY 4.0) déposés dans
