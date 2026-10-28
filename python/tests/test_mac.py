@@ -71,7 +71,7 @@ def test_truncated_and_unknown_commands():
         mac.decode_one(b"\x03\x52\xff", downlink=True)
     assert e.value.code == 602
     with pytest.raises(StatusError) as e:
-        mac.decode_one(b"\x08\x00", downlink=True)  # RXTimingSetup : non implémenté
+        mac.decode_one(b"\x0c\x00", downlink=True)  # ADRParamSetup : non implémenté
     assert e.value.code == 604
 
 
@@ -150,4 +150,52 @@ def test_new_channel_req_and_ans():
 def test_new_channel_ans_rfu_rejected():
     with pytest.raises(StatusError) as e:
         mac.decode_one(b"\x07\x04", downlink=False)
+    assert e.value.code == 602
+
+
+def test_rx_timing_setup_and_device_time():
+    from lsim.mac import DeviceTimeAns, DeviceTimeReq, RxTimingSetupAns, RxTimingSetupReq
+
+    assert mac.encode(RxTimingSetupReq(delay=5)) == b"\x08\x05"
+    assert mac.decode_one(b"\x08\x05", downlink=True) == (RxTimingSetupReq(delay=5), 2)
+    assert mac.encode(RxTimingSetupAns()) == b"\x08"
+    assert mac.decode_one(b"\x08", downlink=False) == (RxTimingSetupAns(), 1)
+    with pytest.raises(ValueError):
+        RxTimingSetupReq(delay=16)
+    # DeviceTimeAns : exemple de la spec (1139322288 s depuis l'époque GPS).
+    wire = mac.encode(DeviceTimeAns(seconds=1_139_322_288, fraction=0x80))
+    assert wire == bytes([0x0D]) + (1_139_322_288).to_bytes(4, "little") + b"\x80"
+    assert mac.decode_one(wire, downlink=True) == (DeviceTimeAns(1_139_322_288, 0x80), 6)
+    assert mac.encode(DeviceTimeReq()) == b"\x0d"
+    assert mac.decode_one(b"\x0d", downlink=False) == (DeviceTimeReq(), 1)
+
+
+def test_force_rejoin_fields_and_rfu():
+    from lsim.mac import ForceRejoinReq
+
+    cmd = ForceRejoinReq(period=2, max_retries=3, rejoin_type=2, dr=5)
+    assert mac.encode(cmd) == bytes([0x0E, 0x25, 0x13])
+    assert mac.decode_one(mac.encode(cmd), downlink=True) == (cmd, 3)
+    with pytest.raises(ValueError):
+        ForceRejoinReq(period=8, max_retries=0, rejoin_type=0, dr=0)
+    with pytest.raises(StatusError) as e:
+        mac.decode_one(bytes([0x0E, 0x35, 0x00]), downlink=True)  # type 3 : RFU
+    assert e.value.code == 603
+
+
+def test_rejoin_param_setup_and_dl_channel():
+    from lsim.mac import DlChannelAns, DlChannelReq, RejoinParamSetupAns, RejoinParamSetupReq
+
+    req = RejoinParamSetupReq(max_time_n=4, max_count_n=7)
+    assert mac.encode(req) == b"\x0f\x47"
+    assert mac.decode_one(b"\x0f\x47", downlink=True) == (req, 2)
+    assert mac.decode_one(mac.encode(RejoinParamSetupAns(time_ok=True)), downlink=False) == (
+        RejoinParamSetupAns(True), 2)
+    dl = DlChannelReq(ch_index=2, freq_100hz=9_235_000)
+    assert mac.decode_one(mac.encode(dl), downlink=True) == (dl, 5)
+    with pytest.raises(ValueError):
+        DlChannelReq(ch_index=2, freq_100hz=500_000)
+    assert mac.decode_one(b"\x0a\x02", downlink=False) == (DlChannelAns(False, True), 2)  # bit 1 = fréquence montante
+    with pytest.raises(StatusError) as e:
+        mac.decode_one(b"\x0a\x04", downlink=False)  # bits RFU
     assert e.value.code == 602

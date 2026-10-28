@@ -164,7 +164,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, trunc, 3, size)),
                  static_cast<int>(MacStatus::MalformedPayload));
         // CID non implémenté (RXParamSetup 0x05) : refusé.
-        const std::uint8_t unknown[2] = {0x08, 0x00};  // RXTimingSetup : non implémenté
+        const std::uint8_t unknown[2] = {0x0C, 0x00};  // ADRParamSetup : non implémenté
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unknown, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
         CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, up, 0, size)),
@@ -225,8 +225,8 @@ void run_mac_commands_tests() {
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::MalformedPayload));
         CHECK_EQ(back.kind, std::uint8_t{0});
 
-        // CID non implémenté (RXTimingSetup 0x08).
-        const std::uint8_t rx[6] = {0x08, 0, 0, 0, 0, 0};  // RXTimingSetup : non implémenté
+        // CID non implémenté (ADRParamSetup 0x0C).
+        const std::uint8_t rx[6] = {0x0C, 0, 0, 0, 0, 0};  // ADRParamSetup : non implémenté
         CHECK_EQ(lsim_mac_decode(rx, 6, LSIM_MAC_DOWNLINK, &back, &used),
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
 
@@ -343,7 +343,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(size, std::size_t{5});
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn + 5, 6, size)), static_cast<int>(MacStatus::Ok));
         CHECK_EQ(size, std::size_t{6});
-        const std::uint8_t unk[2] = {0x0D, 0x00};
+        const std::uint8_t unk[2] = {0x0C, 0x00};
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unk, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
     }
@@ -370,5 +370,142 @@ void run_mac_commands_tests() {
         CHECK_EQ(back.ack_rx_channel, std::uint8_t{1});
         CHECK_EQ(back.ack_rx2_data_rate, std::uint8_t{1});
         CHECK_EQ(back.ack_rx1_dr_offset, std::uint8_t{0});
+    }
+
+    // --- RXTimingSetupReq (down) : Del 3:0, bits 7:4 RFU.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        RxTimingSetupReq r;
+        r.delay = 5;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{2});
+        CHECK_EQ(out[1], std::uint8_t{0x05});
+        RxTimingSetupReq back;
+        const std::uint8_t rfu[2] = {0x08, 0x10};
+        CHECK_EQ(static_cast<int>(decode(rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+        r.delay = 16;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+    }
+    // --- DeviceTimeAns (down) : 32 bits LE + fraction. Exemple : 1139322288 s (spec §5.12).
+    {
+        Buf out{};
+        std::size_t len = 0;
+        DeviceTimeAns d;
+        d.seconds = 1'139'322'288u;
+        d.fraction = 0x80;
+        CHECK_EQ(static_cast<int>(encode(d, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{6});
+        DeviceTimeAns back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.seconds, std::uint32_t{1'139'322'288u});
+        CHECK_EQ(back.fraction, std::uint8_t{0x80});
+    }
+    // --- ForceRejoinReq (down) : 16 bits LE ; RejoinType 3..7 RFU refusé ; bits 15:14 et 7 RFU.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        ForceRejoinReq f;
+        f.period = 2;
+        f.max_retries = 3;
+        f.rejoin_type = 2;
+        f.dr = 5;
+        CHECK_EQ(static_cast<int>(encode(f, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{3});
+        // word = 2<<11 | 3<<8 | 2<<4 | 5 = 0x1000 | 0x0300 | 0x0020 | 0x0005 = 0x1325
+        CHECK_EQ(out[1], std::uint8_t{0x25});
+        CHECK_EQ(out[2], std::uint8_t{0x13});
+        ForceRejoinReq back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.period, std::uint8_t{2});
+        CHECK_EQ(back.max_retries, std::uint8_t{3});
+        CHECK_EQ(back.rejoin_type, std::uint8_t{2});
+        CHECK_EQ(back.dr, std::uint8_t{5});
+        const std::uint8_t rtype_rfu[3] = {0x0E, 0x35, 0x00};  // type 3 (0x30 dans 6:4)
+        CHECK_EQ(static_cast<int>(decode(rtype_rfu, 3, back)), static_cast<int>(MacStatus::FieldOutOfRange));
+        const std::uint8_t bit7[3] = {0x0E, 0x80, 0x00};
+        CHECK_EQ(static_cast<int>(decode(bit7, 3, back)), static_cast<int>(MacStatus::MalformedPayload));
+        const std::uint8_t bit15[3] = {0x0E, 0x00, 0x80};
+        CHECK_EQ(static_cast<int>(decode(bit15, 3, back)), static_cast<int>(MacStatus::MalformedPayload));
+        f.period = 8;
+        CHECK_EQ(static_cast<int>(encode(f, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+    }
+    // --- RejoinParamSetup : Req (MaxTimeN 7:4, MaxCountN 3:0), Ans (bit 0 TimeOK).
+    {
+        Buf out{};
+        std::size_t len = 0;
+        RejoinParamSetupReq r;
+        r.max_time_n = 4;
+        r.max_count_n = 7;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x47});
+        RejoinParamSetupAns a;
+        a.time_ok = true;
+        CHECK_EQ(static_cast<int>(encode(a, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x01});
+        RejoinParamSetupAns back;
+        const std::uint8_t rfu[2] = {0x0F, 0x02};
+        CHECK_EQ(static_cast<int>(decode(rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- DlChannelReq (down) : ChIndex, Freq >= 100 MHz ; DlChannelAns (up) : bits 0..1, RFU 7:2.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        DlChannelReq d;
+        d.ch_index = 2;
+        d.freq_100hz = 9'235'000;  // 923,5 MHz
+        CHECK_EQ(static_cast<int>(encode(d, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{5});
+        DlChannelReq back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.freq_100hz, std::uint32_t{9'235'000});
+        d.freq_100hz = 500'000;
+        CHECK_EQ(static_cast<int>(encode(d, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        DlChannelAns a;
+        a.uplink_freq_exists = true;
+        CHECK_EQ(static_cast<int>(encode(a, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x02});
+        DlChannelAns ab;
+        const std::uint8_t rfu[2] = {0x0A, 0x04};
+        CHECK_EQ(static_cast<int>(decode(rfu, 2, ab)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- Tailles et CID : DeviceTimeReq (up, 1), DeviceTimeAns (down, 6) ; 0x10 reste inconnu.
+    {
+        std::size_t size = 0;
+        const std::uint8_t dt_req[1] = {0x0D};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, dt_req, 1, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{1});
+        const std::uint8_t dt_ans[6] = {0x0D, 0, 0, 0, 0, 0};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dt_ans, 6, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{6});
+        const std::uint8_t ping[2] = {0x10, 0x00};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, ping, 2, size)),
+                 static_cast<int>(MacStatus::UnknownCommand));
+    }
+    // --- Surface C : ForceRejoin et DeviceTimeAns.
+    {
+        lsim_mac_command c{};
+        c.kind = LSIM_MAC_FORCE_REJOIN_REQ;
+        c.rejoin_period = 2;
+        c.rejoin_max_retries = 3;
+        c.rejoin_type = 2;
+        c.data_rate = 5;
+        std::uint8_t out[LSIM_MAC_MAX_COMMAND_BYTES] = {};
+        std::size_t n = 0;
+        CHECK_EQ(lsim_mac_encode(&c, out, &n), 0);
+        CHECK_EQ(n, std::size_t{3});
+        lsim_mac_command back{};
+        std::size_t used = 0;
+        CHECK_EQ(lsim_mac_decode(out, n, LSIM_MAC_DOWNLINK, &back, &used), 0);
+        CHECK_EQ(back.kind, std::uint8_t{LSIM_MAC_FORCE_REJOIN_REQ});
+        CHECK_EQ(back.data_rate, std::uint8_t{5});
+        lsim_mac_command dt{};
+        dt.kind = LSIM_MAC_DEVICE_TIME_ANS;
+        dt.device_time_s = 1'139'322'288u;
+        dt.device_time_frac = 0x40;
+        CHECK_EQ(lsim_mac_encode(&dt, out, &n), 0);
+        CHECK_EQ(n, std::size_t{6});
+        CHECK_EQ(lsim_mac_decode(out, n, LSIM_MAC_DOWNLINK, &back, &used), 0);
+        CHECK_EQ(back.device_time_s, std::uint32_t{1'139'322'288u});
     }
 }

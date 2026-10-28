@@ -28,6 +28,7 @@ extern "C" {
  *   400..449 jointure OTAA (JoinStatus + 400)
  *   600..649 commandes MAC (mac::MacStatus + 600)
  *   650..699 rejoin-request (RejoinStatus + 650)
+ *   700..749 registre serveur (RegistryStatus + 700 ; 706 handle inconnu, 707 paramètre invalide)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -38,6 +39,7 @@ extern "C" {
 #define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_MAC_BASE    600
 #define LSIM_STATUS_REJOIN_BASE 650
+#define LSIM_STATUS_REGISTRY_BASE 700
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -351,6 +353,15 @@ LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_pro
 #define LSIM_MAC_RX_PARAM_SETUP_ANS 12  /* up : ack_rx_channel, ack_rx2_data_rate, ack_rx1_dr_offset */
 #define LSIM_MAC_NEW_CHANNEL_REQ    13  /* down : ch_index, freq_100hz (0 = désactivé), min_dr, max_dr */
 #define LSIM_MAC_NEW_CHANNEL_ANS    14  /* up : ack_dr_range, ack_channel_freq */
+#define LSIM_MAC_RX_TIMING_SETUP_REQ    15  /* down : rx_delay (0..15, 0 -> 1 s) */
+#define LSIM_MAC_RX_TIMING_SETUP_ANS    16  /* up, sans charge */
+#define LSIM_MAC_DEVICE_TIME_REQ        17  /* up, sans charge */
+#define LSIM_MAC_DEVICE_TIME_ANS        18  /* down : device_time_s, device_time_frac */
+#define LSIM_MAC_FORCE_REJOIN_REQ       19  /* down : rejoin_period, rejoin_max_retries, rejoin_type, data_rate */
+#define LSIM_MAC_REJOIN_PARAM_SETUP_REQ 20  /* down : max_time_n, max_count_n */
+#define LSIM_MAC_REJOIN_PARAM_SETUP_ANS 21  /* up : ack_time_ok */
+#define LSIM_MAC_DL_CHANNEL_REQ         22  /* down : ch_index, freq_100hz (>= 100 MHz) */
+#define LSIM_MAC_DL_CHANNEL_ANS         23  /* up : ack_channel_freq, ack_uplink_freq_exists */
 
 /* Commande à plat : seuls les champs du type indiqué par `kind` sont lus. */
 typedef struct lsim_mac_command {
@@ -379,7 +390,17 @@ typedef struct lsim_mac_command {
     uint8_t  ack_rx2_data_rate; /* RXParamSetupAns : 0 ou 1 */
     uint8_t  ack_rx1_dr_offset; /* RXParamSetupAns : 0 ou 1 */
     uint8_t  ack_dr_range;      /* NewChannelAns : 0 ou 1 */
-    uint8_t  ack_channel_freq;  /* NewChannelAns : 0 ou 1 */
+    uint8_t  ack_channel_freq;  /* NewChannelAns, DlChannelAns : 0 ou 1 */
+    uint8_t  rx_delay;          /* RXTimingSetupReq : 0..15 */
+    uint32_t device_time_s;     /* DeviceTimeAns : secondes depuis l'époque GPS */
+    uint8_t  device_time_frac;  /* DeviceTimeAns : 1/256 s */
+    uint8_t  rejoin_period;     /* ForceRejoinReq : 0..7 */
+    uint8_t  rejoin_max_retries;/* ForceRejoinReq : 0..7 */
+    uint8_t  rejoin_type;       /* ForceRejoinReq : 0..2 */
+    uint8_t  max_time_n;        /* RejoinParamSetupReq : 0..15 */
+    uint8_t  max_count_n;       /* RejoinParamSetupReq : 0..15 */
+    uint8_t  ack_time_ok;       /* RejoinParamSetupAns : 0 ou 1 */
+    uint8_t  ack_uplink_freq_exists; /* DlChannelAns : 0 ou 1 */
 } lsim_mac_command;
 
 /* Plus grande commande MAC (CID compris) : 6 octets. */
@@ -428,6 +449,30 @@ LSIM_API int32_t lsim_rejoin_encode_1(const lsim_rejoin1* f, const uint8_t key[1
 /* Décode et vérifie le MIC (JSIntKey) avant exposition des champs. */
 LSIM_API int32_t lsim_rejoin_decode_1(const uint8_t* in, size_t len, const uint8_t key[16],
                                       lsim_rejoin1* out);
+
+/* ------------------------------------------------- Registre serveur de jointure */
+
+/* Registre des DevNonce et RJcount par dispositif. Le registre est désigné par un
+ * identifiant entier (handle) : aucun pointeur interne n'est exposé. Un handle
+ * inconnu renvoie LSIM_STATUS_REGISTRY_BASE + 6. Thread-safe. */
+#define LSIM_REGISTRY_MAX_INSTANCES 64
+
+LSIM_API int32_t lsim_registry_create(uint64_t max_devices, uint64_t* handle);
+LSIM_API int32_t lsim_registry_destroy(uint64_t handle);
+
+/* Join-request : MIC (NwkKey) puis DevNonce strictement croissant. Rien n'est
+ * enregistré si le MIC est faux. */
+LSIM_API int32_t lsim_registry_accept_join_request(uint64_t handle, const uint8_t* in, size_t len,
+                                                   const uint8_t nwk_key[16], lsim_join_request* out);
+/* Rejoin type 0/2 : MIC (SNwkSIntKey) puis RJcount0 croissant. */
+LSIM_API int32_t lsim_registry_accept_rejoin_02(uint64_t handle, const uint8_t* in, size_t len,
+                                                const uint8_t s_nwk_s_int_key[16], lsim_rejoin02* out);
+/* Rejoin type 1 : MIC (JSIntKey) puis RJcount1 croissant. */
+LSIM_API int32_t lsim_registry_accept_rejoin_1(uint64_t handle, const uint8_t* in, size_t len,
+                                               const uint8_t js_int_key[16], lsim_rejoin1* out);
+/* Join-accept traité : RJcount0 du dispositif repart de zéro. */
+LSIM_API int32_t lsim_registry_on_join_accepted(uint64_t handle, const uint8_t dev_eui[8]);
+LSIM_API int32_t lsim_registry_device_count(uint64_t handle, uint64_t* count);
 
 #ifdef __cplusplus
 }

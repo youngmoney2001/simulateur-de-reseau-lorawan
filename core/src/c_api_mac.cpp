@@ -103,6 +103,61 @@ bool to_cpp_and_encode(const lsim_mac_command& c, Buf& out, std::size_t& len, Ma
             st = encode(v, out, len);
             return true;
         }
+        case LSIM_MAC_RX_TIMING_SETUP_REQ: {
+            RxTimingSetupReq v;
+            v.delay = c.rx_delay;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_RX_TIMING_SETUP_ANS:
+            st = encode_empty(Cid::RxTimingSetup, Direction::Uplink, out, len);
+            return true;
+        case LSIM_MAC_DEVICE_TIME_REQ:
+            st = encode_empty(Cid::DeviceTime, Direction::Uplink, out, len);
+            return true;
+        case LSIM_MAC_DEVICE_TIME_ANS: {
+            DeviceTimeAns v;
+            v.seconds = c.device_time_s;
+            v.fraction = c.device_time_frac;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_FORCE_REJOIN_REQ: {
+            ForceRejoinReq v;
+            v.period = c.rejoin_period;
+            v.max_retries = c.rejoin_max_retries;
+            v.rejoin_type = c.rejoin_type;
+            v.dr = c.data_rate;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_REJOIN_PARAM_SETUP_REQ: {
+            RejoinParamSetupReq v;
+            v.max_time_n = c.max_time_n;
+            v.max_count_n = c.max_count_n;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_REJOIN_PARAM_SETUP_ANS: {
+            RejoinParamSetupAns v;
+            v.time_ok = c.ack_time_ok != 0;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_DL_CHANNEL_REQ: {
+            DlChannelReq v;
+            v.ch_index = c.ch_index;
+            v.freq_100hz = c.freq_100hz;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_DL_CHANNEL_ANS: {
+            DlChannelAns v;
+            v.channel_freq_ok = c.ack_channel_freq != 0;
+            v.uplink_freq_exists = c.ack_uplink_freq_exists != 0;
+            st = encode(v, out, len);
+            return true;
+        }
         case LSIM_MAC_REKEY_IND:
         case LSIM_MAC_REKEY_CONF: {
             Rekey v;
@@ -170,6 +225,23 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     break;
                 }
                 case 0x04: out->kind = LSIM_MAC_DUTY_CYCLE_ANS; break;
+                case 0x08: out->kind = LSIM_MAC_RX_TIMING_SETUP_ANS; break;
+                case 0x0A: {
+                    DlChannelAns v;
+                    st = decode(p, n, v);
+                    out->ack_channel_freq = v.channel_freq_ok;
+                    out->ack_uplink_freq_exists = v.uplink_freq_exists;
+                    out->kind = LSIM_MAC_DL_CHANNEL_ANS;
+                    break;
+                }
+                case 0x0D: out->kind = LSIM_MAC_DEVICE_TIME_REQ; break;
+                case 0x0F: {
+                    RejoinParamSetupAns v;
+                    st = decode(p, n, v);
+                    out->ack_time_ok = v.time_ok;
+                    out->kind = LSIM_MAC_REJOIN_PARAM_SETUP_ANS;
+                    break;
+                }
                 case 0x05: {
                     RxParamSetupAns v;
                     st = decode(p, n, v);
@@ -242,6 +314,47 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     break;
                 }
                 case 0x06: out->kind = LSIM_MAC_DEV_STATUS_REQ; break;
+                case 0x08: {
+                    RxTimingSetupReq v;
+                    st = decode(p, n, v);
+                    out->rx_delay = v.delay;
+                    out->kind = LSIM_MAC_RX_TIMING_SETUP_REQ;
+                    break;
+                }
+                case 0x0A: {
+                    DlChannelReq v;
+                    st = decode(p, n, v);
+                    out->ch_index = v.ch_index;
+                    out->freq_100hz = v.freq_100hz;
+                    out->kind = LSIM_MAC_DL_CHANNEL_REQ;
+                    break;
+                }
+                case 0x0D: {
+                    DeviceTimeAns v;
+                    st = decode(p, n, v);
+                    out->device_time_s = v.seconds;
+                    out->device_time_frac = v.fraction;
+                    out->kind = LSIM_MAC_DEVICE_TIME_ANS;
+                    break;
+                }
+                case 0x0E: {
+                    ForceRejoinReq v;
+                    st = decode(p, n, v);
+                    out->rejoin_period = v.period;
+                    out->rejoin_max_retries = v.max_retries;
+                    out->rejoin_type = v.rejoin_type;
+                    out->data_rate = v.dr;
+                    out->kind = LSIM_MAC_FORCE_REJOIN_REQ;
+                    break;
+                }
+                case 0x0F: {
+                    RejoinParamSetupReq v;
+                    st = decode(p, n, v);
+                    out->max_time_n = v.max_time_n;
+                    out->max_count_n = v.max_count_n;
+                    out->kind = LSIM_MAC_REJOIN_PARAM_SETUP_REQ;
+                    break;
+                }
                 case 0x07: {
                     NewChannelReq v;
                     st = decode(p, n, v);

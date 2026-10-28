@@ -58,6 +58,14 @@ _NAMES = {
     655: "rejoin : MIC invalide, champs non exposés",
     656: "rejoin : échec cryptographique",
     657: "rejoin : champ hors domaine",
+    # 700..749 : registre serveur (RegistryStatus + 700)
+    701: "registre : message malformé",
+    702: "registre : MIC invalide, aucun compteur enregistré",
+    703: "registre : échec cryptographique",
+    704: "registre : compteur non croissant (rejeu)",
+    705: "registre : capacité atteinte (nouveau dispositif refusé)",
+    706: "registre : handle inconnu ou fermé",
+    707: "registre : paramètre invalide",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

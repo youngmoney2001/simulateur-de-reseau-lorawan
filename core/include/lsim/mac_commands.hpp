@@ -9,9 +9,9 @@
 //   * chaque longueur est vérifiée avant toute lecture ;
 //   * capacité fixe, aucune allocation dynamique ;
 //   * encodage canonique : les bits RFU doivent valoir 0 à la lecture (rejet sinon) ;
-//   * les CID non implémentés (RXTimingSetup, DeviceTime, …) sont refusés
-//     (`UnknownCommand`), car leur longueur ne peut pas être devinée. Les CID 0x08
-//     (RXTimingSetup), 0x0D (DeviceTime) et suivants restent à implémenter.
+//   * les CID non implémentés (ADRParamSetup, PingSlot, …) sont refusés
+//     (`UnknownCommand`), car leur longueur ne peut pas être devinée. Restent à implémenter :
+//     ADRParamSetup (0x0C), PingSlot (0x10 et suivants), classe B/C.
 #pragma once
 
 #include <array>
@@ -33,6 +33,11 @@ enum class Cid : std::uint8_t {
     DevStatus = 0x06,   // DevStatusAns (up) / DevStatusReq (down)
     RxParamSetup = 0x05,  // RXParamSetupAns (up) / RXParamSetupReq (down)
     NewChannel = 0x07,    // NewChannelAns (up) / NewChannelReq (down)
+    DlChannel = 0x0A,     // DlChannelAns (up) / DlChannelReq (down)
+    RxTimingSetup = 0x08, // RXTimingSetupAns (up) / RXTimingSetupReq (down)
+    DeviceTime = 0x0D,    // DeviceTimeReq (up) / DeviceTimeAns (down)
+    ForceRejoin = 0x0E,   // ForceRejoinReq (down, sans réponse)
+    RejoinParamSetup = 0x0F,  // RejoinParamSetupAns (up) / RejoinParamSetupReq (down)
     Rekey = 0x0B,         // RekeyInd (up) / RekeyConf (down)
 };
 
@@ -44,7 +49,7 @@ enum class MacStatus : std::int32_t {
     UnknownCommand = 4,
 };
 
-inline constexpr std::size_t kMaxCommandBytes = 6;  // plus grande commande gérée (NewChannelReq)
+inline constexpr std::size_t kMaxCommandBytes = 6;  // plus grande commande gérée (DeviceTimeAns)
 inline constexpr std::uint8_t kLoRaWan11Minor = 1;   // « LoRaWAN x.1 » dans RekeyInd/Conf
 
 // ------------------------------------------------------------ charges utiles
@@ -125,6 +130,55 @@ struct NewChannelAns {
     bool channel_freq_ack = false;
 };
 
+// RXTimingSetupReq (down) : délai TX -> RX1 en secondes, Del 3:0 (0 -> 1 s), bits 7:4 RFU.
+// Taille totale : 2 octets. Réponse RXTimingSetupAns : sans charge utile.
+struct RxTimingSetupReq {
+    std::uint8_t delay = 1;  // 0..15
+};
+
+// DeviceTimeAns (down) : secondes depuis l'époque GPS (32 bits LE) et fraction 1/256 s.
+// Taille totale : 6 octets. Requête DeviceTimeReq : sans charge utile.
+struct DeviceTimeAns {
+    std::uint32_t seconds = 0;
+    std::uint8_t fraction = 0;  // unités de 1/256 s
+};
+
+// ForceRejoinReq (down) : 16 bits LE. bits 15:14 RFU, 13:11 Period, 10:8 Max_Retries,
+// bit 7 RFU, 6:4 RejoinType (0, 1 -> type 0 ; 2 -> type 2 ; 3..7 RFU), 3:0 DR.
+// Taille totale : 3 octets. Aucune réponse.
+struct ForceRejoinReq {
+    std::uint8_t period = 0;       // 0..7
+    std::uint8_t max_retries = 0;  // 0..7
+    std::uint8_t rejoin_type = 0;  // 0..2
+    std::uint8_t dr = 0;           // 0..15
+};
+
+// RejoinParamSetupReq (down) : MaxCountN 3:0 (C : rejoin au plus tous les 2^C+4 uplinks),
+// MaxTimeN 7:4 (T : au plus tous les 2^T+10 s). Taille totale : 2 octets.
+struct RejoinParamSetupReq {
+    std::uint8_t max_count_n = 0;  // 0..15
+    std::uint8_t max_time_n = 0;   // 0..15
+};
+
+// RejoinParamSetupAns (up) : bit 0 TimeOK, bits 7:1 RFU. Taille totale : 2 octets.
+struct RejoinParamSetupAns {
+    bool time_ok = false;
+};
+
+// DlChannelReq (down) : ChIndex 0..15 et fréquence RX1 en pas de 100 Hz (>= 100 MHz).
+// Taille totale : 5 octets.
+struct DlChannelReq {
+    std::uint8_t ch_index = 0;
+    std::uint32_t freq_100hz = 0;
+};
+
+// DlChannelAns (up) : bit 0 fréquence utilisable, bit 1 fréquence montante existante ;
+// bits 7:2 RFU. Taille totale : 2 octets.
+struct DlChannelAns {
+    bool channel_freq_ok = false;
+    bool uplink_freq_exists = false;
+};
+
 // ------------------------------------------------------------ encodage
 
 // Chaque encodeur écrit CID + charge utile dans `out` et renvoie la longueur.
@@ -137,6 +191,13 @@ MacStatus encode(const RxParamSetupReq& c, std::array<std::uint8_t, kMaxCommandB
 MacStatus encode(const RxParamSetupAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const NewChannelReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const NewChannelAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const RxTimingSetupReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const DeviceTimeAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const ForceRejoinReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const RejoinParamSetupReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const RejoinParamSetupAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const DlChannelReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const DlChannelAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const Rekey& c, Direction dir, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 
 // Commandes sans charge utile : LinkCheckReq, DutyCycleAns, DevStatusReq.
@@ -159,6 +220,13 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupReq& out
 MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupAns& out);     // up
 MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelReq& out);       // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelAns& out);       // up
+MacStatus decode(const std::uint8_t* data, std::size_t len, RxTimingSetupReq& out);     // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, DeviceTimeAns& out);         // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, ForceRejoinReq& out);        // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, RejoinParamSetupReq& out);   // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, RejoinParamSetupAns& out);   // up
+MacStatus decode(const std::uint8_t* data, std::size_t len, DlChannelReq& out);          // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, DlChannelAns& out);          // up
 MacStatus decode(const std::uint8_t* data, std::size_t len, Rekey& out, Direction dir);
 
 // ------------------------------------------------------------ FOpts

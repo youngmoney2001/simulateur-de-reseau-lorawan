@@ -35,6 +35,15 @@ _KIND_RX_PARAM_SETUP_REQ = 11
 _KIND_RX_PARAM_SETUP_ANS = 12
 _KIND_NEW_CHANNEL_REQ = 13
 _KIND_NEW_CHANNEL_ANS = 14
+_KIND_RX_TIMING_SETUP_REQ = 15
+_KIND_RX_TIMING_SETUP_ANS = 16
+_KIND_DEVICE_TIME_REQ = 17
+_KIND_DEVICE_TIME_ANS = 18
+_KIND_FORCE_REJOIN_REQ = 19
+_KIND_REJOIN_PARAM_SETUP_REQ = 20
+_KIND_REJOIN_PARAM_SETUP_ANS = 21
+_KIND_DL_CHANNEL_REQ = 22
+_KIND_DL_CHANNEL_ANS = 23
 
 MAX_FREQ_100HZ = 0xFFFFFF
 
@@ -209,10 +218,106 @@ class NewChannelAns:
     channel_freq_ack: bool = False
 
 
+@dataclass(frozen=True)
+class RxTimingSetupReq:
+    """Downlink : délai entre la fin de l'uplink et RX1, en secondes (0 et 1 valent 1 s)."""
+
+    delay: int
+
+    def __post_init__(self) -> None:
+        if _uint("delay", self.delay, 4) > 15:
+            raise ValueError("delay doit être compris entre 0 et 15")
+
+
+@dataclass(frozen=True)
+class RxTimingSetupAns:
+    """Uplink, sans charge utile."""
+
+
+@dataclass(frozen=True)
+class DeviceTimeReq:
+    """Uplink, sans charge utile : demande de l'heure réseau."""
+
+
+@dataclass(frozen=True)
+class DeviceTimeAns:
+    """Downlink : secondes depuis l'époque GPS (32 bits) et fraction en 1/256 s."""
+
+    seconds: int
+    fraction: int
+
+    def __post_init__(self) -> None:
+        _uint("seconds", self.seconds, 32)
+        _uint("fraction", self.fraction, 8)
+
+
+@dataclass(frozen=True)
+class ForceRejoinReq:
+    """Downlink, sans réponse : demande de rejoin immédiat (type 0 ou 2)."""
+
+    period: int
+    max_retries: int
+    rejoin_type: int
+    dr: int
+
+    def __post_init__(self) -> None:
+        if _uint("period", self.period, 3) > 7:
+            raise ValueError("period doit être compris entre 0 et 7")
+        if _uint("max_retries", self.max_retries, 3) > 7:
+            raise ValueError("max_retries doit être compris entre 0 et 7")
+        if _uint("rejoin_type", self.rejoin_type, 3) > 2:
+            raise ValueError("rejoin_type doit valoir 0, 1 ou 2 (3 à 7 sont RFU)")
+        _uint("dr", self.dr, 4)
+
+
+@dataclass(frozen=True)
+class RejoinParamSetupReq:
+    """Downlink : rejoin type 0 au plus tous les 2**C+4 uplinks et 2**T+10 s (C = max_count_n, T = max_time_n)."""
+
+    max_time_n: int
+    max_count_n: int
+
+    def __post_init__(self) -> None:
+        _uint("max_time_n", self.max_time_n, 4)
+        _uint("max_count_n", self.max_count_n, 4)
+
+
+@dataclass(frozen=True)
+class RejoinParamSetupAns:
+    """Uplink : time_ok est vrai si la limitation temporelle est acceptée."""
+
+    time_ok: bool = False
+
+
+@dataclass(frozen=True)
+class DlChannelReq:
+    """Downlink : fréquence RX1 du canal ch_index, en pas de 100 Hz (>= 100 MHz)."""
+
+    ch_index: int
+    freq_100hz: int
+
+    def __post_init__(self) -> None:
+        if _uint("ch_index", self.ch_index, 4) > 15:
+            raise ValueError("ch_index doit être compris entre 0 et 15")
+        _uint("freq_100hz", self.freq_100hz, 24)
+        if self.freq_100hz < 1_000_000:
+            raise ValueError("freq_100hz : fréquence inférieure à 100 MHz réservée")
+
+
+@dataclass(frozen=True)
+class DlChannelAns:
+    """Uplink : channel_freq_ok et uplink_freq_exists (bits 0 et 1)."""
+
+    channel_freq_ok: bool = False
+    uplink_freq_exists: bool = False
+
+
 MacCommand = Union[
     LinkCheckReq, LinkCheckAns, LinkAdrReq, LinkAdrAns, DutyCycleReq, DutyCycleAns,
     DevStatusReq, DevStatusAns, RekeyInd, RekeyConf,
     RxParamSetupReq, RxParamSetupAns, NewChannelReq, NewChannelAns,
+    RxTimingSetupReq, RxTimingSetupAns, DeviceTimeReq, DeviceTimeAns, ForceRejoinReq,
+    RejoinParamSetupReq, RejoinParamSetupAns, DlChannelReq, DlChannelAns,
 ]
 
 
@@ -264,6 +369,33 @@ def _to_c(cmd: MacCommand) -> _CMacCommand:
         c.kind = _KIND_NEW_CHANNEL_ANS
         c.ack_dr_range = int(cmd.dr_range_ack)
         c.ack_channel_freq = int(cmd.channel_freq_ack)
+    elif isinstance(cmd, RxTimingSetupReq):
+        c.kind = _KIND_RX_TIMING_SETUP_REQ
+        c.rx_delay = cmd.delay
+    elif isinstance(cmd, RxTimingSetupAns):
+        c.kind = _KIND_RX_TIMING_SETUP_ANS
+    elif isinstance(cmd, DeviceTimeReq):
+        c.kind = _KIND_DEVICE_TIME_REQ
+    elif isinstance(cmd, DeviceTimeAns):
+        c.kind = _KIND_DEVICE_TIME_ANS
+        c.device_time_s, c.device_time_frac = cmd.seconds, cmd.fraction
+    elif isinstance(cmd, ForceRejoinReq):
+        c.kind = _KIND_FORCE_REJOIN_REQ
+        c.rejoin_period, c.rejoin_max_retries = cmd.period, cmd.max_retries
+        c.rejoin_type, c.data_rate = cmd.rejoin_type, cmd.dr
+    elif isinstance(cmd, RejoinParamSetupReq):
+        c.kind = _KIND_REJOIN_PARAM_SETUP_REQ
+        c.max_time_n, c.max_count_n = cmd.max_time_n, cmd.max_count_n
+    elif isinstance(cmd, RejoinParamSetupAns):
+        c.kind = _KIND_REJOIN_PARAM_SETUP_ANS
+        c.ack_time_ok = int(cmd.time_ok)
+    elif isinstance(cmd, DlChannelReq):
+        c.kind = _KIND_DL_CHANNEL_REQ
+        c.ch_index, c.freq_100hz = cmd.ch_index, cmd.freq_100hz
+    elif isinstance(cmd, DlChannelAns):
+        c.kind = _KIND_DL_CHANNEL_ANS
+        c.ack_channel_freq = int(cmd.channel_freq_ok)
+        c.ack_uplink_freq_exists = int(cmd.uplink_freq_exists)
     else:
         raise TypeError("commande MAC inconnue")
     return c
@@ -299,6 +431,24 @@ def _from_c(c: _CMacCommand) -> MacCommand:
         return NewChannelReq(c.ch_index, c.freq_100hz, c.min_dr, c.max_dr)
     if k == _KIND_NEW_CHANNEL_ANS:
         return NewChannelAns(bool(c.ack_dr_range), bool(c.ack_channel_freq))
+    if k == _KIND_RX_TIMING_SETUP_REQ:
+        return RxTimingSetupReq(c.rx_delay)
+    if k == _KIND_RX_TIMING_SETUP_ANS:
+        return RxTimingSetupAns()
+    if k == _KIND_DEVICE_TIME_REQ:
+        return DeviceTimeReq()
+    if k == _KIND_DEVICE_TIME_ANS:
+        return DeviceTimeAns(c.device_time_s, c.device_time_frac)
+    if k == _KIND_FORCE_REJOIN_REQ:
+        return ForceRejoinReq(c.rejoin_period, c.rejoin_max_retries, c.rejoin_type, c.data_rate)
+    if k == _KIND_REJOIN_PARAM_SETUP_REQ:
+        return RejoinParamSetupReq(c.max_time_n, c.max_count_n)
+    if k == _KIND_REJOIN_PARAM_SETUP_ANS:
+        return RejoinParamSetupAns(bool(c.ack_time_ok))
+    if k == _KIND_DL_CHANNEL_REQ:
+        return DlChannelReq(c.ch_index, c.freq_100hz)
+    if k == _KIND_DL_CHANNEL_ANS:
+        return DlChannelAns(bool(c.ack_channel_freq), bool(c.ack_uplink_freq_exists))
     raise StatusError(900)  # type inconnu renvoyé par le cœur : erreur interne
 
 

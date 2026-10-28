@@ -67,6 +67,16 @@ class _CMacCommand(ctypes.Structure):
         ("ack_rx1_dr_offset", ctypes.c_uint8),
         ("ack_dr_range", ctypes.c_uint8),
         ("ack_channel_freq", ctypes.c_uint8),
+        ("rx_delay", ctypes.c_uint8),
+        ("device_time_s", ctypes.c_uint32),
+        ("device_time_frac", ctypes.c_uint8),
+        ("rejoin_period", ctypes.c_uint8),
+        ("rejoin_max_retries", ctypes.c_uint8),
+        ("rejoin_type", ctypes.c_uint8),
+        ("max_time_n", ctypes.c_uint8),
+        ("max_count_n", ctypes.c_uint8),
+        ("ack_time_ok", ctypes.c_uint8),
+        ("ack_uplink_freq_exists", ctypes.c_uint8),
     ]
 
 
@@ -345,3 +355,20 @@ LIB.lsim_rejoin_encode_1.restype = ctypes.c_int32
 LIB.lsim_rejoin_encode_1.argtypes = [ctypes.POINTER(_CRejoin1), _U8P, _U8P]
 LIB.lsim_rejoin_decode_1.restype = ctypes.c_int32
 LIB.lsim_rejoin_decode_1.argtypes = [_U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CRejoin1)]
+LIB.lsim_registry_create.restype = ctypes.c_int32
+LIB.lsim_registry_create.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
+LIB.lsim_registry_destroy.restype = ctypes.c_int32
+LIB.lsim_registry_destroy.argtypes = [ctypes.c_uint64]
+LIB.lsim_registry_accept_join_request.restype = ctypes.c_int32
+LIB.lsim_registry_accept_join_request.argtypes = [
+    ctypes.c_uint64, _U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CJoinRequest)]
+LIB.lsim_registry_accept_rejoin_02.restype = ctypes.c_int32
+LIB.lsim_registry_accept_rejoin_02.argtypes = [
+    ctypes.c_uint64, _U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CRejoin02)]
+LIB.lsim_registry_accept_rejoin_1.restype = ctypes.c_int32
+LIB.lsim_registry_accept_rejoin_1.argtypes = [
+    ctypes.c_uint64, _U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CRejoin1)]
+LIB.lsim_registry_on_join_accepted.restype = ctypes.c_int32
+LIB.lsim_registry_on_join_accepted.argtypes = [ctypes.c_uint64, _U8P]
+LIB.lsim_registry_device_count.restype = ctypes.c_int32
+LIB.lsim_registry_device_count.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
