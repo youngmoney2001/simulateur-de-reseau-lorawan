@@ -21,7 +21,7 @@ constexpr Profile kSx1262Stm32l072 = {
     "SX1262 (datasheet) + STM32L072 (MCU)",
     3.3,
     4.6, 4.6, 4.6,           // Rx LoRa 125 kHz ; 250/500 kHz : estimation
-    0.16 + 0.43,             // SX1262 OFF cold start + STM32L072 Stop (typ.)
+    0.60 + 0.43,             // SX1262 SLEEP warm start + STM32L072 Stop (typ.)
     93e-3 * 32.0,            // 93 µA/MHz × 32 MHz (valeur « jusqu'à » de la fiche ST)
     {{{14.0, 90.0}, {17.0, 95.0}, {20.0, 102.0}, {22.0, 118.0}}},
     4};

@@ -76,24 +76,24 @@ void test_rak_hand_computed() {
 }
 
 void test_sx_hand_computed() {
-    // 1 s à 14 dBm (90 mA), 3599 s de veille (0,59 µA), 3,3 V.
-    // Q = 0,090 + 0,59e-6 × 3599 = 0,09212341 C ; E = 0,304007253 J.
+    // 1 s à 14 dBm (90 mA), 3599 s de veille (1,03 µA), 3,3 V.
+    // Q = 0,090 + 1,03e-6 × 3599 = 0,09370697 C ; E = 0,309233001 J.
     Result r;
     CHECK_EQ(static_cast<int>(device_energy(sx(), 14.0, Bandwidth::Bw125kHz, kSecond, 0, 0,
                                             3600 * kSecond, r)),
              static_cast<int>(Status::Ok));
-    CHECK_NEAR(r.charge_c, 0.09212341, 1e-9);
-    CHECK_NEAR(r.energy_j, 0.304007253, 1e-7);
+    CHECK_NEAR(r.charge_c, 0.09370697, 1e-9);
+    CHECK_NEAR(r.energy_j, 0.309233001, 1e-7);
 }
 
 void test_mcu_active_term_sx() {
-    // 2 s de MCU actif (2,976 mA), reste en veille (0,59 µA), sur 10 s, sans radio.
-    // Q = 2,976e-3 × 2 + 0,59e-6 × 8 = 0,005952 + 0,00000472 = 0,00595672 C.
+    // 2 s de MCU actif (2,976 mA), reste en veille (1,03 µA), sur 10 s, sans radio.
+    // Q = 2,976e-3 × 2 + 1,03e-6 × 8 = 0,005952 + 0,00000824 = 0,00596024 C.
     Result r;
     CHECK_EQ(static_cast<int>(device_energy(sx(), 14.0, Bandwidth::Bw125kHz, 0, 0, 2 * kSecond,
                                             10 * kSecond, r)),
              static_cast<int>(Status::Ok));
-    CHECK_NEAR(r.charge_c, 0.00595672, 1e-9);
+    CHECK_NEAR(r.charge_c, 0.00596024, 1e-9);
 }
 
 void test_device_energy_rejects_overflow_and_bad_input() {
@@ -137,13 +137,13 @@ void test_class_a_preamble_window() {
 
 void test_class_a_explicit_window_and_downlink() {
     // 1 uplink, fenêtres de 1 s chacune, plus 0,5 s de downlink reçu, sur 10 s, profil SX.
-    // rx = 2 + 0,5 = 2,5 s à 4,6 mA ; veille = 7,5 s à 0,59 µA.
-    // Q = 0,0046 × 2,5 + 0,59e-6 × 7,5 = 0,0115 + 0,00000443 = 0,01150443 C.
+    // rx = 2 + 0,5 = 2,5 s à 4,6 mA ; veille = 7,5 s à 1,03 µA.
+    // Q = 0,0046 × 2,5 + 1,03e-6 × 7,5 = 0,0115 + 0,00000773 = 0,01150773 C.
     Result r;
     CHECK_EQ(static_cast<int>(device_energy_class_a(sx(), 14.0, Bandwidth::Bw125kHz, 7, 8, 1, 0,
                                                     kSecond, kSecond / 2, 0, 10 * kSecond, r)),
              static_cast<int>(Status::Ok));
-    CHECK_NEAR(r.charge_c, 0.011504425, 1e-9);
+    CHECK_NEAR(r.charge_c, 0.011507725, 1e-9);
 }
 
 void test_class_a_overflow_rejected() {

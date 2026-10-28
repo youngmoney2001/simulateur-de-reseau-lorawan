@@ -28,7 +28,7 @@ def test_sx_stm32_profile_values():
     p = profile(PROFILE_SX1262_STM32L072)
     assert p.supply_v == pytest.approx(3.3)
     assert p.rx_ma_125khz == pytest.approx(4.6)
-    assert p.sleep_ua == pytest.approx(0.59)          # 0,16 + 0,43
+    assert p.sleep_ua == pytest.approx(1.03)          # 0,6 (warm start) + 0,43
     assert p.mcu_run_ma == pytest.approx(2.976)       # 93 µA/MHz × 32 MHz
 
 
@@ -55,10 +55,10 @@ def test_rak_one_second_tx_then_sleep():
 
 
 def test_sx_one_second_tx_then_sleep():
-    # Q = 0,090 + 0,59e-6 × 3599 = 0,09212341 C ; E = 0,304007253 J.
+    # Q = 0,090 + 1,03e-6 × 3599 = 0,09370697 C ; E = 0,309233001 J.
     r = device_energy(tx_power_dbm=14.0, bandwidth_hz=125_000, airtime_ns=SECOND,
                       total_ns=3600 * SECOND, profile_id=PROFILE_SX1262_STM32L072)
-    assert r.energy_j == pytest.approx(0.304007253, rel=1e-9)
+    assert r.energy_j == pytest.approx(0.309233001, rel=1e-9)
 
 
 def test_class_a_preamble_window():
@@ -71,12 +71,12 @@ def test_class_a_preamble_window():
 
 
 def test_class_a_explicit_window_and_downlink():
-    # Fenêtres de 1 s, plus 0,5 s de downlink ; Q = 0,0046 × 2,5 + 0,59e-6 × 7,5 = 0,011504425 C.
+    # Fenêtres de 1 s, plus 0,5 s de downlink ; Q = 0,0046 × 2,5 + 1,03e-6 × 7,5 = 0,011507725 C.
     r = device_energy_class_a(tx_power_dbm=14.0, bandwidth_hz=125_000, spreading_factor=7,
                               preamble_symbols=8, uplinks=1, airtime_ns=0,
                               rx_window_ns=SECOND, downlink_ns_total=SECOND // 2,
                               total_ns=10 * SECOND, profile_id=PROFILE_SX1262_STM32L072)
-    assert r.energy_j == pytest.approx(0.011504425 * 3.3, rel=1e-9)
+    assert r.energy_j == pytest.approx(0.011507725 * 3.3, rel=1e-9)
 
 
 @pytest.mark.parametrize("bad", [-1, 2**64])

@@ -82,3 +82,42 @@ def test_pdf_report_with_energy(tmp_path):
     out = tmp_path / "r.pdf"
     assert main(["report", str(EXAMPLE), "-o", str(out)]) == 0
     assert out.read_bytes().startswith(b"%PDF")
+
+
+def test_run_scenario_adds_energy_only_when_requested():
+    from lsim.export import run_scenario
+
+    scenario = load_scenario(EXAMPLE)
+    plain = run_scenario(scenario)
+    assert plain.energy_profile is None
+    assert all(r.energy_per_message_j is None for r in plain.rows)
+    with_e = run_scenario(scenario, energy_profile="sx1262-stm32l072")
+    assert with_e.energy_profile == "sx1262-stm32l072"
+    assert all(r.energy_per_message_j > 0 for r in with_e.rows)
+    # Les compteurs de simulation ne dépendent pas du calcul énergie.
+    assert with_e.totals == plain.totals
+
+
+def test_parquet_has_energy_columns_only_with_profile(tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    from lsim.export import run_scenario, write_parquet
+
+    scenario = load_scenario(EXAMPLE)
+    plain_path, energy_path = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    write_parquet(run_scenario(scenario), plain_path)
+    write_parquet(run_scenario(scenario, energy_profile="rak4631"), energy_path)
+    plain = pq.read_table(plain_path)
+    energy = pq.read_table(energy_path)
+    assert "energy_per_message_j" not in plain.column_names
+    assert "energy_per_message_j" in energy.column_names
+    assert energy.schema.metadata[b"lsim.energy_profile"] == b"rak4631"
+    assert b"lsim.energy_profile" not in (plain.schema.metadata or {})
+
+
+def test_cli_run_accepts_energy_profile(tmp_path):
+    pytest.importorskip("pyarrow")
+    out = tmp_path / "run.parquet"
+    assert main(["run", str(EXAMPLE), "-o", str(out), "--energy-profile", "rak4631"]) == 0
+    assert out.exists()
+    with pytest.raises(SystemExit):
+        main(["run", str(EXAMPLE), "-o", str(out), "--energy-profile", "x"])

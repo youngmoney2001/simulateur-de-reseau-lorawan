@@ -64,6 +64,12 @@ Scénarios et exports (dépendances optionnelles `pip install -e "python[data]"`
 PYTHONPATH=python python -m lsim run examples/quartier_sf9.yaml -o resultats.parquet
 ```
 
+## Documentation
+
+- [Utilisation (scénarios, CLI, énergie, Python)](docs/USAGE.md)
+- [Journal des changements](CHANGELOG.md) et [politique de release](docs/RELEASE.md)
+- [Feuille de route](docs/ROADMAP.md) et [priorités](docs/PRIORITIES.md)
+
 ## Statut
 
 Jalons 0 et 1 en grande partie faits. Jalon 2 (LoRaWAN 1.1) en cours : codec, crypto,

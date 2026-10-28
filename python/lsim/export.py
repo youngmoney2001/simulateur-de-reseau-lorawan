@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from lsim import __version__
+from lsim.energy_report import device_energies
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.simulator import Counters, GatewayLoad, simulate_uplinks
@@ -29,6 +30,9 @@ class DeviceRow:
     lost_sensitivity: int
     lost_collision: int
     airtime_ns: int
+    # Énergie (profil choisi à run_scenario) : None si non demandée ou non calculable.
+    energy_per_message_j: Optional[float] = None
+    average_current_ua: Optional[float] = None
 
     @property
     def pdr(self) -> Optional[float]:
@@ -43,15 +47,22 @@ class RunResult:
     rows: tuple[DeviceRow, ...]
     totals: Counters
     gateway: GatewayLoad
+    energy_profile: Optional[str] = None  # nom CLI du profil énergie, ou None
 
     @property
     def pdr(self) -> Optional[float]:
         return self.totals.received / self.totals.sent if self.totals.sent else None
 
 
-def run_scenario(scenario: Scenario) -> RunResult:
-    """Déploie le scénario et lance la simulation native."""
+def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> RunResult:
+    """Déploie le scénario et lance la simulation native.
+
+    `energy_profile` : « rak4631 » ou « sx1262-stm32l072 » ; ajoute l'énergie par message et
+    le courant moyen à chaque dispositif. None : pas de calcul énergie.
+    """
     devices, groups, indices = scenario.deploy()
+    energies = (device_energies(devices, energy_profile)
+                if energy_profile is not None else None)
     result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
                               scenario.environment)
     rows = tuple(
@@ -67,6 +78,8 @@ def run_scenario(scenario: Scenario) -> RunResult:
             lost_sensitivity=c.lost_sensitivity,
             lost_collision=c.lost_collision,
             airtime_ns=c.airtime_ns,
+            energy_per_message_j=energies[i].energy_per_message_j if energies else None,
+            average_current_ua=energies[i].average_current_ua if energies else None,
         )
         for i, (dev, c) in enumerate(zip(devices, result.per_device))
     )
@@ -77,6 +90,7 @@ def run_scenario(scenario: Scenario) -> RunResult:
         rows=rows,
         totals=result.totals,
         gateway=result.gateway,
+        energy_profile=energy_profile,
     )
 
 
@@ -100,6 +114,11 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         "airtime_ns": pa.array([r.airtime_ns for r in rows], pa.uint64()),
         "pdr": pa.array([r.pdr for r in rows], pa.float64()),
     })
+    if run.energy_profile is not None:
+        table = table.append_column("energy_per_message_j", pa.array(
+            [r.energy_per_message_j for r in rows], pa.float64()))
+        table = table.append_column("average_current_ua", pa.array(
+            [r.average_current_ua for r in rows], pa.float64()))
     metadata = {
         b"lsim.scenario_name": run.scenario_name.encode("utf-8"),
         b"lsim.scenario_sha256": run.scenario_sha256.encode("ascii"),
@@ -114,5 +133,7 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         b"lsim.gateway_peak_concurrent": str(run.gateway.peak_concurrent).encode("ascii"),
         b"lsim.gateway_utilization": repr(run.gateway.utilization).encode("ascii"),
     }
+    if run.energy_profile is not None:
+        metadata[b"lsim.energy_profile"] = run.energy_profile.encode("ascii")
     table = table.replace_schema_metadata(metadata)
     pq.write_table(table, str(path), compression="zstd")

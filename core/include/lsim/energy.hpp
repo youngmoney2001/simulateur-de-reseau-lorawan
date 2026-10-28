@@ -15,8 +15,9 @@
 //     +20 dBm 102 mA ; +22 dBm 118 mA ;
 //   - réception LoRa 125 kHz : 4,6 mA (datasheet) ; appliquée aussi à 250 et 500 kHz
 //     (non publié par Semtech dans les extraits consultés : estimation) ;
-//   - veille : SX1262 « OFF, cold start » 0,16 µA + STM32L072 Stop 0,43 µA (typ., −40 à 25 °C) ;
-//     le démarrage à froid suppose la reconfiguration du SX1262 au réveil ;
+//   - veille : SX1262 « SLEEP, warm start » 0,6 µA (configuration conservée, source secondaire :
+//     copie de la datasheet Rev. 2.2) + STM32L072 Stop 0,43 µA (typ., −40 à 25 °C) = 1,03 µA ;
+//     le démarrage à froid (160 nA) suppose de reconfigurer la puce à chaque réveil ;
 //   - MCU actif : 93 µA/MHz × 32 MHz = 2,976 mA. C'est la valeur « jusqu'à » de la fiche ST :
 //     une valeur basse, pas typique.
 //

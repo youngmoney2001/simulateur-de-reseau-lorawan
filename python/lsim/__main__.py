@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from lsim.energy_report import DEFAULT_ENERGY_PROFILE, ENERGY_PROFILES, device_energies
+from lsim.energy_report import DEFAULT_ENERGY_PROFILE, ENERGY_PROFILES
 from lsim.export import run_scenario, write_parquet
 from lsim.report import write_pdf, write_xlsx
 from lsim.calibration import calibrate_path_loss, format_report
@@ -21,6 +21,9 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="exécuter un scénario YAML")
     run.add_argument("scenario", help="fichier YAML du scénario")
     run.add_argument("-o", "--output", required=True, help="fichier Parquet de sortie")
+    run.add_argument("--energy-profile", choices=list(ENERGY_PROFILES), default=None,
+                     help="ajoute l'énergie par message et le courant moyen au Parquet "
+                          "(rak4631 ou sx1262-stm32l072) ; absent : pas de colonnes énergie")
     geo = sub.add_parser("geojson", help="exporter les résultats en GeoJSON géoréférencé")
     geo.add_argument("scenario", help="fichier YAML du scénario")
     geo.add_argument("-o", "--output", required=True, help="fichier GeoJSON de sortie")
@@ -52,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         scenario = load_scenario(args.scenario)
-        result = run_scenario(scenario)
+        result = run_scenario(scenario, energy_profile=args.energy_profile)
         write_parquet(result, args.output)
     except (ValueError, OSError) as exc:
         print(f"erreur : {exc}", file=sys.stderr)
@@ -74,13 +77,11 @@ def _report(args: argparse.Namespace) -> int:
         return 2
     try:
         scenario = load_scenario(args.scenario)
-        result = run_scenario(scenario)
-        devices, _groups, _indices = scenario.deploy()
-        energy = device_energies(devices, args.energy_profile)
+        result = run_scenario(scenario, energy_profile=args.energy_profile)
         if suffix == ".pdf":
-            write_pdf(result, args.output, energy_profile=args.energy_profile, energy=energy)
+            write_pdf(result, args.output)
         else:
-            write_xlsx(result, args.output, energy_profile=args.energy_profile, energy=energy)
+            write_xlsx(result, args.output)
     except (ValueError, OSError) as exc:
         print(f"erreur : {exc}", file=sys.stderr)
         return 2
