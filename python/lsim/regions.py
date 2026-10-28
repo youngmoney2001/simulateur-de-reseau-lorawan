@@ -258,7 +258,9 @@ IN865 = RegionProfile(
 # RU864-870 (§2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5, duty cycle < 1 %).
 # Annexe 11 de la décision GKRF 07-20-03-001 (texte consolidé relu sur Garant et meganorm) :
 #   864–865 MHz : 25 mW ERP, 0,1 % ou LBT ; 868,7–869,2 MHz : 25 mW ERP, LBT (duty cycle non lu).
-# Par prudence, le duty cycle 0,1 % est appliqué aux deux sous-bandes (à confirmer).
+# Par prudence, le duty cycle 0,1 % est appliqué aux deux sous-bandes. Le texte consolidé 2023
+# indique « 10 % ou LBT » pour 868,7–869,2 MHz, assorti d'une condition « stations de base » :
+# régime terminal à confirmer (0,1 % est plus restrictif, donc sûr).
 RU_MAX_ERP_DBM = mw_to_dbm(25.0)
 RU_MAX_EIRP_DBM = RU_MAX_ERP_DBM + ANTENNA_GAIN_DBI_TO_DBD
 RU864 = RegionProfile(
@@ -279,13 +281,13 @@ RU864 = RegionProfile(
 # AS923 Japon (ARIB STD-T108 v1.3, partie 2, « stations spécifiées de faible puissance ») :
 # 920,5–929,7 MHz, 20 mW de puissance d'antenne avec écoute de porteuse, antenne ≤ 3 dBi.
 # PIRE maximale retenue : 20 mW + 3 dBi. La zone 922,4–923,4 MHz est limitée à 360 s d'émission
-# par heure (partie 1 et texte partie 2 lu partiellement) : appliqué par prudence, à confirmer.
+# par heure (extrait officiel ARIB v1.3 : « total transmission time per hour … 360 s or less »).
 # L'écoute de porteuse (5 ms ou 128 µs selon la zone) n'est pas modélisée.
 JP_MAX_EIRP_DBM = mw_to_dbm(20.0) + 3.0
 AS923JP = RegionProfile(
     code="AS923JP",
     source=("ARIB STD-T108 v1.3 (2019), partie 2 : 20 mW avec écoute de porteuse, antenne ≤ 3 dBi ; "
-            "360 s/h pour 922,4–923,4 MHz (à confirmer pour la partie 2) ; "
+            "360 s/h pour 922,4–923,4 MHz (extrait officiel ARIB v1.3) ; "
             "canaux 923,2 et 923,4 MHz de RP002 §2.10.2"),
     channels=(
         _ch(923_200_000, 125_000, 0, 5, eirp=JP_MAX_EIRP_DBM, default=True),
