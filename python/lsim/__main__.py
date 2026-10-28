@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from lsim.energy_report import DEFAULT_ENERGY_PROFILE, ENERGY_PROFILES, device_energies
 from lsim.export import run_scenario, write_parquet
 from lsim.report import write_pdf, write_xlsx
 from lsim.calibration import calibrate_path_loss, format_report
@@ -31,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     rep = sub.add_parser("report", help="exécuter un scénario et écrire un rapport PDF ou Excel")
     rep.add_argument("scenario", help="fichier YAML du scénario")
     rep.add_argument("-o", "--output", required=True, help="fichier de sortie (.pdf ou .xlsx)")
+    rep.add_argument("--energy-profile", choices=list(ENERGY_PROFILES),
+                     default=DEFAULT_ENERGY_PROFILE,
+                     help="profil énergie : rak4631 (module, MCU inclus) ou "
+                          "sx1262-stm32l072 (puce + MCU séparé) ; défaut : %(default)s")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")
     cal.add_argument("measures", help="CSV : distance_m,path_loss_db")
@@ -70,10 +75,12 @@ def _report(args: argparse.Namespace) -> int:
     try:
         scenario = load_scenario(args.scenario)
         result = run_scenario(scenario)
+        devices, _groups, _indices = scenario.deploy()
+        energy = device_energies(devices, args.energy_profile)
         if suffix == ".pdf":
-            write_pdf(result, args.output)
+            write_pdf(result, args.output, energy_profile=args.energy_profile, energy=energy)
         else:
-            write_xlsx(result, args.output)
+            write_xlsx(result, args.output, energy_profile=args.energy_profile, energy=energy)
     except (ValueError, OSError) as exc:
         print(f"erreur : {exc}", file=sys.stderr)
         return 2
