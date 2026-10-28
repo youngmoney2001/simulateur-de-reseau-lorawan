@@ -7,13 +7,13 @@ from lsim.us915 import US915
 
 
 def test_registry_lists_both_regions():
-    assert plan_names() == ["EU868", "US915"]
+    assert plan_names() == ["AU915", "EU868", "US915"]
     assert get_plan("US915") is US915
 
 
 def test_unknown_region_is_refused():
     with pytest.raises(ValueError):
-        get_plan("AU915")
+        get_plan("AU999")
 
 
 def test_us_channel_frequencies_rp002():

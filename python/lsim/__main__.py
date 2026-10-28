@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--db", required=True, help="base SQLite du registre de jointure")
     srv.add_argument("--keys", required=True, help="fichier JSON des clés (mode 600)")
     srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")
-    srv.add_argument("--region", default="EU868", choices=["EU868", "US915"],
+    srv.add_argument("--region", default="EU868", choices=["EU868", "US915", "AU915"],
                      help="plan régional des données et des fenêtres RX1 (défaut : %(default)s)")
     dl = sub.add_parser("downlink", help="mettre un downlink en file pour un dispositif")
     dl.add_argument("--db", required=True, help="base SQLite du registre de jointure")
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     dl.add_argument("--fport", type=int, required=True, help="FPort applicatif (1 à 223)")
     dl.add_argument("--payload-hex", default="", help="charge utile en hexadécimal")
     dl.add_argument("--confirmed", action="store_true", help="downlink confirmé")
-    dl.add_argument("--region", default="EU868", choices=["EU868", "US915"],
+    dl.add_argument("--region", default="EU868", choices=["EU868", "US915", "AU915"],
                     help="plan régional (détermine la charge maximale en file)")
     cal = sub.add_parser("calibrate",
                          help="ajuster la loi log-distance sur des mesures (CSV)")

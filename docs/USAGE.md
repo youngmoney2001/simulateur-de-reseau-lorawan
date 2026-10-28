@@ -102,7 +102,7 @@ export LSIM_DATA_KEY=<64 caractères hexadécimaux, AES-256, stockée hors dép�
 python -m lsim serve --host 0.0.0.0 --port 1700 --db joins.sqlite --keys keys.json --net-id 000013 --region EU868
 ```
 
-Le plan régional (`--region`) doit être celui de la passerelle : `EU868` (défaut) ou `US915`.
+Le plan régional (`--region`) doit être celui de la passerelle : `EU868` (défaut), `US915` ou `AU915`.
 
 - `keys.json` : `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`, mode 600 exigé.
 - Passerelle : pointer le packet forwarder vers ce serveur (`server_address`, ports up/down).
@@ -117,10 +117,11 @@ Le plan régional (`--region`) doit être celui de la passerelle : `EU868` (déf
 
 ```bash
 python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 1 --payload-hex 0102 --region US915
+python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 1 --payload-hex 0102 --region AU915
 python -m lsim downlink --db joins.sqlite --dev-eui 0102030405060708 --fport 2 --payload-hex 00 --confirmed
 ```
 
-Charges maximales en file (fenêtres RX1 atteignables, plus petite valeur N du plan) : EU868 51 octets, US915 222 octets.
+Charges maximales en file (fenêtres RX1 atteignables, plus petite valeur N du plan) : EU868 51 octets, US915 et AU915 222 octets.
 
 Limites des trames de données :
 
@@ -128,10 +129,11 @@ Limites des trames de données :
 - Une seule copie est traitée : avec plusieurs passerelles, les copies suivantes sont rejetées comme rejeu.
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
 - Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
-- US915 : pas de sous-bandes choisies par masque de canaux (LinkADRReq) ni LR-FHSS (DR5, DR6). Le dispositif rejoint sur les 72 canaux par défaut, sans CFList.
+- US915 et AU915 : pas de sous-bandes choisies par masque de canaux (LinkADRReq) ni LR-FHSS. Le dispositif rejoint sur les canaux par défaut, sans CFList.
+- AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
-- Basic Station : pas encore pris en charge. AU915 et autres plans : à ajouter (même interface `Plan`).
+- Basic Station : pas encore pris en charge. Autres plans (AS923, KR920…) : à ajouter (même interface `Plan`).
 
 ## 6. Limites connues
 

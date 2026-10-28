@@ -14,7 +14,10 @@ la table RX1 RP002-1.0.1 ; voir les modules régionaux.
 
 from __future__ import annotations
 
+import importlib
 from typing import Callable, Mapping
+
+_BUILTIN_MODULES = ("lsim.eu868", "lsim.us915", "lsim.au915")
 
 RECEIVE_DELAY1_US = 1_000_000        # RP002 §2.3 : RECEIVE_DELAY1 = 1 s, toutes régions
 _CHANNEL_TOLERANCE_HZ = 1_000        # la passerelle rapporte la fréquence en Hz précis
@@ -81,8 +84,8 @@ def register(plan: Plan) -> Plan:
 
 def _load_builtin() -> None:
     # Les régions s'enregistrent à l'import ; charger ici évite un import circulaire.
-    import lsim.eu868  # noqa: F401
-    import lsim.us915  # noqa: F401
+    for module in _BUILTIN_MODULES:
+        importlib.import_module(module)
 
 
 def get_plan(name: str) -> Plan:

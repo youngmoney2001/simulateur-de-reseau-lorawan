@@ -65,3 +65,9 @@
 - Tableaux DR, charges maximales et règle RX1 extraits des Regional Parameters RP002 (LoRa
   Alliance) et de la page The Things Network « US902-928 MHz Band ». Valeurs numériques
   reprises, aucun texte copié. Source de référence : `python/lsim/us915.py`.
+
+## Plan régional AU915-928 (valeurs seulement)
+
+- Canaux, débits, règle RX1 et charges maximales extraits des Regional Parameters RP002-1.0.2 et
+  RP002-1.0.3 (LoRa Alliance). Valeurs numériques reprises, aucun texte copié. Source de
+  référence : `python/lsim/au915.py`.
