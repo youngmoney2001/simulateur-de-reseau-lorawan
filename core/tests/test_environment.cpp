@@ -135,7 +135,7 @@ void test_invalid_obstacle_refused() {
 void test_engine_uses_environment() {
     using namespace lsim::sim;
     const EndDeviceSpec devs[] = {
-        {Position{4000.0, 50.0}, 7, 10, 14.0, 0, 600000000000LL, 1},  // derrière la crête
+        {Position{4000.0, 50.0}, 7, 10, 14.0, 0, 600000000000LL, 1, 1.0, {}},  // derrière la crête
     };
     GatewaySpec gw{};
     gw.position = Position{0.0, 50.0};
@@ -158,7 +158,7 @@ void test_engine_uses_environment() {
 
 void test_engine_rejects_invalid_environment_and_work_limit() {
     using namespace lsim::sim;
-    const EndDeviceSpec devs[] = {{Position{100.0, 0.0}, 7, 10, 14.0, 0, 600000000000LL, 1}};
+    const EndDeviceSpec devs[] = {{Position{100.0, 0.0}, 7, 10, 14.0, 0, 600000000000LL, 1, 1.0, {}}};
     GatewaySpec gw{};
     PropagationSpec prop;
     DeviceStats st[1];

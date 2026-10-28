@@ -31,6 +31,7 @@ _NAMES = {
     304: "file d'événements pleine",
     305: "environnement invalide (relief ou obstacles)",
     306: "environnement : travail de calcul trop grand (dispositifs x obstacles)",
+    307: "trop de requêtes de downlink (limite 5 000 000)",
     # 400..449 : jointure OTAA
     401: "join : longueur de message invalide",
     402: "join : type de message (MHDR) inattendu",

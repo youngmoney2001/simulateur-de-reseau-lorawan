@@ -161,6 +161,18 @@ class _CClassBDevice(ctypes.Structure):
         ("last_beacon_time_s", ctypes.c_uint32),
         ("dev_addr", ctypes.c_uint32),
         ("periodicity", ctypes.c_uint8),
+        ("clock_drift_ppm", ctypes.c_uint32),
+    ]
+
+
+class _CClassBGatewayInfo(ctypes.Structure):
+    _fields_ = [
+        ("time_s", ctypes.c_uint32),
+        ("present", ctypes.c_uint8),
+        ("info_desc", ctypes.c_uint8),
+        ("has_coordinates", ctypes.c_uint8),
+        ("latitude_deg", ctypes.c_double),
+        ("longitude_deg", ctypes.c_double),
     ]
 
 
@@ -170,6 +182,7 @@ class _CClassBPingSlot(ctypes.Structure):
         ("slot_index", ctypes.c_uint32),
         ("beacon_time_s", ctypes.c_uint32),
         ("beacon_period_start_ns", ctypes.c_uint64),
+        ("window_half_ns", ctypes.c_uint64),
     ]
 
 
@@ -263,6 +276,28 @@ class _CDeviceStats(ctypes.Structure):
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
         ("airtime_ns", ctypes.c_uint64),
+    ]
+
+
+class _CDownlinkPlan(ctypes.Structure):
+    _fields_ = [
+        ("device_class", ctypes.c_uint8),
+        ("count", ctypes.c_uint32),
+        ("first_request_ns", ctypes.c_int64),
+        ("request_period_ns", ctypes.c_int64),
+        ("rx_window_ns", ctypes.c_int64),
+        ("dev_addr", ctypes.c_uint32),
+        ("periodicity", ctypes.c_uint8),
+        ("clock_drift_ppm", ctypes.c_uint32),
+    ]
+
+
+class _CDownlinkStats(ctypes.Structure):
+    _fields_ = [
+        ("requested", ctypes.c_uint64),
+        ("delivered", ctypes.c_uint64),
+        ("latency_sum_ns", ctypes.c_uint64),
+        ("latency_max_ns", ctypes.c_uint64),
     ]
 
 
@@ -409,6 +444,12 @@ LIB.lsim_simulate_uplinks_env.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats)]
+LIB.lsim_simulate_downlinks_env.restype = ctypes.c_int32
+LIB.lsim_simulate_downlinks_env.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.POINTER(_CDownlinkPlan), ctypes.c_size_t,
+    ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CDownlinkStats), ctypes.POINTER(_CDownlinkStats)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
@@ -511,6 +552,12 @@ LIB.lsim_session_end_uplink.restype = ctypes.c_int32
 LIB.lsim_session_end_uplink.argtypes = [ctypes.c_uint64, ctypes.POINTER(_CSessionUplinkEnd)]
 LIB.lsim_classb_decode_beacon.restype = ctypes.c_int32
 LIB.lsim_classb_decode_beacon.argtypes = [_U8P, ctypes.c_size_t, ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint32)]
+LIB.lsim_classb_decode_beacon_full.restype = ctypes.c_int32
+LIB.lsim_classb_decode_beacon_full.argtypes = [
+    _U8P, ctypes.c_size_t, ctypes.c_uint8, ctypes.c_uint8, ctypes.POINTER(_CClassBGatewayInfo)]
+LIB.lsim_classb_us902_channel.restype = ctypes.c_int32
+LIB.lsim_classb_us902_channel.argtypes = [
+    ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint32)]
 LIB.lsim_classb_ping_offset.restype = ctypes.c_int32
 LIB.lsim_classb_ping_offset.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8, ctypes.POINTER(ctypes.c_uint32)]
 LIB.lsim_classb_on_beacon.restype = ctypes.c_int32

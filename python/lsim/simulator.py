@@ -10,11 +10,14 @@ from __future__ import annotations
 import ctypes
 import math
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Optional, Sequence
 
 from lsim._native import (
     LIB,
     _CDeviceStats,
+    _CDownlinkPlan,
+    _CDownlinkStats,
     _CSimStats,
     _CEndDevice,
     _CEnvironment,
@@ -26,7 +29,58 @@ from lsim.environment import Environment
 from lsim.lora import StatusError
 
 MAX_END_DEVICES = 10_000
+MAX_DOWNLINKS_PER_DEVICE = 100_000
+MAX_RX_WINDOW_NS = 10_000_000_000
+MAX_PERIODICITY = 7
+MAX_DRIFT_PPM = 1000
 _NS_PER_MIN = 60_000_000_000
+
+
+class DeviceClass(IntEnum):
+    """Classe LoRaWAN : A (réception après chaque uplink), B (ping slots), C (écoute continue)."""
+
+    A = 0
+    B = 1
+    C = 2
+
+
+@dataclass(frozen=True)
+class DownlinkRequests:
+    """Requêtes de downlink d'un dispositif : la k-ième part à first + k × period.
+
+    Classe B : la balise est supposée reçue à chaque période de 128 s depuis le temps 0.
+    rx_window_ns : durée RX1, hypothèse de modélisation (la spec ne la fixe pas ici).
+    """
+
+    device_class: DeviceClass
+    count: int
+    first_request_ns: int = 0
+    request_period_ns: int = 0
+    rx_window_ns: int = 1_000_000_000
+    dev_addr: int = 0
+    periodicity: int = 0
+    clock_drift_ppm: int = 0
+
+    def __post_init__(self) -> None:
+        try:
+            cls = DeviceClass(self.device_class)
+        except ValueError as exc:
+            raise ValueError("device_class doit valoir A, B ou C") from exc
+        object.__setattr__(self, "device_class", cls)
+        if isinstance(self.count, bool) or not 0 <= self.count <= MAX_DOWNLINKS_PER_DEVICE:
+            raise ValueError(f"count doit être compris entre 0 et {MAX_DOWNLINKS_PER_DEVICE}")
+        if self.first_request_ns < 0:
+            raise ValueError("first_request_ns doit être positif ou nul")
+        if self.count > 1 and self.request_period_ns <= 0:
+            raise ValueError("request_period_ns doit être strictement positif si count > 1")
+        if not 0 <= self.rx_window_ns <= MAX_RX_WINDOW_NS:
+            raise ValueError("rx_window_ns doit être compris entre 0 et 10 s")
+        if not 0 <= self.dev_addr < 2**32:
+            raise ValueError("dev_addr doit être un entier sur 32 bits")
+        if not 0 <= self.periodicity <= MAX_PERIODICITY:
+            raise ValueError(f"periodicity doit être compris entre 0 et {MAX_PERIODICITY}")
+        if not 0 <= self.clock_drift_ppm <= MAX_DRIFT_PPM:
+            raise ValueError(f"clock_drift_ppm doit être compris entre 0 et {MAX_DRIFT_PPM}")
 
 
 @dataclass(frozen=True)
@@ -40,6 +94,7 @@ class EndDevice:
     period_ns: int = 60 * _NS_PER_MIN
     messages: int = 1
     duty_cycle: float = 1.0  # rapport cyclique maximal, ]0, 1] ; 1 = sans limite
+    downlink: Optional[DownlinkRequests] = None  # requêtes de downlink (None = aucune)
 
     def __post_init__(self) -> None:
         if not 0.0 < self.duty_cycle <= 1.0:
@@ -102,6 +157,24 @@ class Counters:
 
 
 @dataclass(frozen=True)
+class DownlinkCounters:
+    """Downlinks : requêtes, livrées (fenêtre utilisable avant la fin de l'observation), latence."""
+
+    requested: int = 0
+    delivered: int = 0
+    latency_sum_ns: int = 0
+    latency_max_ns: int = 0
+
+    @property
+    def delivery_ratio(self) -> float:
+        return self.delivered / self.requested if self.requested else 0.0
+
+    @property
+    def mean_latency_ns(self) -> float:
+        return self.latency_sum_ns / self.delivered if self.delivered else 0.0
+
+
+@dataclass(frozen=True)
 class GatewayLoad:
     """Charge de la passerelle, calculée par le cœur natif."""
     busy_ns: int = 0            # durée où au moins une trame arrive (union, sans double comptage)
@@ -115,6 +188,8 @@ class SimulationResult:
     per_device: tuple[Counters, ...]
     totals: Counters
     gateway: GatewayLoad = GatewayLoad()
+    downlink_per_device: tuple[DownlinkCounters, ...] = ()
+    downlink_totals: DownlinkCounters = DownlinkCounters()
 
 
 def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
@@ -213,14 +288,33 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
     c_stats = (_CDeviceStats * n)()
     c_tot = _CSimStats()
+    c_dl_stats = (_CDownlinkStats * n)()
+    c_dl_tot = _CDownlinkStats()
+    # Plans de downlink : tableau aligné sur les dispositifs ; NULL si aucun n'en demande.
+    c_plans = None
+    if any(d.downlink is not None and d.downlink.count > 0 for d in devices):
+        c_plans = (_CDownlinkPlan * n)()
+        for i, d in enumerate(devices):
+            p = c_plans[i]
+            if d.downlink is None:
+                continue
+            p.device_class = int(d.downlink.device_class)
+            p.count = d.downlink.count
+            p.first_request_ns = d.downlink.first_request_ns
+            p.request_period_ns = d.downlink.request_period_ns
+            p.rx_window_ns = d.downlink.rx_window_ns
+            p.dev_addr = d.downlink.dev_addr
+            p.periodicity = d.downlink.periodicity
+            p.clock_drift_ppm = d.downlink.clock_drift_ppm
     if environment is None:
         c_env_ref, keep = None, []
     else:
         c_env_struct, keep = _c_environment(environment)
         c_env_ref = ctypes.byref(c_env_struct)
-    status = LIB.lsim_simulate_uplinks_env(
-        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop),
-        c_env_ref, c_stats if n else None, ctypes.byref(c_tot))
+    status = LIB.lsim_simulate_downlinks_env(
+        c_devs if n else None, c_plans, n, ctypes.byref(c_gw), ctypes.byref(c_prop),
+        c_env_ref, c_stats if n else None, ctypes.byref(c_tot),
+        c_dl_stats if n else None, ctypes.byref(c_dl_tot))
     del keep
     if status != 0:
         raise StatusError(status)
@@ -233,4 +327,11 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
                    c_tot.airtime_ns)
     load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
                        c_tot.observation_ns, c_tot.gateway_utilization)
-    return SimulationResult(per_device=per, totals=tot, gateway=load)
+    dl_per = tuple(
+        DownlinkCounters(s.requested, s.delivered, s.latency_sum_ns, s.latency_max_ns)
+        for s in c_dl_stats
+    )
+    dl_tot = DownlinkCounters(c_dl_tot.requested, c_dl_tot.delivered, c_dl_tot.latency_sum_ns,
+                              c_dl_tot.latency_max_ns)
+    return SimulationResult(per_device=per, totals=tot, gateway=load,
+                            downlink_per_device=dl_per, downlink_totals=dl_tot)

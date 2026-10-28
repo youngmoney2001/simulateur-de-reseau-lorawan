@@ -14,10 +14,13 @@
 #include <cstdint>
 #include <vector>
 
+#include "lsim/downlink.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
 
 namespace lsim::sim {
+
+namespace downlink = lorawan::downlink;
 
 using SimTime = std::int64_t;  // nanosecondes
 
@@ -54,6 +57,20 @@ struct Position {
     double y_m = 0.0;
 };
 
+// Requêtes de downlink adressées à un dispositif (count = 0 : aucune). La requête k part à
+// first_request_ns + k * request_period_ns ; la latence est mesurée jusqu'à la première
+// fenêtre de réception utilisable selon la classe (voir lsim/downlink.hpp).
+struct DownlinkPlan {
+    downlink::DeviceClass device_class = downlink::DeviceClass::A;
+    std::uint32_t count = 0;                // 0..kMaxDownlinksPerDevice
+    SimTime first_request_ns = 0;           // >= 0
+    SimTime request_period_ns = 0;          // > 0 si count > 1
+    SimTime rx_window_ns = 1'000'000'000;   // durée de RX1 (hypothèse, 0..10 s)
+    std::uint32_t dev_addr = 0;             // classe B : entrée du ping slot
+    std::uint8_t periodicity = 0;           // classe B : 0..7
+    std::uint32_t clock_drift_ppm = 0;      // classe B : 0..1000
+};
+
 // Dispositif terminal émettant périodiquement des trames confirmées-non.
 struct EndDeviceSpec {
     Position position;
@@ -66,6 +83,7 @@ struct EndDeviceSpec {
     // Rapport cyclique maximal (0 < d <= 1, 1 = sans limite). Après chaque
     // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
     double duty_cycle = 1.0;
+    DownlinkPlan downlink;
 };
 
 // Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.
@@ -95,12 +113,22 @@ struct PropagationSpec {
 LSIM_API double shadowing_sample_db(std::uint64_t seed, std::uint32_t device_index,
                                     double sigma_db);
 
+// Statistiques de downlink. Une requête est livrée si une fenêtre de réception
+// utilisable ouvre au plus tard à la fin de l'observation (fin de la dernière émission).
+struct DownlinkStats {
+    std::uint64_t requested = 0;
+    std::uint64_t delivered = 0;
+    std::uint64_t latency_sum_ns = 0;   // somme des latences des requêtes livrées
+    std::uint64_t latency_max_ns = 0;
+};
+
 struct DeviceStats {
     std::uint64_t sent = 0;
     std::uint64_t received = 0;
     std::uint64_t lost_sensitivity = 0;  // sous le seuil de sensibilité
     std::uint64_t lost_collision = 0;    // détruite par une collision non capturée
     std::uint64_t airtime_ns = 0;        // temps d'antenne cumulé des trames émises
+    DownlinkStats downlink;
 };
 
 struct SimulationStats {
@@ -113,11 +141,15 @@ struct SimulationStats {
     std::uint64_t gateway_peak_concurrent = 0;  // nombre maximal de trames simultanées
     std::int64_t observation_ns = 0;          // fin de la dernière trame - début de la première
     double gateway_utilization = 0.0;         // gateway_busy_ns / observation_ns, dans [0, 1]
+    DownlinkStats downlink;                   // somme des dispositifs
 };
 
 // Limites de sécurité / scalabilité.
 inline constexpr std::size_t kMaxEndDevices = 10'000;
 inline constexpr std::uint64_t kMaxTransmissions = 5'000'000;
+inline constexpr std::uint32_t kMaxDownlinksPerDevice = 100'000;
+inline constexpr std::uint64_t kMaxDownlinkRequests = 5'000'000;  // total de la simulation
+inline constexpr SimTime kMaxRxWindowNs = 10'000'000'000;  // 10 s
 inline constexpr double kMaxShadowingSigmaDb = 30.0;
 
 enum class SimStatus : std::int32_t {
@@ -128,6 +160,7 @@ enum class SimStatus : std::int32_t {
     QueueFull = 4,
     InvalidEnvironment = 5,
     EnvironmentWorkLimit = 6,
+    TooManyDownlinks = 7,
 };
 
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir

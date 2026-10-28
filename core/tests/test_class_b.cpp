@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Classe B : CRC et décodage du beacon (exemple de la spec), pingOffset (vecteurs OpenSSL
 // indépendants), timing des ping slots, suivi beacon / beacon-less, passage par l'API C.
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -174,4 +175,114 @@ void run_class_b_tests() {
         CHECK_EQ(static_cast<int>(state), 1);
         CHECK_EQ(lsim_classb_next_ping_slot(nullptr, 0, &slot), static_cast<int>(lsim::lora::Status::NullOutput));
     }
+
+    // --- GwSpecific : exemple EU868 (CRC GwSpecific DE55) puis exemple US915 (CRC D450).
+    {
+        BeaconCommon common;
+        GatewayInfo gw;
+        CHECK_EQ(static_cast<int>(decode_beacon_full(kEuBeacon.data(), kEuBeacon.size(), 2, 0, common, gw)),
+                 0);
+        CHECK_EQ(static_cast<int>(common.time_s), static_cast<int>(0xCC020000u));
+        CHECK_TRUE(gw.present);
+        CHECK_EQ(static_cast<int>(gw.info_desc), 0);
+        CHECK_TRUE(gw.has_coordinates);
+        // Lat 0x002001 = 8193 ; Lng 0x038100 = 229632 (complément à deux, 24 bits).
+        CHECK_NEAR(gw.latitude_deg - 8193.0 * 90.0 / 8388608.0, 0.0, 1e-12);
+        CHECK_NEAR(gw.longitude_deg - 229632.0 * 180.0 / 8388608.0, 0.0, 1e-12);
+
+        const std::vector<std::uint8_t> us = {0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xCC, 0xA2, 0x7E,
+                                              0x00, 0x01, 0x20, 0x00, 0x00, 0x81, 0x03, 0x00, 0x50, 0xD4};
+        CHECK_EQ(static_cast<int>(decode_beacon_full(us.data(), us.size(), 3, 1, common, gw)), 0);
+        CHECK_EQ(static_cast<int>(common.time_s), static_cast<int>(0xCC020000u));
+        CHECK_TRUE(gw.present);
+        CHECK_NEAR(gw.latitude_deg - 8193.0 * 90.0 / 8388608.0, 0.0, 1e-12);
+
+        // Sans GwSpecific : accepté, gw.present = false.
+        CHECK_EQ(static_cast<int>(decode_beacon_full(kEuBeacon.data(), 8, 2, 0, common, gw)), 0);
+        CHECK_TRUE(!gw.present);
+
+        // Longueur incohérente et CRC GwSpecific faux.
+        CHECK_EQ(static_cast<int>(decode_beacon_full(kEuBeacon.data(), 12, 2, 0, common, gw)),
+                 static_cast<int>(ClassBStatus::InvalidParameter));
+        auto bad_gw = kEuBeacon;
+        bad_gw[9] ^= 0x01;  // altère Lat : CRC GwSpecific doit échouer
+        CHECK_EQ(static_cast<int>(decode_beacon_full(bad_gw.data(), bad_gw.size(), 2, 0, common, gw)),
+                 static_cast<int>(ClassBStatus::CrcError));
+
+        // Latitude -90° (raw -2^23 = 0x800000) et InfoDesc 3 (pas de coordonnées décodées).
+        std::vector<std::uint8_t> south = {0x00, 0x00, 0x00, 0x00, 0x02, 0xCC, 0xA2, 0x7E,
+                                           0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00};
+        const std::uint16_t crc_s = beacon_crc16(south.data() + 8, 7);
+        south.push_back(static_cast<std::uint8_t>(crc_s & 0xFF));
+        south.push_back(static_cast<std::uint8_t>(crc_s >> 8));
+        CHECK_EQ(static_cast<int>(decode_beacon_full(south.data(), south.size(), 2, 0, common, gw)), 0);
+        CHECK_NEAR(gw.latitude_deg + 90.0, 0.0, 1e-12);
+        auto info3 = south;
+        info3[8] = 3;
+        const std::uint16_t crc_3 = beacon_crc16(info3.data() + 8, 7);
+        info3[15] = static_cast<std::uint8_t>(crc_3 & 0xFF);
+        info3[16] = static_cast<std::uint8_t>(crc_3 >> 8);
+        CHECK_EQ(static_cast<int>(decode_beacon_full(info3.data(), info3.size(), 2, 0, common, gw)), 0);
+        CHECK_TRUE(gw.present);
+        CHECK_TRUE(!gw.has_coordinates);
+    }
+
+    // --- US902-928 : canal = floor(T/128) mod 8, fréquence 923,3 MHz + 0,6 MHz × indice.
+    {
+        std::uint8_t idx = 99;
+        CHECK_EQ(static_cast<int>(us902_channel_index(0, idx)), 0);
+        CHECK_EQ(static_cast<int>(idx), 0);
+        CHECK_EQ(static_cast<int>(us902_channel_index(127, idx)), 0);
+        CHECK_EQ(static_cast<int>(idx), 0);
+        CHECK_EQ(static_cast<int>(us902_channel_index(128, idx)), 0);
+        CHECK_EQ(static_cast<int>(idx), 1);
+        CHECK_EQ(static_cast<int>(us902_channel_index(8 * 128, idx)), 0);
+        CHECK_EQ(static_cast<int>(idx), 0);
+        std::uint32_t f = 0;
+        CHECK_EQ(static_cast<int>(us902_channel_frequency_hz(0, f)), 0);
+        CHECK_EQ(static_cast<int>(f), 923300000);
+        CHECK_EQ(static_cast<int>(us902_channel_frequency_hz(7, f)), 0);
+        CHECK_EQ(static_cast<int>(f), 927500000);
+        CHECK_EQ(static_cast<int>(us902_channel_frequency_hz(8, f)), static_cast<int>(ClassBStatus::InvalidParameter));
+        uint32_t cf = 0;
+        uint8_t ci = 0;
+        CHECK_EQ(lsim_classb_us902_channel(128, &ci, &cf), 0);
+        CHECK_EQ(static_cast<int>(ci), 1);
+        CHECK_EQ(static_cast<int>(cf), 923900000);
+    }
+
+    // --- Dérive d'horloge : fenêtre élargie = dérive × temps depuis le beacon (arrondi sup.).
+    {
+        DeviceClassB d;
+        d.dev_addr = 0;
+        d.periodicity = 7;
+        CHECK_EQ(static_cast<int>(on_beacon(d, 0, 0)), 0);
+        PingSlot s{};
+        CHECK_EQ(static_cast<int>(next_ping_slot(d, 0, s)), 0);
+        CHECK_EQ(static_cast<int>(s.window_half_ns), 0);  // dérive nulle : pas d'élargissement
+
+        d.clock_drift_ppm = 10;  // spec : ±10 ppm ≈ ±1,3 ms après une période de 128 s
+        CHECK_EQ(static_cast<int>(next_ping_slot(d, 0, s)), 0);
+        const std::uint64_t expected = (s.start_ns * 10ull + 999'999ull) / 1'000'000ull;
+        CHECK_EQ(static_cast<int>(s.window_half_ns), static_cast<int>(expected));
+        CHECK_TRUE(s.window_half_ns <= 1'280'000ull * 2);  // slot avant 2 × 128 s : ≤ 2,56 ms
+
+        // Beacon-less : 2 h après le beacon, la fenêtre atteint plusieurs dizaines de ms.
+        DeviceClassB far = d;
+        PingSlot late{};
+        CHECK_EQ(static_cast<int>(next_ping_slot(far, 7000ull * kSec, late)), 0);
+        CHECK_TRUE(late.window_half_ns >= 60'000'000ull);
+
+        d.clock_drift_ppm = 1001;
+        CHECK_EQ(static_cast<int>(next_ping_slot(d, 0, s)), static_cast<int>(ClassBStatus::InvalidParameter));
+
+        lsim_classb_device cd{};
+        cd.periodicity = 7;
+        cd.clock_drift_ppm = 10;
+        CHECK_EQ(lsim_classb_on_beacon(&cd, 0, 0), 0);
+        lsim_classb_ping_slot cs{};
+        CHECK_EQ(lsim_classb_next_ping_slot(&cd, 0, &cs), 0);
+        CHECK_EQ(static_cast<int>(cs.window_half_ns), static_cast<int>(expected));
+    }
 }
+

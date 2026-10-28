@@ -326,6 +326,39 @@ LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_
                                            lsim_device_stats* per_device,
                                            lsim_sim_stats* totals);
 
+/* ------------------------------------------- Downlinks par classe (A, B, C)
+ * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).
+ * device_class : 0 A, 1 B, 2 C. Latence = début de la première fenêtre utilisable moins
+ * la date de requête ; livrée si la fenêtre ouvre avant la fin de l'observation.
+ * Classe B : balise supposée reçue à chaque période de 128 s depuis le temps 0. */
+typedef struct lsim_downlink_plan {
+    uint8_t  device_class;       /* 0 A, 1 B, 2 C */
+    uint32_t count;              /* 0..100000 */
+    int64_t  first_request_ns;   /* >= 0 */
+    int64_t  request_period_ns;  /* > 0 si count > 1 */
+    int64_t  rx_window_ns;       /* 0..10 s : durée RX1 (hypothèse) */
+    uint32_t dev_addr;           /* classe B */
+    uint8_t  periodicity;        /* classe B : 0..7 */
+    uint32_t clock_drift_ppm;    /* classe B : 0..1000 */
+} lsim_downlink_plan;
+
+typedef struct lsim_downlink_stats {
+    uint64_t requested;
+    uint64_t delivered;
+    uint64_t latency_sum_ns;     /* somme des latences livrées */
+    uint64_t latency_max_ns;
+} lsim_downlink_stats;
+
+LSIM_API int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices,
+                                             const lsim_downlink_plan* plans, size_t device_count,
+                                             const lsim_gateway* gateway,
+                                             const lsim_propagation* prop,
+                                             const lsim_environment* env,
+                                             lsim_device_stats* per_device,
+                                             lsim_sim_stats* totals,
+                                             lsim_downlink_stats* per_device_dl,
+                                             lsim_downlink_stats* dl_total);
+
 /* Portée réelle par azimut (relief et obstacles inclus) : radii_out reçoit
  * `azimuths` distances (m), autour de la passerelle. step_m >= 1 ;
  * azimuths in 1..720. Borne de travail refusée au-delà (statut 506). */
@@ -622,6 +655,7 @@ typedef struct {
     uint32_t last_beacon_time_s;
     uint32_t dev_addr;
     uint8_t  periodicity;      /* 0..7 */
+    uint32_t clock_drift_ppm;  /* dérive d'horloge, 0..1000 ppm */
 } lsim_classb_device;
 
 typedef struct {
@@ -629,11 +663,29 @@ typedef struct {
     uint32_t slot_index;       /* N, 0..4095 */
     uint32_t beacon_time_s;
     uint64_t beacon_period_start_ns;
+    uint64_t window_half_ns;   /* élargissement de la fenêtre (dérive × temps depuis beacon) */
 } lsim_classb_ping_slot;
+
+/* GwSpecific décodé. has_coordinates = 1 seulement si info_desc est 0, 1 ou 2. */
+typedef struct {
+    uint32_t time_s;
+    uint8_t  present;
+    uint8_t  info_desc;
+    uint8_t  has_coordinates;
+    double   latitude_deg;
+    double   longitude_deg;
+} lsim_classb_gateway_info;
 
 /* rfu_len : 2 (EU868) ou 3 (US915). CRC-16 vérifié avant d'écrire time_s. */
 LSIM_API int32_t lsim_classb_decode_beacon(const uint8_t* in, size_t len, uint8_t rfu_len,
                                            uint32_t* time_s);
+/* gw_rfu_len : 0 (EU868) ou 1 (US915). Accepte une trame sans GwSpecific. */
+LSIM_API int32_t lsim_classb_decode_beacon_full(const uint8_t* in, size_t len, uint8_t rfu_len,
+                                                uint8_t gw_rfu_len,
+                                                lsim_classb_gateway_info* out);
+/* US902-928 : index = floor(beacon_time / 128) mod 8 ; freq_hz = 923,3 MHz + 0,6 MHz × index. */
+LSIM_API int32_t lsim_classb_us902_channel(uint32_t beacon_time_s, uint8_t* index,
+                                           uint32_t* freq_hz);
 LSIM_API int32_t lsim_classb_ping_offset(uint32_t beacon_time_s, uint32_t dev_addr,
                                          uint8_t periodicity, uint32_t* offset);
 LSIM_API int32_t lsim_classb_on_beacon(lsim_classb_device* d, uint64_t rx_ns,

@@ -4,10 +4,12 @@
 #include <algorithm>
 #include <cmath>
 
+#include "lsim/class_b.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/link_budget.hpp"
 
 namespace lsim::sim {
+namespace classb = lorawan::classb;
 namespace {
 
 constexpr std::uint32_t kKindTxStart = 1;
@@ -44,6 +46,24 @@ SimStatus validate_device(const EndDeviceSpec& d) {
     }
     if (!finite(d.duty_cycle) || d.duty_cycle <= 0.0 || d.duty_cycle > 1.0) {
         return SimStatus::InvalidInput;
+    }
+    const DownlinkPlan& dl = d.downlink;
+    if (dl.count > kMaxDownlinksPerDevice) return SimStatus::InvalidInput;
+    if (dl.count > 0) {
+        if (dl.first_request_ns < 0 || dl.rx_window_ns < 0 || dl.rx_window_ns > kMaxRxWindowNs) {
+            return SimStatus::InvalidInput;
+        }
+        if (dl.count > 1 && dl.request_period_ns <= 0) return SimStatus::InvalidInput;
+        const double last_d = static_cast<double>(dl.first_request_ns) +
+                              static_cast<double>(dl.count - 1) * static_cast<double>(dl.request_period_ns);
+        if (last_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+        if (dl.periodicity > classb::kMaxPeriodicity ||
+            dl.clock_drift_ppm > classb::kMaxDriftPpm) {
+            return SimStatus::InvalidInput;
+        }
+        if (static_cast<int>(dl.device_class) > static_cast<int>(downlink::DeviceClass::C)) {
+            return SimStatus::InvalidInput;
+        }
     }
     return SimStatus::Ok;
 }
@@ -213,6 +233,13 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         }
     }
 
+    // Borne globale des requêtes de downlink (coût de calcul des opportunités).
+    std::uint64_t total_dl = 0;
+    for (std::size_t i = 0; i < device_count; ++i) {
+        total_dl += devices[i].downlink.count;
+    }
+    if (total_dl > kMaxDownlinkRequests) return SimStatus::TooManyDownlinks;
+
     // Ordonnancement des émissions dans la file bornée.
     EventQueue queue(static_cast<std::size_t>(total_tx));
     for (std::size_t i = 0; i < device_count; ++i) {
@@ -344,6 +371,53 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             ++st.lost_collision;
             ++totals.lost_collision;
         }
+    }
+
+    // Downlinks : pour chaque dispositif demandé, latence jusqu'à la première fenêtre de
+    // réception utilisable. Observation : jusqu'à la fin de la dernière émission.
+    SimTime horizon = 0;
+    for (const Tx& t : txs) horizon = std::max(horizon, t.end);
+    std::vector<std::vector<downlink::Window>> uplinks(device_count);
+    for (const Tx& t : txs) {
+        if (devices[t.device].downlink.count > 0) {
+            uplinks[t.device].push_back(downlink::Window{t.start, t.end});
+        }
+    }
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const DownlinkPlan& dl = devices[i].downlink;
+        if (dl.count == 0) continue;
+        DownlinkStats& st = per_device[i].downlink;
+        const downlink::Timing timing{1'000'000'000, 2'000'000'000, dl.rx_window_ns};
+        std::vector<downlink::Window> blocked;
+        if (dl.device_class != downlink::DeviceClass::A) {
+            if (downlink::class_c_blocked(uplinks[i], timing, blocked) !=
+                downlink::DownlinkStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+        }
+        const downlink::ClassBProfile profile{dl.dev_addr, dl.periodicity, dl.clock_drift_ppm};
+        for (std::uint32_t k = 0; k < dl.count; ++k) {
+            const SimTime request = dl.first_request_ns + static_cast<SimTime>(k) * dl.request_period_ns;
+            ++st.requested;
+            SimTime opp = 0;
+            downlink::DownlinkStatus ds = downlink::DownlinkStatus::NoOpportunity;
+            if (dl.device_class == downlink::DeviceClass::A) {
+                ds = downlink::next_class_a(uplinks[i], request, timing, opp);
+            } else if (dl.device_class == downlink::DeviceClass::C) {
+                ds = downlink::next_class_c(blocked, request, opp);
+            } else {
+                ds = downlink::next_class_b(profile, blocked, request, opp);
+            }
+            if (ds != downlink::DownlinkStatus::Ok || opp > horizon) continue;
+            const std::uint64_t latency = static_cast<std::uint64_t>(opp - request);
+            ++st.delivered;
+            st.latency_sum_ns += latency;
+            st.latency_max_ns = std::max(st.latency_max_ns, latency);
+        }
+        totals.downlink.requested += st.requested;
+        totals.downlink.delivered += st.delivered;
+        totals.downlink.latency_sum_ns += st.latency_sum_ns;
+        totals.downlink.latency_max_ns = std::max(totals.downlink.latency_max_ns, st.latency_max_ns);
     }
 
     for (std::size_t i = 0; i < device_count; ++i) {

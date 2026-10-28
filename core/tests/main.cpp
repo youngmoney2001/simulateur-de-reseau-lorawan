@@ -20,6 +20,7 @@ void run_adr_tests();
 void run_rekey_tests();
 void run_session_tests();
 void run_class_b_tests();
+void run_downlink_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -38,6 +39,7 @@ int main() {
     run_rekey_tests();
     run_session_tests();
     run_class_b_tests();
+    run_downlink_tests();
     std::printf("%d/%d vérifications réussies\n", lsim::test::checks() - lsim::test::failures(),
                 lsim::test::checks());
     return lsim::test::failures() == 0 ? 0 : 1;

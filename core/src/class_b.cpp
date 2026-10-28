@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lsim/class_b.hpp"
 
-#include <array>
-
 #include "lsim/crypto.hpp"
 
 namespace lsim::lorawan::classb {
@@ -11,6 +9,8 @@ namespace {
 
 constexpr std::size_t kTimeLen = 4;
 constexpr std::size_t kCrcLen = 2;
+constexpr std::size_t kGwLen = 7;  // InfoDesc (1) + Info (6)
+constexpr double kCoordScale = 8388608.0;  // 2^23
 
 void put_le32(std::uint8_t* p, std::uint32_t v) {
     p[0] = static_cast<std::uint8_t>(v);
@@ -22,6 +22,14 @@ void put_le32(std::uint8_t* p, std::uint32_t v) {
 std::uint32_t get_le32(const std::uint8_t* p) {
     return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
            (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
+// Entier de 24 bits en complément à deux, little-endian.
+std::int32_t get_s24le(const std::uint8_t* p) {
+    std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
+                      (static_cast<std::uint32_t>(p[2]) << 16);
+    if ((v & 0x800000u) != 0) v |= 0xFF000000u;
+    return static_cast<std::int32_t>(v);
 }
 
 }  // namespace
@@ -48,6 +56,36 @@ ClassBStatus decode_beacon(const std::uint8_t* in, std::size_t len, std::uint8_t
         in[common] | (static_cast<std::uint16_t>(in[common + 1]) << 8));
     if (expected != received) return ClassBStatus::CrcError;
     out.time_s = get_le32(in + rfu_len);
+    return ClassBStatus::Ok;
+}
+
+ClassBStatus decode_beacon_full(const std::uint8_t* in, std::size_t len, std::uint8_t rfu_len,
+                                std::uint8_t gw_rfu_len, BeaconCommon& common, GatewayInfo& gw) {
+    if (gw_rfu_len > 1) return ClassBStatus::InvalidParameter;
+    gw = GatewayInfo{};
+    const ClassBStatus c = decode_beacon(in, len, rfu_len, common);
+    if (c != ClassBStatus::Ok) return c;
+    const std::size_t common_len = rfu_len + kTimeLen + kCrcLen;
+    if (len == common_len) return ClassBStatus::Ok;  // pas de GwSpecific
+    const std::size_t gw_total = kGwLen + gw_rfu_len + kCrcLen;
+    if (len != common_len + gw_total) return ClassBStatus::InvalidParameter;
+
+    const std::uint8_t* g = in + common_len;
+    const std::size_t signed_len = kGwLen + gw_rfu_len;
+    const std::uint16_t expected = beacon_crc16(g, signed_len);
+    const std::uint16_t received =
+        static_cast<std::uint16_t>(g[signed_len] | (static_cast<std::uint16_t>(g[signed_len + 1]) << 8));
+    if (expected != received) return ClassBStatus::CrcError;
+
+    gw.present = true;
+    gw.info_desc = g[0];
+    if (gw.info_desc <= 2) {
+        const std::int32_t lat = get_s24le(g + 1);
+        const std::int32_t lng = get_s24le(g + 4);
+        gw.has_coordinates = true;
+        gw.latitude_deg = static_cast<double>(lat) * 90.0 / kCoordScale;
+        gw.longitude_deg = static_cast<double>(lng) * 180.0 / kCoordScale;
+    }
     return ClassBStatus::Ok;
 }
 
@@ -80,6 +118,17 @@ ClassBStatus ping_offset(std::uint32_t beacon_time_s, std::uint32_t dev_addr,
     return ClassBStatus::Ok;
 }
 
+ClassBStatus us902_channel_index(std::uint32_t beacon_time_s, std::uint8_t& index) {
+    index = static_cast<std::uint8_t>((beacon_time_s / 128u) % kUs902Channels);
+    return ClassBStatus::Ok;
+}
+
+ClassBStatus us902_channel_frequency_hz(std::uint8_t index, std::uint32_t& freq_hz) {
+    if (index >= kUs902Channels) return ClassBStatus::InvalidParameter;
+    freq_hz = 923'300'000u + 600'000u * index;
+    return ClassBStatus::Ok;
+}
+
 ClassBStatus on_beacon(DeviceClassB& d, std::uint64_t rx_ns, std::uint32_t beacon_time_s) {
     if (d.synchronized && rx_ns < d.last_beacon_rx_ns) return ClassBStatus::InvalidParameter;
     d.synchronized = true;
@@ -109,6 +158,7 @@ ClassBStatus next_ping_slot(const DeviceClassB& d, std::uint64_t now_ns, PingSlo
     if (!d.synchronized) return ClassBStatus::NotSynchronized;
     if (now_ns < d.last_beacon_rx_ns) return ClassBStatus::InvalidParameter;
     if (now_ns - d.last_beacon_rx_ns >= kBeaconlessNs) return ClassBStatus::BeaconLost;
+    if (d.clock_drift_ppm > kMaxDriftPpm) return ClassBStatus::InvalidParameter;
 
     std::uint32_t ping_nb = 0;
     std::uint32_t ping_period = 0;
@@ -144,6 +194,10 @@ ClassBStatus next_ping_slot(const DeviceClassB& d, std::uint64_t now_ns, PingSlo
             }
         }
         if (found) {
+            // Dérive : fenêtre élargie proportionnellement au temps écoulé depuis le beacon.
+            const std::uint64_t elapsed = best.start_ns - d.last_beacon_rx_ns;
+            const std::uint64_t drift_num = elapsed * d.clock_drift_ppm;  // ≤ 7,2e15 : pas de débordement
+            best.window_half_ns = (drift_num + 999'999ull) / 1'000'000ull;
             out = best;
             return ClassBStatus::Ok;
         }
