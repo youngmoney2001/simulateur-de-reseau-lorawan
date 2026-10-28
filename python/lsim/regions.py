@@ -205,7 +205,10 @@ AU915_CHANNELS = (
     + tuple(_ch(923_300_000 + 600_000 * k, 500_000, 8, 13, uplink=False) for k in range(8))
 )
 AU915 = RegionProfile(
-    code="AU915", source=RP002 + " §2.8.2–2.8.3 (PIRE 30 dBm ; UplinkDwellTime, 20 s recommandées)",
+    code="AU915",
+    source=(RP002 + " §2.8.2–2.8.3 ; ACMA, Radiocommunications (LIPD) Class Licence 2015, compilation n° 10 "
+            "(F2023C00524), item 58 : modulation numérique 915–928 MHz, 1 W EIRP, PSD ≤ 25 mW par 3 kHz ; "
+            "item 54 : FH, ≥ 20 fréquences"),
     channels=AU915_CHANNELS, power_basis="eirp", recommended_interval_s=20.0,
 )
 
@@ -236,16 +239,20 @@ KR920 = RegionProfile(
 )
 
 # IN865-867 (§2.12.2, §2.12.3) : canaux par défaut, aucune limite de dwell time ni de duty cycle.
-# PIRE maximale non extraite de RP002 : à compléter depuis le texte réglementaire indien.
+# PIRE : GSR 564(E) du 30 juillet 2008 (DoT) : 1 W émetteur, 4 W ERP, carrier 200 kHz.
+# La limite ERP 4 W est convertie en EIRP (EIRP = ERP + 2,15 dB). La limite 1 W conduite
+# ne peut pas être vérifiée sans gain d'antenne : elle reste à respecter côté matériel.
+IN865_MAX_EIRP_DBM = mw_to_dbm(4000.0) + ANTENNA_GAIN_DBI_TO_DBD   # ≈ 38,17 dBm
 IN865 = RegionProfile(
     code="IN865",
-    source=RP002 + " §2.12.2–2.12.3 (canaux par défaut ; PIRE à compléter, texte indien)",
+    source=(RP002 + " §2.12.2–2.12.3 (canaux par défaut) ; GSR 564(E) du 30/07/2008 du DoT Inde "
+            "(extrait de la gazette officielle : 1 W émetteur, 4 W ERP, 200 kHz)"),
     channels=(
-        _ch(865_062_500, 125_000, 0, 5, eirp=None, default=True),
-        _ch(865_402_500, 125_000, 0, 5, eirp=None, default=True),
-        _ch(865_985_000, 125_000, 0, 5, eirp=None, default=True),
+        _ch(865_062_500, 125_000, 0, 5, eirp=IN865_MAX_EIRP_DBM, default=True),
+        _ch(865_402_500, 125_000, 0, 5, eirp=IN865_MAX_EIRP_DBM, default=True),
+        _ch(865_985_000, 125_000, 0, 5, eirp=IN865_MAX_EIRP_DBM, default=True),
     ),
-    power_basis=None,
+    power_basis="eirp",
 )
 
 # RU864-870 (§2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5, duty cycle < 1 %).

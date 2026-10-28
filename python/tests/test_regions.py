@@ -196,11 +196,30 @@ def test_kr920_eirp_by_subrange_and_defaults():
     assert [c.freq_hz for c in KR920.channels if c.is_default] == [922_100_000, 922_300_000, 922_500_000]
 
 
-def test_in865_and_ru864_defaults_without_documented_power():
+def test_in865_defaults_and_gazette_power_limit():
     assert [c.freq_hz for c in IN865.channels] == [865_062_500, 865_402_500, 865_985_000]
-    assert all(c.max_eirp_dbm is None for c in IN865.channels)
+    # GSR 564(E) : 4 W ERP => EIRP = 10 log10(4000) + 2,15 ≈ 38,17 dBm
+    assert IN865.channels[0].max_eirp_dbm == pytest.approx(38.17, abs=0.01)
+    assert IN865.power_basis == "eirp"
+    assert "GSR 564(E)" in IN865.source
+
+
+def test_ru864_defaults_without_documented_power():
+    # Annexe 11 de la décision GKRF 07-20-03-001 non lue : PIRE laissée à None.
     assert [c.freq_hz for c in RU864.channels] == [868_900_000, 869_100_000]
     assert all(c.max_eirp_dbm is None for c in RU864.channels)
+
+
+def test_au915_source_cites_acma_item_58():
+    assert "F2023C00524" in AU915.source
+    assert "item 58" in AU915.source
+    assert AU915.channel_at(915_200_000).max_eirp_dbm == pytest.approx(30.0)
+
+
+def test_scenario_in865_power_limit():
+    _group(region="IN865", channel_freq_hz=865_062_500, tx_power_dbm=30.0)
+    with pytest.raises(ValueError):
+        _group(region="IN865", channel_freq_hz=865_062_500, tx_power_dbm=39.0)
 
 
 def test_every_profile_is_registered():
