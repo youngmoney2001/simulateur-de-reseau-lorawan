@@ -204,10 +204,15 @@ def test_in865_defaults_and_gazette_power_limit():
     assert "GSR 564(E)" in IN865.source
 
 
-def test_ru864_defaults_without_documented_power():
-    # Annexe 11 de la décision GKRF 07-20-03-001 non lue : PIRE laissée à None.
+def test_ru864_defaults_and_annex11_power():
+    # Annexe 11 (décision GKRF 07-20-03-001) : 25 mW ERP => 16,13 dBm EIRP.
     assert [c.freq_hz for c in RU864.channels] == [868_900_000, 869_100_000]
-    assert all(c.max_eirp_dbm is None for c in RU864.channels)
+    assert all(c.max_eirp_dbm == pytest.approx(16.13, abs=0.01) for c in RU864.channels)
+    # Duty cycle appliqué par prudence (à confirmer) sur 864–865 et 868,7–869,2 MHz.
+    assert RU864.duty_cycle_for(864_500_000, 16.0) == pytest.approx(0.001)
+    assert RU864.duty_cycle_for(868_900_000, 16.0) == pytest.approx(0.001)
+    with pytest.raises(ValueError):
+        RU864.duty_cycle_for(865_500_000, 16.0)  # 865–868 MHz : non couvert par l'annexe 11 lue
 
 
 def test_au915_source_cites_acma_item_58():
@@ -224,7 +229,26 @@ def test_scenario_in865_power_limit():
 
 def test_every_profile_is_registered():
     from lsim.regions import PROFILES
-    assert set(PROFILES) == {"EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"}
+    assert set(PROFILES) == {"EU868", "US915", "AU915", "AS923", "AS923JP", "KR920", "IN865", "RU864"}
+
+
+def test_as923jp_channels_power_and_zone_duty():
+    from lsim.regions import AS923JP
+    assert [c.freq_hz for c in AS923JP.channels] == [923_200_000, 923_400_000]
+    # 20 mW + 3 dBi => 16,01 dBm EIRP
+    assert AS923JP.channels[0].max_eirp_dbm == pytest.approx(16.01, abs=0.01)
+    # 922,4–923,4 MHz : 360 s/h (10 %), à confirmer pour la partie 2
+    assert AS923JP.duty_cycle_for(923_200_000, 16.0) == pytest.approx(0.10)
+    # 920,5–922,4 MHz : pas de limite de duty cycle (écoute de porteuse non modélisée)
+    assert AS923JP.duty_cycle_for(921_000_000, 16.0) == pytest.approx(1.0)
+    assert "ARIB STD-T108" in AS923JP.source
+
+
+def test_scenario_as923jp_power_limit():
+    _group(region="AS923JP", channel_freq_hz=923_200_000, tx_power_dbm=16.0, duty_cycle=1.0)
+    assert _group(region="AS923JP", channel_freq_hz=923_200_000, tx_power_dbm=16.0).effective_duty_cycle == pytest.approx(0.10)
+    with pytest.raises(ValueError):
+        _group(region="AS923JP", channel_freq_hz=923_200_000, tx_power_dbm=20.0)
 
 
 # ------------------------------------------- liaison scénario -> canaux

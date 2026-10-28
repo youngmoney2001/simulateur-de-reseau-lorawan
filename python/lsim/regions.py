@@ -256,15 +256,46 @@ IN865 = RegionProfile(
 )
 
 # RU864-870 (§2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5, duty cycle < 1 %).
-# Sous-bandes et PIRE par le texte russe : à compléter.
+# Annexe 11 de la décision GKRF 07-20-03-001 (texte consolidé relu sur Garant et meganorm) :
+#   864–865 MHz : 25 mW ERP, 0,1 % ou LBT ; 868,7–869,2 MHz : 25 mW ERP, LBT (duty cycle non lu).
+# Par prudence, le duty cycle 0,1 % est appliqué aux deux sous-bandes (à confirmer).
+RU_MAX_ERP_DBM = mw_to_dbm(25.0)
+RU_MAX_EIRP_DBM = RU_MAX_ERP_DBM + ANTENNA_GAIN_DBI_TO_DBD
 RU864 = RegionProfile(
     code="RU864",
-    source=RP002 + " §2.13.2–2.13.3 (canaux par défaut ; sous-bandes et PIRE à compléter, texte russe)",
+    source=(RP002 + " §2.13.2–2.13.3 (canaux par défaut) ; décision GKRF 07-20-03-001, annexe 11 "
+            "(864–865 MHz et 868,7–869,2 MHz : 25 mW ERP ; duty cycle 0,1 % appliqué par prudence, à confirmer)"),
     channels=(
-        _ch(868_900_000, 125_000, 0, 5, eirp=None, default=True),
-        _ch(869_100_000, 125_000, 0, 5, eirp=None, default=True),
+        _ch(868_900_000, 125_000, 0, 5, eirp=RU_MAX_EIRP_DBM, default=True),
+        _ch(869_100_000, 125_000, 0, 5, eirp=RU_MAX_EIRP_DBM, default=True),
     ),
-    power_basis=None,
+    sub_bands=(
+        SubBand("RU-864", 864_000_000, 865_000_000, 0.001, RU_MAX_ERP_DBM),
+        SubBand("RU-868.7", 868_700_000, 869_200_000, 0.001, RU_MAX_ERP_DBM),
+    ),
+    power_basis="eirp",
+)
+
+# AS923 Japon (ARIB STD-T108 v1.3, partie 2, « stations spécifiées de faible puissance ») :
+# 920,5–929,7 MHz, 20 mW de puissance d'antenne avec écoute de porteuse, antenne ≤ 3 dBi.
+# PIRE maximale retenue : 20 mW + 3 dBi. La zone 922,4–923,4 MHz est limitée à 360 s d'émission
+# par heure (partie 1 et texte partie 2 lu partiellement) : appliqué par prudence, à confirmer.
+# L'écoute de porteuse (5 ms ou 128 µs selon la zone) n'est pas modélisée.
+JP_MAX_EIRP_DBM = mw_to_dbm(20.0) + 3.0
+AS923JP = RegionProfile(
+    code="AS923JP",
+    source=("ARIB STD-T108 v1.3 (2019), partie 2 : 20 mW avec écoute de porteuse, antenne ≤ 3 dBi ; "
+            "360 s/h pour 922,4–923,4 MHz (à confirmer pour la partie 2) ; "
+            "canaux 923,2 et 923,4 MHz de RP002 §2.10.2"),
+    channels=(
+        _ch(923_200_000, 125_000, 0, 5, eirp=JP_MAX_EIRP_DBM, default=True),
+        _ch(923_400_000, 125_000, 0, 5, eirp=JP_MAX_EIRP_DBM, default=True),
+    ),
+    sub_bands=(
+        SubBand("JP-920.5", 920_500_000, 922_400_000, 1.0, erp_from_eirp(JP_MAX_EIRP_DBM)),
+        SubBand("JP-922.4", 922_400_000, 923_500_000, 0.10, erp_from_eirp(JP_MAX_EIRP_DBM)),
+    ),
+    power_basis="eirp",
 )
 
 # Profils livrés. Toute région ajoutée doit passer par load_profile ou RegionProfile avec sa source.
@@ -276,4 +307,5 @@ PROFILES: dict[str, RegionProfile] = {
     "KR920": KR920,
     "IN865": IN865,
     "RU864": RU864,
+    "AS923JP": AS923JP,
 }
