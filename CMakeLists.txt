@@ -29,6 +29,7 @@ add_library(lsim_objects OBJECT
     core/src/c_api.cpp
     core/src/lora_sensitivity.cpp
     core/src/materials.cpp
+    core/src/energy.cpp
     core/src/link_budget.cpp
     core/src/lorawan_frame.cpp
     core/src/crypto.cpp
@@ -93,6 +94,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_downlink.cpp
         core/tests/test_environment.cpp
         core/tests/test_materials.cpp
+        core/tests/test_energy.cpp
     )
     target_link_libraries(lsim_tests PRIVATE mbedcrypto)
     target_compile_options(lsim_tests PRIVATE -Wall -Wextra -Wpedantic)

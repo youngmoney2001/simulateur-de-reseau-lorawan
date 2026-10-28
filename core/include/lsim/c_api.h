@@ -79,6 +79,18 @@ LSIM_API int32_t lsim_material_traversal_loss_db(uint32_t material_id,
                                                  double* out_db,
                                                  int32_t* out_extrapolated);
 
+/* Bilan énergétique d'un dispositif (profil par défaut, voir energy.hpp).
+ * Durées en ns entiers ; le reste de total_ns est en veille. */
+LSIM_API int32_t lsim_energy_device(double tx_power_dbm, uint32_t bandwidth_hz,
+                                    uint64_t tx_ns, uint64_t rx_ns, uint64_t mcu_active_ns,
+                                    uint64_t total_ns, double* out_energy_j,
+                                    double* out_avg_current_ua);
+
+/* Paramètres du profil par défaut (transparence : sources dans energy.hpp). */
+LSIM_API int32_t lsim_energy_profile(double* supply_v, double* rx_ma_125khz,
+                                     double* rx_ma_250khz, double* rx_ma_500khz,
+                                     double* sleep_ua, double* mcu_run_ma);
+
 /* Perte en espace libre (dB) : distance en m, fréquence en Hz. */
 LSIM_API int32_t lsim_free_space_path_loss_db(double distance_m,
                                               double frequency_hz,

@@ -52,7 +52,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 ## Jalon 3 — Scénarios, résultats et analyse
 - ✅ Scénarios YAML validés (Pydantic, champs inconnus refusés, bornes 10 000 dispositifs / 5 000 000 transmissions), déploiement déterministe par graine, hash SHA-256 du scénario
 - ✅ Export Parquet par dispositif avec métadonnées de traçabilité ; CLI `python -m lsim run`
-- 🔧 Métriques avancées : ✅ temps d'antenne par dispositif (cœur, API C, Parquet) ; ✅ charge passerelle (temps occupé en union, pic de trames simultanées, taux d'occupation) ; ✅ latence = temps d'antenne (aucune file ni backhaul modélisés) ; ⬜ énergie (exige les courants réels de l'émetteur, non inventés : données fabricant requises)
+- 🔧 Métriques avancées : ✅ temps d'antenne par dispositif (cœur, API C, Parquet) ; ✅ charge passerelle (temps occupé en union, pic de trames simultanées, taux d'occupation) ; ✅ latence = temps d'antenne (aucune file ni backhaul modélisés) ; ✅ énergie par dispositif (`core/src/energy.cpp`, `lsim.energy`) : courants SX1276 (Tx Table 6 typ., Rx LoRa bande 1 Table 10, veille 0,2 µA) et MCU de référence STM32L072 (fiche ST, valeurs « à partir de » : 93 µA/MHz, 0,43 µA Stop) ; alimentation 3,3 V = hypothèse ; Tx à 14 dBm estimé au point 17 dBm (87 mA, conservateur) ; fenêtres Rx et traitement MCU non modélisés par défaut (durées fournies par l'appelant) ; ⬜ choix du MCU et table « Run » à 32 MHz à confirmer ; ⬜ intégration au moteur (aujourd'hui calcul à partir de `airtime_ns` exporté)
 - ✅ Notebook pour les bureaux d'études (`notebooks/analyse_scenario.ipynb`, exécuté : indicateurs, PDR par distance, sensibilité au shadowing, avec note sur l'effet de capture)
 
 ## Jalon 4 — Visualisation 3D et produit
