@@ -75,6 +75,7 @@ class _CEndDevice(ctypes.Structure):
         ("start_offset_ns", ctypes.c_int64),
         ("period_ns", ctypes.c_int64),
         ("messages", ctypes.c_uint32),
+        ("duty_cycle", ctypes.c_double),
     ]
 
 

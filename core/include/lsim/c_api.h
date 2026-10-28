@@ -216,6 +216,7 @@ typedef struct lsim_end_device {
     int64_t  start_offset_ns;    /* >= 0 */
     int64_t  period_ns;          /* > 0 */
     uint32_t messages;           /* >= 1 */
+    double   duty_cycle;         /* ]0, 1] ; 1 = sans limite */
 } lsim_end_device;
 
 typedef struct lsim_gateway {

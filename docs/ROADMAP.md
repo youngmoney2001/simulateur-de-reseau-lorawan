@@ -23,7 +23,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
 - ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864
-- ⬜ Duty cycle et temps d'attente réglementaires
+- 🔧 Duty cycle : ✅ mécanisme (rapport cyclique par dispositif, attente airtime·(1−d)/d, scénario `duty_cycle` par groupe) ; ⬜ valeurs réglementaires par région (dans les profils P6)
 
 ## Jalon 2 — MAC LoRaWAN 1.1
 - ✅ Codec de trame (MHDR, FHDR, FPort, FRMPayload, MIC) : encodage canonique, bornes vérifiées

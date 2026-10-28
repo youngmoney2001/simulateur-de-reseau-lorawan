@@ -42,6 +42,9 @@ SimStatus validate_device(const EndDeviceSpec& d) {
     if (d.period_ns <= 0 || d.start_offset_ns < 0 || d.messages == 0) {
         return SimStatus::InvalidInput;
     }
+    if (!finite(d.duty_cycle) || d.duty_cycle <= 0.0 || d.duty_cycle > 1.0) {
+        return SimStatus::InvalidInput;
+    }
     return SimStatus::Ok;
 }
 
@@ -214,11 +217,29 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     EventQueue queue(static_cast<std::size_t>(total_tx));
     for (std::size_t i = 0; i < device_count; ++i) {
         const EndDeviceSpec& d = devices[i];
+        // Le rapport cyclique est propre à chaque dispositif : le décalage se
+        // calcule ici, dans l'ordre de ses propres émissions.
+        const double off_factor = (1.0 - d.duty_cycle) / d.duty_cycle;
+        SimTime prev_end = 0;
         for (std::uint32_t k = 0; k < d.messages; ++k) {
-            const SimTime t = d.start_offset_ns + static_cast<SimTime>(k) * d.period_ns;
+            const double nominal_d = static_cast<double>(d.start_offset_ns) +
+                                     static_cast<double>(k) * static_cast<double>(d.period_ns);
+            if (nominal_d > kMaxHorizonNs) {
+                return SimStatus::InvalidInput;
+            }
+            SimTime t = static_cast<SimTime>(nominal_d);
+            if (k > 0 && off_factor > 0.0) {
+                const double earliest_d = static_cast<double>(prev_end) +
+                                          std::round(static_cast<double>(airtime[i]) * off_factor);
+                if (earliest_d > kMaxHorizonNs) {
+                    return SimStatus::InvalidInput;
+                }
+                t = std::max(t, static_cast<SimTime>(earliest_d));
+            }
             if (!queue.push(t, kKindTxStart, static_cast<std::uint32_t>(i))) {
                 return SimStatus::QueueFull;
             }
+            prev_end = t + airtime[i];
             ++per_device[i].sent;
         }
     }

@@ -39,8 +39,11 @@ class EndDevice:
     start_offset_ns: int = 0
     period_ns: int = 60 * _NS_PER_MIN
     messages: int = 1
+    duty_cycle: float = 1.0  # rapport cyclique maximal, ]0, 1] ; 1 = sans limite
 
     def __post_init__(self) -> None:
+        if not 0.0 < self.duty_cycle <= 1.0:
+            raise ValueError("duty_cycle doit être dans ]0, 1]")
         for name in ("x_m", "y_m", "tx_power_dbm"):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f"{name} doit être un nombre fini")
@@ -202,6 +205,7 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         c.start_offset_ns = d.start_offset_ns
         c.period_ns = d.period_ns
         c.messages = d.messages
+        c.duty_cycle = d.duty_cycle
 
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,

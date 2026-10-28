@@ -259,6 +259,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
             s.messages = d.messages;
+            s.duty_cycle = d.duty_cycle;
         }
         lsim::sim::GatewaySpec g;
         g.position.x_m = gateway->x_m;
@@ -372,6 +373,7 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
             s.messages = d.messages;
+            s.duty_cycle = d.duty_cycle;
         }
         lsim::sim::GatewaySpec g;
         g.position.x_m = gateway->x_m;

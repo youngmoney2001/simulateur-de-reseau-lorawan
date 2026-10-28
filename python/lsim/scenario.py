@@ -81,6 +81,7 @@ class GroupModel(_Strict):
     tx_power_dbm: float = 14.0
     period_s: float = Field(600.0, gt=0)
     messages: int = Field(1, ge=1)
+    duty_cycle: float = Field(1.0, gt=0, le=1.0)
     start_spread_s: float = Field(0.0, ge=0)
 
     @model_validator(mode="after")
@@ -172,7 +173,10 @@ class Scenario:
             dumped.pop("environment", None)
         elif environment is not None and environment.terrain is not None:
             dumped["environment"]["terrain_sha256"] = environment.terrain.sha256
-        # Shadowing désactivé : champs absents du hash (scénarios antérieurs inchangés).
+        # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
+        for group in dumped.get("groups", []):
+            if group.get("duty_cycle") == 1.0:
+                group.pop("duty_cycle", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
@@ -202,7 +206,8 @@ class Scenario:
                 devices.append(EndDevice(
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
-                    start_offset_ns=offset, period_ns=period_ns, messages=g.messages))
+                    start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
+                    duty_cycle=g.duty_cycle))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

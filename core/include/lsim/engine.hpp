@@ -63,7 +63,13 @@ struct EndDeviceSpec {
     SimTime start_offset_ns = 0;
     SimTime period_ns = 60'000'000'000;  // 60 s
     std::uint32_t messages = 1;          // nombre de trames émises
+    // Rapport cyclique maximal (0 < d <= 1, 1 = sans limite). Après chaque
+    // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
+    double duty_cycle = 1.0;
 };
+
+// Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.
+inline constexpr double kMaxHorizonNs = 4.0e18;
 
 struct GatewaySpec {
     Position position;

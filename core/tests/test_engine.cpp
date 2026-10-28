@@ -260,9 +260,49 @@ void test_gateway_load_without_traffic() {
     CHECK_NEAR(empty.gateway_utilization, 0.0, 0.0);
 }
 
+void test_duty_cycle_spacing() {
+    // Trois trames espacées de 100 ms ; rapport cyclique 10 % : chaque trame ne
+    // peut commencer qu'après fin + 9 x airtime. Début de la 3e : 20 x airtime.
+    EndDeviceSpec one = device_at(10.0, 7, 0);
+    one.messages = 3;
+    one.period_ns = 100'000'000;
+    one.duty_cycle = 0.1;
+    const EndDeviceSpec d[] = {one};
+    DeviceStats st[1];
+    SimulationStats tot;
+    CHECK_EQ(static_cast<int>(simulate_uplinks(d, 1, gateway(), PropagationSpec{}, st, tot)),
+             static_cast<int>(SimStatus::Ok));
+    const auto a = static_cast<SimTime>(st[0].airtime_ns / 3);
+    CHECK_EQ(tot.observation_ns, 21 * a);
+    CHECK_EQ(tot.gateway_peak_concurrent, std::uint64_t{1});
+
+    // Sans limite : pas de décalage, dernière trame à 200 ms.
+    EndDeviceSpec free_dev = one;
+    free_dev.duty_cycle = 1.0;
+    const EndDeviceSpec f[] = {free_dev};
+    SimulationStats tot2;
+    simulate_uplinks(f, 1, gateway(), PropagationSpec{}, st, tot2);
+    CHECK_EQ(tot2.observation_ns, 200'000'000 + a);
+}
+
+void test_duty_cycle_invalid_inputs() {
+    SimulationStats tot;
+    DeviceStats st[1];
+    const double bad[] = {0.0, -0.5, 1.5, std::numeric_limits<double>::quiet_NaN()};
+    for (double dc : bad) {
+        EndDeviceSpec e = device_at(10.0, 7, 0);
+        e.duty_cycle = dc;
+        const EndDeviceSpec d[] = {e};
+        CHECK_EQ(static_cast<int>(simulate_uplinks(d, 1, gateway(), PropagationSpec{}, st, tot)),
+                 static_cast<int>(SimStatus::InvalidInput));
+    }
+}
+
 }  // namespace
 
 void run_engine_tests() {
+    test_duty_cycle_spacing();
+    test_duty_cycle_invalid_inputs();
     test_gateway_load_metrics();
     test_gateway_load_without_traffic();
     test_shadowing_sample_properties();
