@@ -46,6 +46,12 @@ _KIND_DL_CHANNEL_REQ = 22
 _KIND_DL_CHANNEL_ANS = 23
 _KIND_ADR_PARAM_SETUP_REQ = 24
 _KIND_ADR_PARAM_SETUP_ANS = 25
+_KIND_PING_SLOT_INFO_REQ = 26
+_KIND_PING_SLOT_INFO_ANS = 27
+_KIND_PING_SLOT_CHANNEL_REQ = 28
+_KIND_PING_SLOT_CHANNEL_ANS = 29
+_KIND_BEACON_FREQ_REQ = 30
+_KIND_BEACON_FREQ_ANS = 31
 
 MAX_FREQ_100HZ = 0xFFFFFF
 
@@ -290,6 +296,64 @@ class AdrParamSetupAns:
 
 
 @dataclass(frozen=True)
+class PingSlotInfoReq:
+    """Uplink : periodicity (0..7) ; période ping effective 0,96 x 2**periodicity s."""
+
+    periodicity: int
+
+    def __post_init__(self) -> None:
+        if _uint("periodicity", self.periodicity, 3) > 7:
+            raise ValueError("periodicity doit être compris entre 0 et 7")
+
+
+@dataclass(frozen=True)
+class PingSlotInfoAns:
+    """Downlink, sans charge utile."""
+
+
+@dataclass(frozen=True)
+class PingSlotChannelReq:
+    """Downlink : fréquence du canal ping en pas de 100 Hz (0 = plan par défaut) et index de débit (0..15)."""
+
+    freq_100hz: int
+    dr: int
+
+    def __post_init__(self) -> None:
+        _uint("freq_100hz", self.freq_100hz, 24)
+        if _uint("dr", self.dr, 4) > 15:
+            raise ValueError("dr doit être compris entre 0 et 15")
+        if 0 < self.freq_100hz < 1_000_000:
+            raise ValueError("freq_100hz : fréquence inférieure à 100 MHz réservée")
+
+
+@dataclass(frozen=True)
+class PingSlotChannelAns:
+    """Uplink : channel_freq_ok (bit 0) et data_rate_ok (bit 1)."""
+
+    channel_freq_ok: bool = False
+    data_rate_ok: bool = False
+
+
+@dataclass(frozen=True)
+class BeaconFreqReq:
+    """Downlink : fréquence de balise en pas de 100 Hz (0 = plan par défaut)."""
+
+    freq_100hz: int
+
+    def __post_init__(self) -> None:
+        _uint("freq_100hz", self.freq_100hz, 24)
+        if 0 < self.freq_100hz < 1_000_000:
+            raise ValueError("freq_100hz : fréquence inférieure à 100 MHz réservée")
+
+
+@dataclass(frozen=True)
+class BeaconFreqAns:
+    """Uplink : beacon_freq_ok (bit 0) ; False si l'appareil conserve l'ancienne fréquence."""
+
+    beacon_freq_ok: bool = False
+
+
+@dataclass(frozen=True)
 class RejoinParamSetupReq:
     """Downlink : rejoin type 0 au plus tous les 2**C+4 uplinks et 2**T+10 s (C = max_count_n, T = max_time_n)."""
 
@@ -338,6 +402,8 @@ MacCommand = Union[
     RxTimingSetupReq, RxTimingSetupAns, DeviceTimeReq, DeviceTimeAns, ForceRejoinReq,
     RejoinParamSetupReq, RejoinParamSetupAns, DlChannelReq, DlChannelAns,
     AdrParamSetupReq, AdrParamSetupAns,
+    PingSlotInfoReq, PingSlotInfoAns, PingSlotChannelReq, PingSlotChannelAns,
+    BeaconFreqReq, BeaconFreqAns,
 ]
 
 
@@ -414,6 +480,24 @@ def _to_c(cmd: MacCommand) -> _CMacCommand:
         c.adr_limit_exp, c.adr_delay_exp = cmd.limit_exp, cmd.delay_exp
     elif isinstance(cmd, AdrParamSetupAns):
         c.kind = _KIND_ADR_PARAM_SETUP_ANS
+    elif isinstance(cmd, PingSlotInfoReq):
+        c.kind = _KIND_PING_SLOT_INFO_REQ
+        c.ping_periodicity = cmd.periodicity
+    elif isinstance(cmd, PingSlotInfoAns):
+        c.kind = _KIND_PING_SLOT_INFO_ANS
+    elif isinstance(cmd, PingSlotChannelReq):
+        c.kind = _KIND_PING_SLOT_CHANNEL_REQ
+        c.freq_100hz, c.data_rate = cmd.freq_100hz, cmd.dr
+    elif isinstance(cmd, PingSlotChannelAns):
+        c.kind = _KIND_PING_SLOT_CHANNEL_ANS
+        c.ack_channel_freq = int(cmd.channel_freq_ok)
+        c.ack_data_rate = int(cmd.data_rate_ok)
+    elif isinstance(cmd, BeaconFreqReq):
+        c.kind = _KIND_BEACON_FREQ_REQ
+        c.freq_100hz = cmd.freq_100hz
+    elif isinstance(cmd, BeaconFreqAns):
+        c.kind = _KIND_BEACON_FREQ_ANS
+        c.ack_beacon_freq = int(cmd.beacon_freq_ok)
     elif isinstance(cmd, DlChannelReq):
         c.kind = _KIND_DL_CHANNEL_REQ
         c.ch_index, c.freq_100hz = cmd.ch_index, cmd.freq_100hz
@@ -474,6 +558,18 @@ def _from_c(c: _CMacCommand) -> MacCommand:
         return AdrParamSetupReq(c.adr_limit_exp, c.adr_delay_exp)
     if k == _KIND_ADR_PARAM_SETUP_ANS:
         return AdrParamSetupAns()
+    if k == _KIND_PING_SLOT_INFO_REQ:
+        return PingSlotInfoReq(c.ping_periodicity)
+    if k == _KIND_PING_SLOT_INFO_ANS:
+        return PingSlotInfoAns()
+    if k == _KIND_PING_SLOT_CHANNEL_REQ:
+        return PingSlotChannelReq(c.freq_100hz, c.data_rate)
+    if k == _KIND_PING_SLOT_CHANNEL_ANS:
+        return PingSlotChannelAns(bool(c.ack_channel_freq), bool(c.ack_data_rate))
+    if k == _KIND_BEACON_FREQ_REQ:
+        return BeaconFreqReq(c.freq_100hz)
+    if k == _KIND_BEACON_FREQ_ANS:
+        return BeaconFreqAns(bool(c.ack_beacon_freq))
     if k == _KIND_DL_CHANNEL_REQ:
         return DlChannelReq(c.ch_index, c.freq_100hz)
     if k == _KIND_DL_CHANNEL_ANS:

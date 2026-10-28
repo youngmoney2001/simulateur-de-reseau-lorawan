@@ -164,7 +164,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, trunc, 3, size)),
                  static_cast<int>(MacStatus::MalformedPayload));
         // CID non implémenté (RXParamSetup 0x05) : refusé.
-        const std::uint8_t unknown[2] = {0x10, 0x00};  // PingSlotInfoReq : non implémenté
+        const std::uint8_t unknown[2] = {0x12, 0x00};  // BeaconTiming (déprécié) : non implémenté
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unknown, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
         CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, up, 0, size)),
@@ -225,8 +225,8 @@ void run_mac_commands_tests() {
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::MalformedPayload));
         CHECK_EQ(back.kind, std::uint8_t{0});
 
-        // CID non implémenté (PingSlotInfoReq 0x10).
-        const std::uint8_t rx[6] = {0x10, 0, 0, 0, 0, 0};  // PingSlotInfoReq : non implémenté
+        // CID non implémenté (BeaconTiming 0x12, déprécié).
+        const std::uint8_t rx[6] = {0x12, 0, 0, 0, 0, 0};  // BeaconTiming : non implémenté
         CHECK_EQ(lsim_mac_decode(rx, 6, LSIM_MAC_DOWNLINK, &back, &used),
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
 
@@ -343,7 +343,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(size, std::size_t{5});
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn + 5, 6, size)), static_cast<int>(MacStatus::Ok));
         CHECK_EQ(size, std::size_t{6});
-        const std::uint8_t unk[2] = {0x10, 0x00};
+        const std::uint8_t unk[2] = {0x12, 0x00};
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unk, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
     }
@@ -500,7 +500,68 @@ void run_mac_commands_tests() {
         const std::uint8_t rfu[2] = {0x0A, 0x04};
         CHECK_EQ(static_cast<int>(decode(rfu, 2, ab)), static_cast<int>(MacStatus::MalformedPayload));
     }
-    // --- Tailles et CID : DeviceTimeReq (up, 1), DeviceTimeAns (down, 6) ; 0x10 reste inconnu.
+    // --- Classe B : PingSlotInfoReq (up, periodicity 2:0), PingSlotChannelReq (down, freq 3 o + DR 3:0),
+    // PingSlotChannelAns (up, bit0 fréquence, bit1 débit), BeaconFreqReq (down), BeaconFreqAns (up, bit0).
+    {
+        Buf out{};
+        std::size_t len = 0;
+        PingSlotInfoReq pi;
+        pi.periodicity = 8;
+        CHECK_EQ(static_cast<int>(encode(pi, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        pi.periodicity = 7;
+        CHECK_EQ(static_cast<int>(encode(pi, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x07});
+        const std::uint8_t pi_rfu[2] = {0x10, 0x08};
+        PingSlotInfoReq back;
+        CHECK_EQ(static_cast<int>(decode(pi_rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+
+        PingSlotChannelReq pc;
+        pc.freq_100hz = 9'235'000;
+        pc.dr = 3;
+        CHECK_EQ(static_cast<int>(encode(pc, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{5});
+        CHECK_EQ(out[1], std::uint8_t{0x38});
+        CHECK_EQ(out[2], std::uint8_t{0xEA});
+        CHECK_EQ(out[3], std::uint8_t{0x8C});
+        CHECK_EQ(out[4], std::uint8_t{0x03});
+        PingSlotChannelReq pc_back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, pc_back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(pc_back.dr, std::uint8_t{3});
+        pc.dr = 16;
+        CHECK_EQ(static_cast<int>(encode(pc, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        pc.dr = 0;
+        pc.freq_100hz = 500'000;  // 50 MHz : réservé
+        CHECK_EQ(static_cast<int>(encode(pc, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        const std::uint8_t pc_rfu[5] = {0x11, 0x38, 0xEA, 0x8C, 0x13};
+        CHECK_EQ(static_cast<int>(decode(pc_rfu, 5, pc_back)), static_cast<int>(MacStatus::MalformedPayload));
+
+        PingSlotChannelAns pa;
+        pa.channel_freq_ok = false;
+        pa.data_rate_ok = true;
+        CHECK_EQ(static_cast<int>(encode(pa, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x02});
+        const std::uint8_t pa_rfu[2] = {0x11, 0x04};
+        PingSlotChannelAns pa_back;
+        CHECK_EQ(static_cast<int>(decode(pa_rfu, 2, pa_back)), static_cast<int>(MacStatus::MalformedPayload));
+
+        BeaconFreqReq bf;
+        bf.freq_100hz = 4'869'000;  // 486,9 MHz
+        CHECK_EQ(static_cast<int>(encode(bf, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{4});
+        BeaconFreqReq bf_back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, bf_back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(bf_back.freq_100hz, std::uint32_t{4'869'000});
+        bf.freq_100hz = 0;  // plan par défaut autorisé
+        CHECK_EQ(static_cast<int>(encode(bf, out, len)), static_cast<int>(MacStatus::Ok));
+        BeaconFreqAns ba;
+        ba.beacon_freq_ok = true;
+        CHECK_EQ(static_cast<int>(encode(ba, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x01});
+        const std::uint8_t ba_rfu[2] = {0x13, 0x02};
+        BeaconFreqAns ba_back;
+        CHECK_EQ(static_cast<int>(decode(ba_rfu, 2, ba_back)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- Tailles et CID : DeviceTimeReq (up, 1), DeviceTimeAns (down, 6) ; 0x12 (BeaconTiming, déprécié) reste inconnu.
     {
         std::size_t size = 0;
         const std::uint8_t dt_req[1] = {0x0D};
@@ -509,7 +570,7 @@ void run_mac_commands_tests() {
         const std::uint8_t dt_ans[6] = {0x0D, 0, 0, 0, 0, 0};
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dt_ans, 6, size)), static_cast<int>(MacStatus::Ok));
         CHECK_EQ(size, std::size_t{6});
-        const std::uint8_t ping[2] = {0x10, 0x00};
+        const std::uint8_t ping[2] = {0x12, 0x00};
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, ping, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
     }

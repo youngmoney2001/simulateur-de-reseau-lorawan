@@ -364,6 +364,12 @@ LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_pro
 #define LSIM_MAC_DL_CHANNEL_ANS         23  /* up : ack_channel_freq, ack_uplink_freq_exists */
 #define LSIM_MAC_ADR_PARAM_SETUP_REQ    24  /* down : adr_limit_exp, adr_delay_exp (0..15) */
 #define LSIM_MAC_ADR_PARAM_SETUP_ANS    25  /* up, sans charge */
+#define LSIM_MAC_PING_SLOT_INFO_REQ     26  /* up : ping_periodicity (0..7) */
+#define LSIM_MAC_PING_SLOT_INFO_ANS     27  /* down, sans charge */
+#define LSIM_MAC_PING_SLOT_CHANNEL_REQ  28  /* down : freq_100hz (0 = défaut), data_rate (0..15) */
+#define LSIM_MAC_PING_SLOT_CHANNEL_ANS  29  /* up : ack_channel_freq, ack_data_rate */
+#define LSIM_MAC_BEACON_FREQ_REQ        30  /* down : freq_100hz (0 = défaut) */
+#define LSIM_MAC_BEACON_FREQ_ANS        31  /* up : ack_beacon_freq */
 
 /* Commande à plat : seuls les champs du type indiqué par `kind` sont lus. */
 typedef struct lsim_mac_command {
@@ -405,6 +411,8 @@ typedef struct lsim_mac_command {
     uint8_t  ack_uplink_freq_exists; /* DlChannelAns : 0 ou 1 */
     uint8_t  adr_limit_exp;     /* ADRParamSetupReq : 0..15 (ADR_ACK_LIMIT = 2^x) */
     uint8_t  adr_delay_exp;     /* ADRParamSetupReq : 0..15 (ADR_ACK_DELAY = 2^x) */
+    uint8_t  ping_periodicity;  /* PingSlotInfoReq : 0..7 */
+    uint8_t  ack_beacon_freq;   /* BeaconFreqAns : 0 ou 1 */
 } lsim_mac_command;
 
 /* Plus grande commande MAC (CID compris) : 6 octets. */

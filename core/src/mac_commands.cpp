@@ -21,6 +21,9 @@ int payload_len(Direction dir, std::uint8_t cid) {
             case 0x0D: return 0;  // DeviceTimeReq
             case 0x0F: return 1;  // RejoinParamSetupAns
             case 0x0C: return 0;  // ADRParamSetupAns
+            case 0x10: return 1;  // PingSlotInfoReq
+            case 0x11: return 1;  // PingSlotChannelAns
+            case 0x13: return 1;  // BeaconFreqAns
             case 0x0B: return 1;  // RekeyInd
             default: return -1;
         }
@@ -38,6 +41,9 @@ int payload_len(Direction dir, std::uint8_t cid) {
         case 0x0E: return 2;  // ForceRejoinReq
         case 0x0F: return 1;  // RejoinParamSetupReq
         case 0x0C: return 1;  // ADRParamSetupReq
+        case 0x10: return 0;  // PingSlotInfoAns
+        case 0x11: return 4;  // PingSlotChannelReq
+        case 0x13: return 3;  // BeaconFreqReq
         case 0x0B: return 1;  // RekeyConf
         default: return -1;
     }
@@ -204,6 +210,50 @@ MacStatus encode(const AdrParamSetupReq& c, Buf& out, std::size_t& len) {
     out = {};
     out[0] = static_cast<std::uint8_t>(Cid::AdrParamSetup);
     out[1] = static_cast<std::uint8_t>((c.limit_exp << 4) | c.delay_exp);
+    len = 2;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const PingSlotInfoReq& c, Buf& out, std::size_t& len) {
+    if (c.periodicity > 7) return MacStatus::FieldOutOfRange;
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::PingSlotInfo);
+    out[1] = c.periodicity;
+    len = 2;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const PingSlotChannelReq& c, Buf& out, std::size_t& len) {
+    if (c.dr > 15 || !freq_valid(c.freq_100hz)) return MacStatus::FieldOutOfRange;
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::PingSlotChannel);
+    write_u24(&out[1], c.freq_100hz);
+    out[4] = c.dr;
+    len = 5;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const PingSlotChannelAns& c, Buf& out, std::size_t& len) {
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::PingSlotChannel);
+    out[1] = static_cast<std::uint8_t>((c.data_rate_ok ? 0x02 : 0x00) | (c.channel_freq_ok ? 0x01 : 0x00));
+    len = 2;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const BeaconFreqReq& c, Buf& out, std::size_t& len) {
+    if (!freq_valid(c.freq_100hz)) return MacStatus::FieldOutOfRange;
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::BeaconFreq);
+    write_u24(&out[1], c.freq_100hz);
+    len = 4;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const BeaconFreqAns& c, Buf& out, std::size_t& len) {
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::BeaconFreq);
+    out[1] = c.beacon_freq_ok ? 0x01 : 0x00;
     len = 2;
     return MacStatus::Ok;
 }
@@ -391,6 +441,46 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, AdrParamSetupReq& ou
     if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::AdrParamSetup)) return MacStatus::MalformedPayload;
     out.delay_exp = static_cast<std::uint8_t>(data[1] & 0x0F);
     out.limit_exp = static_cast<std::uint8_t>((data[1] >> 4) & 0x0F);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, PingSlotInfoReq& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::PingSlotInfo)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0xF8)) return MacStatus::MalformedPayload;  // bits 7:3 RFU
+    out.periodicity = static_cast<std::uint8_t>(data[1] & 0x07);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, PingSlotChannelReq& out) {
+    if (len != 5 || data[0] != static_cast<std::uint8_t>(Cid::PingSlotChannel)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[4], 0xF0)) return MacStatus::MalformedPayload;  // bits 7:4 RFU du DR
+    const std::uint32_t f = read_u24(&data[1]);
+    if (!freq_valid(f)) return MacStatus::FieldOutOfRange;
+    out.freq_100hz = f;
+    out.dr = static_cast<std::uint8_t>(data[4] & 0x0F);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, PingSlotChannelAns& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::PingSlotChannel)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0xFC)) return MacStatus::MalformedPayload;  // bits 7:2 RFU
+    out.channel_freq_ok = (data[1] & 0x01) != 0;
+    out.data_rate_ok = (data[1] & 0x02) != 0;
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, BeaconFreqReq& out) {
+    if (len != 4 || data[0] != static_cast<std::uint8_t>(Cid::BeaconFreq)) return MacStatus::MalformedPayload;
+    const std::uint32_t f = read_u24(&data[1]);
+    if (!freq_valid(f)) return MacStatus::FieldOutOfRange;
+    out.freq_100hz = f;
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, BeaconFreqAns& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::BeaconFreq)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0xFE)) return MacStatus::MalformedPayload;  // bits 7:1 RFU
+    out.beacon_freq_ok = (data[1] & 0x01) != 0;
     return MacStatus::Ok;
 }
 

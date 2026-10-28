@@ -71,7 +71,7 @@ def test_truncated_and_unknown_commands():
         mac.decode_one(b"\x03\x52\xff", downlink=True)
     assert e.value.code == 602
     with pytest.raises(StatusError) as e:
-        mac.decode_one(b"\x10\x00", downlink=True)  # PingSlotInfoReq : non implémenté
+        mac.decode_one(b"\x12\x00", downlink=True)  # BeaconTiming (déprécié) : non implémenté
     assert e.value.code == 604
 
 
@@ -213,4 +213,29 @@ def test_adr_param_setup():
         AdrParamSetupReq(limit_exp=16, delay_exp=0)
     with pytest.raises(StatusError):
         mac.decode_one(b"\x0c", downlink=True)  # réponse incomplète
+
+
+def test_ping_slot_and_beacon_commands():
+    from lsim.mac import (
+        BeaconFreqAns, BeaconFreqReq, PingSlotChannelAns, PingSlotChannelReq, PingSlotInfoAns, PingSlotInfoReq,
+    )
+
+    info = PingSlotInfoReq(periodicity=7)
+    assert mac.encode(info) == b"\x10\x07"
+    assert mac.decode_one(b"\x10\x07", downlink=False) == (info, 2)
+    assert mac.decode_one(b"\x10", downlink=True) == (PingSlotInfoAns(), 1)
+    ch = PingSlotChannelReq(freq_100hz=9_235_000, dr=3)
+    assert mac.encode(ch) == b"\x11\x38\xea\x8c\x03"
+    assert mac.decode_one(mac.encode(ch), downlink=True) == (ch, 5)
+    assert mac.decode_one(b"\x11\x02", downlink=False) == (PingSlotChannelAns(False, True), 2)
+    bf = BeaconFreqReq(freq_100hz=0)
+    assert mac.decode_one(mac.encode(bf), downlink=True) == (bf, 4)
+    assert mac.decode_one(b"\x13\x01", downlink=False) == (BeaconFreqAns(True), 2)
+    with pytest.raises(ValueError):
+        PingSlotInfoReq(periodicity=8)
+    with pytest.raises(ValueError):
+        PingSlotChannelReq(freq_100hz=500_000, dr=0)
+    with pytest.raises(StatusError) as e:
+        mac.decode_one(b"\x11\x58\xcb\x8c\xf0", downlink=True)  # RFU du DR
+    assert e.value.code == 602
 

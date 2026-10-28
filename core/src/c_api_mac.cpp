@@ -122,6 +122,41 @@ bool to_cpp_and_encode(const lsim_mac_command& c, Buf& out, std::size_t& len, Ma
         case LSIM_MAC_ADR_PARAM_SETUP_ANS:
             st = encode_empty(Cid::AdrParamSetup, Direction::Uplink, out, len);
             return true;
+        case LSIM_MAC_PING_SLOT_INFO_REQ: {
+            PingSlotInfoReq v;
+            v.periodicity = c.ping_periodicity;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_PING_SLOT_INFO_ANS:
+            st = encode_empty(Cid::PingSlotInfo, Direction::Downlink, out, len);
+            return true;
+        case LSIM_MAC_PING_SLOT_CHANNEL_REQ: {
+            PingSlotChannelReq v;
+            v.freq_100hz = c.freq_100hz;
+            v.dr = c.data_rate;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_PING_SLOT_CHANNEL_ANS: {
+            PingSlotChannelAns v;
+            v.channel_freq_ok = c.ack_channel_freq != 0;
+            v.data_rate_ok = c.ack_data_rate != 0;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_BEACON_FREQ_REQ: {
+            BeaconFreqReq v;
+            v.freq_100hz = c.freq_100hz;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_BEACON_FREQ_ANS: {
+            BeaconFreqAns v;
+            v.beacon_freq_ok = c.ack_beacon_freq != 0;
+            st = encode(v, out, len);
+            return true;
+        }
         case LSIM_MAC_DEVICE_TIME_REQ:
             st = encode_empty(Cid::DeviceTime, Direction::Uplink, out, len);
             return true;
@@ -246,6 +281,28 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                 }
                 case 0x0D: out->kind = LSIM_MAC_DEVICE_TIME_REQ; break;
                 case 0x0C: out->kind = LSIM_MAC_ADR_PARAM_SETUP_ANS; break;
+                case 0x10: {
+                    PingSlotInfoReq v;
+                    st = decode(p, n, v);
+                    out->ping_periodicity = v.periodicity;
+                    out->kind = LSIM_MAC_PING_SLOT_INFO_REQ;
+                    break;
+                }
+                case 0x11: {
+                    PingSlotChannelAns v;
+                    st = decode(p, n, v);
+                    out->ack_channel_freq = v.channel_freq_ok;
+                    out->ack_data_rate = v.data_rate_ok;
+                    out->kind = LSIM_MAC_PING_SLOT_CHANNEL_ANS;
+                    break;
+                }
+                case 0x13: {
+                    BeaconFreqAns v;
+                    st = decode(p, n, v);
+                    out->ack_beacon_freq = v.beacon_freq_ok;
+                    out->kind = LSIM_MAC_BEACON_FREQ_ANS;
+                    break;
+                }
                 case 0x0F: {
                     RejoinParamSetupAns v;
                     st = decode(p, n, v);
@@ -356,6 +413,22 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     out->rejoin_type = v.rejoin_type;
                     out->data_rate = v.dr;
                     out->kind = LSIM_MAC_FORCE_REJOIN_REQ;
+                    break;
+                }
+                case 0x10: out->kind = LSIM_MAC_PING_SLOT_INFO_ANS; break;
+                case 0x11: {
+                    PingSlotChannelReq v;
+                    st = decode(p, n, v);
+                    out->freq_100hz = v.freq_100hz;
+                    out->data_rate = v.dr;
+                    out->kind = LSIM_MAC_PING_SLOT_CHANNEL_REQ;
+                    break;
+                }
+                case 0x13: {
+                    BeaconFreqReq v;
+                    st = decode(p, n, v);
+                    out->freq_100hz = v.freq_100hz;
+                    out->kind = LSIM_MAC_BEACON_FREQ_REQ;
                     break;
                 }
                 case 0x0C: {

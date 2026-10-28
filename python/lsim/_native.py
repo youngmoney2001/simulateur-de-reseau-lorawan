@@ -79,6 +79,8 @@ class _CMacCommand(ctypes.Structure):
         ("ack_uplink_freq_exists", ctypes.c_uint8),
         ("adr_limit_exp", ctypes.c_uint8),
         ("adr_delay_exp", ctypes.c_uint8),
+        ("ping_periodicity", ctypes.c_uint8),
+        ("ack_beacon_freq", ctypes.c_uint8),
     ]
 
 
