@@ -34,8 +34,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Chiffrement avec identifiant de type de trame (base du chiffrement FOpts) : vecteurs TTN
 - ✅ Trame sécurisée 1.1 : scellement et ouverture, MIC vérifié avant déchiffrement, compteur 32 bits contrôlé
 - ✅ Crypto et trame sécurisée exposées via l'API C et Python (`lsim.security`)
-- 🔧 Confirmer les vecteurs contre le document officiel TS001-1.1.0 : ✅ document lu (pas de vecteur numérique dans le PDF, seulement le format des blocs) ; ⬜ errata « FOpts Encryption, Usage of FCntDwn » à lire et à appliquer
-- 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A du §4.3.1.6, vecteurs calculés avec openssl) ; ⬜ câblage dans le codec de trame ; ⬜ trancher l'écart avec les vecteurs TTN « type de trame 00000001 » (le PDF impose quatre octets nuls)
+- 🔧 Confirmer les vecteurs contre le document officiel TS001-1.1.0 : ✅ document lu (pas de vecteur numérique dans le PDF, seulement le format des blocs) ; ✅ errata « FOpts Encryption, Usage of FCntDwn » (CR de janvier 2018) lu et appliqué
+- 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A1 de l'errata : constante 0x00000001 ou 0x00000002 pour AFCntDwn, compteur de bloc 1) ; vecteurs TTN et calcul openssl concordants ; ⬜ câblage dans le codec de trame
 - ⬜ Classes A, B, C
 - ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
 - ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2

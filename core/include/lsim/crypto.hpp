@@ -55,13 +55,19 @@ LSIM_API CryptoStatus crypt_frm_payload(const Key128& key, Direction dir,
                                         std::uint8_t* payload, std::size_t len,
                                         const FrameTypeConstant& frame_type = FrameTypeConstant{});
 
-// Chiffrement des FOpts LoRaWAN 1.1 (spécification TS001-1.1.0, §4.3.1.6),
-// avec NwkSEncKey. Bloc A unique : 0x01 | 4x0x00 | Dir | DevAddr | FCnt | 0x00 | 0x00
-// (aucun identifiant de type de trame, compteur de bloc 0). `len` <= 15 octets.
-// Opération symétrique, en place.
+// Compteur utilisé dans le bloc A des FOpts (TS001-1.1.0 §4.3.1.6, errata
+// « FOpts Encryption, Usage of FCntDwn » de janvier 2018) :
+//   FCntUpOrNFCntDwn : FCntUp (uplink) ou NFCntDwn (downlink sans FPort) ; constante 0x00000001.
+//   AFCntDwn         : AFCntDwn (downlink avec FPort > 0) ; constante 0x00000002.
+enum class FOptsCounter : std::uint8_t { FCntUpOrNFCntDwn = 0, AFCntDwn = 1 };
+
+// Chiffrement des FOpts LoRaWAN 1.1 avec NwkSEncKey. Bloc A1 unique :
+// 0x01 | constante(4) | Dir | DevAddr | compteur(4) | 0x00 | 0x01.
+// `len` <= 15 octets. Opération symétrique, en place.
 LSIM_API CryptoStatus crypt_fopts(const Key128& nwk_s_enc_key, Direction dir,
-                                  std::uint32_t dev_addr, std::uint32_t fcnt32,
-                                  std::uint8_t* fopts, std::size_t len);
+                                  std::uint32_t dev_addr, std::uint32_t counter32,
+                                  FOptsCounter counter_kind, std::uint8_t* fopts,
+                                  std::size_t len);
 
 // MIC d'une trame de données LoRaWAN 1.0.x (clé NwkSKey). `msg` = MHDR | FHDR |
 // FPort | FRMPayload, sans le MIC. Pour 1.1, voir compute_uplink_mic_11 et

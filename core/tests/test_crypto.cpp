@@ -114,28 +114,44 @@ void test_frm_payload_roundtrip_all_lengths() {
     }
 }
 
-// FOpts LoRaWAN 1.1 : vecteurs calculés avec openssl (AES-128-ECB sur le bloc A
-// de la spécification TS001-1.1.0 §4.3.1.6), indépendamment de mbedTLS.
+// FOpts LoRaWAN 1.1 (bloc A1 de l'errata FCntDwn). Les valeurs avec constante
+// 0x00000001 coïncident avec les vecteurs TTN ; celles avec 0x00000002 ont été
+// calculées avec openssl (AES-128-ECB), indépendamment de mbedTLS.
 void test_fopts_encryption_vectors() {
     const Key128 key = from_hex<16>("01010101010101010101010101010101");
-    std::uint8_t p[4];
     const std::uint8_t plain[4] = {1, 2, 3, 4};
+    std::uint8_t p[4];
+
     std::memcpy(p, plain, 4);
-    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1, p, 4)),
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1,
+                                          FOptsCounter::FCntUpOrNFCntDwn, p, 4)),
              static_cast<int>(CryptoStatus::Ok));
-    CHECK_TRUE(equals_hex<4>(p, "33c92622"));
+    CHECK_TRUE(equals_hex<4>(p, "23615f18"));
     // Symétrie : un second passage restitue le clair.
-    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1, p, 4)),
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 0x01020304u, 1,
+                                          FOptsCounter::FCntUpOrNFCntDwn, p, 4)),
              static_cast<int>(CryptoStatus::Ok));
     CHECK_TRUE(equals_hex<4>(p, "01020304"));
+
     std::memcpy(p, plain, 4);
-    crypt_fopts(key, Direction::Downlink, 0x01020304u, 1, p, 4);
-    CHECK_TRUE(equals_hex<4>(p, "ca6fdaba"));
+    crypt_fopts(key, Direction::Downlink, 0x01020304u, 1, FOptsCounter::FCntUpOrNFCntDwn, p, 4);
+    CHECK_TRUE(equals_hex<4>(p, "b2dbe391"));
+
+    // Constante 0x00000002 (AFCntDwn) : doit différer, pour isoler les domaines.
+    std::memcpy(p, plain, 4);
+    crypt_fopts(key, Direction::Downlink, 0x01020304u, 1, FOptsCounter::AFCntDwn, p, 4);
+    CHECK_TRUE(equals_hex<4>(p, "f1b1baa0"));
+    std::memcpy(p, plain, 4);
+    crypt_fopts(key, Direction::Uplink, 0x01020304u, 1, FOptsCounter::AFCntDwn, p, 4);
+    CHECK_TRUE(equals_hex<4>(p, "85eed646"));
+
     // Bornes : plus de 15 octets refusés ; pointeur nul refusé pour len > 0.
     std::uint8_t big[16] = {};
-    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u, big, 16)),
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u,
+                                          FOptsCounter::FCntUpOrNFCntDwn, big, 16)),
              static_cast<int>(CryptoStatus::InvalidLength));
-    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u, nullptr, 4)),
+    CHECK_EQ(static_cast<int>(crypt_fopts(key, Direction::Uplink, 1u, 1u,
+                                          FOptsCounter::FCntUpOrNFCntDwn, nullptr, 4)),
              static_cast<int>(CryptoStatus::InvalidLength));
 }
 

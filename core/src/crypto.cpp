@@ -110,7 +110,8 @@ CryptoStatus aes_cmac(const Key128& key, const std::uint8_t* data, std::size_t l
 }
 
 CryptoStatus crypt_fopts(const Key128& nwk_s_enc_key, Direction dir, std::uint32_t dev_addr,
-                         std::uint32_t fcnt32, std::uint8_t* fopts, std::size_t len) {
+                         std::uint32_t counter32, FOptsCounter counter_kind, std::uint8_t* fopts,
+                         std::size_t len) {
     constexpr std::size_t kMaxFOpts = 15;  // LoRaWAN 1.1 §4.3.1.6
     if (len > kMaxFOpts) {
         return CryptoStatus::InvalidLength;
@@ -121,11 +122,14 @@ CryptoStatus crypt_fopts(const Key128& nwk_s_enc_key, Direction dir, std::uint32
     if (fopts == nullptr) {
         return CryptoStatus::InvalidLength;
     }
-    // Bloc A des FOpts : identifiant de type nul, compteur de bloc 0.
-    const FrameTypeConstant zero_type{};
+    // Constante du bloc A1 : 0x00000001 (FCntUp / NFCntDwn) ou 0x00000002 (AFCntDwn).
+    const FrameTypeConstant constant = (counter_kind == FOptsCounter::AFCntDwn)
+                                           ? FrameTypeConstant{0, 0, 0, 2}
+                                           : FrameTypeConstant{0, 0, 0, 1};
     Block16 a{};
     Block16 s{};
-    build_a_block(zero_type, dir, dev_addr, fcnt32, 0, a);
+    // Compteur de bloc i = 1 : la quinzième position vaut 0x01 (errata, IEEE 802.15.4 B.4.1.3).
+    build_a_block(constant, dir, dev_addr, counter32, 1, a);
     mbedtls_aes_context ctx;
     mbedtls_aes_init(&ctx);
     CryptoStatus status = CryptoStatus::Ok;
