@@ -71,7 +71,7 @@ def test_truncated_and_unknown_commands():
         mac.decode_one(b"\x03\x52\xff", downlink=True)
     assert e.value.code == 602
     with pytest.raises(StatusError) as e:
-        mac.decode_one(b"\x05\x00", downlink=True)  # RXParamSetup : non implémenté
+        mac.decode_one(b"\x08\x00", downlink=True)  # RXTimingSetup : non implémenté
     assert e.value.code == 604
 
 
@@ -108,3 +108,46 @@ def test_rekey_conf_downlink_format():
 
 def test_duty_cycle_request_decode():
     assert mac.decode_one(b"\x04\x03", downlink=True) == (DutyCycleReq(3), 2)
+
+
+def test_rx_param_setup_req_roundtrip_and_bytes():
+    from lsim.mac import NewChannelAns, NewChannelReq, RxParamSetupAns, RxParamSetupReq
+
+    cmd = RxParamSetupReq(rx2_data_rate=3, rx1_dr_offset=2, freq_100hz=8_695_250)
+    wire = mac.encode(cmd)
+    assert wire == bytes([0x05, 0x23, 0xD2, 0xAD, 0x84])
+    assert mac.decode_one(wire, downlink=True) == (cmd, 5)
+    assert mac.decode_one(mac.encode(RxParamSetupAns(True, False, True)), downlink=False) == (
+        RxParamSetupAns(True, False, True), 2)
+
+
+def test_rx_param_setup_bounds():
+    from lsim.mac import RxParamSetupReq
+
+    with pytest.raises(ValueError):
+        RxParamSetupReq(rx2_data_rate=0, rx1_dr_offset=8, freq_100hz=8_695_250)
+    with pytest.raises(ValueError):
+        RxParamSetupReq(rx2_data_rate=0, rx1_dr_offset=0, freq_100hz=500_000)  # < 100 MHz
+    with pytest.raises(ValueError):
+        RxParamSetupReq(rx2_data_rate=0, rx1_dr_offset=0, freq_100hz=0x1000000)
+
+
+def test_new_channel_req_and_ans():
+    from lsim.mac import NewChannelAns, NewChannelReq
+
+    cmd = NewChannelReq(ch_index=3, freq_100hz=8_686_000, min_dr=0, max_dr=5)
+    wire = mac.encode(cmd)
+    assert wire[5] == 0x50  # MaxDR 7:4, MinDR 3:0
+    assert mac.decode_one(wire, downlink=True) == (cmd, 6)
+    # Fréquence 0 : désactivation du canal, acceptée.
+    off = NewChannelReq(ch_index=3, freq_100hz=0, min_dr=0, max_dr=5)
+    assert mac.decode_one(mac.encode(off), downlink=True)[0] == off
+    assert mac.decode_one(mac.encode(NewChannelAns(True, True)), downlink=False) == (NewChannelAns(True, True), 2)
+    with pytest.raises(ValueError):
+        NewChannelReq(ch_index=16, freq_100hz=8_686_000, min_dr=0, max_dr=5)
+
+
+def test_new_channel_ans_rfu_rejected():
+    with pytest.raises(StatusError) as e:
+        mac.decode_one(b"\x07\x04", downlink=False)
+    assert e.value.code == 602

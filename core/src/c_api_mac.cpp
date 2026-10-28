@@ -71,6 +71,38 @@ bool to_cpp_and_encode(const lsim_mac_command& c, Buf& out, std::size_t& len, Ma
             st = encode(v, out, len);
             return true;
         }
+        case LSIM_MAC_RX_PARAM_SETUP_REQ: {
+            RxParamSetupReq v;
+            v.rx2_data_rate = c.rx2_data_rate;
+            v.rx1_dr_offset = c.rx1_dr_offset;
+            v.freq_100hz = c.freq_100hz;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_RX_PARAM_SETUP_ANS: {
+            RxParamSetupAns v;
+            v.channel_ack = c.ack_rx_channel != 0;
+            v.rx2_data_rate_ack = c.ack_rx2_data_rate != 0;
+            v.rx1_dr_offset_ack = c.ack_rx1_dr_offset != 0;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_NEW_CHANNEL_REQ: {
+            NewChannelReq v;
+            v.ch_index = c.ch_index;
+            v.freq_100hz = c.freq_100hz;
+            v.min_dr = c.min_dr;
+            v.max_dr = c.max_dr;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_NEW_CHANNEL_ANS: {
+            NewChannelAns v;
+            v.dr_range_ack = c.ack_dr_range != 0;
+            v.channel_freq_ack = c.ack_channel_freq != 0;
+            st = encode(v, out, len);
+            return true;
+        }
         case LSIM_MAC_REKEY_IND:
         case LSIM_MAC_REKEY_CONF: {
             Rekey v;
@@ -138,12 +170,29 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     break;
                 }
                 case 0x04: out->kind = LSIM_MAC_DUTY_CYCLE_ANS; break;
+                case 0x05: {
+                    RxParamSetupAns v;
+                    st = decode(p, n, v);
+                    out->ack_rx_channel = v.channel_ack;
+                    out->ack_rx2_data_rate = v.rx2_data_rate_ack;
+                    out->ack_rx1_dr_offset = v.rx1_dr_offset_ack;
+                    out->kind = LSIM_MAC_RX_PARAM_SETUP_ANS;
+                    break;
+                }
                 case 0x06: {
                     DevStatusAns v;
                     st = decode(p, n, v);
                     out->battery = v.battery;
                     out->dev_margin = v.margin;
                     out->kind = LSIM_MAC_DEV_STATUS_ANS;
+                    break;
+                }
+                case 0x07: {
+                    NewChannelAns v;
+                    st = decode(p, n, v);
+                    out->ack_dr_range = v.dr_range_ack;
+                    out->ack_channel_freq = v.channel_freq_ack;
+                    out->kind = LSIM_MAC_NEW_CHANNEL_ANS;
                     break;
                 }
                 case 0x0B: {
@@ -183,7 +232,26 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     out->kind = LSIM_MAC_DUTY_CYCLE_REQ;
                     break;
                 }
+                case 0x05: {
+                    RxParamSetupReq v;
+                    st = decode(p, n, v);
+                    out->rx2_data_rate = v.rx2_data_rate;
+                    out->rx1_dr_offset = v.rx1_dr_offset;
+                    out->freq_100hz = v.freq_100hz;
+                    out->kind = LSIM_MAC_RX_PARAM_SETUP_REQ;
+                    break;
+                }
                 case 0x06: out->kind = LSIM_MAC_DEV_STATUS_REQ; break;
+                case 0x07: {
+                    NewChannelReq v;
+                    st = decode(p, n, v);
+                    out->ch_index = v.ch_index;
+                    out->freq_100hz = v.freq_100hz;
+                    out->min_dr = v.min_dr;
+                    out->max_dr = v.max_dr;
+                    out->kind = LSIM_MAC_NEW_CHANNEL_REQ;
+                    break;
+                }
                 case 0x0B: {
                     Rekey v;
                     st = decode(p, n, v, Direction::Downlink);

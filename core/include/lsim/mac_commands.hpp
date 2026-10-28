@@ -9,8 +9,9 @@
 //   * chaque longueur est vérifiée avant toute lecture ;
 //   * capacité fixe, aucune allocation dynamique ;
 //   * encodage canonique : les bits RFU doivent valoir 0 à la lecture (rejet sinon) ;
-//   * les CID non implémentés (RXParamSetup, NewChannel, …) sont refusés
-//     (`UnknownCommand`), car leur longueur ne peut pas être devinée.
+//   * les CID non implémentés (RXTimingSetup, DeviceTime, …) sont refusés
+//     (`UnknownCommand`), car leur longueur ne peut pas être devinée. Les CID 0x08
+//     (RXTimingSetup), 0x0D (DeviceTime) et suivants restent à implémenter.
 #pragma once
 
 #include <array>
@@ -30,7 +31,9 @@ enum class Cid : std::uint8_t {
     LinkAdr = 0x03,     // LinkADRAns (up) / LinkADRReq (down)
     DutyCycle = 0x04,   // DutyCycleAns (up) / DutyCycleReq (down)
     DevStatus = 0x06,   // DevStatusAns (up) / DevStatusReq (down)
-    Rekey = 0x0B,       // RekeyInd (up) / RekeyConf (down)
+    RxParamSetup = 0x05,  // RXParamSetupAns (up) / RXParamSetupReq (down)
+    NewChannel = 0x07,    // NewChannelAns (up) / NewChannelReq (down)
+    Rekey = 0x0B,         // RekeyInd (up) / RekeyConf (down)
 };
 
 enum class MacStatus : std::int32_t {
@@ -41,7 +44,7 @@ enum class MacStatus : std::int32_t {
     UnknownCommand = 4,
 };
 
-inline constexpr std::size_t kMaxCommandBytes = 6;  // plus grande commande gérée
+inline constexpr std::size_t kMaxCommandBytes = 6;  // plus grande commande gérée (NewChannelReq)
 inline constexpr std::uint8_t kLoRaWan11Minor = 1;   // « LoRaWAN x.1 » dans RekeyInd/Conf
 
 // ------------------------------------------------------------ charges utiles
@@ -89,6 +92,39 @@ struct Rekey {
     std::uint8_t minor = kLoRaWan11Minor;
 };
 
+// RXParamSetupReq (down) : DLsettings (RX2DataRate 3:0, RX1DRoffset 6:4, bit 7 RFU)
+// et fréquence RX2 sur 24 bits en pas de 100 Hz (0 interdit ici, < 100 MHz réservé).
+// Taille totale : 5 octets.
+struct RxParamSetupReq {
+    std::uint8_t rx2_data_rate = 0;   // 0..15
+    std::uint8_t rx1_dr_offset = 0;   // 0..7
+    std::uint32_t freq_100hz = 0;     // 0..0xFFFFFF, Hz = 100 x valeur
+};
+
+// RXParamSetupAns (up) : bit 0 canal, bit 1 débit RX2, bit 2 offset RX1 ; bits 7:3 RFU.
+// Taille totale : 2 octets.
+struct RxParamSetupAns {
+    bool channel_ack = false;
+    bool rx2_data_rate_ack = false;
+    bool rx1_dr_offset_ack = false;
+};
+
+// NewChannelReq (down) : ChIndex, Freq (24 bits, pas de 100 Hz, 0 = désactive le canal),
+// DrRange (MinDR 3:0, MaxDR 7:4). Taille totale : 6 octets.
+struct NewChannelReq {
+    std::uint8_t ch_index = 0;        // 0..15
+    std::uint32_t freq_100hz = 0;     // 0 ou >= 1 000 000 (100 MHz)
+    std::uint8_t min_dr = 0;          // 0..15
+    std::uint8_t max_dr = 0;          // 0..15
+};
+
+// NewChannelAns (up) : bit 0 plage de débits, bit 1 fréquence ; bits 7:2 RFU.
+// Taille totale : 2 octets.
+struct NewChannelAns {
+    bool dr_range_ack = false;
+    bool channel_freq_ack = false;
+};
+
 // ------------------------------------------------------------ encodage
 
 // Chaque encodeur écrit CID + charge utile dans `out` et renvoie la longueur.
@@ -97,6 +133,10 @@ MacStatus encode(const LinkAdrReq& c, std::array<std::uint8_t, kMaxCommandBytes>
 MacStatus encode(const LinkAdrAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const DutyCycleReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const DevStatusAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const RxParamSetupReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const RxParamSetupAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const NewChannelReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const NewChannelAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const Rekey& c, Direction dir, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 
 // Commandes sans charge utile : LinkCheckReq, DutyCycleAns, DevStatusReq.
@@ -115,6 +155,10 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, LinkAdrReq& out);   
 MacStatus decode(const std::uint8_t* data, std::size_t len, LinkAdrAns& out);        // up
 MacStatus decode(const std::uint8_t* data, std::size_t len, DutyCycleReq& out);      // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, DevStatusAns& out);      // up
+MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupReq& out);     // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupAns& out);     // up
+MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelReq& out);       // down
+MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelAns& out);       // up
 MacStatus decode(const std::uint8_t* data, std::size_t len, Rekey& out, Direction dir);
 
 // ------------------------------------------------------------ FOpts

@@ -31,6 +31,12 @@ _KIND_DEV_STATUS_REQ = 7
 _KIND_DEV_STATUS_ANS = 8
 _KIND_REKEY_IND = 9
 _KIND_REKEY_CONF = 10
+_KIND_RX_PARAM_SETUP_REQ = 11
+_KIND_RX_PARAM_SETUP_ANS = 12
+_KIND_NEW_CHANNEL_REQ = 13
+_KIND_NEW_CHANNEL_ANS = 14
+
+MAX_FREQ_100HZ = 0xFFFFFF
 
 
 def _uint(name: str, value: int, bits: int) -> int:
@@ -144,9 +150,69 @@ class RekeyConf:
             raise ValueError("minor doit valoir 1 (LoRaWAN 1.1)")
 
 
+def _check_freq(name: str, freq_100hz: int) -> None:
+    """Fréquence en pas de 100 Hz : 0 (canal désactivé) ou >= 100 MHz (1 000 000)."""
+    _uint(name, freq_100hz, 24)
+    if freq_100hz not in (0,) and freq_100hz < 1_000_000:
+        raise ValueError(f"{name} : fréquence inférieure à 100 MHz réservée")
+
+
+@dataclass(frozen=True)
+class RxParamSetupReq:
+    """Downlink : RX2 (débit et fréquence) et offset RX1.
+
+    freq_100hz : fréquence en pas de 100 Hz (869 525 000 Hz = 8 695 250).
+    """
+
+    rx2_data_rate: int
+    rx1_dr_offset: int
+    freq_100hz: int
+
+    def __post_init__(self) -> None:
+        _uint("rx2_data_rate", self.rx2_data_rate, 4)
+        if _uint("rx1_dr_offset", self.rx1_dr_offset, 3) > 7:
+            raise ValueError("rx1_dr_offset doit être compris entre 0 et 7")
+        _check_freq("freq_100hz", self.freq_100hz)
+
+
+@dataclass(frozen=True)
+class RxParamSetupAns:
+    """Uplink : acquittement des trois champs de RXParamSetupReq."""
+
+    channel_ack: bool = False
+    rx2_data_rate_ack: bool = False
+    rx1_dr_offset_ack: bool = False
+
+
+@dataclass(frozen=True)
+class NewChannelReq:
+    """Downlink : création ou modification d'un canal (hors plan fixe uniquement)."""
+
+    ch_index: int
+    freq_100hz: int
+    min_dr: int
+    max_dr: int
+
+    def __post_init__(self) -> None:
+        if _uint("ch_index", self.ch_index, 4) > 15:
+            raise ValueError("ch_index doit être compris entre 0 et 15")
+        _check_freq("freq_100hz", self.freq_100hz)
+        _uint("min_dr", self.min_dr, 4)
+        _uint("max_dr", self.max_dr, 4)
+
+
+@dataclass(frozen=True)
+class NewChannelAns:
+    """Uplink : acquittement de la plage de débits et de la fréquence."""
+
+    dr_range_ack: bool = False
+    channel_freq_ack: bool = False
+
+
 MacCommand = Union[
     LinkCheckReq, LinkCheckAns, LinkAdrReq, LinkAdrAns, DutyCycleReq, DutyCycleAns,
     DevStatusReq, DevStatusAns, RekeyInd, RekeyConf,
+    RxParamSetupReq, RxParamSetupAns, NewChannelReq, NewChannelAns,
 ]
 
 
@@ -182,6 +248,22 @@ def _to_c(cmd: MacCommand) -> _CMacCommand:
     elif isinstance(cmd, RekeyConf):
         c.kind = _KIND_REKEY_CONF
         c.lorawan_minor = cmd.minor
+    elif isinstance(cmd, RxParamSetupReq):
+        c.kind = _KIND_RX_PARAM_SETUP_REQ
+        c.rx2_data_rate, c.rx1_dr_offset, c.freq_100hz = cmd.rx2_data_rate, cmd.rx1_dr_offset, cmd.freq_100hz
+    elif isinstance(cmd, RxParamSetupAns):
+        c.kind = _KIND_RX_PARAM_SETUP_ANS
+        c.ack_rx_channel = int(cmd.channel_ack)
+        c.ack_rx2_data_rate = int(cmd.rx2_data_rate_ack)
+        c.ack_rx1_dr_offset = int(cmd.rx1_dr_offset_ack)
+    elif isinstance(cmd, NewChannelReq):
+        c.kind = _KIND_NEW_CHANNEL_REQ
+        c.ch_index, c.freq_100hz = cmd.ch_index, cmd.freq_100hz
+        c.min_dr, c.max_dr = cmd.min_dr, cmd.max_dr
+    elif isinstance(cmd, NewChannelAns):
+        c.kind = _KIND_NEW_CHANNEL_ANS
+        c.ack_dr_range = int(cmd.dr_range_ack)
+        c.ack_channel_freq = int(cmd.channel_freq_ack)
     else:
         raise TypeError("commande MAC inconnue")
     return c
@@ -209,6 +291,14 @@ def _from_c(c: _CMacCommand) -> MacCommand:
         return RekeyInd(c.lorawan_minor)
     if k == _KIND_REKEY_CONF:
         return RekeyConf(c.lorawan_minor)
+    if k == _KIND_RX_PARAM_SETUP_REQ:
+        return RxParamSetupReq(c.rx2_data_rate, c.rx1_dr_offset, c.freq_100hz)
+    if k == _KIND_RX_PARAM_SETUP_ANS:
+        return RxParamSetupAns(bool(c.ack_rx_channel), bool(c.ack_rx2_data_rate), bool(c.ack_rx1_dr_offset))
+    if k == _KIND_NEW_CHANNEL_REQ:
+        return NewChannelReq(c.ch_index, c.freq_100hz, c.min_dr, c.max_dr)
+    if k == _KIND_NEW_CHANNEL_ANS:
+        return NewChannelAns(bool(c.ack_dr_range), bool(c.ack_channel_freq))
     raise StatusError(900)  # type inconnu renvoyé par le cœur : erreur interne
 
 

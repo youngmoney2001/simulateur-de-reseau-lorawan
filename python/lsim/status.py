@@ -50,6 +50,14 @@ _NAMES = {
     602: "commande MAC : charge utile tronquée ou bit RFU non nul",
     603: "commande MAC : champ hors domaine",
     604: "commande MAC : CID non implémenté",
+    # 650..699 : rejoin-request
+    651: "rejoin : tampon de sortie trop petit",
+    652: "rejoin : longueur de message invalide",
+    653: "rejoin : MHDR inattendu",
+    654: "rejoin : type de rejoin inconnu",
+    655: "rejoin : MIC invalide, champs non exposés",
+    656: "rejoin : échec cryptographique",
+    657: "rejoin : champ hors domaine",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

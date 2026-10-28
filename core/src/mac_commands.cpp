@@ -14,6 +14,8 @@ int payload_len(Direction dir, std::uint8_t cid) {
             case 0x03: return 1;  // LinkADRAns
             case 0x04: return 0;  // DutyCycleAns
             case 0x06: return 2;  // DevStatusAns
+            case 0x05: return 1;  // RXParamSetupAns
+            case 0x07: return 1;  // NewChannelAns
             case 0x0B: return 1;  // RekeyInd
             default: return -1;
         }
@@ -23,12 +25,28 @@ int payload_len(Direction dir, std::uint8_t cid) {
         case 0x03: return 4;  // LinkADRReq
         case 0x04: return 1;  // DutyCycleReq
         case 0x06: return 0;  // DevStatusReq
+        case 0x05: return 4;  // RXParamSetupReq
+        case 0x07: return 5;  // NewChannelReq
         case 0x0B: return 1;  // RekeyConf
         default: return -1;
     }
 }
 
 bool rfu_zero(std::uint8_t value, std::uint8_t rfu_mask) { return (value & rfu_mask) == 0; }
+
+// Fréquence codée sur 24 bits LE, en pas de 100 Hz : 0 (canal désactivé) ou >= 100 MHz.
+bool freq_valid(std::uint32_t f) { return f <= 0xFFFFFFu && (f == 0 || f >= 1'000'000u); }
+
+std::uint32_t read_u24(const std::uint8_t* p) {
+    return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
+           (static_cast<std::uint32_t>(p[2]) << 16);
+}
+
+void write_u24(std::uint8_t* p, std::uint32_t v) {
+    p[0] = static_cast<std::uint8_t>(v & 0xFFu);
+    p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFFu);
+    p[2] = static_cast<std::uint8_t>((v >> 16) & 0xFFu);
+}
 
 }  // namespace
 
@@ -83,6 +101,48 @@ MacStatus encode(const DevStatusAns& c, Buf& out, std::size_t& len) {
     out[1] = c.battery;
     out[2] = static_cast<std::uint8_t>(static_cast<std::uint8_t>(c.margin) & 0x3Fu);
     len = 3;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const RxParamSetupReq& c, Buf& out, std::size_t& len) {
+    if (c.rx2_data_rate > 15 || c.rx1_dr_offset > 7 || c.freq_100hz > 0xFFFFFFu || !freq_valid(c.freq_100hz)) {
+        return MacStatus::FieldOutOfRange;
+    }
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::RxParamSetup);
+    out[1] = static_cast<std::uint8_t>((c.rx1_dr_offset << 4) | c.rx2_data_rate);
+    write_u24(&out[2], c.freq_100hz);
+    len = 5;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const RxParamSetupAns& c, Buf& out, std::size_t& len) {
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::RxParamSetup);
+    out[1] = static_cast<std::uint8_t>((c.channel_ack ? 0x01 : 0) | (c.rx2_data_rate_ack ? 0x02 : 0) |
+                                       (c.rx1_dr_offset_ack ? 0x04 : 0));
+    len = 2;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const NewChannelReq& c, Buf& out, std::size_t& len) {
+    if (c.ch_index > 15 || c.min_dr > 15 || c.max_dr > 15 || !freq_valid(c.freq_100hz)) {
+        return MacStatus::FieldOutOfRange;
+    }
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::NewChannel);
+    out[1] = c.ch_index;
+    write_u24(&out[2], c.freq_100hz);
+    out[5] = static_cast<std::uint8_t>((c.max_dr << 4) | c.min_dr);
+    len = 6;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const NewChannelAns& c, Buf& out, std::size_t& len) {
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::NewChannel);
+    out[1] = static_cast<std::uint8_t>((c.dr_range_ack ? 0x01 : 0) | (c.channel_freq_ack ? 0x02 : 0));
+    len = 2;
     return MacStatus::Ok;
 }
 
@@ -159,6 +219,46 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, DevStatusAns& out) {
     // Margin signé sur 6 bits (complément à deux).
     const auto raw = static_cast<std::uint8_t>(data[2] & 0x3F);
     out.margin = static_cast<std::int8_t>((raw & 0x20) ? (raw | 0xC0) : raw);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupReq& out) {
+    if (len != 5 || data[0] != static_cast<std::uint8_t>(Cid::RxParamSetup)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0x80)) return MacStatus::MalformedPayload;  // bit 7 RFU
+    const std::uint32_t f = read_u24(&data[2]);
+    if (!freq_valid(f)) return MacStatus::FieldOutOfRange;
+    out.rx2_data_rate = static_cast<std::uint8_t>(data[1] & 0x0F);
+    out.rx1_dr_offset = static_cast<std::uint8_t>((data[1] >> 4) & 0x07);
+    out.freq_100hz = f;
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, RxParamSetupAns& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::RxParamSetup)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0xF8)) return MacStatus::MalformedPayload;  // bits 7:3 RFU
+    out.channel_ack = (data[1] & 0x01) != 0;
+    out.rx2_data_rate_ack = (data[1] & 0x02) != 0;
+    out.rx1_dr_offset_ack = (data[1] & 0x04) != 0;
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelReq& out) {
+    if (len != 6 || data[0] != static_cast<std::uint8_t>(Cid::NewChannel)) return MacStatus::MalformedPayload;
+    if (data[1] > 15) return MacStatus::FieldOutOfRange;
+    const std::uint32_t f = read_u24(&data[2]);
+    if (!freq_valid(f)) return MacStatus::FieldOutOfRange;
+    out.ch_index = data[1];
+    out.freq_100hz = f;
+    out.min_dr = static_cast<std::uint8_t>(data[5] & 0x0F);
+    out.max_dr = static_cast<std::uint8_t>((data[5] >> 4) & 0x0F);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, NewChannelAns& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::NewChannel)) return MacStatus::MalformedPayload;
+    if (!rfu_zero(data[1], 0xFC)) return MacStatus::MalformedPayload;  // bits 7:2 RFU
+    out.dr_range_ack = (data[1] & 0x01) != 0;
+    out.channel_freq_ack = (data[1] & 0x02) != 0;
     return MacStatus::Ok;
 }
 

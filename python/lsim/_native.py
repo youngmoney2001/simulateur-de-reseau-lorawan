@@ -56,6 +56,17 @@ class _CMacCommand(ctypes.Structure):
         ("battery", ctypes.c_uint8),
         ("dev_margin", ctypes.c_int8),
         ("lorawan_minor", ctypes.c_uint8),
+        ("rx2_data_rate", ctypes.c_uint8),
+        ("rx1_dr_offset", ctypes.c_uint8),
+        ("freq_100hz", ctypes.c_uint32),
+        ("ch_index", ctypes.c_uint8),
+        ("min_dr", ctypes.c_uint8),
+        ("max_dr", ctypes.c_uint8),
+        ("ack_rx_channel", ctypes.c_uint8),
+        ("ack_rx2_data_rate", ctypes.c_uint8),
+        ("ack_rx1_dr_offset", ctypes.c_uint8),
+        ("ack_dr_range", ctypes.c_uint8),
+        ("ack_channel_freq", ctypes.c_uint8),
     ]
 
 
@@ -309,3 +320,28 @@ LIB.lsim_mac_decode.argtypes = [
 LIB.lsim_mac_append_fopts.restype = ctypes.c_int32
 LIB.lsim_mac_append_fopts.argtypes = [
     _U8P, ctypes.POINTER(ctypes.c_uint8), _U8P, ctypes.c_size_t]
+class _CRejoin02(ctypes.Structure):
+    _fields_ = [
+        ("rejoin_type", ctypes.c_uint8),
+        ("net_id", ctypes.c_uint8 * 3),
+        ("dev_eui", ctypes.c_uint8 * 8),
+        ("rjcount0", ctypes.c_uint16),
+    ]
+
+
+class _CRejoin1(ctypes.Structure):
+    _fields_ = [
+        ("join_eui", ctypes.c_uint8 * 8),
+        ("dev_eui", ctypes.c_uint8 * 8),
+        ("rjcount1", ctypes.c_uint16),
+    ]
+
+
+LIB.lsim_rejoin_encode_02.restype = ctypes.c_int32
+LIB.lsim_rejoin_encode_02.argtypes = [ctypes.POINTER(_CRejoin02), _U8P, _U8P]
+LIB.lsim_rejoin_decode_02.restype = ctypes.c_int32
+LIB.lsim_rejoin_decode_02.argtypes = [_U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CRejoin02)]
+LIB.lsim_rejoin_encode_1.restype = ctypes.c_int32
+LIB.lsim_rejoin_encode_1.argtypes = [ctypes.POINTER(_CRejoin1), _U8P, _U8P]
+LIB.lsim_rejoin_decode_1.restype = ctypes.c_int32
+LIB.lsim_rejoin_decode_1.argtypes = [_U8P, ctypes.c_size_t, _U8P, ctypes.POINTER(_CRejoin1)]

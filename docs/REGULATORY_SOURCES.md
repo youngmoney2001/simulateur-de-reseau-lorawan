@@ -23,7 +23,7 @@ Légende : **Vérifié** = texte officiel lu ; **Secondaire** = source tierce, �
 - **AU915** : 1 W EIRP confirmé par le texte ACMA. La limite PSD (25 mW par 3 kHz) n'est pas encore modélisée.
 - **US915** : la limite FHSS de 1 W s'applique à la puissance conduite. Le gain d'antenne au-delà de 6 dBi
   réduit la puissance conduite autorisée (15.247(b)(4)). Le modèle ne l'applique pas encore.
-- **IN865** : PIRE dérivée de 4 W ERP (GSR 564(E)). **RU864** : PIRE non documentée (`max_eirp_dbm = None`) tant que l'annexe 11 n'est pas lue.
+- **IN865** : PIRE dérivée de 4 W ERP (GSR 564(E)). **RU864** : PIRE 16,13 dBm EIRP (25 mW ERP, annexe 11 lue en extraits concordants) ; duty cycle de 868,7–869,2 MHz non confirmé (0,1 % par prudence).
 - **Corée** : aucun passage du texte en vigueur pour 920,9–923,3 MHz n'a pu être trouvé ; les valeurs RP002 restent sans confirmation nationale.
 - **Accès aux textes** : le PDF complet de la gazette indienne (dms.dot.gov.in) n'a pas pu être téléchargé ; seul un extrait
-  est vérifié. Le texte consolidé russe est tronqué avant l'annexe 11. ARIB : partie 2 absente du PDF lu.
+  est vérifié. Le texte consolidé russe est tronqué avant l'annexe 11. ARIB : le PDF lu (v1.3) ne couvre que la partie 1 sur les pages récupérées ; la partie 2 n'est vue que dans des snippets (20 mW, LBT).

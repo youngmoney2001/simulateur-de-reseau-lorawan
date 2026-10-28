@@ -38,15 +38,15 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - 🔧 Chiffrement FOpts 1.1 avec NwkSEncKey : ✅ primitive `crypt_fopts` (bloc A1 de l'errata : constante 0x00000001 ou 0x00000002 pour AFCntDwn, compteur de bloc 1) ; vecteurs TTN et calcul openssl concordants ; ✅ câblage uplink dans la trame sécurisée (chiffrement avant MIC, déchiffrement après MIC, API C et Python) ; ✅ downlink (compteur NFCntDwn sans FPort, AFCntDwn avec FPort > 0 ; API C et Python)
 - ⬜ Classes A, B, C
 - ✅ Join OTAA 1.1 : join-request (MIC NwkKey), join-accept (chiffrement NwkKey, MIC JSIntKey si OptNeg, repli 1.0.x) : vecteurs TTN, API C et Python
-- ⬜ Suivi des DevNonce (état serveur) et rejoin types 0/1/2
-- 🔧 Commandes MAC : ✅ codec C++ LinkCheck, LinkADR, DutyCycle, DevStatus, Rekey (`core/src/mac_commands.cpp`, RFU vérifiés, FOpts borné à 15 octets) ; ⬜ RXParamSetup, NewChannel ; ✅ API C (`lsim_mac_encode`, `lsim_mac_decode`, `lsim_mac_append_fopts`, statuts 600+) et binding Python (`python/lsim/mac.py`, bornes vérifiées avant l'appel natif) ; ⬜ ADR côté serveur, ACK, rekey effectif (machine d'état)
+- 🔧 Rejoin et DevNonce : ✅ rejoin-request types 0, 1, 2 (`core/src/rejoin.cpp`) : MIC par SNwkSIntKey (types 0/2) ou JSIntKey (type 1), comparaison en temps constant, champs non exposés si MIC faux ; vecteurs calculés hors code (RFC 4493) ; ✅ API C et Python (`lsim.rejoin`) ; ✅ garde anti-rejeu `Counter16Guard` (RJcount et DevNonce strictement croissants, enregistrement après MIC seulement) ; ⬜ stockage de l'état serveur par dispositif (table persistante) et branchement du garde sur le traitement des join-requests ; ⬜ garde en API C/Python (état à gérer par l'appelant)
+- 🔧 Commandes MAC : ✅ codec C++ LinkCheck, LinkADR, DutyCycle, DevStatus, Rekey (`core/src/mac_commands.cpp`, RFU vérifiés, FOpts borné à 15 octets) ; ✅ RXParamSetup, NewChannel (codec, bornes de fréquence 100 MHz et RFU) ; ✅ API C (`lsim_mac_encode`, `lsim_mac_decode`, `lsim_mac_append_fopts`, statuts 600+) et binding Python (`python/lsim/mac.py`, bornes vérifiées avant l'appel natif) ; ⬜ RXTimingSetup, DeviceTime, ForceRejoin, RejoinParamSetup, DlChannel (CID 0x08, 0x0D à 0x10 et suivants) ; ⬜ ADR côté serveur, ACK, rekey effectif (machine d'état)
 - ✅ Moteur d'événements discrets : file bornée déterministe, simulation des uplinks (`lsim.simulator`)
 
 ## Limites connues (à traiter avant commercialisation)
 - Le relief et les obstacles utilisent un modèle simplifié (Deygout à 3 arêtes, pénétration fixe par pavé) : à calibrer par mesures avant usage contractuel.
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
 - Les FOpts sont câblés en uplink et en downlink (compteurs selon l'errata FCntDwn) ; le codec des commandes MAC existe (`mac_commands.hpp`, API C, `lsim.mac`) mais la simulation n'en génère pas encore.
-- La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
+- La jointure gère le codec du rejoin et le garde anti-rejeu, mais pas encore l'état persistant par dispositif : c'est l'état du serveur de jointure.
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 
 ## Jalon 3 — Scénarios, résultats et analyse

@@ -27,6 +27,7 @@ extern "C" {
  *   300..399 simulateur (SimStatus + 300)
  *   400..449 jointure OTAA (JoinStatus + 400)
  *   600..649 commandes MAC (mac::MacStatus + 600)
+ *   650..699 rejoin-request (RejoinStatus + 650)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -36,6 +37,7 @@ extern "C" {
 #define LSIM_STATUS_ENV_BASE    500
 #define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_MAC_BASE    600
+#define LSIM_STATUS_REJOIN_BASE 650
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -345,6 +347,10 @@ LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_pro
 #define LSIM_MAC_DEV_STATUS_ANS    8  /* up : battery, dev_margin */
 #define LSIM_MAC_REKEY_IND         9  /* up : lorawan_minor (1) */
 #define LSIM_MAC_REKEY_CONF       10  /* down : lorawan_minor (1) */
+#define LSIM_MAC_RX_PARAM_SETUP_REQ 11  /* down : rx2_data_rate, rx1_dr_offset, freq_100hz */
+#define LSIM_MAC_RX_PARAM_SETUP_ANS 12  /* up : ack_rx_channel, ack_rx2_data_rate, ack_rx1_dr_offset */
+#define LSIM_MAC_NEW_CHANNEL_REQ    13  /* down : ch_index, freq_100hz (0 = désactivé), min_dr, max_dr */
+#define LSIM_MAC_NEW_CHANNEL_ANS    14  /* up : ack_dr_range, ack_channel_freq */
 
 /* Commande à plat : seuls les champs du type indiqué par `kind` sont lus. */
 typedef struct lsim_mac_command {
@@ -363,6 +369,17 @@ typedef struct lsim_mac_command {
     uint8_t  battery;           /* DevStatusAns : 0 externe, 255 non mesuré */
     int8_t   dev_margin;        /* DevStatusAns : -32..31 dB */
     uint8_t  lorawan_minor;     /* Rekey : 1 (LoRaWAN 1.1) */
+    uint8_t  rx2_data_rate;     /* RXParamSetupReq : 0..15 */
+    uint8_t  rx1_dr_offset;     /* RXParamSetupReq : 0..7 */
+    uint32_t freq_100hz;        /* RXParamSetupReq, NewChannelReq : 24 bits, Hz = 100 x valeur */
+    uint8_t  ch_index;          /* NewChannelReq : 0..15 */
+    uint8_t  min_dr;            /* NewChannelReq : 0..15 */
+    uint8_t  max_dr;            /* NewChannelReq : 0..15 */
+    uint8_t  ack_rx_channel;    /* RXParamSetupAns : 0 ou 1 */
+    uint8_t  ack_rx2_data_rate; /* RXParamSetupAns : 0 ou 1 */
+    uint8_t  ack_rx1_dr_offset; /* RXParamSetupAns : 0 ou 1 */
+    uint8_t  ack_dr_range;      /* NewChannelAns : 0 ou 1 */
+    uint8_t  ack_channel_freq;  /* NewChannelAns : 0 ou 1 */
 } lsim_mac_command;
 
 /* Plus grande commande MAC (CID compris) : 6 octets. */
@@ -381,6 +398,36 @@ LSIM_API int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t directio
  * en entrée et sortie). Refuse tout dépassement sans modifier fopts. */
 LSIM_API int32_t lsim_mac_append_fopts(uint8_t fopts[15], uint8_t* fopts_len,
                                        const uint8_t* cmd, size_t cmd_len);
+
+/* ------------------------------------------------- Rejoin-request 1.1 */
+
+/* Type 0 ou 2 : NetID (3 octets, ordre de transmission) + DevEUI + RJcount0. */
+typedef struct lsim_rejoin02 {
+    uint8_t  rejoin_type;   /* 0 ou 2 */
+    uint8_t  net_id[3];
+    uint8_t  dev_eui[8];
+    uint16_t rjcount0;
+} lsim_rejoin02;
+
+/* Type 1 : JoinEUI + DevEUI + RJcount1. */
+typedef struct lsim_rejoin1 {
+    uint8_t  join_eui[8];
+    uint8_t  dev_eui[8];
+    uint16_t rjcount1;
+} lsim_rejoin1;
+
+/* Encode un rejoin type 0/2 (19 octets) ; MIC par SNwkSIntKey (key). */
+LSIM_API int32_t lsim_rejoin_encode_02(const lsim_rejoin02* f, const uint8_t key[16],
+                                       uint8_t out[19]);
+/* Décode et vérifie le MIC (SNwkSIntKey) avant exposition des champs. */
+LSIM_API int32_t lsim_rejoin_decode_02(const uint8_t* in, size_t len, const uint8_t key[16],
+                                       lsim_rejoin02* out);
+/* Encode un rejoin type 1 (24 octets) ; MIC par JSIntKey (key). */
+LSIM_API int32_t lsim_rejoin_encode_1(const lsim_rejoin1* f, const uint8_t key[16],
+                                      uint8_t out[24]);
+/* Décode et vérifie le MIC (JSIntKey) avant exposition des champs. */
+LSIM_API int32_t lsim_rejoin_decode_1(const uint8_t* in, size_t len, const uint8_t key[16],
+                                      lsim_rejoin1* out);
 
 #ifdef __cplusplus
 }

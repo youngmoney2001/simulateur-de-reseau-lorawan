@@ -164,7 +164,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, trunc, 3, size)),
                  static_cast<int>(MacStatus::MalformedPayload));
         // CID non implémenté (RXParamSetup 0x05) : refusé.
-        const std::uint8_t unknown[2] = {0x05, 0x00};
+        const std::uint8_t unknown[2] = {0x08, 0x00};  // RXTimingSetup : non implémenté
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unknown, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
         CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, up, 0, size)),
@@ -225,8 +225,8 @@ void run_mac_commands_tests() {
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::MalformedPayload));
         CHECK_EQ(back.kind, std::uint8_t{0});
 
-        // CID non implémenté (RXParamSetup 0x05).
-        const std::uint8_t rx[6] = {0x05, 0, 0, 0, 0, 0};
+        // CID non implémenté (RXTimingSetup 0x08).
+        const std::uint8_t rx[6] = {0x08, 0, 0, 0, 0, 0};  // RXTimingSetup : non implémenté
         CHECK_EQ(lsim_mac_decode(rx, 6, LSIM_MAC_DOWNLINK, &back, &used),
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
 
@@ -250,5 +250,125 @@ void run_mac_commands_tests() {
         CHECK_EQ(lsim_mac_append_fopts(fopts, &flen, ack, 1) , 0);
         CHECK_EQ(flen, std::uint8_t{15});
         CHECK_EQ(fopts[14], std::uint8_t{0x03});
+    }
+
+    // --- RXParamSetupReq (down) : DLsettings + fréquence 24 bits LE (869,525 MHz = 8 695 250).
+    {
+        Buf out{};
+        std::size_t len = 0;
+        RxParamSetupReq r;
+        r.rx2_data_rate = 3;
+        r.rx1_dr_offset = 2;
+        r.freq_100hz = 8'695'250;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{5});
+        // DLsettings = 0x23 ; 8695250 = 0x84ADD2 -> LE D2 AD 84
+        CHECK_EQ(out[1], std::uint8_t{0x23});
+        CHECK_EQ(out[2], std::uint8_t{0xD2});
+        CHECK_EQ(out[3], std::uint8_t{0xAD});
+        CHECK_EQ(out[4], std::uint8_t{0x84});
+        RxParamSetupReq back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.rx2_data_rate, std::uint8_t{3});
+        CHECK_EQ(back.rx1_dr_offset, std::uint8_t{2});
+        CHECK_EQ(back.freq_100hz, std::uint32_t{8'695'250});
+        // Bit 7 de DLsettings RFU.
+        const std::uint8_t rfu[5] = {0x05, 0x80, 0xD2, 0xAD, 0x84};
+        CHECK_EQ(static_cast<int>(decode(rfu, 5, back)), static_cast<int>(MacStatus::MalformedPayload));
+        // Offset RX1 sur 3 bits : 8 interdit.
+        r.rx1_dr_offset = 8;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        // Fréquence sous 100 MHz réservée.
+        r.rx1_dr_offset = 0;
+        r.freq_100hz = 500'000;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+    }
+    // --- RXParamSetupAns (up) : bits 0..2 et RFU 7:3.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        RxParamSetupAns a;
+        a.channel_ack = true;
+        a.rx1_dr_offset_ack = true;
+        CHECK_EQ(static_cast<int>(encode(a, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x05});
+        RxParamSetupAns back;
+        const std::uint8_t rfu[2] = {0x05, 0x08};
+        CHECK_EQ(static_cast<int>(decode(rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- NewChannelReq (down) : ChIndex, Freq, DrRange = MaxDR 7:4 | MinDR 3:0.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        NewChannelReq n;
+        n.ch_index = 3;
+        n.freq_100hz = 8'686'000;  // 868,6 MHz
+        n.min_dr = 0;
+        n.max_dr = 5;              // DrRange = 0x50 : DR0 à DR5
+        CHECK_EQ(static_cast<int>(encode(n, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{6});
+        CHECK_EQ(out[5], std::uint8_t{0x50});
+        NewChannelReq back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.ch_index, std::uint8_t{3});
+        CHECK_EQ(back.freq_100hz, std::uint32_t{8'686'000});
+        CHECK_EQ(back.max_dr, std::uint8_t{5});
+        // Canal 0 désactivé : fréquence 0 acceptée.
+        n.freq_100hz = 0;
+        CHECK_EQ(static_cast<int>(encode(n, out, len)), static_cast<int>(MacStatus::Ok));
+        // ChIndex 16 refusé.
+        n.ch_index = 16;
+        CHECK_EQ(static_cast<int>(encode(n, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        // ChIndex 16 refusé aussi au décodage.
+        const std::uint8_t bad_idx[6] = {0x07, 0x10, 0x00, 0x00, 0x00, 0x50};
+        CHECK_EQ(static_cast<int>(decode(bad_idx, 6, back)), static_cast<int>(MacStatus::FieldOutOfRange));
+    }
+    // --- NewChannelAns (up) : bits 0..1 et RFU 7:2.
+    {
+        Buf out{};
+        std::size_t len = 0;
+        NewChannelAns a;
+        a.channel_freq_ack = true;
+        CHECK_EQ(static_cast<int>(encode(a, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(out[1], std::uint8_t{0x02});
+        NewChannelAns back;
+        const std::uint8_t rfu[2] = {0x07, 0x04};
+        CHECK_EQ(static_cast<int>(decode(rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- Tailles dans un flux : RXParamSetupReq (5) et NewChannelReq (6) ; CID 0x0D reste inconnu.
+    {
+        const std::uint8_t dn[11] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00};
+        std::size_t size = 0;
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn, 11, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{5});
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn + 5, 6, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{6});
+        const std::uint8_t unk[2] = {0x0D, 0x00};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unk, 2, size)),
+                 static_cast<int>(MacStatus::UnknownCommand));
+    }
+    // --- Surface C : nouveaux types.
+    {
+        lsim_mac_command c{};
+        c.kind = LSIM_MAC_NEW_CHANNEL_REQ;
+        c.ch_index = 4;
+        c.freq_100hz = 8'670'000;
+        c.min_dr = 0;
+        c.max_dr = 5;
+        std::uint8_t out[LSIM_MAC_MAX_COMMAND_BYTES] = {};
+        std::size_t n = 0;
+        CHECK_EQ(lsim_mac_encode(&c, out, &n), 0);
+        CHECK_EQ(n, std::size_t{6});
+        lsim_mac_command back{};
+        std::size_t used = 0;
+        CHECK_EQ(lsim_mac_decode(out, n, LSIM_MAC_DOWNLINK, &back, &used), 0);
+        CHECK_EQ(back.kind, std::uint8_t{LSIM_MAC_NEW_CHANNEL_REQ});
+        CHECK_EQ(back.freq_100hz, std::uint32_t{8'670'000});
+        const std::uint8_t ans[2] = {0x05, 0x03};
+        CHECK_EQ(lsim_mac_decode(ans, 2, LSIM_MAC_UPLINK, &back, &used), 0);
+        CHECK_EQ(back.kind, std::uint8_t{LSIM_MAC_RX_PARAM_SETUP_ANS});
+        CHECK_EQ(back.ack_rx_channel, std::uint8_t{1});
+        CHECK_EQ(back.ack_rx2_data_rate, std::uint8_t{1});
+        CHECK_EQ(back.ack_rx1_dr_offset, std::uint8_t{0});
     }
 }
