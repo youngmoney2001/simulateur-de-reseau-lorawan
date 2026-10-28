@@ -401,12 +401,21 @@ LIB = _load_library()
 
 LIB.lsim_receiver_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_receiver_sensitivity_dbm.argtypes = [ctypes.c_uint8, ctypes.c_uint32, _DBL]
+LIB.lsim_energy_profile_count.restype = ctypes.c_uint32
+LIB.lsim_energy_profile_count.argtypes = []
 LIB.lsim_energy_device.restype = ctypes.c_int32
 LIB.lsim_energy_device.argtypes = [
-    ctypes.c_double, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_class_a.restype = ctypes.c_int32
+LIB.lsim_energy_device_class_a.argtypes = [
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
     ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_tx_current_ma.restype = ctypes.c_int32
+LIB.lsim_energy_tx_current_ma.argtypes = [ctypes.c_uint32, ctypes.c_double, _DBL]
 LIB.lsim_energy_profile.restype = ctypes.c_int32
-LIB.lsim_energy_profile.argtypes = [_DBL, _DBL, _DBL, _DBL, _DBL, _DBL]
+LIB.lsim_energy_profile.argtypes = [ctypes.c_uint32, _DBL, _DBL, _DBL, _DBL, _DBL, _DBL]
 LIB.lsim_material_count.restype = ctypes.c_uint32
 LIB.lsim_material_count.argtypes = []
 LIB.lsim_material_traversal_loss_db.restype = ctypes.c_int32

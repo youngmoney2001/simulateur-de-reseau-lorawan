@@ -42,3 +42,9 @@
 - Auteurs : Nahshon Mokua Obiri, Kristof Van Laerhoven. Article : https://doi.org/10.1109/ACCESS.2025.3569164 (IEEE Access, vol. 13, 2025).
 - Jeu de données : https://doi.org/10.5281/zenodo.15349730 ; code : https://github.com/nahshonmokua/LoRaWAN-Indoor-PathLoss-Dataset-IEEEACCESS (commit `7fa0327c8ed65a5823f4923f6d62301fff69d935`).
 - Licence : CC BY 4.0 (section « License » du README du dépôt ; aucun fichier LICENSE séparé). Attribution requise dans tout produit qui reprend ces paramètres.
+
+## Données de consommation (valeurs numériques, aucun code copié)
+
+- Semtech SX1262 : datasheet (Rev. 1.2 et v2.1, copies publiques) : courants d'émission, réception LoRa 125 kHz 4,6 mA, veille « OFF cold start » 160 nA. Utilisé dans `core/src/energy.cpp` (profil 1).
+- STM32L072xx : fiche technique ST (DocID027100), Stop 0,43 µA typ., « jusqu'à » 93 µA/MHz en Run. Utilisé dans `core/src/energy.cpp` (profil 1).
+- RAKwireless RAK4631 : documentation RAKwireless (tension 3,3 V nominale, courants Tx/Rx/veille module). Utilisé dans `core/src/energy.cpp` (profil 0).

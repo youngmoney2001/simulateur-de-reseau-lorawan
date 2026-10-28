@@ -79,17 +79,33 @@ LSIM_API int32_t lsim_material_traversal_loss_db(uint32_t material_id,
                                                  double* out_db,
                                                  int32_t* out_extrapolated);
 
-/* Bilan énergétique d'un dispositif (profil par défaut, voir energy.hpp).
- * Durées en ns entiers ; le reste de total_ns est en veille. */
-LSIM_API int32_t lsim_energy_device(double tx_power_dbm, uint32_t bandwidth_hz,
-                                    uint64_t tx_ns, uint64_t rx_ns, uint64_t mcu_active_ns,
-                                    uint64_t total_ns, double* out_energy_j,
-                                    double* out_avg_current_ua);
+/* Bilan énergétique d'un dispositif. profile_id : 0 = RAK4631, 1 = SX1262 + STM32L072
+ * (voir energy.hpp). Durées en ns entiers ; le reste de total_ns est en veille. */
+LSIM_API uint32_t lsim_energy_profile_count(void);
+LSIM_API int32_t lsim_energy_device(uint32_t profile_id, double tx_power_dbm,
+                                    uint32_t bandwidth_hz, uint64_t tx_ns, uint64_t rx_ns,
+                                    uint64_t mcu_active_ns, uint64_t total_ns,
+                                    double* out_energy_j, double* out_avg_current_ua);
 
-/* Paramètres du profil par défaut (transparence : sources dans energy.hpp). */
-LSIM_API int32_t lsim_energy_profile(double* supply_v, double* rx_ma_125khz,
-                                     double* rx_ma_250khz, double* rx_ma_500khz,
-                                     double* sleep_ua, double* mcu_run_ma);
+/* Classe A : uplinks identiques ; deux fenêtres RX1/RX2 par uplink de rx_window_ns
+ * (0 : durée du préambule), plus downlink_ns_total ; traitement MCU par uplink. */
+LSIM_API int32_t lsim_energy_device_class_a(uint32_t profile_id, double tx_power_dbm,
+                                            uint32_t bandwidth_hz, uint8_t spreading_factor,
+                                            uint16_t preamble_symbols, uint64_t uplinks,
+                                            uint64_t airtime_ns, uint64_t rx_window_ns,
+                                            uint64_t downlink_ns_total,
+                                            uint64_t mcu_ns_per_uplink, uint64_t total_ns,
+                                            double* out_energy_j, double* out_avg_current_ua);
+
+/* Courant d'émission (mA) : point du profil de puissance >= demandée. */
+LSIM_API int32_t lsim_energy_tx_current_ma(uint32_t profile_id, double tx_power_dbm,
+                                           double* out_ma);
+
+/* Paramètres d'un profil (transparence : sources dans energy.hpp). */
+LSIM_API int32_t lsim_energy_profile(uint32_t profile_id, double* supply_v,
+                                     double* rx_ma_125khz, double* rx_ma_250khz,
+                                     double* rx_ma_500khz, double* sleep_ua,
+                                     double* mcu_run_ma);
 
 /* Perte en espace libre (dB) : distance en m, fréquence en Hz. */
 LSIM_API int32_t lsim_free_space_path_loss_db(double distance_m,
