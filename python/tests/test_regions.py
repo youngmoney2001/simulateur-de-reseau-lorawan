@@ -95,3 +95,36 @@ def test_eu868_gap_between_subbands_is_outside_plan():
 def test_eu868_boundary_865_uses_most_restrictive():
     # 865,0 MHz : appartient à K (0,1 %) et à L (1 %) ; K gouverne.
     assert EU868.duty_cycle_for(865_000_000, 14.0) == pytest.approx(0.001)
+
+
+# -------------------------------------------- liaison scénario -> profil régional
+
+def _group(**kw):
+    from lsim.scenario import DiskPlacement, GroupModel
+    base = dict(name="g", count=1, placement=DiskPlacement(type="disk", radius_m=10))
+    base.update(kw)
+    return GroupModel(**base)
+
+
+def test_group_without_region_keeps_declared_duty_cycle():
+    assert _group(duty_cycle=0.5).effective_duty_cycle == 0.5
+
+
+def test_group_region_applies_subband_duty_cycle():
+    g = _group(region="EU868", channel_freq_hz=868_100_000, tx_power_dbm=14.0)
+    assert g.effective_duty_cycle == pytest.approx(0.01)
+
+
+def test_group_region_takes_most_restrictive_of_declared_and_band():
+    g = _group(region="EU868", channel_freq_hz=868_100_000, duty_cycle=0.005)
+    assert g.effective_duty_cycle == pytest.approx(0.005)
+
+
+def test_group_region_rejects_channel_outside_plan():
+    with pytest.raises(ValueError):
+        _group(region="EU868", channel_freq_hz=900_000_000)
+
+
+def test_group_unknown_region_rejected():
+    with pytest.raises(ValueError):
+        _group(region="US915", channel_freq_hz=868_100_000)

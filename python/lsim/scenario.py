@@ -82,7 +82,30 @@ class GroupModel(_Strict):
     period_s: float = Field(600.0, gt=0)
     messages: int = Field(1, ge=1)
     duty_cycle: float = Field(1.0, gt=0, le=1.0)
+    # Profil régional optionnel (ex. « EU868 ») : le duty cycle effectif est alors
+    # le plus restrictif entre `duty_cycle` et la sous-bande du canal `channel_freq_hz`.
+    region: Optional[str] = None
+    channel_freq_hz: int = Field(868_100_000, gt=0)
     start_spread_s: float = Field(0.0, ge=0)
+
+    @property
+    def effective_duty_cycle(self) -> float:
+        if self.region is None:
+            return self.duty_cycle
+        from lsim.regions import PROFILES
+        profile = PROFILES[self.region]
+        return min(self.duty_cycle,
+                   profile.duty_cycle_for(self.channel_freq_hz, self.tx_power_dbm))
+
+    @model_validator(mode="after")
+    def _region_known_and_in_plan(self) -> "GroupModel":
+        if self.region is None:
+            return self
+        from lsim.regions import PROFILES
+        if self.region not in PROFILES:
+            raise ValueError(f"région inconnue : {self.region}")
+        self.effective_duty_cycle  # lève si le canal est hors plan ou PIRE trop haute
+        return self
 
     @model_validator(mode="after")
     def _count_matches_placement(self) -> "GroupModel":
@@ -177,6 +200,9 @@ class Scenario:
         for group in dumped.get("groups", []):
             if group.get("duty_cycle") == 1.0:
                 group.pop("duty_cycle", None)
+            if group.get("region") is None:
+                group.pop("region", None)
+                group.pop("channel_freq_hz", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
@@ -207,7 +233,7 @@ class Scenario:
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
-                    duty_cycle=g.duty_cycle))
+                    duty_cycle=g.effective_duty_cycle))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

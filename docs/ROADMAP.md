@@ -22,8 +22,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Shadowing log-normal dans la simulation : terme par dispositif (constant sur la simulation), tirage déterministe par graine (SplitMix64 + Box-Muller), `shadowing_sigma_db` 0–30 dB ; non appliqué à la couverture
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
-- 🔧 Profils régionaux data-driven : ✅ cadre (`python/lsim/regions.py`, source obligatoire, règle du plus restrictif pour les sous-bandes qui se recouvrent) ; ✅ EU868 (ETSI EN 300 220-2 V3.2.1, tableau K à QP ; RP002-1.0.0 §2.4) ; ⬜ liaison duty cycle du scénario vers le profil ; ⬜ US915, AS923, AU915, KR920, IN865, RU864
-- 🔧 Duty cycle : ✅ mécanisme (rapport cyclique par dispositif, attente airtime·(1−d)/d, scénario `duty_cycle` par groupe) ; ⬜ liaison du duty cycle de scénario au profil EU868 (valeurs EU868 disponibles dans `regions.py`)
+- 🔧 Profils régionaux data-driven : ✅ cadre (`python/lsim/regions.py`, source obligatoire, règle du plus restrictif pour les sous-bandes qui se recouvrent) ; ✅ EU868 (ETSI EN 300 220-2 V3.2.1, tableau K à QP ; RP002-1.0.0 §2.4) ; ✅ liaison duty cycle du scénario vers le profil ; ⬜ US915, AS923, AU915, KR920, IN865, RU864
+- 🔧 Duty cycle : ✅ mécanisme (rapport cyclique par dispositif, attente airtime·(1−d)/d, scénario `duty_cycle` par groupe) ; ✅ liaison scénario → profil (`region: EU868`, `channel_freq_hz`, duty cycle effectif = le plus restrictif ; canal hors plan refusé au chargement)
 
 ## Jalon 2 — MAC LoRaWAN 1.1
 - ✅ Codec de trame (MHDR, FHDR, FPort, FRMPayload, MIC) : encodage canonique, bornes vérifiées
