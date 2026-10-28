@@ -10,7 +10,7 @@ import ctypes
 from dataclasses import dataclass
 from typing import Sequence
 
-from lsim._native import LIB, _CAdrInput, _CAdrOutput
+from lsim._native import LIB, _CAdrDeviceState, _CAdrInput, _CAdrOutput, _CAdrUplinkOutcome
 from lsim.lora import StatusError
 
 MAX_SAMPLES = 20
@@ -78,3 +78,66 @@ def decide(
     if status != 0:
         raise StatusError(status)
     return AdrDecision(int(out.dr), int(out.tx_power_index))
+
+
+@dataclass(frozen=True)
+class DeviceAdrState:
+    """État ADR_ACK du dispositif (LoRaWAN 1.1 §4.3.1.1), à conserver par l'appelant."""
+
+    ack_cnt: int = 0
+    dr: int = 0
+    min_dr: int = 0
+    tx_power_index: int = 0
+    default_tx_power_index: int = 0
+    channels_subset: bool = False
+
+
+@dataclass(frozen=True)
+class UplinkResult:
+    state: DeviceAdrState
+    ack_req: bool
+    default_channels_reenabled: bool
+
+
+def _to_c_device(st: DeviceAdrState) -> _CAdrDeviceState:
+    for name, value, hi in (("dr", st.dr, 15), ("min_dr", st.min_dr, 15),
+                            ("tx_power_index", st.tx_power_index, 15),
+                            ("default_tx_power_index", st.default_tx_power_index, 15)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= hi:
+            raise ValueError(f"{name} doit être un entier entre 0 et {hi}")
+    if isinstance(st.ack_cnt, bool) or not isinstance(st.ack_cnt, int) or not 0 <= st.ack_cnt < 2**64:
+        raise ValueError("ack_cnt doit être un entier non négatif sur 64 bits")
+    c = _CAdrDeviceState()
+    c.ack_cnt = st.ack_cnt
+    c.dr, c.min_dr = st.dr, st.min_dr
+    c.tx_power_index, c.default_tx_power_index = st.tx_power_index, st.default_tx_power_index
+    c.channels_subset = int(bool(st.channels_subset))
+    return c
+
+
+def _from_c_device(c: _CAdrDeviceState) -> DeviceAdrState:
+    return DeviceAdrState(int(c.ack_cnt), int(c.dr), int(c.min_dr), int(c.tx_power_index),
+                          int(c.default_tx_power_index), bool(c.channels_subset))
+
+
+def device_uplink(state: DeviceAdrState, *, limit_exp: int, delay_exp: int) -> UplinkResult:
+    """Un uplink (nouveau FCnt) : ADR_ACK_LIMIT = 2**limit_exp, ADR_ACK_DELAY = 2**delay_exp."""
+    for name, value in (("limit_exp", limit_exp), ("delay_exp", delay_exp)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 15:
+            raise ValueError(f"{name} doit être un entier entre 0 et 15")
+    c = _to_c_device(state)
+    out = _CAdrUplinkOutcome()
+    status = LIB.lsim_adr_device_uplink(ctypes.byref(c), limit_exp, delay_exp, ctypes.byref(out))
+    if status != 0:
+        raise StatusError(status)
+    return UplinkResult(_from_c_device(c), bool(out.ack_req), bool(out.default_channels_reenabled))
+
+
+def device_downlink(state: DeviceAdrState) -> DeviceAdrState:
+    """Réception d'une trame descendante : ADR_ACK_CNT repart de zéro."""
+    c = _to_c_device(state)
+    status = LIB.lsim_adr_device_downlink(ctypes.byref(c))
+    if status != 0:
+        raise StatusError(status)
+    return _from_c_device(c)
+

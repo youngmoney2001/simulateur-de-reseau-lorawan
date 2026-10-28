@@ -55,4 +55,37 @@ bool required_snr_tenth_db(std::uint8_t sf, std::int32_t& out);
 // Décision ADR. En cas d'erreur, `out` vaut l'état courant et le statut est InvalidParameter.
 AdrStatus decide(const Input& in, Output& out);
 
+// ------------------------------------------------------------ ADR_ACK côté dispositif
+//
+// LoRaWAN 1.1 §4.3.1.1 (back-off ADR) : ADR_ACK_CNT compte les uplinks depuis la dernière
+// réception descendante. À ADR_ACK_LIMIT (= 2^limit_exp) : ADRACKReq = 1 si le débit n'est
+// pas le minimum, ou la puissance est inférieure au défaut, ou le masque est restreint.
+// À LIMIT + k·DELAY (= 2^delay_exp, k >= 1), une étape de repli : puissance au défaut si
+// elle ne l'est pas, sinon débit d'un cran plus bas ; au débit minimal, les canaux par
+// défaut sont réactivés.
+// Écart signalé : le tableau d'exemple (fig. 14) place la première remontée de puissance
+// à 96 et non à 64 ; ce module suit le texte normatif (étape à LIMIT + DELAY).
+
+struct DeviceAdrState {
+    std::uint64_t ack_cnt = 0;             // ADR_ACK_CNT (uplinks depuis la dernière réception)
+    std::uint8_t dr = 0;
+    std::uint8_t min_dr = 0;               // débit minimal défini par le dispositif
+    std::uint8_t tx_power_index = 0;
+    std::uint8_t default_tx_power_index = 0;
+    bool channels_subset = false;          // masque restreint aux canaux par défaut
+};
+
+struct UplinkOutcome {
+    bool ack_req = false;                  // ADRACKReq à émettre dans cet uplink
+    bool default_channels_reenabled = false;
+};
+
+// Un uplink (nouveau FCnt). limit_exp et delay_exp : 0..15 (ADRParamSetup).
+// Invalide : rien n'est modifié.
+AdrStatus device_on_uplink(DeviceAdrState& st, std::uint8_t limit_exp, std::uint8_t delay_exp,
+                           UplinkOutcome& out);
+
+// Réception d'une trame descendante : réinitialise ADR_ACK_CNT.
+void device_on_downlink(DeviceAdrState& st);
+
 }  // namespace lsim::lorawan::adr

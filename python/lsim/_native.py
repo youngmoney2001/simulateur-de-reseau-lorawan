@@ -106,6 +106,24 @@ class _CAdrOutput(ctypes.Structure):
     ]
 
 
+class _CAdrDeviceState(ctypes.Structure):
+    _fields_ = [
+        ("ack_cnt", ctypes.c_uint64),
+        ("dr", ctypes.c_uint8),
+        ("min_dr", ctypes.c_uint8),
+        ("tx_power_index", ctypes.c_uint8),
+        ("default_tx_power_index", ctypes.c_uint8),
+        ("channels_subset", ctypes.c_uint8),
+    ]
+
+
+class _CAdrUplinkOutcome(ctypes.Structure):
+    _fields_ = [
+        ("ack_req", ctypes.c_uint8),
+        ("default_channels_reenabled", ctypes.c_uint8),
+    ]
+
+
 class _CUplinkFrame(ctypes.Structure):
     _fields_ = [
         ("dev_addr", ctypes.c_uint32),
@@ -398,6 +416,11 @@ LIB.lsim_registry_on_join_accepted.restype = ctypes.c_int32
 LIB.lsim_registry_on_join_accepted.argtypes = [ctypes.c_uint64, _U8P]
 LIB.lsim_registry_device_count.restype = ctypes.c_int32
 LIB.lsim_registry_device_count.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
+LIB.lsim_adr_device_uplink.restype = ctypes.c_int32
+LIB.lsim_adr_device_uplink.argtypes = [
+    ctypes.POINTER(_CAdrDeviceState), ctypes.c_uint8, ctypes.c_uint8, ctypes.POINTER(_CAdrUplinkOutcome)]
+LIB.lsim_adr_device_downlink.restype = ctypes.c_int32
+LIB.lsim_adr_device_downlink.argtypes = [ctypes.POINTER(_CAdrDeviceState)]
 LIB.lsim_adr_decide.restype = ctypes.c_int32
 LIB.lsim_adr_decide.argtypes = [ctypes.POINTER(_CAdrInput), ctypes.POINTER(_CAdrOutput)]
 LIB.lsim_registry_export.restype = ctypes.c_int32

@@ -520,6 +520,27 @@ typedef struct {
 
 LSIM_API int32_t lsim_adr_decide(const lsim_adr_input* in, lsim_adr_output* out);
 
+/* ADR_ACK côté dispositif : état passé et mis à jour par l'appelant (aucun état caché).
+ * ack_cnt : uplinks depuis la dernière réception descendante. Un état invalide laisse
+ * *st intact et renvoie 761. limit_exp / delay_exp : 0..15 (ADRParamSetup). */
+typedef struct {
+    uint64_t ack_cnt;
+    uint8_t  dr;
+    uint8_t  min_dr;
+    uint8_t  tx_power_index;
+    uint8_t  default_tx_power_index;
+    uint8_t  channels_subset;   /* 0 ou 1 */
+} lsim_adr_device_state;
+
+typedef struct {
+    uint8_t ack_req;                    /* ADRACKReq à émettre : 0 ou 1 */
+    uint8_t default_channels_reenabled; /* 0 ou 1 */
+} lsim_adr_uplink_outcome;
+
+LSIM_API int32_t lsim_adr_device_uplink(lsim_adr_device_state* st, uint8_t limit_exp, uint8_t delay_exp,
+                                        lsim_adr_uplink_outcome* out);
+LSIM_API int32_t lsim_adr_device_downlink(lsim_adr_device_state* st);
+
 #ifdef __cplusplus
 }
 #endif

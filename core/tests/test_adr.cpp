@@ -122,6 +122,69 @@ void run_adr_tests() {
         CHECK_EQ(static_cast<int>(decide(in, o)), static_cast<int>(AdrStatus::InvalidParameter));
         CHECK_EQ(o.dr, std::uint8_t{0});
     }
+    // --- ADR_ACK dispositif. LIMIT = DELAY = 32 (exp 5). Départ : DR2, puissance 2 (< défaut 0),
+    // masque restreint, débit minimal 0.
+    {
+        DeviceAdrState st;
+        st.dr = 2;
+        st.min_dr = 0;
+        st.tx_power_index = 2;
+        st.default_tx_power_index = 0;
+        st.channels_subset = true;
+        UplinkOutcome o;
+        for (int i = 1; i <= 31; ++i) {
+            CHECK_EQ(static_cast<int>(device_on_uplink(st, 5, 5, o)), static_cast<int>(AdrStatus::Ok));
+            CHECK_TRUE(!o.ack_req);
+        }
+        // cnt 32 : ADRACKReq (débit, puissance et masque non nominaux), pas encore de repli.
+        CHECK_EQ(static_cast<int>(device_on_uplink(st, 5, 5, o)), static_cast<int>(AdrStatus::Ok));
+        CHECK_TRUE(o.ack_req);
+        CHECK_EQ(st.tx_power_index, std::uint8_t{2});
+        // cnt 63 : pas de repli (pas un multiple de DELAY après LIMIT + DELAY).
+        for (int i = 33; i <= 63; ++i) device_on_uplink(st, 5, 5, o);
+        CHECK_EQ(st.tx_power_index, std::uint8_t{2});
+        // cnt 64 = LIMIT + DELAY : puissance remontée au défaut.
+        device_on_uplink(st, 5, 5, o);
+        CHECK_EQ(st.tx_power_index, std::uint8_t{0});
+        CHECK_EQ(st.dr, std::uint8_t{2});
+        CHECK_TRUE(o.ack_req);
+        // cnt 96 : débit d'un cran plus bas.
+        for (int i = 65; i <= 96; ++i) device_on_uplink(st, 5, 5, o);
+        CHECK_EQ(st.dr, std::uint8_t{1});
+        // cnt 128 : débit minimal atteint ; canaux par défaut réactivés ; ADRACKReq à 0.
+        for (int i = 97; i <= 128; ++i) device_on_uplink(st, 5, 5, o);
+        CHECK_EQ(st.dr, std::uint8_t{0});
+        CHECK_TRUE(o.default_channels_reenabled);
+        CHECK_TRUE(!st.channels_subset);
+        CHECK_TRUE(!o.ack_req);
+        // Une trame descendante remet ADR_ACK_CNT à zéro.
+        device_on_downlink(st);
+        CHECK_EQ(static_cast<int>(st.ack_cnt), 0);
+        device_on_uplink(st, 5, 5, o);
+        CHECK_TRUE(!o.ack_req);
+        // Entrées invalides : état intact.
+        const auto before = st;
+        CHECK_EQ(static_cast<int>(device_on_uplink(st, 16, 5, o)), static_cast<int>(AdrStatus::InvalidParameter));
+        CHECK_EQ(st.ack_cnt, before.ack_cnt);
+        DeviceAdrState bad;
+        bad.dr = 0;
+        bad.min_dr = 1;
+        CHECK_EQ(static_cast<int>(device_on_uplink(bad, 5, 5, o)), static_cast<int>(AdrStatus::InvalidParameter));
+    }
+    // --- ADR_ACK via l'API C.
+    {
+        lsim_adr_device_state cs{};
+        cs.dr = 2;
+        cs.tx_power_index = 2;
+        cs.channels_subset = 1;
+        lsim_adr_uplink_outcome co{};
+        for (int i = 0; i < 32; ++i) CHECK_EQ(lsim_adr_device_uplink(&cs, 5, 5, &co), 0);
+        CHECK_EQ(static_cast<int>(co.ack_req), 1);
+        CHECK_EQ(lsim_adr_device_uplink(&cs, 16, 5, &co), LSIM_STATUS_ADR_BASE + 1);
+        CHECK_EQ(lsim_adr_device_downlink(&cs), 0);
+        CHECK_EQ(static_cast<int>(cs.ack_cnt), 0);
+        CHECK_EQ(lsim_adr_device_downlink(nullptr), static_cast<int>(lsim::lora::Status::NullOutput));
+    }
     // --- Frontière C : NULL et code 761.
     {
         lsim_adr_input cin{};

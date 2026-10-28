@@ -101,4 +101,38 @@ AdrStatus decide(const Input& in, Output& out) {
     return AdrStatus::Ok;
 }
 
+AdrStatus device_on_uplink(DeviceAdrState& st, std::uint8_t limit_exp, std::uint8_t delay_exp,
+                           UplinkOutcome& out) {
+    out = UplinkOutcome{};
+    if (limit_exp > 15 || delay_exp > 15) return AdrStatus::InvalidParameter;
+    if (st.dr < st.min_dr || st.tx_power_index > kMaxPowerIndex ||
+        st.default_tx_power_index > kMaxPowerIndex) {
+        return AdrStatus::InvalidParameter;
+    }
+    DeviceAdrState next = st;
+    ++next.ack_cnt;
+    const std::uint64_t limit = std::uint64_t{1} << limit_exp;
+    const std::uint64_t delay = std::uint64_t{1} << delay_exp;
+    if (next.ack_cnt >= limit + delay && (next.ack_cnt - limit) % delay == 0) {
+        // Étape de repli : puissance au défaut, sinon débit d'un cran plus bas.
+        if (next.tx_power_index > next.default_tx_power_index) {
+            next.tx_power_index = next.default_tx_power_index;
+        } else if (next.dr > next.min_dr) {
+            --next.dr;
+        }
+        // Débit minimal atteint : canaux par défaut réactivés sans attendre une étape de plus.
+        if (next.dr == next.min_dr && next.channels_subset) {
+            next.channels_subset = false;
+            out.default_channels_reenabled = true;
+        }
+    }
+    out.ack_req = next.ack_cnt >= limit &&
+                  (next.dr > next.min_dr || next.tx_power_index > next.default_tx_power_index ||
+                   next.channels_subset);
+    st = next;
+    return AdrStatus::Ok;
+}
+
+void device_on_downlink(DeviceAdrState& st) { st.ack_cnt = 0; }
+
 }  // namespace lsim::lorawan::adr

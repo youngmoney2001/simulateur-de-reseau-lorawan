@@ -37,3 +37,41 @@ int32_t lsim_adr_decide(const lsim_adr_input* in, lsim_adr_output* out) {
         return LSIM_STATUS_INTERNAL;
     }
 }
+
+int32_t lsim_adr_device_uplink(lsim_adr_device_state* st, uint8_t limit_exp, uint8_t delay_exp,
+                               lsim_adr_uplink_outcome* out) {
+    if (st == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    try {
+        lsim::lorawan::adr::DeviceAdrState v;
+        v.ack_cnt = st->ack_cnt;
+        v.dr = st->dr;
+        v.min_dr = st->min_dr;
+        v.tx_power_index = st->tx_power_index;
+        v.default_tx_power_index = st->default_tx_power_index;
+        v.channels_subset = st->channels_subset != 0;
+        lsim::lorawan::adr::UplinkOutcome o;
+        const auto s = lsim::lorawan::adr::device_on_uplink(v, limit_exp, delay_exp, o);
+        if (s != lsim::lorawan::adr::AdrStatus::Ok) {
+            return LSIM_STATUS_ADR_BASE + 1;
+        }
+        st->ack_cnt = v.ack_cnt;
+        st->dr = v.dr;
+        st->tx_power_index = v.tx_power_index;
+        st->channels_subset = v.channels_subset ? 1 : 0;
+        out->ack_req = o.ack_req ? 1 : 0;
+        out->default_channels_reenabled = o.default_channels_reenabled ? 1 : 0;
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_adr_device_downlink(lsim_adr_device_state* st) {
+    if (st == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    st->ack_cnt = 0;
+    return 0;
+}
