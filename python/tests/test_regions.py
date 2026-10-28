@@ -211,6 +211,7 @@ def test_ru864_defaults_and_annex11_power():
     # Duty cycle appliqué par prudence (à confirmer) sur 864–865 et 868,7–869,2 MHz.
     assert RU864.duty_cycle_for(864_500_000, 16.0) == pytest.approx(0.001)
     assert RU864.duty_cycle_for(868_900_000, 16.0) == pytest.approx(0.001)
+    assert "à confirmer" in RU864.source  # statut partiel explicite, aussi dans la chaîne source
     with pytest.raises(ValueError):
         RU864.duty_cycle_for(865_500_000, 16.0)  # 865–868 MHz : non couvert par l'annexe 11 lue
 

@@ -18,6 +18,7 @@ void run_rejoin_tests();
 void run_join_registry_tests();
 void run_adr_tests();
 void run_rekey_tests();
+void run_session_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -34,6 +35,7 @@ int main() {
     run_join_registry_tests();
     run_adr_tests();
     run_rekey_tests();
+    run_session_tests();
     std::printf("%d/%d vérifications réussies\n", lsim::test::checks() - lsim::test::failures(),
                 lsim::test::checks());
     return lsim::test::failures() == 0 ? 0 : 1;

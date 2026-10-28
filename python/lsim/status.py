@@ -72,6 +72,13 @@ _NAMES = {
     741: "registre : paramètre invalide",
     # 760..799 : ADR serveur
     761: "ADR : paramètre invalide (SNR, plan de débits ou puissance)",
+    # 780..789 : moteur de session dispositif
+    781: "session : aucune session active (join requis)",
+    782: "session : cycle d'uplink mal ordonné",
+    783: "session : compteur descendant déjà consommé (rejeu)",
+    784: "session : paramètre invalide",
+    785: "session : compteur FCntUp épuisé (rejoin requis)",
+    786: "session : handle inconnu ou fermé",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

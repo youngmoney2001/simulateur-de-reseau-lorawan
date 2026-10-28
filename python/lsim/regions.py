@@ -255,9 +255,10 @@ IN865 = RegionProfile(
     power_basis="eirp",
 )
 
-# RU864-870 (§2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5, duty cycle < 1 %).
+# RU864-870 (RP002-1.0.0 §2.13.2, §2.13.3) : canaux par défaut 868,9 et 869,1 MHz (DR0–5).
 # Annexe 11 de la décision GKRF 07-20-03-001 (texte consolidé relu sur Garant et meganorm) :
-#   864–865 MHz : 25 mW ERP, 0,1 % ou LBT ; 868,7–869,2 MHz : 25 mW ERP, LBT (duty cycle non lu).
+#   864–865 MHz : 25 mW ERP, 0,1 % ou LBT ; 868,7–869,2 MHz : 25 mW ERP, « 10 % ou LBT »
+#   (version consolidée 2023) — le duty cycle ci-dessous est donc le plus restrictif.
 # Par prudence, le duty cycle 0,1 % est appliqué aux deux sous-bandes. Le texte consolidé 2023
 # indique « 10 % ou LBT » pour 868,7–869,2 MHz, assorti d'une condition « stations de base » :
 # régime terminal à confirmer (0,1 % est plus restrictif, donc sûr).

@@ -132,6 +132,42 @@ class _CRekeyServer(ctypes.Structure):
     _fields_ = [("awaiting", ctypes.c_uint8)]
 
 
+class _CSessionKeys(ctypes.Structure):
+    _fields_ = [
+        ("f_nwk_s_int_key", ctypes.c_uint8 * 16),
+        ("s_nwk_s_int_key", ctypes.c_uint8 * 16),
+        ("nwk_s_enc_key", ctypes.c_uint8 * 16),
+        ("app_s_key", ctypes.c_uint8 * 16),
+    ]
+
+
+class _CSessionUplinkPlan(ctypes.Structure):
+    _fields_ = [
+        ("fcnt32", ctypes.c_uint32),
+        ("rekey_ind", ctypes.c_uint8),
+        ("ack_req", ctypes.c_uint8),
+        ("default_channels_reenabled", ctypes.c_uint8),
+    ]
+
+
+class _CSessionUplinkEnd(ctypes.Structure):
+    _fields_ = [("state", ctypes.c_uint8)]
+
+
+class _CSessionInfo(ctypes.Structure):
+    _fields_ = [
+        ("state", ctypes.c_uint8),
+        ("dev_addr", ctypes.c_uint32),
+        ("fcnt_up", ctypes.c_uint64),
+        ("nf_cnt_dwn", ctypes.c_uint64),
+        ("af_cnt_dwn", ctypes.c_uint64),
+        ("dr", ctypes.c_uint8),
+        ("tx_power_index", ctypes.c_uint8),
+        ("ack_cnt", ctypes.c_uint64),
+        ("cycle_open", ctypes.c_uint8),
+    ]
+
+
 class _CUplinkFrame(ctypes.Structure):
     _fields_ = [
         ("dev_addr", ctypes.c_uint32),
@@ -438,6 +474,24 @@ LIB.lsim_rekey_device_must_send_rekey_ind.restype = ctypes.c_int32
 LIB.lsim_rekey_device_must_send_rekey_ind.argtypes = [ctypes.POINTER(_CRekeyDevice), _U8P]
 LIB.lsim_rekey_server_join_accepted.restype = ctypes.c_int32
 LIB.lsim_rekey_server_join_accepted.argtypes = [ctypes.POINTER(_CRekeyServer)]
+LIB.lsim_session_create.restype = ctypes.c_int32
+LIB.lsim_session_create.argtypes = [ctypes.POINTER(ctypes.c_uint64)]
+LIB.lsim_session_destroy.restype = ctypes.c_int32
+LIB.lsim_session_destroy.argtypes = [ctypes.c_uint64]
+LIB.lsim_session_join_accepted.restype = ctypes.c_int32
+LIB.lsim_session_join_accepted.argtypes = [
+    ctypes.c_uint64, ctypes.POINTER(_CSessionKeys), ctypes.c_uint32, ctypes.c_uint8,
+    ctypes.c_uint8, ctypes.c_uint8, ctypes.c_uint8]
+LIB.lsim_session_begin_uplink.restype = ctypes.c_int32
+LIB.lsim_session_begin_uplink.argtypes = [
+    ctypes.c_uint64, ctypes.c_uint8, ctypes.c_uint8, ctypes.POINTER(_CSessionUplinkPlan)]
+LIB.lsim_session_receive_downlink.restype = ctypes.c_int32
+LIB.lsim_session_receive_downlink.argtypes = [
+    ctypes.c_uint64, ctypes.c_uint8, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint8]
+LIB.lsim_session_end_uplink.restype = ctypes.c_int32
+LIB.lsim_session_end_uplink.argtypes = [ctypes.c_uint64, ctypes.POINTER(_CSessionUplinkEnd)]
+LIB.lsim_session_snapshot.restype = ctypes.c_int32
+LIB.lsim_session_snapshot.argtypes = [ctypes.c_uint64, ctypes.POINTER(_CSessionInfo)]
 LIB.lsim_rekey_server_on_uplink.restype = ctypes.c_int32
 LIB.lsim_rekey_server_on_uplink.argtypes = [
     ctypes.POINTER(_CRekeyServer), ctypes.c_uint8, ctypes.c_uint8, _U8P]

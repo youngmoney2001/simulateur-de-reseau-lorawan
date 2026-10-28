@@ -41,6 +41,7 @@ extern "C" {
 #define LSIM_STATUS_REJOIN_BASE 650
 #define LSIM_STATUS_REGISTRY_BASE 700
 #define LSIM_STATUS_ADR_BASE    760
+#define LSIM_STATUS_SESSION_BASE 780
 #define LSIM_STATUS_INTERNAL    900
 
 typedef struct lsim_radio_config {
@@ -559,6 +560,56 @@ LSIM_API int32_t lsim_rekey_device_must_send_rekey_ind(const lsim_rekey_device* 
 LSIM_API int32_t lsim_rekey_server_join_accepted(lsim_rekey_server* s);
 LSIM_API int32_t lsim_rekey_server_on_uplink(lsim_rekey_server* s, uint8_t new_context,
                                              uint8_t has_rekey_ind, uint8_t* action);
+
+/* ------------------------------------------- Moteur de session dispositif (OTAA 1.1)
+ * Session désignée par un handle (table protégée par verrou, aucune clé exposée en
+ * retour). Statut : 780 + SessionStatus (0 Ok, 1 NoSession, 2 CycleError, 3 Replay,
+ * 4 InvalidParameter, 5 CounterExhausted) ; handle inconnu : 786.
+ * state : 0 NoSession, 1 Active, 2 NeedsJoin. Cycle d'uplink :
+ * begin_uplink -> [receive_downlink]* -> end_uplink. */
+typedef struct {
+    uint8_t f_nwk_s_int_key[16];
+    uint8_t s_nwk_s_int_key[16];
+    uint8_t nwk_s_enc_key[16];
+    uint8_t app_s_key[16];
+} lsim_session_keys;
+
+typedef struct {
+    uint32_t fcnt32;   /* FCntUp à utiliser */
+    uint8_t rekey_ind; /* 1 : inclure RekeyInd */
+    uint8_t ack_req;   /* 1 : inclure ADRACKReq */
+    uint8_t default_channels_reenabled;
+} lsim_session_uplink_plan;
+
+typedef struct {
+    uint8_t state;     /* 0 NoSession, 1 Active, 2 NeedsJoin */
+} lsim_session_uplink_end;
+
+typedef struct {
+    uint8_t state;
+    uint32_t dev_addr;
+    uint64_t fcnt_up;
+    uint64_t nf_cnt_dwn;
+    uint64_t af_cnt_dwn;
+    uint8_t dr;
+    uint8_t tx_power_index;
+    uint64_t ack_cnt;
+    uint8_t cycle_open;
+} lsim_session_info;
+
+LSIM_API int32_t lsim_session_create(uint64_t* handle);
+LSIM_API int32_t lsim_session_destroy(uint64_t handle);
+LSIM_API int32_t lsim_session_join_accepted(uint64_t handle, const lsim_session_keys* keys,
+                                            uint32_t dev_addr, uint8_t dr, uint8_t min_dr,
+                                            uint8_t tx_power_index, uint8_t default_tx_power_index);
+/* limit_exp / delay_exp : ADR_ACK_LIMIT / ADR_ACK_DELAY en exposants (0..15). */
+LSIM_API int32_t lsim_session_begin_uplink(uint64_t handle, uint8_t limit_exp, uint8_t delay_exp,
+                                           lsim_session_uplink_plan* plan);
+/* uses_nf : 1 si FPort absent ou 0 (NFCntDown), 0 sinon (AFCntDown). */
+LSIM_API int32_t lsim_session_receive_downlink(uint64_t handle, uint8_t uses_nf, uint32_t fcnt32,
+                                               uint8_t conf_received, uint8_t server_version);
+LSIM_API int32_t lsim_session_end_uplink(uint64_t handle, lsim_session_uplink_end* out);
+LSIM_API int32_t lsim_session_snapshot(uint64_t handle, lsim_session_info* out);
 
 #ifdef __cplusplus
 }
