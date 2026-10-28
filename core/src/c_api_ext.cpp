@@ -407,6 +407,37 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
     }
 }
 
+int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
+                            double max_path_loss_db, const lsim_environment* env,
+                            double step_m, size_t azimuths, double* radii_out) {
+    if (gateway == nullptr || prop == nullptr || radii_out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    try {
+        lsim::radio::LogDistanceModel model;
+        model.frequency_hz = prop->frequency_hz;
+        model.reference_distance_m = prop->reference_distance_m;
+        model.exponent = prop->exponent;
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        if (env != nullptr) {
+            const int32_t built = build_environment(env, grid, obstacles, e);
+            if (built != 0) {
+                return built;
+            }
+        }
+        const auto st = lsim::env::coverage_radii_m(model, gateway->x_m, gateway->y_m, e,
+                                                    max_path_loss_db, step_m, azimuths, radii_out);
+        if (st != lsim::env::EnvStatus::Ok) {
+            return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(st);
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 int32_t lsim_encode_join_request(const lsim_join_request* req, const uint8_t nwk_key[16],
                                  uint8_t out[23]) {
     if (req == nullptr || nwk_key == nullptr || out == nullptr) {

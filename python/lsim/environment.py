@@ -14,6 +14,7 @@ import csv
 import hashlib
 import math
 from array import array
+from itertools import islice
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
@@ -93,65 +94,162 @@ class Environment:
                 raise ValueError(f"{name} doit être dans ]0 ; {MAX_HEIGHT_M}]")
 
 
-def load_dem_csv(path: Path) -> Terrain:
-    """Lit un MNT CSV (`x_m,y_m,z_m`) décrivant une grille régulière complète."""
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+_DEM_BLOCK_ROWS = 100_000
+_COLUMNS = ("x_m", "y_m", "z_m")
+
+
+def _columns_arrow(path: Path) -> Optional[tuple[array, array, array]]:
+    """Lecture colonne par colonne via PyArrow (C++ multi-thread). None si indisponible.
+
+    Toute anomalie de forme (colonnes, types, valeurs) renvoie None : le lecteur
+    Python, plus strict et au message précis par ligne, prend alors le relais.
+    """
+    try:
+        import pyarrow as pa
+        import pyarrow.csv as pacsv
+    except ImportError:
+        return None
+    try:
+        table = pacsv.read_csv(
+            path,
+            convert_options=pacsv.ConvertOptions(
+                column_types={c: pa.float64() for c in _COLUMNS}, strings_can_be_null=False),
+        )
+    except (pa.ArrowInvalid, pa.ArrowTypeError, OSError):
+        return None
+    if tuple(table.column_names) != _COLUMNS:
+        return None
+    out: list[array] = []
+    for name in _COLUMNS:
+        col = table[name].combine_chunks()
+        if col.null_count:
+            return None
+        values = array("d")
+        values.frombytes(col.buffers()[1].to_pybytes()[col.offset * 8:(col.offset + len(col)) * 8])
+        out.append(values)
+    return out[0], out[1], out[2]
+
+
+def _columns_python(path: Path) -> tuple[array, array, array]:
+    """Lecteur CSV pur Python par blocs ; erreurs avec numéro de ligne exact."""
+    xs = array("d")
+    ys = array("d")
+    zs = array("d")
     with path.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.reader(fh)
         header = next(reader, None)
-        if header is None or [h.strip() for h in header] != ["x_m", "y_m", "z_m"]:
+        if header is None or tuple(h.strip() for h in header) != _COLUMNS:
             raise ValueError("MNT : en-tête attendu 'x_m,y_m,z_m'")
-        rows: list[tuple[float, float, float]] = []
-        for lineno, row in enumerate(reader, start=2):
-            if len(rows) >= MAX_TERRAIN_CELLS:
+        lineno = 1
+        while True:
+            block = list(islice(reader, _DEM_BLOCK_ROWS))
+            if not block:
+                break
+            if len(zs) + len(block) > MAX_TERRAIN_CELLS:
                 raise ValueError(f"MNT trop grand (limite {MAX_TERRAIN_CELLS} points)")
-            if len(row) != 3:
-                raise ValueError(f"MNT ligne {lineno} : 3 colonnes attendues")
-            try:
-                x, y, z = (float(v) for v in row)
-            except ValueError as exc:
-                raise ValueError(f"MNT ligne {lineno} : valeur non numérique") from exc
-            if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
-                raise ValueError(f"MNT ligne {lineno} : valeur non finie")
-            rows.append((x, y, z))
-    if not rows:
-        raise ValueError("MNT vide")
+            _parse_block(block, lineno + 1, xs, ys, zs)
+            lineno += len(block)
+    return xs, ys, zs
 
-    xs = sorted({r[0] for r in rows})
-    ys = sorted({r[1] for r in rows})
+
+def _parse_block(block: list[list[str]], first_line: int, xs: array, ys: array,
+                 zs: array) -> None:
+    """Ajoute un bloc de lignes CSV aux tableaux (boucles C sur le chemin nominal)."""
+    if set(map(len, block)) != {3}:
+        for offset, row in enumerate(block):
+            if len(row) != 3:
+                raise ValueError(f"MNT ligne {first_line + offset} : 3 colonnes attendues")
+    cols = list(zip(*block))
+    try:
+        bx = list(map(float, cols[0]))
+        by = list(map(float, cols[1]))
+        bz = list(map(float, cols[2]))
+    except ValueError:
+        for offset, row in enumerate(block):
+            for v in row:
+                try:
+                    float(v)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"MNT ligne {first_line + offset} : valeur non numérique") from exc
+        raise
+    # sum() détecte NaN et infini ; faux positif par débordement : contrôle ligne à ligne.
+    if not (math.isfinite(sum(bx)) and math.isfinite(sum(by)) and math.isfinite(sum(bz))):
+        for offset in range(len(block)):
+            if not (math.isfinite(bx[offset]) and math.isfinite(by[offset])
+                    and math.isfinite(bz[offset])):
+                raise ValueError(f"MNT ligne {first_line + offset} : valeur non finie")
+    xs.extend(bx)
+    ys.extend(by)
+    zs.extend(bz)
+
+
+def load_dem_csv(path: Path) -> Terrain:
+    """Lit un MNT CSV (`x_m,y_m,z_m`) décrivant une grille régulière complète.
+
+    Chemin rapide PyArrow, repli Python. Mémoire : trois tableaux `array('d')` et les
+    valeurs distinctes de x et y (au plus la taille de la grille).
+    """
+    cols = _columns_arrow(path)
+    if cols is None:
+        cols = _columns_python(path)
+    xs_in, ys_in, zs_in = cols
+    n = len(zs_in)
+    if n == 0:
+        raise ValueError("MNT vide")
+    if n > MAX_TERRAIN_CELLS:
+        raise ValueError(f"MNT trop grand (limite {MAX_TERRAIN_CELLS} points)")
+    if not (math.isfinite(sum(xs_in)) and math.isfinite(sum(ys_in)) and math.isfinite(sum(zs_in))):
+        if not all(math.isfinite(v) for v in zs_in):
+            raise ValueError("MNT : valeur non finie")
+        if not all(math.isfinite(v) for v in xs_in) or not all(math.isfinite(v) for v in ys_in):
+            raise ValueError("MNT : coordonnée non finie")
+
+    xs = sorted(set(xs_in))
+    ys = sorted(set(ys_in))
     nx, ny = len(xs), len(ys)
     if nx < 2 or ny < 2:
         raise ValueError("MNT : la grille doit compter au moins 2 x 2 points")
-    if nx * ny != len(rows):
+    if nx * ny != n:
         raise ValueError("MNT : grille incomplète ou points dupliqués")
     dx = xs[1] - xs[0]
     dy = ys[1] - ys[0]
     if dx <= 0 or dy <= 0:
         raise ValueError("MNT : pas non strictement positif")
-    tol_x = _SPACING_TOL * dx
-    tol_y = _SPACING_TOL * dy
-    if any(abs((xs[i + 1] - xs[i]) - dx) > tol_x for i in range(nx - 1)):
-        raise ValueError("MNT : pas en x non régulier")
-    if any(abs((ys[i + 1] - ys[i]) - dy) > tol_y for i in range(ny - 1)):
-        raise ValueError("MNT : pas en y non régulier")
     if abs(dx - dy) > _SPACING_TOL * max(dx, dy):
         raise ValueError("MNT : cellules non carrées non supportées")
+    if any(abs((xs[i + 1] - xs[i]) - dx) > _SPACING_TOL * dx for i in range(nx - 1)):
+        raise ValueError("MNT : pas en x non régulier")
+    if any(abs((ys[i + 1] - ys[i]) - dy) > _SPACING_TOL * dy for i in range(ny - 1)):
+        raise ValueError("MNT : pas en y non régulier")
 
-    ix_of = {x: i for i, x in enumerate(xs)}
-    iy_of = {y: i for i, y in enumerate(ys)}
-    z = array("f", bytes(4 * nx * ny))
-    seen = bytearray(nx * ny)
-    for x, y, zv in rows:
-        pos = iy_of[y] * nx + ix_of[x]
-        if seen[pos]:
-            raise ValueError("MNT : points dupliqués")
-        seen[pos] = 1
-        z[pos] = zv
-    if not all(seen):
-        raise ValueError("MNT : grille incomplète")
-
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    # Chemin rapide (fichier trié ligne par ligne, cas courant) : comparaisons par bloc, C.
+    row_sorted = xs_in == array("d", xs) * ny and all(
+        ys_in[k * nx:(k + 1) * nx] == array("d", [ys[k]]) * nx for k in range(ny))
+    if row_sorted:
+        z = array("f", zs_in)
+    else:
+        ix_of = {x: i for i, x in enumerate(xs)}
+        iy_of = {y: i for i, y in enumerate(ys)}
+        z = array("f", bytes(4 * n))
+        seen = bytearray(n)
+        for x, y, zv in zip(xs_in, ys_in, zs_in):
+            pos = iy_of[y] * nx + ix_of[x]
+            if seen[pos]:
+                raise ValueError("MNT : points dupliqués")
+            seen[pos] = 1
+            z[pos] = zv
+    # nx * ny points distincts, tous placés : grille complète, sans trou.
     return Terrain(origin_x_m=xs[0], origin_y_m=ys[0], cell_m=dx, nx=nx, ny=ny, z=z,
-                   sha256=digest)
+                   sha256=_sha256_file(path))
 
 
 def check_obstacles(obstacles: Sequence[Obstacle]) -> tuple[Obstacle, ...]:

@@ -77,3 +77,92 @@ test("bounds cover every entity", () => {
   }
   assert.equal(boundsOf({ gateway: null, coverage: [], devices: [] }), null);
 });
+
+// ---------------------------------------------------------------- relief (MNT)
+import {
+  parseDem,
+  lonLatToLocal,
+  localToLonLat,
+  groundAtLocal,
+  groundAtLonLat,
+  footprintBase,
+  heightmapTile,
+  DEM_FORMAT,
+} from "../src/model.js";
+
+function demDocument({ nx, ny, cell, z, x0 = 0, y0 = 0, lat = 4.0511, lon = 9.7679 }) {
+  const f32 = Float32Array.from(z);
+  return {
+    format: DEM_FORMAT,
+    origin: { latitude: lat, longitude: lon },
+    origin_x_m: x0,
+    origin_y_m: y0,
+    cell_m: cell,
+    nx,
+    ny,
+    encoding: "float32-le-base64",
+    z: Buffer.from(f32.buffer).toString("base64"),
+    sha256: "abc",
+  };
+}
+
+test("the DEM document decodes and validates", () => {
+  const dem = parseDem(demDocument({ nx: 2, ny: 2, cell: 100, z: [1, 2, 3, 4] }));
+  assert.equal(dem.nx, 2);
+  assert.deepEqual(Array.from(dem.z), [1, 2, 3, 4]);
+  assert.equal(dem.sha256, "abc");
+});
+
+test("invalid DEM documents are refused explicitly", () => {
+  const good = demDocument({ nx: 2, ny: 2, cell: 100, z: [1, 2, 3, 4] });
+  assert.throws(() => parseDem({ ...good, format: "other" }), /lsim-dem-v1/);
+  assert.throws(() => parseDem({ ...good, cell_m: 0 }), /pas/);
+  assert.throws(() => parseDem({ ...good, nx: 3 }), /taille/);
+  assert.throws(() => parseDem({ ...good, nx: 4000, ny: 4000 }), /trop grand/);
+  assert.throws(() => parseDem({ ...good, encoding: "text" }), /encodage/);
+  const nan = demDocument({ nx: 2, ny: 2, cell: 100, z: [1, NaN, 3, 4] });
+  assert.throws(() => parseDem(nan), /non finie/);
+});
+
+test("local projection round-trips and matches the scale of geo.py", () => {
+  const dem = parseDem(demDocument({ nx: 2, ny: 2, cell: 100, z: [0, 0, 0, 0] }));
+  const { x, y } = lonLatToLocal(dem, 9.7679 + 0.01, 4.0511 + 0.01);
+  // 0,01° de latitude ~ 1113 m ; 0,01° de longitude ~ 1113 m x cos(4°).
+  assert.ok(Math.abs(y - 1111.95) < 1.0);
+  assert.ok(Math.abs(x - 1111.95 * Math.cos((4.0511 * Math.PI) / 180)) < 1.0);
+  const back = localToLonLat(dem, x, y);
+  assert.ok(Math.abs(back.lon - (9.7679 + 0.01)) < 1e-9);
+  assert.ok(Math.abs(back.lat - (4.0511 + 0.01)) < 1e-9);
+});
+
+test("bilinear ground elevation and clamping outside the grid", () => {
+  const dem = parseDem(demDocument({ nx: 2, ny: 2, cell: 100, z: [0, 10, 20, 30] }));
+  assert.equal(groundAtLocal(dem, 0, 0), 0);
+  assert.equal(groundAtLocal(dem, 100, 0), 10);
+  assert.equal(groundAtLocal(dem, 50, 50), 15);
+  assert.equal(groundAtLocal(dem, -500, -500), 0); // clamp
+  assert.equal(groundAtLocal(dem, 900, 900), 30); // clamp
+});
+
+test("heightmap tiles put the north row first and sample the grid", () => {
+  // z croît vers le nord : y = 100 (nord) doit donner la valeur la plus haute.
+  const dem = parseDem(demDocument({ nx: 2, ny: 2, cell: 100, z: [0, 0, 100, 100] }));
+  const { lat: north } = localToLonLat(dem, 0, 100);
+  const { lat: south } = localToLonLat(dem, 0, 0);
+  const { lon: west } = localToLonLat(dem, 0, 0);
+  const { lon: east } = localToLonLat(dem, 100, 0);
+  const tile = heightmapTile(dem, west, south, east, north, 3, 3);
+  assert.equal(tile.length, 9);
+  assert.ok(tile[0] > 99 && tile[2] > 99, "première ligne = nord");
+  assert.ok(tile[6] < 1 && tile[8] < 1, "dernière ligne = sud");
+});
+
+test("obstacle base is the lowest ground under its footprint", () => {
+  const dem = parseDem(demDocument({ nx: 2, ny: 2, cell: 100, z: [0, 0, 100, 100] }));
+  const low = localToLonLat(dem, 10, 10);
+  const high = localToLonLat(dem, 90, 90);
+  const ring = [[low.lon, low.lat], [high.lon, low.lat], [high.lon, high.lat], [low.lon, low.lat]];
+  // Sommet le plus bas de l'emprise : sol interpolé à y = 10 m, soit 10 m.
+  assert.ok(Math.abs(footprintBase(dem, ring) - 10) < 0.5);
+  assert.ok(groundAtLonLat(dem, high.lon, high.lat) > 50);
+});

@@ -183,6 +183,88 @@ void test_engine_rejects_invalid_environment_and_work_limit() {
              static_cast<int>(SimStatus::EnvironmentWorkLimit));
 }
 
+// Deux crêtes identiques à 1/3 et 2/3 du trajet : Deygout doit ajouter la perte
+// des deux arêtes secondaires à celle de l'arête principale.
+void test_deygout_two_ridges_add_loss() {
+    const double cell = 100.0;
+    const std::uint32_t nx = 31;  // 3 000 m, pas 100 m
+    std::vector<float> z_two(nx * 2, 0.0f);
+    std::vector<float> z_one(nx * 2, 0.0f);
+    for (std::uint32_t iy = 0; iy < 2; ++iy) {
+        z_two[iy * nx + 10] = 60.0f;  // x = 1000 m
+        z_two[iy * nx + 20] = 60.0f;  // x = 2000 m
+        z_one[iy * nx + 10] = 60.0f;
+    }
+    ElevationGrid g2, g1;
+    CHECK_EQ(static_cast<int>(make_elevation_grid(0, 0, cell, nx, 2, z_two.data(), z_two.size(), g2)),
+             static_cast<int>(EnvStatus::Ok));
+    CHECK_EQ(static_cast<int>(make_elevation_grid(0, 0, cell, nx, 2, z_one.data(), z_one.size(), g1)),
+             static_cast<int>(EnvStatus::Ok));
+    Environment e2;
+    e2.grid = &g2;
+    Environment e1;
+    e1.grid = &g1;
+    PathLoss p2, p1;
+    CHECK_EQ(static_cast<int>(path_loss_db(model(), 0, 50, 3000, 50, e2, p2)),
+             static_cast<int>(EnvStatus::Ok));
+    CHECK_EQ(static_cast<int>(path_loss_db(model(), 0, 50, 3000, 50, e1, p1)),
+             static_cast<int>(EnvStatus::Ok));
+    CHECK_TRUE(p2.diffraction_db > p1.diffraction_db + 1.0);
+    CHECK_TRUE(p1.diffraction_db > 0.0);
+}
+
+// Portée par azimut : un mur côté est réduit la portée dans cette direction seulement.
+void test_coverage_radii_follow_obstacles() {
+    const LogDistanceModel m = model();
+    const double mapl = 120.0;
+    const auto bound = lsim::radio::max_range_m(m, mapl);
+    CHECK_EQ(static_cast<int>(bound.status), 0);
+
+    constexpr std::size_t kAz = 8;
+    double flat[kAz] = {};
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, Environment{}, mapl, 10.0, kAz, flat)),
+             static_cast<int>(EnvStatus::Ok));
+    for (double r : flat) {
+        CHECK_NEAR(r, bound.value, 10.0 + 1e-6);
+    }
+
+    // Mur haut de 40 m entre 300 et 320 m, au-dessus de l'azimut 0 (est).
+    Obstacle wall{300.0, -200.0, 320.0, 200.0, 40.0, 60.0};
+    Environment walled;
+    walled.obstacles = &wall;
+    walled.obstacle_count = 1;
+    double with_wall[kAz] = {};
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, walled, mapl, 10.0, kAz, with_wall)),
+             static_cast<int>(EnvStatus::Ok));
+    // Azimut 0 (est) : la portée est coupée par le mur ; azimut opposé (ouest) : inchangé.
+    CHECK_TRUE(with_wall[0] < 300.0 + 1.0);
+    CHECK_NEAR(with_wall[kAz / 2], flat[kAz / 2], 10.0 + 1e-6);
+    for (std::size_t k = 0; k < kAz; ++k) {
+        CHECK_TRUE(with_wall[k] <= flat[k] + 1e-6);  // jamais plus que le log-distance
+    }
+}
+
+void test_coverage_input_and_work_limits() {
+    const LogDistanceModel m = model();
+    double out[4] = {};
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, Environment{}, 120.0, 10.0, 0, out)),
+             static_cast<int>(EnvStatus::InvalidInput));
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, Environment{}, 120.0, 0.1, 4, out)),
+             static_cast<int>(EnvStatus::InvalidInput));
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, Environment{}, 120.0, 10.0, 4, nullptr)),
+             static_cast<int>(EnvStatus::InvalidInput));
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, Environment{}, std::nan(""), 10.0, 4, out)),
+             static_cast<int>(EnvStatus::InvalidInput));
+    // 720 azimuts, pas de 1 m, 6 000 obstacles : borne de travail dépassée.
+    std::vector<double> big(720);
+    std::vector<Obstacle> walls(6000, Obstacle{1e6, 1e6, 1e6 + 1, 1e6 + 1, 1.0, 0.0});
+    Environment e;
+    e.obstacles = walls.data();
+    e.obstacle_count = walls.size();
+    CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, e, 120.0, 1.0, 720, big.data())),
+             static_cast<int>(EnvStatus::WorkLimit));
+}
+
 }  // namespace
 
 void run_environment_tests() {
@@ -195,4 +277,7 @@ void run_environment_tests() {
     test_invalid_obstacle_refused();
     test_engine_uses_environment();
     test_engine_rejects_invalid_environment_and_work_limit();
+    test_deygout_two_ridges_add_loss();
+    test_coverage_radii_follow_obstacles();
+    test_coverage_input_and_work_limits();
 }

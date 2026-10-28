@@ -44,6 +44,7 @@ _NAMES = {
     503: "obstacle invalide (emprise vide, hauteur ou atténuation hors domaine)",
     504: "trop d'obstacles (limite 10 000)",
     505: "environnement : entrée invalide (pointeur nul avec obstacles déclarés)",
+    506: "couverture : travail de calcul trop grand (azimuts x portée x obstacles)",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

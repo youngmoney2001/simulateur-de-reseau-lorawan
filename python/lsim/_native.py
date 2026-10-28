@@ -225,6 +225,11 @@ LIB.lsim_simulate_uplinks_env.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats)]
+LIB.lsim_coverage_radii.restype = ctypes.c_int32
+LIB.lsim_coverage_radii.argtypes = [
+    ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
+    ctypes.POINTER(_CEnvironment), ctypes.c_double, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_encode_join_request.restype = ctypes.c_int32
 LIB.lsim_encode_join_request.argtypes = [
     ctypes.POINTER(_CJoinRequest), _U8P, _U8P]

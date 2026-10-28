@@ -126,6 +126,39 @@ def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
     return c_env, keep
 
 
+def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db: float,
+                   environment: Optional[Environment], step_m: float,
+                   azimuths: int) -> tuple[float, ...]:
+    """Portée réelle (m) par azimut autour de la passerelle, relief et obstacles inclus.
+
+    Chaque valeur est la distance maximale où la perte totale reste sous
+    `max_path_loss_db`. Le calcul et sa borne de travail sont dans le cœur natif.
+    """
+    if not 1 <= azimuths <= 720:
+        raise ValueError("azimuths doit être compris entre 1 et 720")
+    if not math.isfinite(step_m) or step_m < 1.0:
+        raise ValueError("step_m doit être supérieur ou égal à 1 m")
+    if not math.isfinite(max_path_loss_db):
+        raise ValueError("max_path_loss_db doit être un nombre fini")
+    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db)
+    keep: list[object] = []
+    if environment is None:
+        c_env_ref = None
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+    out = (ctypes.c_double * azimuths)()
+    status = LIB.lsim_coverage_radii(
+        ctypes.byref(c_gw), ctypes.byref(c_prop), max_path_loss_db, c_env_ref,
+        step_m, azimuths, out)
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    return tuple(out)
+
+
 def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
                      propagation: Propagation,
                      environment: Optional[Environment] = None) -> SimulationResult:

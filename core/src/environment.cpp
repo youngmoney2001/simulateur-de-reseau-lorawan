@@ -15,6 +15,10 @@ constexpr double kSpeedOfLight = 299'792'458.0;
 constexpr double kMinDistanceM = 1.0;         // en dessous : pas de diffraction
 constexpr double kProfileStepM = 10.0;        // pas de profil sans grille
 constexpr double kKnifeEdgeMinV = -0.78;      // domaine de validité de J(v)
+constexpr std::size_t kMaxAzimuths = 720;
+constexpr double kMinCoverageStepM = 1.0;
+constexpr int kCoverageBisections = 14;
+constexpr double kMaxCoverageWork = 2.0e9;
 
 bool finite(double x) { return std::isfinite(x); }
 
@@ -58,6 +62,46 @@ struct Candidate {
     double t1;
     double ground_m;  // sol local sous le centre du pavé
 };
+
+// Profil discrétisé : d[i] distance depuis l'émetteur (croissante), z[i] hauteur
+// absolue de l'obstruction (sol ou sommet de pavé). z[0] et z[n] : antennes.
+struct Profile {
+    const double* d;
+    const double* z;
+    double wavelength_m;
+};
+
+// Diffraction de Deygout à 3 arêtes (principale + deux secondaires, niveau 2).
+// Chaque arête est évaluée par rapport à la droite joignant ses extrémités
+// (sommets d'obstacles inclus), comme dans la méthode de Deygout / UIT-R P.526.
+double deygout_loss_db(const Profile& p, std::size_t a, std::size_t b, int level) {
+    if (level <= 0 || b < a + 2) {
+        return 0.0;
+    }
+    const double da = p.d[a];
+    const double db = p.d[b];
+    const double span = db - da;
+    const double za = p.z[a];
+    const double zb = p.z[b];
+    double vmax = -std::numeric_limits<double>::infinity();
+    std::size_t m = a;
+    for (std::size_t i = a + 1; i < b; ++i) {
+        const double t = (p.d[i] - da) / span;
+        const double h = p.z[i] - (za + t * (zb - za));
+        const double d1 = p.d[i] - da;
+        const double d2 = db - p.d[i];
+        const double v = h * std::sqrt(2.0 * span / (p.wavelength_m * d1 * d2));
+        if (v > vmax) {
+            vmax = v;
+            m = i;
+        }
+    }
+    if (vmax <= kKnifeEdgeMinV) {
+        return 0.0;
+    }
+    return knife_edge_loss_db(vmax) + deygout_loss_db(p, a, m, level - 1) +
+           deygout_loss_db(p, m, b, level - 1);
+}
 
 }  // namespace
 
@@ -196,36 +240,122 @@ EnvStatus path_loss_db(const radio::LogDistanceModel& model, double tx_x_m, doub
         }
     }
 
-    // Diffraction : obstruction la plus haute le long du profil.
+    // Diffraction : profil discrétisé (sol ou sommet de pavé), puis Deygout à 3 arêtes.
     const double step = has_terrain ? e.grid->cell_m : kProfileStepM;
-    const std::size_t n = std::clamp<std::size_t>(
-        static_cast<std::size_t>(std::ceil(std::hypot(dx, dy) / step)), 2, kMaxProfileSamples);
     const double total_m = std::hypot(dx, dy);
-    const double wavelength = kSpeedOfLight / model.frequency_hz;
-    double max_v = -std::numeric_limits<double>::infinity();
+    const std::size_t n = std::clamp<std::size_t>(
+        static_cast<std::size_t>(std::ceil(total_m / step)), 2, kMaxProfileSamples);
+    std::vector<double> dist(n + 1);
+    std::vector<double> obstruction(n + 1);
     double max_h = -std::numeric_limits<double>::infinity();
-    for (std::size_t s = 1; s < n; ++s) {
+    for (std::size_t s = 0; s <= n; ++s) {
         const double t = static_cast<double>(s) / static_cast<double>(n);
+        dist[s] = t * total_m;
+        if (s == 0) {
+            obstruction[s] = z_tx;
+            continue;
+        }
+        if (s == n) {
+            obstruction[s] = z_rx;
+            continue;
+        }
         const double x = tx_x_m + t * dx;
         const double y = tx_y_m + t * dy;
-        double obstruction = has_terrain ? ground_elevation_m(*e.grid, x, y) : 0.0;
+        double top = has_terrain ? ground_elevation_m(*e.grid, x, y) : 0.0;
         for (const Candidate& c : cands) {
             if (t < c.t0 || t > c.t1) continue;
             const Obstacle& o = e.obstacles[c.index];
             if (x < o.x_min_m || x > o.x_max_m || y < o.y_min_m || y > o.y_max_m) continue;
-            obstruction = std::max(obstruction, c.ground_m + o.height_m);
+            top = std::max(top, c.ground_m + o.height_m);
         }
-        const double h = obstruction - los(t);
-        max_h = std::max(max_h, h);
-        const double d1 = t * total_m;
-        const double d2 = (1.0 - t) * total_m;
-        const double v = h * std::sqrt(2.0 * (d1 + d2) / (wavelength * d1 * d2));
-        max_v = std::max(max_v, v);
+        obstruction[s] = top;
+        max_h = std::max(max_h, top - los(t));
     }
     // Diffraction seulement si une obstruction dépasse réellement la ligne de visée :
     // un sol sous le rayon est déjà couvert par le modèle log-distance calibré.
-    out.diffraction_db = max_h > 0.0 ? knife_edge_loss_db(max_v) : 0.0;
+    if (max_h > 0.0) {
+        const Profile profile{dist.data(), obstruction.data(),
+                              kSpeedOfLight / model.frequency_hz};
+        out.diffraction_db = deygout_loss_db(profile, 0, n, 2);
+    }
     out.total_db = out.log_distance_db + out.diffraction_db + out.penetration_db;
+    return EnvStatus::Ok;
+}
+
+EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_x_m,
+                           double gateway_y_m, const Environment& e, double max_path_loss_db,
+                           double step_m, std::size_t azimuths, double* radii_out) {
+    if (radii_out == nullptr || azimuths == 0 || azimuths > kMaxAzimuths ||
+        !finite(gateway_x_m) || !finite(gateway_y_m) || !finite(max_path_loss_db) ||
+        !finite(step_m) || step_m < kMinCoverageStepM) {
+        return EnvStatus::InvalidInput;
+    }
+    const EnvStatus vs = validate_environment(e);
+    if (vs != EnvStatus::Ok) {
+        return vs;
+    }
+    // Sans relief ni obstacle, la portée log-distance est une borne haute exacte :
+    // les termes ajoutés (diffraction, pénétration) ne font qu'augmenter la perte.
+    const radio::BudgetResult bound = radio::max_range_m(model, max_path_loss_db);
+    if (bound.status != lora::Status::Ok) {
+        return EnvStatus::InvalidInput;
+    }
+    const double range = bound.value;
+    const double steps = std::ceil(range / step_m) + 1.0;
+    // Borne de travail réaliste : azimuts x pas de recherche x échantillons du profil
+    // (portée / pas du profil, plafonné) x (1 + obstacles). Refus avant tout calcul.
+    const double profile_step = e.grid != nullptr ? e.grid->cell_m : kProfileStepM;
+    const double samples = std::min(std::max(2.0, range / profile_step),
+                                    static_cast<double>(kMaxProfileSamples));
+    const double work = static_cast<double>(azimuths) * steps * samples *
+                        (1.0 + static_cast<double>(e.obstacle_count));
+    if (work > kMaxCoverageWork) {
+        return EnvStatus::WorkLimit;
+    }
+
+    const auto ok_at = [&](double theta, double r) {
+        PathLoss pl;
+        const double px = gateway_x_m + r * std::cos(theta);
+        const double py = gateway_y_m + r * std::sin(theta);
+        if (path_loss_db(model, px, py, gateway_x_m, gateway_y_m, e, pl) != EnvStatus::Ok) {
+            return false;
+        }
+        return pl.total_db <= max_path_loss_db;
+    };
+
+    constexpr double kTwoPi = 6.283185307179586;
+    for (std::size_t k = 0; k < azimuths; ++k) {
+        const double theta = kTwoPi * static_cast<double>(k) / static_cast<double>(azimuths);
+        double last_ok = 0.0;
+        double first_fail = -1.0;
+        for (double r = step_m; ; r += step_m) {
+            const double rr = std::min(r, range);
+            if (ok_at(theta, rr)) {
+                last_ok = rr;
+            } else {
+                first_fail = rr;
+                break;
+            }
+            if (rr >= range) {
+                break;
+            }
+        }
+        if (first_fail > 0.0) {
+            // Raffinement dichotomique entre le dernier succès et le premier échec.
+            double lo = last_ok;
+            double hi = first_fail;
+            for (int it = 0; it < kCoverageBisections; ++it) {
+                const double mid = 0.5 * (lo + hi);
+                if (ok_at(theta, mid)) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            last_ok = lo;
+        }
+        radii_out[k] = last_ok;
+    }
     return EnvStatus::Ok;
 }
 

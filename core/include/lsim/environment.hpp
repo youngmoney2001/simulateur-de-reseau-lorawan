@@ -3,8 +3,8 @@
 //
 // Modèle (simplifié, à calibrer par campagne de mesures) :
 //   PL = PL_log-distance(d_horizontal)
-//        + diffraction (couteau unique, approximation de Lee de l'intégrale de
-//          Fresnel-Kirchhoff, sur l'obstruction la plus haute du profil)
+//        + diffraction (Deygout à 3 arêtes : approximation de Lee de l'intégrale de
+//          Fresnel-Kirchhoff sur l'arête principale puis sur deux arêtes secondaires)
 //        + pénétration (somme des atténuations des pavés traversés sous leur sommet)
 //
 // Règles :
@@ -91,5 +91,16 @@ LSIM_API double ground_elevation_m(const ElevationGrid& grid, double x_m, double
 LSIM_API EnvStatus path_loss_db(const radio::LogDistanceModel& model, double tx_x_m, double tx_y_m,
                                 double rx_x_m, double rx_y_m, const Environment& env,
                                 PathLoss& out);
+
+// Portée réelle par azimut (m) : distance maximale où la perte totale (relief et
+// obstacles inclus) reste sous `max_path_loss_db`. Le dispositif tourne autour de la
+// passerelle (position de référence) ; `radii_out` reçoit `azimuths` valeurs.
+// Recherche par pas puis dichotomie entre le dernier succès et le premier échec
+// (le premier échec est retenu : pas de portée « trouée » surestimée).
+// Borne haute : la portée log-distance (les termes ajoutés ne font qu'augmenter la perte).
+LSIM_API EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_x_m,
+                                    double gateway_y_m, const Environment& e,
+                                    double max_path_loss_db, double step_m,
+                                    std::size_t azimuths, double* radii_out);
 
 }  // namespace lsim::env

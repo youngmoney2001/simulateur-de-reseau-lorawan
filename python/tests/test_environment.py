@@ -1,6 +1,7 @@
 """Relief et obstacles : validation, MNT CSV, intégration simulateur, scénarios, GeoJSON."""
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -214,7 +215,8 @@ environment:
     assert obs[0]["properties"]["height_m"] == 12.0
     assert obs[0]["geometry"]["type"] == "Polygon"
     cov = [ft for ft in doc["features"] if ft["properties"].get("kind") == "coverage"]
-    assert all(ft["properties"]["model"] == "log_distance" for ft in cov)
+    # Scénario avec obstacles : la couverture est la portée réelle par azimut.
+    assert all(ft["properties"]["model"] == "environment" for ft in cov)
     json.dumps(doc)
 
 
@@ -222,3 +224,45 @@ def test_status_names_for_environment_codes():
     assert "obstacle" in describe(503)
     assert "relief" in describe(501)
     assert describe(305).startswith("environnement")
+
+
+def test_dem_fast_and_python_paths_agree(tmp_path):
+    from lsim.environment import _columns_python, load_dem_csv
+    p = _grid_csv(tmp_path / "dem.csv", 25, 17, 20.0, lambda x, y: math.sin(x) + y / 7.0)
+    fast = load_dem_csv(p)
+    xs, ys, zs = _columns_python(p)
+    assert len(zs) == fast.nx * fast.ny
+    # zs est en double précision, la grille stocke en flottant simple : arrondi attendu.
+    assert list(fast.z) == pytest.approx(list(zs), rel=1e-6, abs=1e-5)
+
+
+def test_dem_unsorted_rows_give_same_grid(tmp_path):
+    import random
+    rows = ["x_m,y_m,z_m"]
+    cells = [(ix * 10.0, iy * 10.0, float(ix * 3 + iy)) for ix in range(12) for iy in range(9)]
+    ordered = list(cells)
+    random.Random(5).shuffle(cells)
+    rows += [f"{x},{y},{z}" for x, y, z in cells]
+    shuffled = tmp_path / "shuffled.csv"
+    shuffled.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    ref = tmp_path / "ref.csv"
+    ref.write_text("x_m,y_m,z_m\n" + "\n".join(f"{x},{y},{z}" for x, y, z in ordered) + "\n",
+                   encoding="utf-8")
+    a = load_dem_csv(shuffled)
+    b = load_dem_csv(ref)
+    assert (a.nx, a.ny) == (b.nx, b.ny)
+    assert list(a.z) == list(b.z)
+
+
+def test_dem_duplicate_point_is_refused(tmp_path):
+    p = tmp_path / "dup.csv"
+    p.write_text("x_m,y_m,z_m\n0,0,1\n0,0,2\n10,0,1\n0,10,1\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_dem_csv(p)
+
+
+def test_dem_bad_number_reports_line(tmp_path):
+    p = tmp_path / "bad.csv"
+    p.write_text("x_m,y_m,z_m\n0,0,1\n10,0,abc\n0,10,1\n10,10,1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="ligne"):
+        load_dem_csv(p)

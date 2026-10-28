@@ -288,6 +288,13 @@ LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_
                                            lsim_device_stats* per_device,
                                            lsim_sim_stats* totals);
 
+/* Portée réelle par azimut (relief et obstacles inclus) : radii_out reçoit
+ * `azimuths` distances (m), autour de la passerelle. step_m >= 1 ;
+ * azimuths in 1..720. Borne de travail refusée au-delà (statut 506). */
+LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
+                                     double max_path_loss_db, const lsim_environment* env,
+                                     double step_m, size_t azimuths, double* radii_out);
+
 #ifdef __cplusplus
 }
 #endif
