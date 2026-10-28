@@ -7,6 +7,7 @@
 
 #include "lsim/c_api.h"
 #include "lsim/engine.hpp"
+#include "lsim/environment.hpp"
 #include "lsim/join.hpp"
 #include "lsim/lorawan_keys.hpp"
 #include "lsim/secure_frame.hpp"
@@ -288,6 +289,119 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
             return 0;
         }
         return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+namespace {
+
+// Copie les données C de l'environnement vers des objets C++ validés.
+// Retourne 0 ou un code de statut LSIM_STATUS_ENV_BASE + EnvStatus.
+int32_t build_environment(const lsim_environment* in, lsim::env::ElevationGrid& grid,
+                          std::vector<lsim::env::Obstacle>& obstacles,
+                          lsim::env::Environment& out) {
+    out = lsim::env::Environment{};
+    out.gateway_height_m = in->gateway_height_m;
+    out.device_height_m = in->device_height_m;
+    if (in->obstacle_count > 0 && in->obstacles == nullptr) {
+        return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(lsim::env::EnvStatus::InvalidInput);
+    }
+    if (in->obstacle_count > lsim::env::kMaxObstacles) {
+        return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(lsim::env::EnvStatus::TooManyObstacles);
+    }
+    obstacles.resize(in->obstacle_count);
+    for (size_t i = 0; i < in->obstacle_count; ++i) {
+        const lsim_obstacle& o = in->obstacles[i];
+        obstacles[i].x_min_m = o.x_min_m;
+        obstacles[i].y_min_m = o.y_min_m;
+        obstacles[i].x_max_m = o.x_max_m;
+        obstacles[i].y_max_m = o.y_max_m;
+        obstacles[i].height_m = o.height_m;
+        obstacles[i].attenuation_db = o.attenuation_db;
+    }
+    out.obstacles = obstacles.data();
+    out.obstacle_count = obstacles.size();
+    if (in->grid_z != nullptr) {
+        const std::size_t count = static_cast<std::size_t>(in->grid_nx) * in->grid_ny;
+        const auto st = lsim::env::make_elevation_grid(
+            in->grid_origin_x_m, in->grid_origin_y_m, in->grid_cell_m,
+            in->grid_nx, in->grid_ny, in->grid_z, count, grid);
+        if (st != lsim::env::EnvStatus::Ok) {
+            return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(st);
+        }
+        out.grid = &grid;
+    }
+    return 0;
+}
+
+}  // namespace
+
+int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_count,
+                                  const lsim_gateway* gateway, const lsim_propagation* prop,
+                                  const lsim_environment* env,
+                                  lsim_device_stats* per_device, lsim_sim_stats* totals) {
+    if (env == nullptr) {
+        return lsim_simulate_uplinks(devices, device_count, gateway, prop, per_device, totals);
+    }
+    if (gateway == nullptr || prop == nullptr || totals == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    try {
+        std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
+        for (size_t i = 0; i < device_count; ++i) {
+            const lsim_end_device& d = devices[i];
+            lsim::sim::EndDeviceSpec& s = specs[i];
+            s.position.x_m = d.x_m;
+            s.position.y_m = d.y_m;
+            s.spreading_factor = d.spreading_factor;
+            s.payload_bytes = d.payload_bytes;
+            s.tx_power_dbm = d.tx_power_dbm;
+            s.start_offset_ns = d.start_offset_ns;
+            s.period_ns = d.period_ns;
+            s.messages = d.messages;
+        }
+        lsim::sim::GatewaySpec g;
+        g.position.x_m = gateway->x_m;
+        g.position.y_m = gateway->y_m;
+        g.antenna_gain_dbi = gateway->antenna_gain_dbi;
+
+        lsim::sim::PropagationSpec p;
+        p.frequency_hz = prop->frequency_hz;
+        p.reference_distance_m = prop->reference_distance_m;
+        p.exponent = prop->exponent;
+        p.capture_threshold_db = prop->capture_threshold_db;
+
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        const int32_t built = build_environment(env, grid, obstacles, e);
+        if (built != 0) {
+            return built;
+        }
+
+        std::vector<lsim::sim::DeviceStats> stats(device_count);
+        lsim::sim::SimulationStats tot;
+        const auto st = lsim::sim::simulate_uplinks(specs.data(), device_count, g, p,
+                                                    stats.data(), tot, &e);
+        if (st != lsim::sim::SimStatus::Ok) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
+        }
+        totals->sent = tot.sent;
+        totals->received = tot.received;
+        totals->lost_sensitivity = tot.lost_sensitivity;
+        totals->lost_collision = tot.lost_collision;
+        for (size_t i = 0; i < device_count; ++i) {
+            per_device[i].sent = stats[i].sent;
+            per_device[i].received = stats[i].received;
+            per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
+            per_device[i].lost_collision = stats[i].lost_collision;
+        }
+        return 0;
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }

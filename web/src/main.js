@@ -59,6 +59,20 @@ function render(parsed) {
     });
   }
 
+  // Obstacles : pavés extrudés depuis le sol jusqu'à leur hauteur (mètres).
+  for (const o of parsed.obstacles ?? []) {
+    viewer.entities.add({
+      name: "Obstacle",
+      description: `hauteur ${o.height_m} m, atténuation ${o.attenuation_db ?? 0} dB`,
+      polygon: {
+        hierarchy: Cesium.Cartesian3.fromDegreesArray(o.ring.flat()),
+        extrudedHeight: o.height_m,
+        material: Cesium.Color.DARKSLATEGRAY.withAlpha(0.85),
+        outline: false,
+      },
+    });
+  }
+
   for (const c of parsed.coverage) {
     const flat = c.ring.flat();
     viewer.entities.add({

@@ -32,6 +32,7 @@ extern "C" {
 #define LSIM_STATUS_SECURE_BASE 200
 #define LSIM_STATUS_FRAME_BASE  250
 #define LSIM_STATUS_SIM_BASE    300
+#define LSIM_STATUS_ENV_BASE    500
 #define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_INTERNAL    900
 
@@ -251,6 +252,41 @@ LSIM_API int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t de
                                        const lsim_propagation* prop,
                                        lsim_device_stats* per_device,
                                        lsim_sim_stats* totals);
+
+/* Environnement radio : relief et obstacles (voir lsim/environment.hpp). */
+typedef struct lsim_obstacle {
+    double x_min_m;
+    double y_min_m;
+    double x_max_m;
+    double y_max_m;
+    double height_m;
+    double attenuation_db;       /* >= 0, par traversée sous le sommet */
+} lsim_obstacle;
+
+typedef struct lsim_environment {
+    /* Relief : grid_z NULL = terrain plat. Sinon grid_z DOIT pointer vers au
+     * moins grid_nx * grid_ny flottants (m), ligne par ligne. La taille ne peut
+     * pas être vérifiée par le cœur : c'est un contrat de l'appelant. Les
+     * dimensions sont bornées avant toute lecture. Les valeurs sont copiées. */
+    const float* grid_z;
+    uint32_t grid_nx;
+    uint32_t grid_ny;
+    double grid_origin_x_m;
+    double grid_origin_y_m;
+    double grid_cell_m;          /* > 0 */
+    const lsim_obstacle* obstacles;   /* NULL si obstacle_count == 0 */
+    size_t obstacle_count;
+    double gateway_height_m;
+    double device_height_m;
+} lsim_environment;
+
+/* Comme lsim_simulate_uplinks, avec relief et obstacles. env NULL = terrain plat. */
+LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_count,
+                                           const lsim_gateway* gateway,
+                                           const lsim_propagation* prop,
+                                           const lsim_environment* env,
+                                           lsim_device_stats* per_device,
+                                           lsim_sim_stats* totals);
 
 #ifdef __cplusplus
 }

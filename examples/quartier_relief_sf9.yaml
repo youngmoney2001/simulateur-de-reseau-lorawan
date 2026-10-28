@@ -1,0 +1,39 @@
+# Quartier 500 compteurs avec relief (MNT synthétique) et bâtiments (obstacles).
+# Les chemins de relief sont relatifs à ce fichier. Données fictives, à remplacer
+# par un MNT et un plan de bâtiments réels pour une étude.
+schema_version: 1
+name: Quartier 500 compteurs SF9 avec relief
+seed: 42
+gateway:
+  x_m: 0
+  y_m: 0
+  antenna_gain_dbi: 2.15
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+environment:
+  gateway_height_m: 25
+  device_height_m: 1.5
+  terrain:
+    type: dem_csv
+    path: relief_quartier_dem.csv
+  obstacles:
+    - {x_min_m: 400, y_min_m: -150, x_max_m: 550, y_max_m: 150, height_m: 24, attenuation_db: 18}
+    - {x_min_m: -700, y_min_m: 300, x_max_m: -450, y_max_m: 480, height_m: 15, attenuation_db: 15}
+    - {x_min_m: 900, y_min_m: 600, x_max_m: 1150, y_max_m: 760, height_m: 30, attenuation_db: 20}
+    - {x_min_m: -1200, y_min_m: -900, x_max_m: -1000, y_max_m: -700, height_m: 12, attenuation_db: 12}
+    - {x_min_m: 200, y_min_m: -1400, x_max_m: 320, y_max_m: -1250, height_m: 18, attenuation_db: 18}
+groups:
+  - name: compteurs
+    count: 500
+    placement:
+      type: disk
+      radius_m: 3000
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 900
+    messages: 10
+    start_spread_s: 900

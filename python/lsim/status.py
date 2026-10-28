@@ -29,6 +29,8 @@ _NAMES = {
     302: "trop de dispositifs (limite 10 000)",
     303: "trop de transmissions (limite 5 000 000)",
     304: "file d'événements pleine",
+    305: "environnement invalide (relief ou obstacles)",
+    306: "environnement : travail de calcul trop grand (dispositifs x obstacles)",
     # 400..449 : jointure OTAA
     401: "join : longueur de message invalide",
     402: "join : type de message (MHDR) inattendu",
@@ -36,6 +38,12 @@ _NAMES = {
     404: "join : MIC invalide, champs non exposés",
     405: "join : échec cryptographique",
     406: "join : champ hors domaine",
+    # 500..599 : environnement (relief, obstacles)
+    501: "relief invalide : grille incohérente ou valeurs non finies",
+    502: "relief trop grand (limite 4 000 000 points)",
+    503: "obstacle invalide (emprise vide, hauteur ou atténuation hors domaine)",
+    504: "trop d'obstacles (limite 10 000)",
+    505: "environnement : entrée invalide (pointeur nul avec obstacles déclarés)",
     # 900 : erreur interne (exception interceptée à la frontière)
     900: "erreur interne du cœur",
 }

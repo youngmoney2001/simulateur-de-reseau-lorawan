@@ -21,6 +21,13 @@ from typing import Annotated, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lsim.environment import (
+    MAX_OBSTACLES,
+    Environment,
+    Obstacle,
+    Terrain,
+    load_dem_csv,
+)
 from lsim.simulator import EndDevice, Gateway, Propagation
 
 SCHEMA_VERSION = 1
@@ -89,12 +96,48 @@ class GroupModel(_Strict):
         return int(self.count or 0)
 
 
+class ObstacleModel(_Strict):
+    x_min_m: float
+    y_min_m: float
+    x_max_m: float
+    y_max_m: float
+    height_m: float = Field(gt=0, le=1000)
+    attenuation_db: float = Field(0.0, ge=0, le=200)
+
+    @model_validator(mode="after")
+    def _box_not_empty(self) -> "ObstacleModel":
+        if not (self.x_min_m < self.x_max_m and self.y_min_m < self.y_max_m):
+            raise ValueError("emprise de l'obstacle vide (min doit être < max)")
+        return self
+
+
+class TerrainModel(_Strict):
+    type: Literal["dem_csv"]
+    # Chemin relatif au fichier de scénario ; pas de racine, pas de '..'.
+    path: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _safe_relative(self) -> "TerrainModel":
+        p = Path(self.path)
+        if p.is_absolute() or ".." in p.parts or "\\" in self.path:
+            raise ValueError("terrain.path doit être relatif, sans '..'")
+        return self
+
+
+class EnvironmentModel(_Strict):
+    gateway_height_m: float = Field(15.0, gt=0, le=1000)
+    device_height_m: float = Field(1.5, gt=0, le=1000)
+    terrain: Optional[TerrainModel] = None
+    obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
+
+
 class ScenarioModel(_Strict):
     schema_version: Literal[1]
     name: str = Field(min_length=1, max_length=128)
     seed: int = Field(0, ge=0, le=2**32 - 1)
     gateway: GatewayModel = GatewayModel()
     propagation: PropagationModel = PropagationModel()
+    environment: Optional[EnvironmentModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -114,10 +157,18 @@ class ScenarioModel(_Strict):
 class Scenario:
     """Scénario validé, prêt à être déployé et simulé."""
 
-    def __init__(self, model: ScenarioModel) -> None:
+    def __init__(self, model: ScenarioModel, environment: Optional[Environment] = None) -> None:
+        if model.environment is not None and environment is None:
+            raise ValueError("environnement déclaré : charger le scénario avec load_scenario")
         self.model = model
-        canonical = json.dumps(model.model_dump(mode="json"), sort_keys=True,
-                               separators=(",", ":"), ensure_ascii=False)
+        self.environment = environment
+        dumped = model.model_dump(mode="json")
+        if model.environment is None:
+            # Sans environnement, le hash reste celui des scénarios antérieurs.
+            dumped.pop("environment", None)
+        elif environment is not None and environment.terrain is not None:
+            dumped["environment"]["terrain_sha256"] = environment.terrain.sha256
+        canonical = json.dumps(dumped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         self.sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
@@ -170,17 +221,42 @@ def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
     return out
 
 
+def _build_environment(model: EnvironmentModel, base_dir: Path) -> Environment:
+    terrain: Optional[Terrain] = None
+    if model.terrain is not None:
+        root = base_dir.resolve()
+        target = (root / model.terrain.path).resolve()
+        if root not in target.parents:
+            raise ValueError("terrain.path sort du dossier du scénario")
+        if not target.is_file():
+            raise ValueError(f"fichier de relief introuvable : {model.terrain.path}")
+        terrain = load_dem_csv(target)
+    obstacles = tuple(
+        Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m, o.attenuation_db)
+        for o in model.obstacles)
+    return Environment(terrain=terrain, obstacles=obstacles,
+                       gateway_height_m=model.gateway_height_m,
+                       device_height_m=model.device_height_m)
+
+
 def load_scenario(source: Union[str, Path]) -> Scenario:
     """Charge un scénario depuis un fichier YAML (chemin) ou une chaîne YAML.
 
     Utilise `yaml.safe_load` : aucun objet Python arbitraire n'est construit.
+    Le relief (`terrain.path`) est lu relativement au dossier du fichier YAML ;
+    pour une chaîne YAML, relativement au dossier courant.
     """
+    base_dir = Path(".")
     if isinstance(source, Path) or (isinstance(source, str) and "\n" not in source
                                     and source.endswith((".yaml", ".yml"))):
-        text = Path(source).read_text(encoding="utf-8")
+        path = Path(source)
+        text = path.read_text(encoding="utf-8")
+        base_dir = path.parent
     else:
         text = str(source)
     data = yaml.safe_load(text)
     if not isinstance(data, dict):
         raise ValueError("le scénario doit être un mapping YAML")
-    return Scenario(ScenarioModel.model_validate(data))
+    model = ScenarioModel.model_validate(data)
+    env = _build_environment(model.environment, base_dir) if model.environment else None
+    return Scenario(model, env)

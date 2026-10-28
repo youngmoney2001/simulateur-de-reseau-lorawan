@@ -3,7 +3,8 @@
 
 export const MAX_FEATURES = 20000;
 
-const KINDS = new Set(["gateway", "coverage", "device"]);
+const KINDS = new Set(["gateway", "coverage", "device", "obstacle"]);
+const MAX_OBSTACLE_HEIGHT_M = 1000;
 
 function isLonLat(c) {
   return (
@@ -35,6 +36,15 @@ export function validateMap(doc) {
         throw new Error("Couverture : polygone attendu");
       }
       if (!g.coordinates[0].every(isLonLat)) throw new Error("Couverture : coordonnées invalides");
+    } else if (kind === "obstacle") {
+      if (g?.type !== "Polygon" || !Array.isArray(g.coordinates?.[0])) {
+        throw new Error("Obstacle : polygone attendu");
+      }
+      if (!g.coordinates[0].every(isLonLat)) throw new Error("Obstacle : coordonnées invalides");
+      const h = f.properties.height_m;
+      if (!Number.isFinite(h) || h <= 0 || h > MAX_OBSTACLE_HEIGHT_M) {
+        throw new Error("Obstacle : hauteur invalide");
+      }
     } else {
       if (g?.type !== "Point" || !isLonLat(g.coordinates)) {
         throw new Error(`${kind} : point géographique attendu`);
@@ -55,13 +65,21 @@ export function pdrColor(pdr) {
 
 export function parseMap(doc) {
   validateMap(doc);
-  const out = { gateway: null, coverage: [], devices: [], properties: doc.properties ?? {} };
+  const out = {
+    gateway: null,
+    coverage: [],
+    devices: [],
+    obstacles: [],
+    properties: doc.properties ?? {},
+  };
   for (const f of doc.features) {
     const p = f.properties;
     if (p.kind === "gateway") {
       out.gateway = f.geometry.coordinates;
     } else if (p.kind === "coverage") {
       out.coverage.push({ ...p, ring: f.geometry.coordinates[0] });
+    } else if (p.kind === "obstacle") {
+      out.obstacles.push({ ...p, ring: f.geometry.coordinates[0] });
     } else {
       out.devices.push({ ...p, lonlat: f.geometry.coordinates });
     }
@@ -80,6 +98,7 @@ export function boundsOf(parsed) {
   };
   if (parsed.gateway) add(parsed.gateway);
   for (const c of parsed.coverage) c.ring.forEach(add);
+  for (const o of parsed.obstacles ?? []) o.ring.forEach(add);
   for (const d of parsed.devices) add(d.lonlat);
   if (!Number.isFinite(west)) return null;
   return { west, south, east, north };

@@ -81,6 +81,60 @@ void test_seal_open_roundtrip_and_tamper() {
     CHECK_EQ(n, size_t{0});
 }
 
+void test_simulate_with_environment() {
+    const lsim_gateway g{0.0, 0.0, 0.0};
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0};
+    lsim_end_device d[1] = {{1000.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1}};
+    lsim_device_stats per[1]{};
+    lsim_sim_stats tot{};
+
+    // env NULL : identique à l'API sans environnement.
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, nullptr, per, &tot), 0);
+    const uint64_t base_received = tot.received;
+
+    // Obstacle épais et haut, traversé : perte supplémentaire -> perte de réception.
+    lsim_obstacle wall{500.0, -50.0, 600.0, 50.0, 30.0, 200.0};
+    lsim_environment e{};
+    e.obstacles = &wall;
+    e.obstacle_count = 1;
+    e.gateway_height_m = 15.0;
+    e.device_height_m = 1.5;
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, &e, per, &tot), 0);
+    CHECK_EQ(tot.received, uint64_t{0});
+    CHECK_TRUE(base_received >= tot.received);
+
+    // Grille hors bornes (4 002 000 cellules > 4 000 000) : refusée avant toute lecture.
+    const float z[1] = {0.0f};
+    lsim_environment bad{};
+    bad.grid_z = z;
+    bad.grid_nx = 2000;
+    bad.grid_ny = 2001;
+    bad.grid_cell_m = 10.0;
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, &bad, per, &tot), 500 + 2);  // GridTooLarge
+
+    // Pas de grille nul : refusé.
+    lsim_environment zero{};
+    zero.grid_z = z;
+    zero.grid_nx = 1;
+    zero.grid_ny = 1;
+    zero.grid_cell_m = 0.0;
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, &zero, per, &tot), 500 + 1);  // InvalidGrid
+
+    // Obstacle non fini : refusé.
+    lsim_obstacle nan_wall{0.0, 0.0, 1.0, 1.0, 1.0, 0.0};
+    nan_wall.height_m = 0.0 / 0.0;
+    lsim_environment nan_env{};
+    nan_env.obstacles = &nan_wall;
+    nan_env.obstacle_count = 1;
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, &nan_env, per, &tot) == 0, false);
+
+    // Pointeur d'obstacles nul avec un nombre non nul : refus.
+    lsim_environment null_env{};
+    null_env.obstacle_count = 1;
+    CHECK_EQ(lsim_simulate_uplinks_env(d, 1, &g, &p, &null_env, per, &tot),
+             500 + 5);
+}
+
 void test_status_ranges_are_disjoint() {
     // Un statut de crypto (100+) ne doit jamais se confondre avec un PHY (0..99).
     lsim_session_keys_11 k{};
@@ -158,5 +212,6 @@ void run_c_api_tests() {
     test_seal_open_roundtrip_and_tamper();
     test_status_ranges_are_disjoint();
     test_simulate_totals();
+    test_simulate_with_environment();
     test_join_roundtrip_and_vectors();
 }

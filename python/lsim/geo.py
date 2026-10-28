@@ -67,11 +67,27 @@ def to_geojson(run: RunResult, scenario: Scenario, origin_lat: float, origin_lon
         features.append({
             "type": "Feature",
             "geometry": {"type": "Polygon", "coordinates": [ring]},
+            # Portée en espace libre (log-distance seul) : ne tient pas compte du relief
+            # ni des obstacles du scénario, indiqué explicitement dans `model`.
             "properties": {"kind": "coverage", "group": group.name,
                            "spreading_factor": group.spreading_factor,
                            "tx_power_dbm": group.tx_power_dbm,
-                           "range_m": round(radius, 1)},
+                           "range_m": round(radius, 1),
+                           "model": "log_distance"},
         })
+
+    env = scenario.environment
+    if env is not None:
+        for i, o in enumerate(env.obstacles):
+            corners = [(o.x_min_m, o.y_min_m), (o.x_max_m, o.y_min_m),
+                       (o.x_max_m, o.y_max_m), (o.x_min_m, o.y_max_m), (o.x_min_m, o.y_min_m)]
+            ring = [list(_to_lonlat(x, y, origin_lat, origin_lon)) for x, y in corners]
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+                "properties": {"kind": "obstacle", "index": i, "height_m": o.height_m,
+                               "attenuation_db": o.attenuation_db},
+            })
 
     for r in run.rows:
         features.append({

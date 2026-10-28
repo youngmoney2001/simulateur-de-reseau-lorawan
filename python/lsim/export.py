@@ -50,7 +50,8 @@ class RunResult:
 def run_scenario(scenario: Scenario) -> RunResult:
     """Déploie le scénario et lance la simulation native."""
     devices, groups, indices = scenario.deploy()
-    result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation())
+    result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
+                              scenario.environment)
     rows = tuple(
         DeviceRow(
             device_index=i,

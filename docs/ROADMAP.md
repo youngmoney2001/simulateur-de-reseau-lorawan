@@ -14,7 +14,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Sensibilité SX1276 125 kHz (SF7–SF12) ; 250/500 kHz refusées tant que non vérifiées
 - ✅ Perte espace libre, log-distance, perte maximale admissible (MAPL), portée inverse
 - ⬜ Vérifier les sensibilités 250/500 kHz sur le datasheet officiel
-- ⬜ Obstacles, masques de terrain, shadowing
+- ✅ Relief (grille d'altitudes bilinéaire, MNT CSV) et obstacles (pavés) : perte log-distance + diffraction de couteau unique (Lee, seulement si l'obstruction dépasse la ligne de visée) + pénétration ; API C `lsim_simulate_uplinks_env`, scénario YAML `environment:`
+- ⬜ Calibrage du modèle de relief/obstacles par campagne de mesures ; shadowing log-normal
 
 - ✅ Collisions même SF avec capture effect (seuil 6 dB), orthogonalité inter-SF (modèle de base, voir Limites)
 - ⬜ Profils régionaux data-driven : EU868, US915, AS923, AU915, KR920, IN865, RU864
@@ -38,6 +39,7 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - ✅ Moteur d'événements discrets : file bornée déterministe, simulation des uplinks (`lsim.simulator`)
 
 ## Limites connues (à traiter avant commercialisation)
+- Le relief et les obstacles utilisent un modèle simplifié (diffraction de couteau unique, pénétration fixe) : à calibrer par mesures avant usage contractuel. Les couvertures affichées restent en log-distance seul.
 - Le modèle de collision est un modèle de base : pas de réception multi-passerelle, pas de dérive d'horloge, pas de duty cycle ni de downlink.
 - Les FOpts ne sont pas exposés par l'API C ; le chiffrement FOpts 1.1 (NwkSEncKey) n'est pas câblé.
 - La jointure ne gère pas le suivi des DevNonce ni le rejoin : c'est l'état du serveur de jointure, hors bibliothèque.
@@ -51,7 +53,8 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 
 ## Jalon 4 — Visualisation 3D et produit
 - ✅ Carte 3D CesiumJS (Apache-2.0) : passerelle, zones de couverture natives, dispositifs colorés par PDR (PointPrimitiveCollection), détail au clic, chargement GeoJSON validé
-- ⬜ Terrain et obstacles dans la carte (aujourd'hui terrain plat)
+- ✅ Obstacles extrudés dans la carte (export GeoJSON `kind: obstacle`, hauteur en mètres)
+- ⬜ Relief dans la carte (terrain local, sans fournisseur de tuiles sous contrat)
 - ⬜ Fournisseur de tuiles sous contrat pour l'usage commercial
 - ⬜ Rapports PDF/Excel, gestion multi-utilisateurs
 - ⬜ Empaquetage, documentation, cycle de release

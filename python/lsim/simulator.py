@@ -10,15 +10,18 @@ from __future__ import annotations
 import ctypes
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 from lsim._native import (
     LIB,
     _CDeviceStats,
     _CEndDevice,
+    _CEnvironment,
     _CGateway,
+    _CObstacle,
     _CPropagation,
 )
+from lsim.environment import Environment
 from lsim.lora import StatusError
 
 MAX_END_DEVICES = 10_000
@@ -92,9 +95,45 @@ class SimulationResult:
     totals: Counters
 
 
+def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
+    """Traduit l'environnement en structure C. Retourne aussi les tampons à garder vivants."""
+    keep: list[object] = []
+    c_env = _CEnvironment()
+    c_env.gateway_height_m = env.gateway_height_m
+    c_env.device_height_m = env.device_height_m
+    if env.terrain is not None:
+        t = env.terrain
+        buf = (ctypes.c_float * len(t.z)).from_buffer(t.z)
+        keep.append(buf)
+        c_env.grid_z = ctypes.cast(buf, ctypes.POINTER(ctypes.c_float))
+        c_env.grid_nx = t.nx
+        c_env.grid_ny = t.ny
+        c_env.grid_origin_x_m = t.origin_x_m
+        c_env.grid_origin_y_m = t.origin_y_m
+        c_env.grid_cell_m = t.cell_m
+    if env.obstacles:
+        c_obs = (_CObstacle * len(env.obstacles))()
+        for i, o in enumerate(env.obstacles):
+            c_obs[i].x_min_m = o.x_min_m
+            c_obs[i].y_min_m = o.y_min_m
+            c_obs[i].x_max_m = o.x_max_m
+            c_obs[i].y_max_m = o.y_max_m
+            c_obs[i].height_m = o.height_m
+            c_obs[i].attenuation_db = o.attenuation_db
+        keep.append(c_obs)
+        c_env.obstacles = ctypes.cast(c_obs, ctypes.POINTER(_CObstacle))
+        c_env.obstacle_count = len(env.obstacles)
+    return c_env, keep
+
+
 def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
-                     propagation: Propagation) -> SimulationResult:
-    """Simule les liaisons montantes vers une passerelle et retourne les compteurs."""
+                     propagation: Propagation,
+                     environment: Optional[Environment] = None) -> SimulationResult:
+    """Simule les liaisons montantes vers une passerelle et retourne les compteurs.
+
+    `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
+    plat et sans obstacle (résultat identique au modèle log-distance seul).
+    """
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     n = len(devices)
@@ -115,9 +154,15 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation.exponent, propagation.capture_threshold_db)
     c_stats = (_CDeviceStats * n)()
     c_tot = _CDeviceStats()
-    status = LIB.lsim_simulate_uplinks(
+    if environment is None:
+        c_env_ref, keep = None, []
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+    status = LIB.lsim_simulate_uplinks_env(
         c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop),
-        c_stats if n else None, ctypes.byref(c_tot))
+        c_env_ref, c_stats if n else None, ctypes.byref(c_tot))
+    del keep
     if status != 0:
         raise StatusError(status)
 

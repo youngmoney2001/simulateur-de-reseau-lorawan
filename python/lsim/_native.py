@@ -124,6 +124,32 @@ class _CJoinAccept(ctypes.Structure):
     ]
 
 
+class _CObstacle(ctypes.Structure):
+    _fields_ = [
+        ("x_min_m", ctypes.c_double),
+        ("y_min_m", ctypes.c_double),
+        ("x_max_m", ctypes.c_double),
+        ("y_max_m", ctypes.c_double),
+        ("height_m", ctypes.c_double),
+        ("attenuation_db", ctypes.c_double),
+    ]
+
+
+class _CEnvironment(ctypes.Structure):
+    _fields_ = [
+        ("grid_z", ctypes.POINTER(ctypes.c_float)),
+        ("grid_nx", ctypes.c_uint32),
+        ("grid_ny", ctypes.c_uint32),
+        ("grid_origin_x_m", ctypes.c_double),
+        ("grid_origin_y_m", ctypes.c_double),
+        ("grid_cell_m", ctypes.c_double),
+        ("obstacles", ctypes.POINTER(_CObstacle)),
+        ("obstacle_count", ctypes.c_size_t),
+        ("gateway_height_m", ctypes.c_double),
+        ("device_height_m", ctypes.c_double),
+    ]
+
+
 _CSimStats = _CDeviceStats  # même disposition (quatre uint64)
 
 
@@ -194,6 +220,11 @@ LIB.lsim_simulate_uplinks.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDeviceStats),
     ctypes.POINTER(_CSimStats)]
+LIB.lsim_simulate_uplinks_env.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_env.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats)]
 LIB.lsim_encode_join_request.restype = ctypes.c_int32
 LIB.lsim_encode_join_request.argtypes = [
     ctypes.POINTER(_CJoinRequest), _U8P, _U8P]
