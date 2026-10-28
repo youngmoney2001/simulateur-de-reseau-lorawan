@@ -20,6 +20,7 @@ int payload_len(Direction dir, std::uint8_t cid) {
             case 0x0A: return 1;  // DlChannelAns
             case 0x0D: return 0;  // DeviceTimeReq
             case 0x0F: return 1;  // RejoinParamSetupAns
+            case 0x0C: return 0;  // ADRParamSetupAns
             case 0x0B: return 1;  // RekeyInd
             default: return -1;
         }
@@ -36,6 +37,7 @@ int payload_len(Direction dir, std::uint8_t cid) {
         case 0x0D: return 5;  // DeviceTimeAns
         case 0x0E: return 2;  // ForceRejoinReq
         case 0x0F: return 1;  // RejoinParamSetupReq
+        case 0x0C: return 1;  // ADRParamSetupReq
         case 0x0B: return 1;  // RekeyConf
         default: return -1;
     }
@@ -193,6 +195,15 @@ MacStatus encode(const RejoinParamSetupReq& c, Buf& out, std::size_t& len) {
     out = {};
     out[0] = static_cast<std::uint8_t>(Cid::RejoinParamSetup);
     out[1] = static_cast<std::uint8_t>((c.max_time_n << 4) | c.max_count_n);
+    len = 2;
+    return MacStatus::Ok;
+}
+
+MacStatus encode(const AdrParamSetupReq& c, Buf& out, std::size_t& len) {
+    if (c.limit_exp > 15 || c.delay_exp > 15) return MacStatus::FieldOutOfRange;
+    out = {};
+    out[0] = static_cast<std::uint8_t>(Cid::AdrParamSetup);
+    out[1] = static_cast<std::uint8_t>((c.limit_exp << 4) | c.delay_exp);
     len = 2;
     return MacStatus::Ok;
 }
@@ -373,6 +384,13 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, RejoinParamSetupReq&
     if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::RejoinParamSetup)) return MacStatus::MalformedPayload;
     out.max_count_n = static_cast<std::uint8_t>(data[1] & 0x0F);
     out.max_time_n = static_cast<std::uint8_t>((data[1] >> 4) & 0x0F);
+    return MacStatus::Ok;
+}
+
+MacStatus decode(const std::uint8_t* data, std::size_t len, AdrParamSetupReq& out) {
+    if (len != 2 || data[0] != static_cast<std::uint8_t>(Cid::AdrParamSetup)) return MacStatus::MalformedPayload;
+    out.delay_exp = static_cast<std::uint8_t>(data[1] & 0x0F);
+    out.limit_exp = static_cast<std::uint8_t>((data[1] >> 4) & 0x0F);
     return MacStatus::Ok;
 }
 

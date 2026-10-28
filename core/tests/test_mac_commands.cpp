@@ -164,7 +164,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, trunc, 3, size)),
                  static_cast<int>(MacStatus::MalformedPayload));
         // CID non implémenté (RXParamSetup 0x05) : refusé.
-        const std::uint8_t unknown[2] = {0x0C, 0x00};  // ADRParamSetup : non implémenté
+        const std::uint8_t unknown[2] = {0x10, 0x00};  // PingSlotInfoReq : non implémenté
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unknown, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
         CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, up, 0, size)),
@@ -225,8 +225,8 @@ void run_mac_commands_tests() {
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::MalformedPayload));
         CHECK_EQ(back.kind, std::uint8_t{0});
 
-        // CID non implémenté (ADRParamSetup 0x0C).
-        const std::uint8_t rx[6] = {0x0C, 0, 0, 0, 0, 0};  // ADRParamSetup : non implémenté
+        // CID non implémenté (PingSlotInfoReq 0x10).
+        const std::uint8_t rx[6] = {0x10, 0, 0, 0, 0, 0};  // PingSlotInfoReq : non implémenté
         CHECK_EQ(lsim_mac_decode(rx, 6, LSIM_MAC_DOWNLINK, &back, &used),
                  LSIM_STATUS_MAC_BASE + static_cast<int>(MacStatus::UnknownCommand));
 
@@ -343,7 +343,7 @@ void run_mac_commands_tests() {
         CHECK_EQ(size, std::size_t{5});
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn + 5, 6, size)), static_cast<int>(MacStatus::Ok));
         CHECK_EQ(size, std::size_t{6});
-        const std::uint8_t unk[2] = {0x0C, 0x00};
+        const std::uint8_t unk[2] = {0x10, 0x00};
         CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, unk, 2, size)),
                  static_cast<int>(MacStatus::UnknownCommand));
     }
@@ -446,6 +446,37 @@ void run_mac_commands_tests() {
         RejoinParamSetupAns back;
         const std::uint8_t rfu[2] = {0x0F, 0x02};
         CHECK_EQ(static_cast<int>(decode(rfu, 2, back)), static_cast<int>(MacStatus::MalformedPayload));
+    }
+    // --- ADRParamSetupReq (down) : Limit_exp 7:4, Delay_exp 3:0 ; ADRParamSetupAns (up, vide).
+    {
+        Buf out{};
+        std::size_t len = 0;
+        AdrParamSetupReq r;
+        r.limit_exp = 4;
+        r.delay_exp = 13;
+        CHECK_EQ(static_cast<int>(encode(r, out, len)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(len, std::size_t{2});
+        CHECK_EQ(out[0], std::uint8_t{0x0C});
+        CHECK_EQ(out[1], std::uint8_t{0x4D});
+        AdrParamSetupReq back;
+        CHECK_EQ(static_cast<int>(decode(out.data(), len, back)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(back.limit_exp, std::uint8_t{4});
+        CHECK_EQ(back.delay_exp, std::uint8_t{13});
+        AdrParamSetupReq bad;
+        bad.limit_exp = 16;
+        CHECK_EQ(static_cast<int>(encode(bad, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        bad.limit_exp = 0;
+        bad.delay_exp = 16;
+        CHECK_EQ(static_cast<int>(encode(bad, out, len)), static_cast<int>(MacStatus::FieldOutOfRange));
+        const std::uint8_t trunc[1] = {0x0C};
+        CHECK_EQ(static_cast<int>(decode(trunc, 1, back)), static_cast<int>(MacStatus::MalformedPayload));
+        std::size_t size = 0;
+        const std::uint8_t dn[2] = {0x0C, 0x00};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Downlink, dn, 2, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{2});
+        const std::uint8_t up[1] = {0x0C};
+        CHECK_EQ(static_cast<int>(command_size(Direction::Uplink, up, 1, size)), static_cast<int>(MacStatus::Ok));
+        CHECK_EQ(size, std::size_t{1});
     }
     // --- DlChannelReq (down) : ChIndex, Freq >= 100 MHz ; DlChannelAns (up) : bits 0..1, RFU 7:2.
     {

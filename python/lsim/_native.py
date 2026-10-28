@@ -77,6 +77,8 @@ class _CMacCommand(ctypes.Structure):
         ("max_count_n", ctypes.c_uint8),
         ("ack_time_ok", ctypes.c_uint8),
         ("ack_uplink_freq_exists", ctypes.c_uint8),
+        ("adr_limit_exp", ctypes.c_uint8),
+        ("adr_delay_exp", ctypes.c_uint8),
     ]
 
 

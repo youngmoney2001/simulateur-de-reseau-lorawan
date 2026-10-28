@@ -11,7 +11,7 @@
 //   * encodage canonique : les bits RFU doivent valoir 0 à la lecture (rejet sinon) ;
 //   * les CID non implémentés (ADRParamSetup, PingSlot, …) sont refusés
 //     (`UnknownCommand`), car leur longueur ne peut pas être devinée. Restent à implémenter :
-//     ADRParamSetup (0x0C), PingSlot (0x10 et suivants), classe B/C.
+//     PingSlot (0x10 et suivants), classe B/C.
 #pragma once
 
 #include <array>
@@ -39,6 +39,7 @@ enum class Cid : std::uint8_t {
     ForceRejoin = 0x0E,   // ForceRejoinReq (down, sans réponse)
     RejoinParamSetup = 0x0F,  // RejoinParamSetupAns (up) / RejoinParamSetupReq (down)
     Rekey = 0x0B,         // RekeyInd (up) / RekeyConf (down)
+    AdrParamSetup = 0x0C, // ADRParamSetupAns (up) / ADRParamSetupReq (down)
 };
 
 enum class MacStatus : std::int32_t {
@@ -160,6 +161,13 @@ struct RejoinParamSetupReq {
     std::uint8_t max_time_n = 0;   // 0..15
 };
 
+// ADRParamSetupReq (down) : Limit_exp 7:4 (ADR_ACK_LIMIT = 2^Limit_exp), Delay_exp 3:0
+// (ADR_ACK_DELAY = 2^Delay_exp), chacun dans 0..15. Taille totale : 2 octets.
+struct AdrParamSetupReq {
+    std::uint8_t limit_exp = 0;  // 0..15
+    std::uint8_t delay_exp = 0;  // 0..15
+};
+
 // RejoinParamSetupAns (up) : bit 0 TimeOK, bits 7:1 RFU. Taille totale : 2 octets.
 struct RejoinParamSetupAns {
     bool time_ok = false;
@@ -196,6 +204,7 @@ MacStatus encode(const DeviceTimeAns& c, std::array<std::uint8_t, kMaxCommandByt
 MacStatus encode(const ForceRejoinReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const RejoinParamSetupReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const RejoinParamSetupAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
+MacStatus encode(const AdrParamSetupReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const DlChannelReq& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const DlChannelAns& c, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
 MacStatus encode(const Rekey& c, Direction dir, std::array<std::uint8_t, kMaxCommandBytes>& out, std::size_t& len);
@@ -225,6 +234,7 @@ MacStatus decode(const std::uint8_t* data, std::size_t len, DeviceTimeAns& out);
 MacStatus decode(const std::uint8_t* data, std::size_t len, ForceRejoinReq& out);        // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, RejoinParamSetupReq& out);   // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, RejoinParamSetupAns& out);   // up
+MacStatus decode(const std::uint8_t* data, std::size_t len, AdrParamSetupReq& out);     // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, DlChannelReq& out);          // down
 MacStatus decode(const std::uint8_t* data, std::size_t len, DlChannelAns& out);          // up
 MacStatus decode(const std::uint8_t* data, std::size_t len, Rekey& out, Direction dir);

@@ -71,7 +71,7 @@ def test_truncated_and_unknown_commands():
         mac.decode_one(b"\x03\x52\xff", downlink=True)
     assert e.value.code == 602
     with pytest.raises(StatusError) as e:
-        mac.decode_one(b"\x0c\x00", downlink=True)  # ADRParamSetup : non implémenté
+        mac.decode_one(b"\x10\x00", downlink=True)  # PingSlotInfoReq : non implémenté
     assert e.value.code == 604
 
 
@@ -199,3 +199,18 @@ def test_rejoin_param_setup_and_dl_channel():
     with pytest.raises(StatusError) as e:
         mac.decode_one(b"\x0a\x04", downlink=False)  # bits RFU
     assert e.value.code == 602
+
+
+def test_adr_param_setup():
+    from lsim.mac import AdrParamSetupAns, AdrParamSetupReq
+
+    req = AdrParamSetupReq(limit_exp=4, delay_exp=13)
+    assert mac.encode(req) == b"\x0c\x4d"
+    assert mac.decode_one(b"\x0c\x4d", downlink=True) == (req, 2)
+    assert mac.encode(AdrParamSetupAns()) == b"\x0c"
+    assert mac.decode_one(b"\x0c", downlink=False) == (AdrParamSetupAns(), 1)
+    with pytest.raises(ValueError):
+        AdrParamSetupReq(limit_exp=16, delay_exp=0)
+    with pytest.raises(StatusError):
+        mac.decode_one(b"\x0c", downlink=True)  # réponse incomplète
+

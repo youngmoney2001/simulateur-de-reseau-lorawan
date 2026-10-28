@@ -362,6 +362,8 @@ LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_pro
 #define LSIM_MAC_REJOIN_PARAM_SETUP_ANS 21  /* up : ack_time_ok */
 #define LSIM_MAC_DL_CHANNEL_REQ         22  /* down : ch_index, freq_100hz (>= 100 MHz) */
 #define LSIM_MAC_DL_CHANNEL_ANS         23  /* up : ack_channel_freq, ack_uplink_freq_exists */
+#define LSIM_MAC_ADR_PARAM_SETUP_REQ    24  /* down : adr_limit_exp, adr_delay_exp (0..15) */
+#define LSIM_MAC_ADR_PARAM_SETUP_ANS    25  /* up, sans charge */
 
 /* Commande à plat : seuls les champs du type indiqué par `kind` sont lus. */
 typedef struct lsim_mac_command {
@@ -401,6 +403,8 @@ typedef struct lsim_mac_command {
     uint8_t  max_count_n;       /* RejoinParamSetupReq : 0..15 */
     uint8_t  ack_time_ok;       /* RejoinParamSetupAns : 0 ou 1 */
     uint8_t  ack_uplink_freq_exists; /* DlChannelAns : 0 ou 1 */
+    uint8_t  adr_limit_exp;     /* ADRParamSetupReq : 0..15 (ADR_ACK_LIMIT = 2^x) */
+    uint8_t  adr_delay_exp;     /* ADRParamSetupReq : 0..15 (ADR_ACK_DELAY = 2^x) */
 } lsim_mac_command;
 
 /* Plus grande commande MAC (CID compris) : 6 octets. */

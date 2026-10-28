@@ -44,6 +44,8 @@ _KIND_REJOIN_PARAM_SETUP_REQ = 20
 _KIND_REJOIN_PARAM_SETUP_ANS = 21
 _KIND_DL_CHANNEL_REQ = 22
 _KIND_DL_CHANNEL_ANS = 23
+_KIND_ADR_PARAM_SETUP_REQ = 24
+_KIND_ADR_PARAM_SETUP_ANS = 25
 
 MAX_FREQ_100HZ = 0xFFFFFF
 
@@ -271,6 +273,23 @@ class ForceRejoinReq:
 
 
 @dataclass(frozen=True)
+class AdrParamSetupReq:
+    """Downlink : ADR_ACK_LIMIT = 2**limit_exp et ADR_ACK_DELAY = 2**delay_exp (0..15 chacun)."""
+
+    limit_exp: int
+    delay_exp: int
+
+    def __post_init__(self) -> None:
+        _uint("limit_exp", self.limit_exp, 4)
+        _uint("delay_exp", self.delay_exp, 4)
+
+
+@dataclass(frozen=True)
+class AdrParamSetupAns:
+    """Uplink, sans charge utile."""
+
+
+@dataclass(frozen=True)
 class RejoinParamSetupReq:
     """Downlink : rejoin type 0 au plus tous les 2**C+4 uplinks et 2**T+10 s (C = max_count_n, T = max_time_n)."""
 
@@ -318,6 +337,7 @@ MacCommand = Union[
     RxParamSetupReq, RxParamSetupAns, NewChannelReq, NewChannelAns,
     RxTimingSetupReq, RxTimingSetupAns, DeviceTimeReq, DeviceTimeAns, ForceRejoinReq,
     RejoinParamSetupReq, RejoinParamSetupAns, DlChannelReq, DlChannelAns,
+    AdrParamSetupReq, AdrParamSetupAns,
 ]
 
 
@@ -389,6 +409,11 @@ def _to_c(cmd: MacCommand) -> _CMacCommand:
     elif isinstance(cmd, RejoinParamSetupAns):
         c.kind = _KIND_REJOIN_PARAM_SETUP_ANS
         c.ack_time_ok = int(cmd.time_ok)
+    elif isinstance(cmd, AdrParamSetupReq):
+        c.kind = _KIND_ADR_PARAM_SETUP_REQ
+        c.adr_limit_exp, c.adr_delay_exp = cmd.limit_exp, cmd.delay_exp
+    elif isinstance(cmd, AdrParamSetupAns):
+        c.kind = _KIND_ADR_PARAM_SETUP_ANS
     elif isinstance(cmd, DlChannelReq):
         c.kind = _KIND_DL_CHANNEL_REQ
         c.ch_index, c.freq_100hz = cmd.ch_index, cmd.freq_100hz
@@ -445,6 +470,10 @@ def _from_c(c: _CMacCommand) -> MacCommand:
         return RejoinParamSetupReq(c.max_time_n, c.max_count_n)
     if k == _KIND_REJOIN_PARAM_SETUP_ANS:
         return RejoinParamSetupAns(bool(c.ack_time_ok))
+    if k == _KIND_ADR_PARAM_SETUP_REQ:
+        return AdrParamSetupReq(c.adr_limit_exp, c.adr_delay_exp)
+    if k == _KIND_ADR_PARAM_SETUP_ANS:
+        return AdrParamSetupAns()
     if k == _KIND_DL_CHANNEL_REQ:
         return DlChannelReq(c.ch_index, c.freq_100hz)
     if k == _KIND_DL_CHANNEL_ANS:

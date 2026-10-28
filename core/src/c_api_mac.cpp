@@ -112,6 +112,16 @@ bool to_cpp_and_encode(const lsim_mac_command& c, Buf& out, std::size_t& len, Ma
         case LSIM_MAC_RX_TIMING_SETUP_ANS:
             st = encode_empty(Cid::RxTimingSetup, Direction::Uplink, out, len);
             return true;
+        case LSIM_MAC_ADR_PARAM_SETUP_REQ: {
+            AdrParamSetupReq v;
+            v.limit_exp = c.adr_limit_exp;
+            v.delay_exp = c.adr_delay_exp;
+            st = encode(v, out, len);
+            return true;
+        }
+        case LSIM_MAC_ADR_PARAM_SETUP_ANS:
+            st = encode_empty(Cid::AdrParamSetup, Direction::Uplink, out, len);
+            return true;
         case LSIM_MAC_DEVICE_TIME_REQ:
             st = encode_empty(Cid::DeviceTime, Direction::Uplink, out, len);
             return true;
@@ -235,6 +245,7 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     break;
                 }
                 case 0x0D: out->kind = LSIM_MAC_DEVICE_TIME_REQ; break;
+                case 0x0C: out->kind = LSIM_MAC_ADR_PARAM_SETUP_ANS; break;
                 case 0x0F: {
                     RejoinParamSetupAns v;
                     st = decode(p, n, v);
@@ -345,6 +356,14 @@ int32_t lsim_mac_decode(const uint8_t* in, size_t len, uint8_t direction, lsim_m
                     out->rejoin_type = v.rejoin_type;
                     out->data_rate = v.dr;
                     out->kind = LSIM_MAC_FORCE_REJOIN_REQ;
+                    break;
+                }
+                case 0x0C: {
+                    AdrParamSetupReq v;
+                    st = decode(p, n, v);
+                    out->adr_limit_exp = v.limit_exp;
+                    out->adr_delay_exp = v.delay_exp;
+                    out->kind = LSIM_MAC_ADR_PARAM_SETUP_REQ;
                     break;
                 }
                 case 0x0F: {
