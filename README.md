@@ -58,6 +58,12 @@ cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build-asan && ./build-asan/lsim_tests
 ```
 
+Scénarios et exports (dépendances optionnelles `pip install -e "python[data]"`) :
+
+```bash
+PYTHONPATH=python python -m lsim run examples/quartier_sf9.yaml -o resultats.parquet
+```
+
 ## Statut
 
 Jalons 0 et 1 en grande partie faits. Jalon 2 (LoRaWAN 1.1) en cours : codec, crypto,

@@ -44,8 +44,9 @@ Légende : ✅ fait · 🔧 en cours · ⬜ planifié
 - Vecteurs issus de TTN (Apache-2.0), pas du document TS001.
 
 ## Jalon 3 — Scénarios, résultats et analyse
-- ⬜ Scénarios YAML validés (Pydantic)
-- ⬜ Export Parquet, métriques (PDR, énergie, charge gateway)
+- ✅ Scénarios YAML validés (Pydantic, champs inconnus refusés, bornes 10 000 dispositifs / 5 000 000 transmissions), déploiement déterministe par graine, hash SHA-256 du scénario
+- ✅ Export Parquet par dispositif avec métadonnées de traçabilité ; CLI `python -m lsim run`
+- ⬜ Métriques avancées (énergie, charge gateway, latence)
 - ⬜ Notebooks pour les bureaux d'études
 
 ## Jalon 4 — Visualisation 3D et produit
