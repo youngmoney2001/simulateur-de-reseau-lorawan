@@ -178,3 +178,15 @@ def test_end_device_link_check_bounds():
     with pytest.raises(ValueError):
         EndDevice(payload_bytes=255, link_check_every=1)
     assert EndDevice(payload_bytes=254, link_check_every=1).link_check_every == 1
+
+
+def test_mac_annotations_do_not_duplicate_frames_in_the_animation():
+    # Une annotation MAC n'a pas de saut propre : la trame est dessinée par l'uplink ou le downlink.
+    tr = build_trace(_scenario({"link_check_every": 2, "device_status_every": 2}),
+                     ProtocolOptions(downlink_every=1))
+    for e in tr.events:
+        if e.kind == "mac_request":
+            assert e.hops == ()
+        if e.kind == "mac_answer":
+            assert e.hops == () or len(e.hops) == 1  # réponse seule : downlink dédié, sinon annotation
+    assert any(e.kind == "mac_request" for e in tr.events)

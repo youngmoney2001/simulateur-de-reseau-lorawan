@@ -421,7 +421,8 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
             _UPLINK_OUTCOME[r.outcome])
         if mac is not None and not is_join:
             for cmd in uplink_requests(mac, ranks[i]):
-                add(r.start_ns, "mac_request", d, hops, _MAC_NAME[type(cmd)])
+                # Annotation : la trame est déjà dessinée par l'événement uplink ; pas de saut dupliqué.
+                add(r.start_ns, "mac_request", d, [], _MAC_NAME[type(cmd)])
 
         k = job_of.get(i)
         if k is None:
@@ -449,9 +450,9 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         if ok and job.fopts and job.kind != "mac_answer":
             for cmd in lsim_mac.decode_all(job.fopts, downlink=True):
                 if isinstance(cmd, LinkCheckAns):
-                    add(start, "mac_answer", d, down, "delivered")
+                    add(start, "mac_answer", d, [], "delivered")
                 elif isinstance(cmd, DevStatusReq):
-                    add(start, "mac_request", d, down, "DevStatusReq")
+                    add(start, "mac_request", d, [], "DevStatusReq")
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")
