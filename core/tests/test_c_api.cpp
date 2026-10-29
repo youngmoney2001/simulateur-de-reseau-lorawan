@@ -226,23 +226,23 @@ void test_multi_gateway_c_api() {
     lsim_gateway_rx_stats per_gw[2]{};
 
     // Une passerelle : hors de portée.
-    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 1, &prop, nullptr, per_device, &tot, per_gw),
+    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 1, &prop, nullptr, per_device, &tot, per_gw, nullptr, nullptr, nullptr, 0, nullptr),
              0);
     CHECK_EQ(tot.received, uint64_t{0});
     CHECK_EQ(tot.lost_sensitivity, uint64_t{1});
 
     // Deux passerelles : la seconde reçoit.
-    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 2, &prop, nullptr, per_device, &tot, per_gw),
+    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 2, &prop, nullptr, per_device, &tot, per_gw, nullptr, nullptr, nullptr, 0, nullptr),
              0);
     CHECK_EQ(tot.received, uint64_t{1});
     CHECK_EQ(per_gw[1].received, uint64_t{1});
     CHECK_EQ(per_gw[0].lost_sensitivity, uint64_t{1});
 
     // Bornes : 0 passerelle et 65 passerelles refusées par statut, sans appel au moteur.
-    CHECK_TRUE(lsim_simulate_uplinks_multi(&d, 1, g, 0, &prop, nullptr, per_device, &tot, per_gw) !=
+    CHECK_TRUE(lsim_simulate_uplinks_multi(&d, 1, g, 0, &prop, nullptr, per_device, &tot, per_gw, nullptr, nullptr, nullptr, 0, nullptr) !=
                0);
     CHECK_TRUE(lsim_simulate_uplinks_multi(&d, 1, g, 65, &prop, nullptr, per_device, &tot,
-                                           per_gw) != 0);
+                                           per_gw, nullptr, nullptr, nullptr, 0, nullptr) != 0);
 }
 
 void run_c_api_tests() {

@@ -332,6 +332,7 @@ class _CNetworkStats(ctypes.Structure):
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
         ("airtime_ns", ctypes.c_uint64),
+        ("lost_gateway_busy", ctypes.c_uint64),
     ]
 
 
@@ -340,6 +341,43 @@ class _CGatewayRxStats(ctypes.Structure):
         ("received", ctypes.c_uint64),
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
+        ("lost_gateway_busy", ctypes.c_uint64),
+    ]
+
+
+class _CDownlinkRule(ctypes.Structure):
+    _fields_ = [
+        ("ack_uplinks", ctypes.c_uint8),
+        ("every", ctypes.c_uint32),
+        ("payload_bytes", ctypes.c_uint32),
+        ("gateway_tx_power_dbm", ctypes.c_double),
+        ("device_antenna_gain_dbi", ctypes.c_double),
+        ("device_rx_offset_db", ctypes.c_double),
+    ]
+
+
+class _CDownlinkRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("gateway_index", ctypes.c_uint32),
+        ("data", ctypes.c_uint8),
+        ("t_open_ns", ctypes.c_int64),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("outcome", ctypes.c_uint8),
+    ]
+
+
+class _CMultiTxRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("spreading_factor", ctypes.c_uint8),
+        ("receivers", ctypes.c_uint32),
+        ("best_gateway", ctypes.c_int32),
+        ("best_rssi_dbm", ctypes.c_double),
+        ("outcome", ctypes.c_uint8),
     ]
 
 
@@ -521,7 +559,15 @@ LIB.lsim_simulate_uplinks_multi.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats),
-    ctypes.POINTER(_CGatewayRxStats)]
+    ctypes.POINTER(_CGatewayRxStats), ctypes.POINTER(_CInterval), ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_simulate_uplinks_multi_dl.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDownlinkRule), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,

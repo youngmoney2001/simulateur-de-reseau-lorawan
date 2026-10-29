@@ -224,6 +224,7 @@ struct NetworkStats {
     std::uint64_t duplicates = 0;       // copies décodées en plus de la première
     std::uint64_t lost_sensitivity = 0;  // aucune passerelle au-dessus de la sensibilité
     std::uint64_t lost_collision = 0;    // au-dessus de la sensibilité quelque part, mais collisionnée partout
+    std::uint64_t lost_gateway_busy = 0; // seule(s) passerelle(s) audibles en émission (downlink)
     std::uint64_t airtime_ns = 0;
 };
 
@@ -232,6 +233,7 @@ struct GatewayRxStats {
     std::uint64_t received = 0;
     std::uint64_t lost_sensitivity = 0;
     std::uint64_t lost_collision = 0;
+    std::uint64_t lost_gateway_busy = 0;  // passerelle en émission pendant la trame
 };
 
 // Issue réseau d'une émission. `receivers` = nombre de passerelles qui l'ont décodée.
@@ -246,12 +248,62 @@ struct MultiTx {
     TxOutcome outcome = TxOutcome::LostSensitivity;  // Received si receivers > 0
 };
 
-// `per_gateway` doit contenir `gateway_count` entrées. `trace` optionnel (trié par début).
+// `per_gateway` doit contenir `gateway_count` entrées. `trace` optionnel (trié par début). `gateway_busy` optionnel : une liste d'émissions passerelle par passerelle
+// (intervalles [start, end)) ; une trame qui chevauche l'émission de SA passerelle n'y est pas
+// décodée (LostGatewayBusy à cette passerelle seulement).
 LSIM_API SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t device_count,
                                           const GatewaySpec* gateways, std::size_t gateway_count,
                                           const PropagationSpec& prop, DeviceStats* per_device,
                                           NetworkStats& totals, GatewayRxStats* per_gateway,
                                           const env::Environment* environment = nullptr,
-                                          std::vector<MultiTx>* trace = nullptr);
+                                          std::vector<MultiTx>* trace = nullptr,
+                                          const std::vector<std::vector<Interval>>* gateway_busy = nullptr);
+
+// ------------------------------------------------- Downlinks multi-passerelles
+//
+// Règle : chaque uplink décodé par au moins une passerelle est acquitté (ACK seul) ou reçoit une
+// charge (une par `every` uplinks décodés), par la MEILLEURE passerelle décodeuse (plus fort RSSI),
+// en fenêtre RX1 (+1 s). Chaque passerelle sérialise ses propres downlinks ; un downlink qui ne
+// peut pas partir dans la fenêtre RX1 est perdu (GatewayBusy). Pendant son downlink, une passerelle
+// ne décode pas les trames (demi-duplex par passerelle). Le dispositif ne reçoit que s'il n'émet
+// pas pendant sa fenêtre RX1 (DeviceTransmitting), puis par réciprocité sur le RSSI de la passerelle
+// répondante.
+//
+// Calcul exact sans itération : les émissions sont traitées dans l'ordre de leur FIN. Un downlink
+// qui chevauche une émission X est déclenché par une émission finie avant X - 1 s, donc déjà connu.
+
+struct MultiDownlinkRule {
+    bool ack_uplinks = false;               // ACK seul pour chaque uplink décodé (confirmé)
+    std::uint32_t every = 0;                // charge en file : une par `every` uplinks décodés (0 : aucune)
+    std::uint32_t payload_bytes = 10;       // charge des downlinks de données, 0..242
+    double gateway_tx_power_dbm = 14.0;     // puissance d'émission passerelle (downlink)
+    double device_antenna_gain_dbi = 0.0;   // gain d'antenne du dispositif (réception)
+    double device_rx_offset_db = 0.0;       // écart de sensibilité du récepteur réel (dB)
+};
+
+enum class DownlinkOutcome : std::uint8_t {
+    Delivered = 0,
+    LostSensitivity = 1,
+    GatewayBusy = 2,         // hors de la fenêtre RX1 : la passerelle ne peut plus émettre à temps
+    DeviceTransmitting = 3,  // le dispositif émet pendant sa fenêtre RX1
+};
+
+// Downlink planifié. start_ns = -1 si non émis (GatewayBusy ou DeviceTransmitting).
+struct MultiDownlink {
+    std::uint32_t device = 0;
+    std::uint32_t gateway = 0;
+    bool data = false;          // false : ACK seul ; true : charge
+    SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif
+    SimTime start_ns = -1;
+    SimTime end_ns = -1;
+    DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;
+};
+
+LSIM_API SimStatus simulate_uplinks_multi_downlinks(
+    const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
+    std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
+    DeviceStats* per_device, NetworkStats& totals, GatewayRxStats* per_gateway,
+    const env::Environment* environment = nullptr, std::vector<MultiTx>* trace = nullptr,
+    std::vector<MultiDownlink>* downlinks = nullptr);
 
 }  // namespace lsim::sim

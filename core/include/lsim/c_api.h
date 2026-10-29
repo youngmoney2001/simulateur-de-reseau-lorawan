@@ -409,21 +409,83 @@ typedef struct lsim_network_stats {
     uint64_t lost_sensitivity;  /* aucune passerelle au-dessus de la sensibilité */
     uint64_t lost_collision;    /* collisionnée à toutes les passerelles qui l'entendent */
     uint64_t airtime_ns;
+    uint64_t lost_gateway_busy; /* passerelle(s) audibles en émission (downlink) */
 } lsim_network_stats;
 
 typedef struct lsim_gateway_rx_stats {
     uint64_t received;          /* trames décodées par cette passerelle */
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
+    uint64_t lost_gateway_busy; /* passerelle en émission pendant la trame */
 } lsim_gateway_rx_stats;
 
+/* Trace par émission, multi-passerelles. outcome : 0 sous la sensibilité partout, 1 collision,
+ * 2 reçue (receivers > 0 ; best_gateway = meilleure passerelle décodeuse), 3 passerelle(s)
+ * occupée(s) par un downlink. Sans décodeur, best_gateway = -1 et best_rssi = RSSI maximal. */
+typedef struct lsim_multi_tx_record {
+    uint32_t device_index;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  spreading_factor;
+    uint32_t receivers;
+    int32_t  best_gateway;
+    double   best_rssi_dbm;
+    uint8_t  outcome;
+} lsim_multi_tx_record;
+
+/* busy : NULL = aucune émission passerelle. Sinon, périodes [start, end) de toutes les passerelles
+ * mises bout à bout ; busy_counts[g] = nombre de périodes de la passerelle g (gateway_count
+ * entrées). records : NULL si record_count est NULL (pas de trace) ; sinon capacité
+ * record_capacity, et record_count reçoit le nombre réel ; statut 308 si trop petit. */
 LSIM_API int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t device_count,
                                              const lsim_gateway* gateways, size_t gateway_count,
                                              const lsim_propagation* prop,
                                              const lsim_environment* env,
                                              lsim_device_stats* per_device,
                                              lsim_network_stats* totals,
-                                             lsim_gateway_rx_stats* per_gateway);
+                                             lsim_gateway_rx_stats* per_gateway,
+                                             const lsim_interval* busy,
+                                             const size_t* busy_counts,
+                                             lsim_multi_tx_record* records,
+                                             size_t record_capacity, size_t* record_count);
+
+/* Passerelles multiples avec downlinks (ordre de fin, calcul exact sans itération) : chaque uplink
+ * décodé est acquitté (ack_uplinks) ou reçoit une charge (une par `every` uplinks décodés) par la
+ * meilleure passerelle décodeuse, en RX1. Chaque passerelle sérialise ses downlinks et ne décode
+ * pas pendant les siens (demi-duplex par passerelle). Voir lsim/engine.hpp. */
+typedef struct lsim_downlink_rule {
+    uint8_t  ack_uplinks;             /* 0 ou 1 */
+    uint32_t every;                   /* 0 : aucune charge en file */
+    uint32_t payload_bytes;           /* 0..242 */
+    double   gateway_tx_power_dbm;
+    double   device_antenna_gain_dbi;
+    double   device_rx_offset_db;
+} lsim_downlink_rule;
+
+/* outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors fenêtre RX1, 3 dispositif en émission.
+ * start_ns/end_ns = -1 si non émis. */
+typedef struct lsim_downlink_record {
+    uint32_t device_index;
+    uint32_t gateway_index;
+    uint8_t  data;
+    int64_t  t_open_ns;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  outcome;
+} lsim_downlink_record;
+
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,
+                                                const lsim_gateway* gateways, size_t gateway_count,
+                                                const lsim_propagation* prop,
+                                                const lsim_downlink_rule* rule,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_network_stats* totals,
+                                                lsim_gateway_rx_stats* per_gateway,
+                                                lsim_multi_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                lsim_downlink_record* downlinks,
+                                                size_t downlink_capacity, size_t* downlink_count);
 
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).
