@@ -299,3 +299,26 @@ def test_answers_are_never_deferred_end_to_end(count, radius, offset):
     assert q.expired > 0
     assert q.deferred == q.expired
     assert q.pending_at_end == 0
+
+
+def test_next_uplink_waits_for_rx2_end_end_to_end():
+    """TS001 §3.3.6 (décision C1) : un dispositif n'émet pas avant la fin de RX2 de son uplink
+    précédent (fin + 3 s), même lorsque sa période est plus courte. Vérifié sur la trace produite
+    par la boucle fermée, pas seulement sur le moteur C."""
+    short = (BASE.replace("count: 40", "count: 20")
+             .replace("period_s: 900", "period_s: 2")
+             .replace("messages: 30", "messages: 10")
+             .replace("start_spread_s: 900", "start_spread_s: 2"))
+    sc = _scenario("mac:\n  link_adr: true\n", base=short)
+    assert closed_loop_applies(sc)
+    tr = build_trace(sc, ProtocolOptions())
+    by_dev: dict[int, list] = {}
+    for r in tr.records:
+        by_dev.setdefault(r.device_index, []).append(r)
+    assert len(tr.records) == 200  # 20 dispositifs x 10 messages : aucune émission perdue du décompte
+    gaps = []
+    for recs in by_dev.values():
+        recs.sort(key=lambda r: r.start_ns)
+        for prev, nxt in zip(recs, recs[1:]):
+            gaps.append(nxt.start_ns - prev.end_ns)
+    assert gaps and min(gaps) >= 3_000_000_000

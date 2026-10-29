@@ -7,8 +7,9 @@ Statut : **S0, S1 et S2 faits pour la passerelle unique, sans jointure ni autre 
    Le point fixe actuel de `build_trace` (`MAX_ITERATIONS`, occupation passerelle par les
    descentes Python) est à supprimer. Correction : l'état précédent du dépôt n'était pas
    « une seule exécution » pour les descentes, seulement pour les réservations MAC.
-2. **Classe A et RX1** : une commande est perdue si le dispositif émet pendant RX1 ; elle est
-   retentée à l'uplink suivant. La prochaine émission n'est pas retardée.
+2. **Classe A, RX1 et RX2** (TS001 §3.3.6, décision C1) : une commande est perdue si le dispositif émet
+   pendant RX1 ; elle est retentée à l'uplink suivant. La prochaine émission est retardée jusqu'à la fin de RX2
+   (fin + 3 s). Repli RX2 (fin + 2 s, SF12) si la passerelle ne peut pas émettre en RX1.
 3. **Décision ADR** : `python/lsim/adr.py` (et `core/include/lsim/adr.hpp`) fournit la décision
    côté serveur.
 
@@ -66,9 +67,9 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
     reçu, puis répété jusqu'à DutyCycleAns.
   - Classe A : une descente est perdue si le dispositif émet pendant RX1 (`device_missed`, décidé par un
     événement Check à t_open + 1 s, avant les débuts simultanés). La commande est retentée au prochain
-    uplink reçu ; l'émission suivante n'est pas retardée. Une descente est livrée seulement si elle a un
-    créneau passerelle dans RX1, si le dispositif n'émet pas pendant RX1 et si son RSSI atteint la sensibilité
-    RX1 (plus `device_rx_offset_db`).
+    uplink reçu ; l'émission suivante part au plus tôt à fin + 3 s (fin de RX2). Une descente est livrée
+    seulement si elle a un créneau passerelle (RX1, sinon RX2 à fin + 2 s), si le dispositif n'émet pas
+    pendant cette fenêtre et si son RSSI atteint la sensibilité de la fenêtre (plus `device_rx_offset_db`).
   - Application : `max(t_open + 1 s, début + airtime)` pour une descente livrée. Réponse confirmée seulement si
     l'uplink qui la porte est reçu.
   - Puissance (corrigée) : index 0 = puissance configurée, plafonnée par la PIRE du plan ; chaque index

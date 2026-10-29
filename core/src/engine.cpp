@@ -1277,6 +1277,10 @@ constexpr double kMaxLoopSnrDb = 50.0;          // bornes du cœur ADR : -500..5
 constexpr std::size_t kLoopHistory = lorawan::adr::kMaxSamples;
 constexpr SimTime kLoopRxDelayNs = 1'000'000'000;   // RECEIVE_DELAY1
 constexpr SimTime kLoopRx1WindowNs = 1'000'000'000;
+constexpr SimTime kLoopRx2DelayNs = 2'000'000'000;   // RECEIVE_DELAY2 (TS001 §3.3.3)
+constexpr SimTime kLoopRx2WindowNs = 1'000'000'000;  // durée de RX2 (égale à RX1, §3.3.4)
+// SF de RX2 par défaut en EU868 (RP002-1.0.3 : SF12, 125 kHz, DR0). RP002-1.0.5 non vérifié.
+constexpr std::uint8_t kLoopRx2Sf = 12;
 constexpr std::uint32_t kLoopAckBytes = 12;         // MHDR, DevAddr, FCtrl, FCnt, MIC
 constexpr std::uint32_t kLoopDataOverheadBytes = 13;
 constexpr std::uint8_t kLoopIgnoreField = 15;       // LinkADRReq : champ « ignorer »
@@ -1661,15 +1665,23 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         const std::uint32_t base = kind == 2 ? kLoopDataOverheadBytes + options.protocol.downlink_payload_bytes
                                              : kLoopAckBytes;
         plan::DeviceRadio rad = radios[d];
-        rad.rx1_sf = ta.sf;  // RX1 au débit montant (RX1DROffset 0)
+        // Fenêtre : RX1 (fin + 1 s, débit montant, RX1DROffset 0) ; si la passerelle ne peut pas
+        // émettre dans RX1, repli sur RX2 (fin + 2 s, SF kLoopRx2Sf). TS001 §3.3.1 et §3.3.3.
+        SimTime t_open = ta.end + kLoopRxDelayNs;
+        SimTime start = any_busy ? std::max(t_open, busy_until) : t_open;
+        bool scheduled = start - t_open < kLoopRx1WindowNs;
+        rad.rx1_sf = ta.sf;
+        if (!scheduled) {
+            t_open = ta.end + kLoopRx2DelayNs;
+            start = any_busy ? std::max(t_open, busy_until) : t_open;
+            scheduled = start - t_open < kLoopRx2WindowNs;
+            rad.rx1_sf = kLoopRx2Sf;
+        }
         SimTime air = 0;
         if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
             status = SimStatus::InvalidInput;
             return;
         }
-        const SimTime t_open = ta.end + kLoopRxDelayNs;
-        const SimTime start = any_busy ? std::max(t_open, busy_until) : t_open;
-        const bool scheduled = start - t_open < kLoopRx1WindowNs;
         if (scheduled) {
             any_busy = true;
             busy_until = start + air;
@@ -1702,6 +1714,16 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 const EndDeviceSpec& d = devices[i];
                 LoopDevice& ds = dev[i];
                 if (ds.next_k >= d.messages) break;
+                // TS001 §3.3.6 : pas d'émission avant d'avoir reçu une descente en RX1/RX2 de
+                // l'uplink précédent, ou avant la fin de RX2. Attendre la fin de RX2 (fin + 3 s)
+                // satisfait la règle dans tous les cas, y compris après une descente reçue en RX1.
+                if (ds.has_prev) {
+                    const SimTime rx_free = ds.prev_end + kLoopRx2DelayNs + kLoopRx2WindowNs;
+                    if (rx_free > ev.t) {
+                        q.push(LoopEvent{rx_free, kLoopRankStart, seq++, LoopKind::Start, ev.device, 0, 0});
+                        break;
+                    }
+                }
                 const std::size_t mo = mac_off[i] + ds.next_k;
                 const std::uint32_t bytes = d.payload_bytes + answer_octets(ds.answer_mask) + mac_extra[mo];
                 if (bytes > 255) {
@@ -1825,7 +1847,8 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 if (ok) {
                     const Tx& ta = txs[dl.uplink];
                     plan::DeviceRadio rad = radios[dl.device];
-                    rad.rx1_sf = ta.sf;
+                    const bool rx2 = dl.t_open == ta.end + kLoopRx2DelayNs;
+                    rad.rx1_sf = rx2 ? kLoopRx2Sf : ta.sf;
                     const double rssi_dl = ta.rssi_dbm - tx_dbm(dl.device, powers[dl.uplink]) +
                                            options.protocol.gateway_tx_power_dbm +
                                            options.protocol.device_antenna_gain_dbi;

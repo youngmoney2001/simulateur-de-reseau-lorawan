@@ -231,10 +231,11 @@ void test_duty_convention_differs_from_start_airtime() {
     CHECK_TRUE(differs >= 1);  // au moins un repos où la convention historique serait violée
 }
 
-void test_retry_after_device_missed_rx1() {
-    // Classe A : le dispositif émet toutes les 1,5 s, donc chaque uplink tombe dans la RX1 de
-    // l'uplink précédent (fin + 1 s à fin + 2 s). Les descentes sont perdues, la commande
-    // DutyCycleReq est retentée à chaque uplink reçu, et aucune émission n'est retardée.
+void test_next_uplink_waits_for_rx2_end() {
+    // TS001 §3.3.6 (décision C1) : le dispositif n'émet pas avant la fin de RX2 de l'uplink
+    // précédent (fin + 3 s). Avec une période de 1,5 s, chaque uplink suivant est donc décalé
+    // jusqu'à fin + 3 s. La descente, reçue en RX1 car le dispositif ne transmet pas pendant
+    // RX1, livre la commande DutyCycleReq, et les émissions ne se chevauchent jamais.
     const EndDeviceSpec d[] = {dev(10.0, 7, 0, 3 * kS / 2, 5)};
     lsim::plan::DeviceRadio rv[1] = {radio()};
     LoopRegion regions[1] = {region()};
@@ -248,21 +249,70 @@ void test_retry_after_device_missed_rx1() {
                                                    nullptr, opt, st, tot, res)),
              0);
     CHECK_EQ(res.uplinks.size(), std::size_t{5});
-    for (std::size_t k = 0; k < res.uplinks.size() && k < 5; ++k) {
-        CHECK_EQ(res.uplinks[k].start_ns, SimTime(k) * 3 * kS / 2);
+    if (res.uplinks.size() != 5) return;
+    CHECK_EQ(res.uplinks[0].start_ns, SimTime{0});
+    for (std::size_t k = 1; k < res.uplinks.size(); ++k) {
+        CHECK_TRUE(res.uplinks[k].start_ns >= res.uplinks[k - 1].end_ns + 2 * kS + kS);
+        CHECK_EQ(res.uplinks[k].start_ns, res.uplinks[k - 1].end_ns + 3 * kS);
     }
-    CHECK_EQ(res.downlinks.size(), std::size_t{5});
-    if (res.downlinks.size() != 5) return;
-    // Les quatre premières descentes sont perdues (émission du dispositif pendant la RX1)...
-    for (std::size_t k = 0; k < 4; ++k) {
-        CHECK_TRUE(res.downlinks[k].device_missed);
-        CHECK_TRUE(!res.downlinks[k].delivered);
-        CHECK_TRUE((res.downlinks[k].commands & kLoopCmdDutyCycle) != 0);  // retentée
+    // Une seule descente : la commande DutyCycleReq est livrée à la première RX1 (le dispositif
+    // n'émet pas pendant RX1), puis la file est vide et aucune descente n'est plus nécessaire.
+    CHECK_EQ(res.downlinks.size(), std::size_t{1});
+    if (res.downlinks.size() != 1) return;
+    const LoopDownlink& dl = res.downlinks[0];
+    CHECK_EQ(dl.uplink, std::uint32_t{0});
+    CHECK_TRUE(!dl.device_missed);
+    CHECK_EQ(dl.t_open, res.uplinks[0].end_ns + kS);  // ouverture de RX1
+    CHECK_TRUE(dl.delivered);                          // reçue en RX1, sans repli
+    CHECK_TRUE((dl.commands & kLoopCmdDutyCycle) != 0);
+}
+
+void test_rx2_fallback_when_gateway_busy() {
+    // TS001 §3.3.1 et §3.3.3 (décision C3) : si la passerelle ne peut pas émettre dans RX1, la
+    // descente part dans RX2 (fin + 2 s, SF12 par défaut EU868).
+    // Dispositif 0 : SF12, uplink long, descente RX1 de ~1,5 s qui occupe la passerelle.
+    // Dispositif 1 : SF7, émis pendant cette occupation ; sa RX1 déborde, donc RX2 est utilisée.
+    const EndDeviceSpec d[] = {
+        dev(10.0, 12, 0, 60 * kS, 1),
+        dev(10.0, 7, 11 * kS / 10, 60 * kS, 1),  // émis pendant la descente du dispositif 0
+    };
+    lsim::plan::DeviceRadio rv[2] = {radio(), radio()};
+    LoopRegion regions[2] = {region(), region()};
+    DeviceStats st[2];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    const LoopMacSlot slots[] = {
+        {0, 1, 0, kLoopMacLinkCheck},
+        {1, 1, 0, kLoopMacLinkCheck},
+    };
+    opt.mac = slots;
+    opt.mac_count = 2;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 2, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{2});
+    CHECK_EQ(res.downlinks.size(), std::size_t{2});
+    if (res.uplinks.size() != 2 || res.downlinks.size() != 2) return;
+    // Trouver la descente de chaque dispositif.
+    const LoopDownlink* d0 = nullptr;
+    const LoopDownlink* d1 = nullptr;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if (dl.device == 0) d0 = &dl;
+        if (dl.device == 1) d1 = &dl;
     }
-    // ...la dernière, sans émission pendant la RX1, livre la commande.
-    CHECK_TRUE(!res.downlinks[4].device_missed);
-    CHECK_TRUE(res.downlinks[4].delivered);
-    CHECK_TRUE((res.downlinks[4].commands & kLoopCmdDutyCycle) != 0);
+    if (d0 == nullptr || d1 == nullptr) {
+        CHECK_TRUE(false);
+        return;
+    }
+    // Dispositif 0 : RX1 normale.
+    CHECK_EQ(d0->t_open, res.uplinks[d0->uplink].end_ns + kS);
+    CHECK_TRUE(d0->start_ns >= 0);
+    // Dispositif 1 : RX1 refusée (passerelle occupée au-delà de la fenêtre), RX2 utilisée.
+    CHECK_EQ(d1->t_open, res.uplinks[d1->uplink].end_ns + 2 * kS);
+    CHECK_TRUE(d1->start_ns >= d1->t_open);
+    CHECK_TRUE(d1->start_ns - d1->t_open < kS);
+    CHECK_TRUE(d1->delivered);
 }
 
 void test_mac_reservations_and_answers() {
@@ -588,7 +638,8 @@ void run_closed_loop_tests() {
     test_duty_convention_differs_from_start_airtime();
     test_adr_converges_to_sf7();
     test_duty_cycle_spacing_after_apply();
-    test_retry_after_device_missed_rx1();
+    test_next_uplink_waits_for_rx2_end();
+    test_rx2_fallback_when_gateway_busy();
     test_mac_reservations_and_answers();
     test_mac_queue_defers_expires_and_conserves();
     test_mac_queue_zero_deferrals_expires_at_once();

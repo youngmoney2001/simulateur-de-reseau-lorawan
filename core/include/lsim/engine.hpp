@@ -486,7 +486,7 @@ struct MultiDownlink {
     std::uint32_t gateway = 0;
     bool data = false;          // false : ACK seul ; true : charge
     bool join = false;          // true : join-accept (charge de 17 octets)
-    SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif (RX2 : +1 s)
+    SimTime t_open_ns = 0;      // ouverture de la fenêtre chez le dispositif : RX1 = fin + 1 s ; RX2 = fin + 2 s (boucle fermée)
     SimTime start_ns = -1;
     SimTime end_ns = -1;
     DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;

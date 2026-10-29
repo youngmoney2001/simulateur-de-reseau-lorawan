@@ -25,13 +25,13 @@ Ce document est la base de travail avant toute modification du moteur. Il ne dé
 
 | ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
 |---|---|---|---|---|---|---|---|
-| A1 | TS001 §3.3 | Obl. | Après chaque uplink, ouvrir RX1 ; ouvrir RX2 si aucune trame destinée au dispositif n'est reçue en RX1. | Boucle fermée S2 : RX1 seule. Chemin historique : repli RX2 si la passerelle ne peut pas émettre en RX1 (`engine.cpp`, ~l.1096). | E (S2) / P (historique) | S2 ne modélise pas RX2 : une descente que la passerelle ne peut pas émettre en RX1 est perdue. | `test_closed_loop.cpp` : à écrire (repli RX2 en S2). |
+| A1 | TS001 §3.3 | Obl. | Après chaque uplink, ouvrir RX1 ; ouvrir RX2 si aucune trame destinée au dispositif n'est reçue en RX1. | Boucle fermée : RX1, puis repli RX2 (fin + 2 s) si la passerelle ne peut pas émettre en RX1 (`engine.cpp`, `on_received`). Le repli ne traite que l'occupation de la passerelle : une descente émise en RX1 mais non reçue (sensibilité) n'est pas réémise en RX2, car le serveur de réseau ne retransmet pas dans le modèle. | P | Réémission côté serveur de réseau non modélisée. Historique : repli RX2 déjà présent (inchangé). | `test_closed_loop.cpp` `test_rx2_fallback_when_gateway_busy` ; `python/tests/test_mac_loop.py` |
 | A2 | TS001 §3.3.1 | Obl. | Pas d'ouverture de RX2 si une trame valide est reçue en RX1. | Historique : repli seulement après `GatewayBusy` en RX1. S2 : sans objet (pas de RX2). | P | Dépend de A1. | à écrire avec A1 |
 | A3 | TS001 §3.3.2 | Obl. | RX1 ouverte à RECEIVE_DELAY1 = 1 s après la fin de l'uplink, durée ≥ détection du préambule. | S2 : `kLoopRxDelayNs = 1 s`, `kLoopRx1WindowNs = 1 s`. | C (valeurs par défaut) | RXTimingSetupReq (§5.7, NV) non modélisé : délai réglable 1 à 15 s. | `test_closed_loop.cpp` (délai RX1 implicite) |
-| A4 | TS001 §3.3.3 | Obl. | RX2 à RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s. | Historique : +1 s. S2 : absente. | P / E | Voir A1. | à écrire |
-| A5 | TS001 §3.3.3, RP002-1.0.5 | Obl. (valeur régionale) | Fréquence et débit RX2 par défaut de la région (EU868 : 869,525 MHz, DR0 ; à confirmer dans RP002-1.0.5). | Seul `rx2_sf` (défaut 12) existe ; fréquence RX2 non modélisée. | E | Fréquence et débit régionaux absents ; valeur RP002-1.0.5 NV. | à écrire |
-| A6 | TS001 §3.3.5 | Obl. | La passerelle commence la descente **précisément** au début de la fenêtre. | S2 : `start = max(t_open, busy_until)` : la descente peut être décalée dans RX1, sinon perdue. | E (modèle) | Le décalage intra-fenêtre n'est pas conforme ; il correspond à une approximation d'occupation de la passerelle. Corriger avec A1 (repli RX2 ou perte). | à écrire |
-| A7 | TS001 §3.3.6 | Obl. (contrainte dispositif) | Un dispositif **n'émet pas** un nouvel uplink avant d'avoir reçu une descente en RX1/RX2 de l'uplink précédent, ou avant la fin de RX2. | S2 : l'émission suit la période du scénario ; une émission pendant RX1 fait perdre la descente (`device_missed`) et le prochain uplink n'est **pas** retardé (règle utilisateur, voir §5 C1). | **E — conflit** | Le moteur autorise des émissions pendant les fenêtres RX, ce que la norme interdit au dispositif. | `test_retry_after_device_missed_rx1` (historique, à conserver) |
+| A4 | TS001 §3.3.3 | Obl. | RX2 à RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s. | Boucle fermée : `kLoopRx2DelayNs = 2 s` (fin + 2 s), durée 1 s. Historique : +1 s après RX1 (inchangé). | C (boucle fermée) | Historique : valeur conforme, mais non vérifiée de bout en bout par un test dédié. | `test_closed_loop.cpp` `test_rx2_fallback_when_gateway_busy` |
+| A5 | TS001 §3.3.3, RP002-1.0.3 | Obl. (valeur régionale) | Fréquence et débit RX2 par défaut de la région (EU868 : 869,525 MHz, DR0 = SF12/125 kHz). | Boucle fermée : SF RX2 = 12 (`kLoopRx2Sf`, valeur RP002-1.0.3) ; fréquence RX2 non modélisée. | P | RP002-1.0.5 non vérifiée (décision RP002). Fréquence RX2 et duty cycle de la passerelle sur RX2 non modélisés. | `test_rx2_fallback_when_gateway_busy` |
+| A6 | TS001 §3.3.5 | Obl. | La passerelle commence la descente **précisément** au début de la fenêtre. | Boucle fermée : `start = max(t_open, busy_until)`, décalage admis jusqu'à la fin de la fenêtre (1 s), sinon repli RX2 ou perte. | E (modèle) | Le décalage intra-fenêtre reste une approximation d'occupation de la passerelle. | `test_rx2_fallback_when_gateway_busy` |
+| A7 | TS001 §3.3.6 | Obl. (contrainte dispositif) | Un dispositif **n'émet pas** un nouvel uplink avant d'avoir reçu une descente en RX1/RX2 de l'uplink précédent, ou avant la fin de RX2. | Boucle fermée (décision C1, option b) : l'uplink suivant part au plus tôt à fin + 3 s (fin de RX2). Attendre la fin de RX2 satisfait la règle dans tous les cas. | C (boucle fermée) | Historique : non modifié (`device_missed` historique conservé pour les scénarios sans MAC). | `test_closed_loop.cpp` `test_next_uplink_waits_for_rx2_end` ; `python/tests/test_mac_loop.py` `test_next_uplink_waits_for_rx2_end_end_to_end` |
 | A8 | TS001 §4.1 | Obl. | MACPayload ≤ M (taille maximale par débit, RP002). Trame plus longue : rejetée silencieusement. | Présent dans `plan.py` / `uplink.py` ; couverture de test non vérifiée dans cette session. | NV | — | à vérifier |
 | A9 | TS001 §3.3.4, §5.7 | Obl. ? | RXTimingSetupReq / Ans : délai RX1 réglable. | Non modélisé (S2). | NV / E | Statut obligatoire à confirmer dans §5.7 (NV). | — |
 
@@ -105,18 +105,14 @@ Ce document est la base de travail avant toute modification du moteur. Il ne dé
 
 ## 5. Conflits entre résultats historiques ou choix utilisateur et la norme
 
-**C1 — Émission pendant les fenêtres RX (A7).** La règle retenue pour la boucle fermée (« une émission pendant RX1 fait perdre la descente ; la prochaine émission n'est pas retardée ») contredit TS001 §3.3.6 (le dispositif ne doit pas émettre avant la fin de ses fenêtres). Options :
-- (a) conserver le modèle et refuser les scénarios dont la période est inférieure à airtime + RX2 (validation explicite) ;
-- (b) retarder la prochaine émission après RX2 (conforme ; modifie les résultats des scénarios à période courte) ;
-- (c) conserver avec une non-conformité documentée.
-Migration proposée : (b) ou (a) pour la boucle fermée uniquement ; le chemin historique reste inchangé jusqu'à validation explicite.
+**C1 — Émission pendant les fenêtres RX (A7). Décidé : option (b).** La règle antérieure (« une émission pendant RX1 fait perdre la descente ; la prochaine émission n'est pas retardée ») contredisait TS001 §3.3.6. Décision utilisateur : la prochaine émission est retardée jusqu'à la fin de RX2 (fin + 3 s) dans la boucle fermée. Appliqué. Le chemin historique reste inchangé jusqu'à validation explicite (empreintes `d2cb0fac…` et `ed126d7f…` inchangées : aucun scénario sans bloc `mac:` ne change).
 
 **C2 — Profil de protocole (F8, F9, F10, S1).** Le module de trame sécurisée implémente LoRaWAN 1.1 (MIC et chiffrement de FOpts avec des clés 1.1). La cible est 1.0.4. Options :
 - (a) profil de version explicite : 1.0.4 pour les trames et le MIC (`compute_data_mic` existant), 1.1 conservé comme profil séparé ;
 - (b) supprimer le profil 1.1 du module de trame (non recommandé sans décision).
 Recommandation : (a), avec tests de vecteurs 1.0.4.
 
-**C3 — RX2 en boucle fermée (A1, A4, A5, A6).** Nécessite la fréquence et le débit RX2 régionaux, donc l'accès à RP002-1.0.5 (NV).
+**C3 — RX2 en boucle fermée (A1, A4, A5, A6). Décidé : valeurs RP002-1.0.3.** Repli RX2 implémenté en S2 (fin + 2 s, SF12, 1 s). Fréquence RX2 (869,525 MHz) non modélisée ; RP002-1.0.5 reste non vérifiée et sa compatibilité n'est pas établie.
 
 **C4 — Retransmissions confirmées et NbTrans (F12, M9).** Modifie l'airtime et les collisions ; à faire avec validation explicite des traces.
 
@@ -124,7 +120,7 @@ Recommandation : (a), avec tests de vecteurs 1.0.4.
 
 | Ordre demandé | Élément | État |
 |---|---|---|
-| 1. Classe A, RX1/RX2, planification | Repli RX2 en S2 (A1, A4, A5, A6) ; conflit A7 (C1) | **Non fait** : bloqué par C1 (décision) et C3 (RP002-1.0.5). |
+| 1. Classe A, RX1/RX2, planification | Repli RX2 en S2 (A1, A4, A5) ; délai après RX2 (A7, C1) | **Fait (partiel)** : C1 et repli RX2 appliqués, tests E2E C++ et Python. Reste : fréquence RX2 (A5), décalage intra-fenêtre (A6), réémission serveur (A1), RP002-1.0.5 (NV). |
 | 2. Commandes MAC, réponses, FOpts | Réponses MAC : pas de report (M2) | **Fait** : tests C++ et Python ; empreintes historiques inchangées. Reste : M1, M3, M6, M7, M8, M9. |
 | 3. ADR, puissance, débits, duty cycle, régional | RP002-1.0.5 (R2), backoff ADR (F14) | **Non fait** : texte RP002-1.0.5 NV. |
 | 4. Compteurs, sécurité, jointure | Profil 1.0.4 (F8, F9, F10, S1) ; FPort 224 (F4) | **Non fait** : décision C2 requise. |
