@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Optional
@@ -119,6 +120,8 @@ def run_basicstation(host: str, port: int, db_path: Path, keys_path: Path, net_i
     log = logging.getLogger("lsim.serve")
     if not uri.startswith(("ws://", "wss://")):
         raise ValueError("--uri : schéma ws:// ou wss:// attendu")
+    if not re.fullmatch(r"sx1301/[1-8]", hwspec):
+        raise ValueError("--hwspec : « sx1301/N » attendu (N = 1 à 8), voir docs/USAGE.md")
     if (tls_cert is None) != (tls_key is None):
         raise ValueError("--tls-cert et --tls-key vont ensemble")
     if tls_cert is None and host not in _LOOPBACK_HOSTS:

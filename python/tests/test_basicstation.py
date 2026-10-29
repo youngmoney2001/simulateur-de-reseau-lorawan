@@ -16,7 +16,8 @@ import pytest
 from lsim import wsproto
 from lsim.basicstation import (
     BasicStationServer, downlink_message, format_eui, jreq_to_wire, parse_eui,
-    router_config, sx1301_conf, start_basicstation_server, updf_to_wire,
+    DEFAULT_HWSPEC, router_config, sx1301_conf, start_basicstation_server, updf_to_wire,
+    uplink_to_rxpk,
 )
 from lsim.plan import get_plan
 from lsim.security import JoinRequest, decode_join_accept, derive_session_keys_11, encode_join_request
@@ -248,7 +249,7 @@ def test_eui_accepts_dashed_plain_and_integer_forms():
 # --- router_config et sx1301_conf ------------------------------------------------------------
 
 def test_router_config_uses_plan_tables():
-    doc = router_config(US, net_id=0x13, hwspec="sx1302/1")
+    doc = router_config(US, net_id=0x13, hwspec="sx1301/1")
     assert doc["region"] == "US915" and doc["NetID"] == [0x13]
     assert len(doc["DRs"]) == 16 and len(doc["sx1301_conf"]) == 1
     assert doc["DRs"][4] == [8, 500, 0] and doc["DRs"][8] == [12, 500, 1]     # DR8 descendant seul
@@ -477,3 +478,46 @@ def test_silent_client_is_disconnected_after_handshake_timeout(monkeypatch):
         assert server.stats["handshake_timeout"] == 2
 
     asyncio.run(with_server(None, run))
+
+
+# --- Vecteurs officiels : selftest_lora.c de Basic Station (lora-net/basicstation) ------------
+# Trame jreq (23 octets) et trame updf (16 octets), avec le JSON attendu par la passerelle.
+
+OFFICIAL_JREQ = bytes.fromhex("00" "0123456789ABCDEF" "F1E3F5E7F9EBFDEF" "F0F1" "A0A1A2A3")
+OFFICIAL_UPDF = bytes.fromhex("40" "ABCDEFFF" "01" "F3F4" "FF" "20" "2122" "A0A1A2A3")
+
+
+def test_official_jreq_vector_matches_station_json():
+    msg = {"msgtype": "jreq", "MHdr": 0, "JoinEui": "EF-CD-AB-89-67-45-23-01",
+           "DevEui": "EF-FD-EB-F9-E7-F5-E3-F1", "DevNonce": 61936, "MIC": -1549622880}
+    assert jreq_to_wire(msg) == OFFICIAL_JREQ
+
+
+def test_official_updf_vector_matches_station_json():
+    msg = {"msgtype": "updf", "MHdr": 64, "DevAddr": -1061461, "FCtrl": 1, "FCnt": 62707,
+           "FOpts": "FF", "FPort": 32, "FRMPayload": "2122", "MIC": -1549622880}
+    assert updf_to_wire(msg) == OFFICIAL_UPDF
+
+
+def test_official_vectors_roundtrip_through_rxpk():
+    rxpk, _, _ = uplink_to_rxpk({"msgtype": "updf", "MHdr": 64, "DevAddr": -1061461, "FCtrl": 1,
+                                 "FCnt": 62707, "FOpts": "FF", "FPort": 32, "FRMPayload": "2122",
+                                 "MIC": -1549622880, "DR": 5, "Freq": 868_100_000,
+                                 "upinfo": {"xtime": 1}}, EU)
+    assert rxpk.payload == OFFICIAL_UPDF and rxpk.datr == "SF7BW125"
+
+
+def test_router_config_accepts_all_join_eui_and_station_hwspec():
+    doc = router_config(EU, net_id=0x13, hwspec=DEFAULT_HWSPEC)
+    assert doc["JoinEui"] is None                       # null : pas de filtre (int64 côté Station)
+    assert doc["hwspec"] == "sx1301/1"
+    assert json.loads(json.dumps(doc))["JoinEui"] is None
+
+
+def test_cli_refuses_hwspec_outside_station_vocabulary():
+    from lsim.serve import run_basicstation
+    from pathlib import Path
+    for bad in ("sx1302/1", "sx1301/9", "sx1301/", "SX1301/1"):
+        with pytest.raises(ValueError):
+            run_basicstation("127.0.0.1", 0, Path("x.sqlite"), Path("k.json"), "000013", "EU868",
+                             "ws://x", hwspec=bad)

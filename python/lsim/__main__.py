@@ -52,8 +52,8 @@ def main(argv: list[str] | None = None) -> int:
                      help="basicstation : adresse WebSocket publique annoncée (ws:// ou wss://)")
     srv.add_argument("--tls-cert", default=None, help="basicstation : certificat PEM (wss)")
     srv.add_argument("--tls-key", default=None, help="basicstation : clé PEM du certificat")
-    srv.add_argument("--hwspec", default="sx1302/1",
-                     help="basicstation : matériel annoncé (défaut : %(default)s)")
+    srv.add_argument("--hwspec", default="sx1301/1",
+                     help="basicstation : matériel annoncé, « sx1301/N » (défaut : %(default)s)")
     srv.add_argument("--db", required=True, help="base SQLite du registre de jointure")
     srv.add_argument("--keys", required=True, help="fichier JSON des clés (mode 600)")
     srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")

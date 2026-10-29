@@ -15,6 +15,10 @@ Hypothèses (à valider sur une vraie passerelle) : EUI au format « AA-BB-… �
 entier) ; MIC et DevAddr en entier signé 32 bits, octets sur l'air en petit-boutiste ; ID6 non
 pris en charge dans `router`. `sx1301_conf` décrit 8 canaux (sous-bande 0 du plan) sur un
 concentrateur ; les autres canaux ne sont pas configurés (limite documentée).
+
+Vérifié dans les sources de Basic Station (lora.c, s2e.c, selftest_lora.c) : EUI affichés
+MSB-first après lecture LSB-first ; MIC et DevAddr en petit-boutiste, entiers signés ;
+RxDelay 0 ramené à 1 ; `JoinEui: null` désactive le filtre.
 """
 
 from __future__ import annotations
@@ -44,8 +48,9 @@ DEFAULT_IDLE_TIMEOUT_S = 300.0
 DEFAULT_MAX_CONNECTIONS = 1024
 MAX_INFLIGHT_PER_CONNECTION = 32
 DEFAULT_PORT_WS = 8887             # port de déploiement (choix, non normatif)
-DEFAULT_HWSPEC = "sx1302/1"          # concentrateurs RAKwireless actuels (à confirmer par passerelle)
-JOIN_EUI_RANGE = (0, 2**64 - 1)
+# Station n'accepte que « sx1301/N » (ral_config / sx1301v2conf : préfixe « sx1301/ » ; aucune
+# chaîne « sx1302/ » dans les sources) ; N = nombre de concentrateurs (1 ici).
+DEFAULT_HWSPEC = "sx1301/1"
 _GPS_EPOCH_UNIX_S = 315_964_800      # 1980-01-06 00:00:00 UTC
 _GPS_LEAP_S = 18                     # écart GPS - UTC depuis 2017
 _MAX_TEXT = 64
@@ -196,7 +201,9 @@ def router_config(plan: Plan, net_id: int, hwspec: str) -> dict:
     return {
         "msgtype": "router_config",
         "NetID": [net_id],
-        "JoinEui": [list(JOIN_EUI_RANGE)],
+        # null : pas de filtre de JoinEUI côté passerelle (s2e.c : filtre désactivé). Une plage
+        # [0, 2^64-1] serait lue en int64 par Station et rejetterait toutes les jointures.
+        "JoinEui": None,
         "region": plan.name,
         "hwspec": hwspec,
         "freq_range": [lo, hi],

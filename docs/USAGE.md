@@ -152,8 +152,9 @@ python -m lsim serve --transport basicstation --host 0.0.0.0 --port 8887 \
 - TLS : `--tls-cert` et `--tls-key` vont ensemble (TLS 1.2 minimum). Sans TLS, le serveur n'écoute
   en clair qu'en boucle locale : hors boucle locale, il journalise un avertissement. En production,
   utiliser TLS ici ou un proxy TLS devant le serveur.
-- `--hwspec` : matériel annoncé dans `router_config` (défaut `sx1302/1`). À vérifier pour chaque
-  passerelle : une passerelle SX1301 doit recevoir `sx1301/1`.
+- `--hwspec` : matériel annoncé dans `router_config`, forme `sx1301/N` (défaut `sx1301/1`). Station
+  n'accepte que ce préfixe (aucun `sx1302/` dans ses sources), y compris pour les concentrateurs
+  SX1302. Une autre valeur est refusée au démarrage.
 - Routes : `…/router-info` (découverte : `router` → `muxs`, `uri`) ; toute autre cible est une
   session de données, ouverte après un `version`.
 - `router_config` : plan régional (`--region`), NetID, bornes de fréquence, tables DR (16 entrées),
@@ -174,7 +175,8 @@ attendent le DevEUI **en ordre de transmission** (ex. `0102030405060708` pour le
 jeton) ; `router` en format ID6 non accepté (EUI ou entier seulement) ; un seul concentrateur et
 seulement les 8 premiers canaux montants du plan (pas de sous-bandes par LinkADRReq, pas de
 LR-FHSS) ; pas de beacon, de Class B/C ni de `rmtsh` ; formats EUI et MIC (petit-boutiste) validés
-sur des trames produites par le cœur, à confirmer contre une passerelle réelle.
+conformes aux vecteurs de test officiels de Basic Station (`selftest_lora.c`) ; reste à confirmer
+sur une passerelle réelle (non disponible pour ces essais).
 
 ## 6. Limites connues
 
