@@ -24,6 +24,17 @@
           "title": "Name",
           "type": "string"
         },
+        "sensor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensorSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "x_m": {
           "maximum": 1000000,
           "minimum": -1000000,
@@ -45,6 +56,91 @@
         "y_m"
       ],
       "title": "Node",
+      "type": "object"
+    },
+    "SensorSettings": {
+      "additionalProperties": false,
+      "description": "Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario.",
+      "properties": {
+        "channel_freq_hz": {
+          "anyOf": [
+            {
+              "maximum": 3000000000,
+              "minimum": 137000000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel Freq Hz"
+        },
+        "messages": {
+          "default": 1,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Messages",
+          "type": "integer"
+        },
+        "payload_bytes": {
+          "default": 10,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "period_s": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Period S",
+          "type": "number"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "enum": [
+                "EU868",
+                "US915",
+                "AU915",
+                "AS923",
+                "KR920",
+                "IN865",
+                "RU864"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "spreading_factor": {
+          "default": 7,
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "start_spread_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "Start Spread S",
+          "type": "number"
+        },
+        "tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 30.0,
+          "minimum": -10.0,
+          "title": "Tx Power Dbm",
+          "type": "number"
+        }
+      },
+      "title": "SensorSettings",
       "type": "object"
     }
   },

@@ -3,6 +3,17 @@
 ## 0.1.0 (non publiée)
 
 
+### Panneau d'étude : simulation d'une session, topologie éditable, persistance (servis)
+- **Simulation depuis la session** : `POST /api/v1/sessions/{id}/simulate` compile la topologie et les configurations CLI en scénario (`lsim/study_compile.py`) et crée le run par le chemin de `POST /runs` (mêmes validations). La réponse donne `run_id`, `links` et `notes`. La liaison au résultat est automatique à la fin du run : `POST /sessions/{id}/simulation` sans `links` lie les passerelles du run compilé.
+- **Réglages capteur** : `Node.sensor` (SF, charge, puissance, période, messages, départ, plan, canal). Ils sont les paramètres d'un groupe de simulation nommé comme le capteur.
+- **Topologie éditable** : `POST /sessions/{id}/nodes` (ajout, 64 au plus, identifiant unique), `DELETE /sessions/{id}/nodes/{node_id}`, `POST /sessions/{id}/nodes/{node_id}/sensor`. Le serveur n'accepte pas `PUT` : c'est `POST` qui remplace les réglages.
+- **Règles de compilation** : passerelle à interface lora arrêtée exclue du run ; avec relais, exactement une frontière active ; réglages mesh (SF, bande) identiques entre frontière et relais (422 sinon) ; sauts : plus petite valeur réglée ; mode mesh incohérent avec le rôle (422) ; plan régional et sous-bande identiques pour toutes les passerelles. Défauts appliqués (EU868, sous-bande 1) et réglages non modélisés listés dans `notes`.
+- **Persistance** : sessions, configurations CLI, liaisons et journal sont écrits dans le fichier SQLite des runs (`--runs-db`, `lsim/study_store.py`) et relus au démarrage. Expiration de 4 h d'inactivité appliquée après redémarrage. Une lecture est écrite au plus une fois par minute.
+- **Seuil de latence validé** : 300 ms (p95 remise au LNS par la frontière), décision de l'auteur.
+- **Exercices** : chaque topologie de départ contient un capteur. Dans les exercices à relais, le capteur émet à -10 dBm à 1500 m, la frontière ne l'entend pas. L'exercice de latence envoie 20 messages. Son indice mentionne la bande mesh : à 203 kHz, p95 ≈ 790 ms (échec) ; à 812 kHz, ≈ 228 ms (réussite).
+- **Changement de comportement** : `unlinked` (réponse de liaison) liste aussi les capteurs, qui ne sont jamais liés à une passerelle.
+- Tests : `test_study_compile.py` (18), `test_study_simulate.py` (17), `test_study_persistence.py` (6, dont un redémarrage du serveur HTTP). Schémas `v1` régénérés (`study_sensor`, `study_simulate`, `study_simulate_request`). Suite Python : 1489 passés, 1 ignoré.
+
 ### Panneau d'étude : critères de connectivité et de latence, indices, journal (servis)
 - **Critères** : `_mesh_inbound(node, from_node)` (lien mesh observé entre deux passerelles liées, via `mesh_inbound` du résumé) et `_latency_p95_at_most(node, 300 ms)` (latence p95 remise au LNS).
 - **Indices** : `POST /api/v1/sessions/{id}/hints`. Deux par exercice ; chaque indice révélé retire `HINT_PENALTY` = 2 points, plancher 0. Plus d'indice : 409 ; exercice différent : 422 ; exercice ou session d'un autre compte : 404.

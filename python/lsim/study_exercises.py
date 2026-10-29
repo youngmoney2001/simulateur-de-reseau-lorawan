@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from lsim.study_cli import GatewayConfig
-from lsim.study_contract import ExerciseList, ExerciseSummary, Node
+from lsim.study_contract import ExerciseList, ExerciseSummary, Node, SensorSettings
 
 
 HINT_PENALTY = 2   # points retirés par indice révélé (§6, barème)
@@ -119,13 +119,21 @@ def _node(id_: str, kind: str, name: str, x: float, y: float) -> Node:
     return Node(id=id_, kind=kind, name=name, x_m=x, y_m=y)
 
 
+def _sensor(x: float, tx_power_dbm: float = 14.0, messages: int = 1) -> Node:
+    """Capteur de départ. Avec un relais, il émet à -10 dBm à 1500 m : la frontière ne l'entend
+    pas, le relais (à 300 m) si, et la trame n'arrive au LNS que par le mesh."""
+    return Node(id="capteur-1", kind="sensor", name="Capteur 1", x_m=x, y_m=0,
+                sensor=SensorSettings(tx_power_dbm=tx_power_dbm, messages=messages,
+                                      period_s=60.0 if messages > 1 else 600.0))
+
+
 EXERCISES: tuple[Exercise, ...] = (
     Exercise(
         id="eu868-passerelle",
         title="Configurer une passerelle frontière sur EU868",
         statement=("Configurez la passerelle frontière frontiere pour le plan EU868 et déclarez son "
                    "serveur réseau : adresse 10.0.0.5, port montant 1700, port descendant 1701."),
-        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
         criteria=(
             Criterion("region", "Plan régional EU868 sur la passerelle frontière", 10,
                       _region("frontiere", "EU868")),
@@ -141,7 +149,8 @@ EXERCISES: tuple[Exercise, ...] = (
         statement=("Configurez le relais relais-1 en mode relay, avec au plus deux sauts. Liez une "
                    "simulation : la frontière doit recevoir par le mesh des trames de relais-1."),
         start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
-                     _node("relais-1", "relay", "Relais 1", 1200, 0)),
+                     _node("relais-1", "relay", "Relais 1", 1200, 0),
+                     _sensor(1500, tx_power_dbm=-10.0)),
         criteria=(
             Criterion("mode", "Relais en mode relay", 10, _mesh_mode("relais-1", "relay")),
             Criterion("sauts", "Au plus 2 sauts sur le relais", 10,
@@ -159,7 +168,7 @@ EXERCISES: tuple[Exercise, ...] = (
         statement=("Configurez la passerelle frontière frontiere sur le plan US915, sous-bande 2. "
                    "Liez ensuite une simulation à la session : la frontière doit recevoir au moins "
                    "une trame."),
-        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
         criteria=(
             Criterion("region", "Plan régional US915", 10, _region("frontiere", "US915")),
             Criterion("sous-bande", "Sous-bande 2", 10, _sub_band("frontiere", 2)),
@@ -175,14 +184,15 @@ EXERCISES: tuple[Exercise, ...] = (
         statement=("Liez une simulation d'un réseau avec relais : la latence p95 des uplinks remis "
                    "au LNS par la frontière doit être au plus 300 ms."),
         start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
-                     _node("relais-1", "relay", "Relais 1", 1200, 0)),
+                     _node("relais-1", "relay", "Relais 1", 1200, 0),
+                     _sensor(1500, tx_power_dbm=-10.0, messages=20)),
         criteria=(
             Criterion("latence", "Latence p95 de la frontière <= 300 ms", 20,
                       _latency_p95_at_most("frontiere", 300.0)),
         ),
         hints=("La latence est publiée par passerelle dans le résumé du run.",
-               "Une trame relayée ajoute le délai du mesh : elle pèse sur le p95 seulement si elles "
-               "sont assez nombreuses."),
+               "Le délai d'une trame relayée dépend de la durée d'émission sur le mesh : la commande "
+               "« bandwidth » de l'interface mesh (203, 406, 812 ou 1625 kHz) la raccourcit."),
     ),
 )
 

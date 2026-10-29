@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
 MASKED = "******"
@@ -31,12 +31,35 @@ Mode = Literal["user", "privileged", "config", "config-if"]
 NodeKind = Literal["sensor", "relay", "border", "server"]
 
 
+Region = Literal["EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"]
+
+
+class SensorSettings(_Strict):
+    """Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario."""
+
+    spreading_factor: int = Field(7, ge=7, le=12)
+    payload_bytes: int = Field(10, ge=0, le=255)
+    tx_power_dbm: float = Field(14.0, ge=-10.0, le=30.0)
+    period_s: float = Field(600.0, gt=0, le=86400)
+    messages: int = Field(1, ge=1, le=1000)
+    start_spread_s: float = Field(0.0, ge=0, le=86400)
+    region: Optional[Region] = None               # None : plan des passerelles
+    channel_freq_hz: Optional[int] = Field(None, ge=137_000_000, le=3_000_000_000)
+
+
 class Node(_Strict):
     id: str = Field(pattern=ID_PATTERN)
     kind: NodeKind
     name: str = Field(min_length=1, max_length=64)
     x_m: float = Field(ge=-1_000_000, le=1_000_000)
     y_m: float = Field(ge=-1_000_000, le=1_000_000)
+    sensor: Optional[SensorSettings] = None      # seulement pour un capteur
+
+    @model_validator(mode="after")
+    def _sensor_settings_only_on_sensors(self) -> "Node":
+        if self.sensor is not None and self.kind != "sensor":
+            raise ValueError("réglages capteur sur un équipement qui n'est pas un capteur")
+        return self
 
 
 class SessionCreate(_Strict):
@@ -90,10 +113,30 @@ class GatewayLink(_Strict):
 
 
 class SimulationBind(_Strict):
-    """Liaison d'une simulation terminée à la session. Sans association, rien n'est lié."""
+    """Liaison d'une simulation terminée à la session.
+
+    Sans `links`, seul un run créé par `POST /sessions/{id}/simulate` est lié, selon les liaisons de
+    sa compilation. Tout autre run exige des associations explicites : sans elles, rien n'est lié.
+    """
 
     run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
     links: list[GatewayLink] = Field(default_factory=list, max_length=MAX_NODES)
+
+
+class SimulateRequest(_Strict):
+    """Lance une simulation de la topologie de la session, avec sa configuration courante."""
+
+    seed: int = Field(0, ge=0, le=2**32 - 1)
+
+
+class SimulateOut(_Strict):
+    """Run créé à partir de la session. `links` : liaisons à appliquer au résultat (une fois
+    terminé) ; `notes` : défauts appliqués et réglages non modélisés."""
+
+    run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    state: str = Field(max_length=16)
+    links: list[GatewayLink] = Field(max_length=MAX_NODES)
+    notes: list[str] = Field(max_length=32)
 
 
 class SimulationBound(_Strict):
@@ -185,6 +228,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_submit_result": SubmitResult,
     "study_simulation_bind": SimulationBind,
     "study_simulation_bound": SimulationBound,
+    "study_simulate_request": SimulateRequest,
+    "study_simulate": SimulateOut,
+    "study_sensor": SensorSettings,
     "study_hint_request": HintRequest,
     "study_hint": HintOut,
     "study_attempt_list": AttemptList,

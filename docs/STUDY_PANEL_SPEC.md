@@ -161,7 +161,11 @@ est public.
 | POST | `/api/v1/sessions` | Crée une session : `nodes` (topologie) ou `exercise_id` (topologie de l'exercice) |
 | GET | `/api/v1/sessions/{id}/topology` | Équipements et états (hostname, région, configuré ; jamais de clé) |
 | POST | `/api/v1/sessions/{id}/cli` | Exécute une ligne CLI sur un équipement ; réponse : sortie, mode, erreur |
-| POST | `/api/v1/sessions/{id}/simulation` | Lie un run terminé : `run_id` et `links: [{node_id, gateway}]` |
+| POST | `/api/v1/sessions/{id}/nodes` | Ajoute un équipement à la topologie (`Node`, `sensor` optionnel) |
+| DELETE | `/api/v1/sessions/{id}/nodes/{node_id}` | Retire un équipement (et son état CLI) |
+| POST | `/api/v1/sessions/{id}/nodes/{node_id}/sensor` | Remplace les réglages d'un capteur (`SensorSettings`) |
+| POST | `/api/v1/sessions/{id}/simulate` | Compile la session et crée le run (`seed`) ; réponse : `run_id`, `links`, `notes` |
+| POST | `/api/v1/sessions/{id}/simulation` | Lie un run terminé : `run_id`, et `links` ou, pour un run de `simulate`, rien |
 | POST | `/api/v1/sessions/{id}/hints` | Révèle le prochain indice de l'exercice (`exercise_id`) |
 | GET | `/api/v1/sessions/{id}/attempts` | Journal des soumissions de la session (résultats seulement) |
 | GET | `/api/v1/exercises` | Catalogue : énoncé, total de points, nombre d'indices |
@@ -169,9 +173,30 @@ est public.
 
 Décisions (implémentées) :
 
-- **Sessions en mémoire** : perdues au redémarrage. Expiration après 4 h **d'inactivité** (chaque accès
-  prolonge la vie). 8 sessions par compte, 256 au total ; ces limites sont appliquées sous le verrou de
-  la création (test de concurrence). 429 `limit_exceeded` au-delà.
+- **Persistance** : sessions, configurations CLI et journal sont écrits dans le fichier SQLite des runs
+  (`--runs-db`) à chaque modification, et relus au démarrage (`study_store.py`). Un redémarrage ne les
+  perd pas. Une lecture n'est écrite qu'une fois par minute au plus, pour que l'expiration parte de
+  la dernière activité. Expiration après 4 h **d'inactivité**. 8 sessions par compte, 256 au total ;
+  ces limites sont appliquées sous le verrou de la création (test de concurrence). 429
+  `limit_exceeded` au-delà.
+- **Simulation** (`study_compile.py`) : `simulate` transforme la topologie et les configurations CLI en
+  scénario, puis crée le run par le même chemin que `POST /runs` (mêmes validations, même file). Règles :
+  - chaque capteur est un groupe de simulation nommé comme lui ; ses réglages `sensor` (SF, charge,
+    puissance, période, messages, région, canal) sont les paramètres du groupe, défauts du scénario ;
+  - `border` et `relay` sont des passerelles ; une passerelle dont l'interface `lora` est arrêtée n'entre
+    pas dans le run ; un relais dont l'interface `mesh` est arrêtée reste une passerelle d'accès ;
+  - avec des relais actifs : exactement une frontière active, à interface mesh active ; les réglages
+    mesh (SF, bande, sauts) viennent de la frontière et des relais. Deux SF ou deux bandes réglées et
+    différentes : 422. Les sauts prennent la plus petite valeur réglée ;
+  - `mode` réglé qui ne correspond pas au rôle : 422 ;
+  - plan régional et sous-bande : ceux des passerelles, identiques pour toutes ; un capteur qui déclare
+    un autre plan : 422. Non réglé : EU868 (et sous-bande 1 sur US915 / AU915), signalé dans `notes` ;
+  - `notes` liste aussi ce que le moteur ne modélise pas : puissance des passerelles, fréquence réglée,
+    Ethernet, serveur réseau (le LNS est implicite derrière la frontière) ;
+  - la liaison est automatique : `links` (une par passerelle active) sont mémorisés et appliqués à la
+    fin du run, sans nom à saisir.
+- **Limites** : au plus 64 équipements par session. Le serveur n'accepte pas `PUT` (405) : les
+  réglages capteur passent par `POST .../sensor`.
 - **Propriété** : toute session, et tout équipement qu'elle contient, appartient à un seul compte. Un
   autre compte reçoit 404 (« inconnue »), jamais 403.
 - **Identifiant d'équipement** : motif `^[a-z][a-z0-9-]{0,31}$`, chaîne stable (aussi nom d'hôte CLI,
@@ -184,8 +209,11 @@ Décisions (implémentées) :
 - **CLI** : une seule ligne (422 sinon). `exit` au niveau utilisateur redémarre la console en mode
   utilisateur (message dans la sortie). `show lorawan counters` et `show mesh counters` lisent la
   passerelle associée ; les `show` non alimentés par le moteur ne sont pas dans la grammaire.
-- **Exercices** : trois exercices (EU868 ; relais à deux sauts avec lien mesh observé ; US915 sous-bande
-  2 avec réception ; latence p95 de la frontière). Le public ne voit que l'énoncé, le total de points et
+- **Exercices** : quatre exercices (EU868 ; relais à deux sauts avec lien mesh observé ; US915 sous-bande
+  2 avec réception ; latence p95 de la frontière, seuil 300 ms, **validé par l'auteur**). Chaque
+  topologie de départ contient un capteur. Dans les exercices à relais, il émet à -10 dBm à 1500 m :
+  la frontière ne l'entend pas, le relais si. La latence de l'exercice tombe sous 300 ms avec une bande
+  mesh de 812 kHz (p95 228 ms ; 790 ms à 203 kHz, valeur par défaut). Le public ne voit que l'énoncé, le total de points et
   le nombre d'indices. Critères : configuration (région, sous-bande, serveur, mode mesh, sauts) et
   simulation liée (trames reçues, lien mesh observé, latence p95). Le client n'envoie que `session_id` ;
   un champ `score` ou `criteria` est refusé (422). Une session ne se note que pour son exercice.
@@ -201,13 +229,16 @@ passerelle) :
   passerelle, de l'émission à la remise (saut mesh inclus). Rang le plus proche ; absents sans mesure.
 - `mesh_inbound` : sauts mesh livrés depuis chaque émetteur (les copies supprimées ne comptent pas).
 
+Décisions validées par l'auteur :
+
+- seuil de latence de l'exercice : **300 ms** (p95 remise au LNS par la frontière).
+
 Restent ouverts :
 
-- journal persistant (au-delà de la session) ;
-- seuils des exercices (le seuil de latence de 300 ms est un paramètre à valider par l'auteur) ;
-- **construction d'un scénario depuis la topologie de session** : aujourd'hui le run se décrit à part et
-  se lie par association ;
-- interface graphique (`web/`, phases 5 à 7 de la §8).
+- compte et partage : les sessions appartiennent à un jeton, sans comptes multiples ni partage ;
+- sauvegarde : les sessions sont dans le fichier des runs ; leur sauvegarde suit celle de ce fichier ;
+- interface graphique (`web/`, phases 5 à 7 de la §8). L'API est complète pour construire, configurer
+  et simuler ; le navigateur ne fait pas encore que la piloter.
 
 ## 8. Phasage proposé
 

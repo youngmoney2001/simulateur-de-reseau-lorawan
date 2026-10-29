@@ -48,12 +48,12 @@ def _scenario(count=30, messages=4, **extra):
 
 
 @contextlib.contextmanager
-def _make_api(tmp_path, terrain_dir=None):
+def _make_api(tmp_path, terrain_dir=None, runs_db=":memory:"):
     tokens = tmp_path / "tokens.json"
     store = srv.TokenStore(tokens)
     alice = store.issue("alice")
     bob = store.issue("bob")
-    server = srv.make_server("127.0.0.1", 0, tokens, terrain_dir=terrain_dir)
+    server = srv.make_server("127.0.0.1", 0, tokens, terrain_dir=terrain_dir, runs_db=runs_db)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -85,6 +85,7 @@ def _make_api(tmp_path, terrain_dir=None):
         server.shutdown()
         server.server_close()
         server.service.close()
+        server.study.close()
 
 
 @pytest.fixture()

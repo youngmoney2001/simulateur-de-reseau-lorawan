@@ -25,7 +25,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Liaison d'une simulation terminée à la session. Sans association, rien n'est lié.",
+  "description": "Liaison d'une simulation terminée à la session.\n\nSans `links`, seul un run créé par `POST /sessions/{id}/simulate` est lié, selon les liaisons de\nsa compilation. Tout autre run exige des associations explicites : sans elles, rien n'est lié.",
   "properties": {
     "links": {
       "items": {

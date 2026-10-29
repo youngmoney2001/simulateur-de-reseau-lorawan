@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "description": "Lance une simulation de la topologie de la session, avec sa configuration courante.",
+  "properties": {
+    "seed": {
+      "default": 0,
+      "maximum": 4294967295,
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    }
+  },
+  "title": "SimulateRequest",
+  "type": "object"
+}

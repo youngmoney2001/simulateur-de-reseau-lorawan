@@ -57,9 +57,11 @@ from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
-    CliRequest, HintRequest, SessionCreate, SimulationBind, SubmitRequest,
+    CliRequest, GatewayLink, HintRequest, Node, SensorSettings, SessionCreate, SimulateOut,
+    SimulateRequest, SimulationBind, SubmitRequest,
 )
 from lsim.study_session import StudyError, StudyService
+from lsim.study_store import StudyStore
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
 from lsim.trace_events import (
@@ -844,6 +846,9 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and rest == "runs":
             return 202, svc.create(owner, self._json_body())
         study: StudyService = self.server.study  # type: ignore[attr-defined]
+        m = re.fullmatch(r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor)?)?", rest)
+        if m is not None:
+            return self._nodes(method, study, owner, m.group(1), m.group(2), m.group(3))
         if method == "POST" and rest == "sessions":
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))
@@ -858,7 +863,7 @@ class _Handler(BaseHTTPRequestHandler):
             result = self._study(lambda: study.submit(owner, exercise_id, req.session_id))
             return 200, result.model_dump()
 
-        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation|hints|attempts)", rest)
+        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation|simulate|hints|attempts)", rest)
         if m is not None:
             sid, action = m.group(1), m.group(2)
             if method == "GET" and action == "attempts":
@@ -873,6 +878,9 @@ class _Handler(BaseHTTPRequestHandler):
                 req = self._parse_body(CliRequest)
                 return 200, self._study(lambda: study.cli(owner, sid, req)).model_dump(
                     exclude_none=True)
+            if method == "POST" and action == "simulate":
+                req = self._parse_body(SimulateRequest)
+                return 202, self._simulate(svc, study, owner, sid, req.seed)
             if method == "POST" and action == "simulation":
                 req = self._parse_body(SimulationBind)
                 summary = svc.summary(owner, req.run_id)  # propriétaire vérifié ; 409 si non fini
@@ -896,6 +904,32 @@ class _Handler(BaseHTTPRequestHandler):
                 return 200, svc.devices_page(owner, run_id, cursor, limit)
             return 200, svc.events_page(owner, run_id, cursor, limit)
         raise ApiError(404, "not_found", "route inconnue")
+
+    def _nodes(self, method: str, study: StudyService, owner: str, sid: str,
+               node_id: Optional[str], sensor: Optional[str]) -> tuple[int, Optional[dict[str, Any]]]:
+        if node_id is None:
+            if method == "POST":
+                req = self._parse_body(Node)
+                return 201, self._study(lambda: study.add_node(owner, sid, req)).model_dump()
+            raise ApiError(404, "not_found", "route inconnue")
+        if sensor is not None and method == "POST":      # remplace les réglages (pas de PUT)
+            req = self._parse_body(SensorSettings)
+            return 200, self._study(
+                lambda: study.set_sensor(owner, sid, node_id, req)).model_dump()
+        if sensor is None and method == "DELETE":
+            self._study(lambda: study.remove_node(owner, sid, node_id))
+            return 204, None
+        raise ApiError(404, "not_found", "route inconnue")
+
+    def _simulate(self, svc: "RunService", study: StudyService, owner: str, sid: str,
+                  seed: int) -> dict[str, Any]:
+        compiled = self._study(lambda: study.compile(owner, sid, seed))
+        status = svc.create(owner, compiled.body)          # mêmes validations que POST /runs
+        self._study(lambda: study.record_simulation(owner, sid, status["run_id"], compiled.links))
+        return SimulateOut(
+            run_id=status["run_id"], state=status["state"],
+            links=[GatewayLink.model_validate(x) for x in compiled.links],
+            notes=compiled.notes).model_dump()
 
     def _parse_body(self, model: type) -> Any:
         try:
@@ -951,8 +985,9 @@ def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":mem
     service = RunService(RunStore(runs_db), max_queue=max_queue,
                          limiter=RateLimiter(per_minute=rate_per_min),
                          terrains=TerrainCatalog(terrain_dir))
+    study = StudyService(store=StudyStore(runs_db))
     return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
-                     study=StudyService())
+                     study=study)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1003,6 +1038,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         server.server_close()
         server.service.close()
         server.service._store.close()
+        server.study.close()
     return 0
 
 

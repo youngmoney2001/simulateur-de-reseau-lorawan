@@ -76,7 +76,7 @@ def test_exercise_session_starts_with_the_exercise_topology(api):
     status, out = _session(api, exercise="relais-deux-sauts")
     assert status == 201 and out["exercise_id"] == "relais-deux-sauts"
     _, topo = api.call("GET", f"/api/v1/sessions/{out['session_id']}/topology")
-    assert [n["id"] for n in topo["nodes"]] == ["frontiere", "relais-1"]
+    assert [n["id"] for n in topo["nodes"]] == ["frontiere", "relais-1", "capteur-1"]
 
 
 def test_exercise_session_refuses_its_own_topology_and_unknown_exercises(api):
