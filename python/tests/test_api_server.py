@@ -4,19 +4,29 @@ Le serveur tourne sur une adresse locale, en fil, pour chaque test ; les répons
 contre les modèles du contrat (`lsim.api_contract`).
 """
 
+import contextlib
 import http.client
 import json
 import os
+import shutil
 import stat
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from lsim import api_server as srv
 from lsim.api_contract import (
-    DevicePage, RegionList, RunStatus, RunSummary, TracePage, ValidateResponse,
+    ApiScenario, DevicePage, RegionList, RunStatus, RunSummary, TerrainList, TracePage,
+    ValidateResponse,
 )
+from lsim.environment import load_dem_csv
+from lsim.export import run_scenario
+
+ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = ROOT / "examples"
+SCHEMAS = ROOT / "schemas" / "api" / "v1"
 
 
 def _scenario(count=30, messages=4, **extra):
@@ -37,13 +47,13 @@ def _scenario(count=30, messages=4, **extra):
     return d
 
 
-@pytest.fixture()
-def api(tmp_path):
+@contextlib.contextmanager
+def _make_api(tmp_path, terrain_dir=None):
     tokens = tmp_path / "tokens.json"
     store = srv.TokenStore(tokens)
     alice = store.issue("alice")
     bob = store.issue("bob")
-    server = srv.make_server("127.0.0.1", 0, tokens)
+    server = srv.make_server("127.0.0.1", 0, tokens, terrain_dir=terrain_dir)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -69,10 +79,29 @@ def api(tmp_path):
     api = Api()
     api.call, api.alice, api.bob, api.tokens_path, api.store = call, alice, bob, tokens, store
     api.service = server.service
-    yield api
-    server.shutdown()
-    server.server_close()
-    server.service.close()
+    try:
+        yield api
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.service.close()
+
+
+@pytest.fixture()
+def api(tmp_path):
+    with _make_api(tmp_path) as a:
+        yield a
+
+
+@pytest.fixture()
+def api_relief(tmp_path):
+    """Serveur avec un catalogue de reliefs : `quartier.csv` valide, un nom d'identifiant invalide."""
+    catalog = tmp_path / "terrains"
+    catalog.mkdir()
+    shutil.copy(EXAMPLES / "relief_quartier_dem.csv", catalog / "quartier.csv")
+    (catalog / "Mauvais Nom.csv").write_text("x_m,y_m,z_m\n", encoding="utf-8")
+    with _make_api(tmp_path, terrain_dir=catalog) as a:
+        yield a
 
 
 def _wait_done(api, run_id, token=None, timeout=120):
@@ -143,7 +172,7 @@ def test_validate_accepts_and_reports_problems(api):
     assert body["problems"][0]["code"] == "validation_error"
 
 
-def test_terrain_in_scenario_is_refused_with_its_code(api):
+def test_terrain_path_in_scenario_is_refused_with_its_code(api):
     d = _scenario(environment={"terrain": {"type": "dem_csv", "path": "relief.csv"}})
     status, body = api.call("POST", "/api/v1/runs", {"scenario": d})
     assert status == 422 and body["code"] == "terrain_not_allowed"
@@ -463,7 +492,7 @@ def test_protocol_run_totals_agree_with_events(api):
     assert summary["totals"]["lost_gateway_busy"] >= 0
 
 
-def test_obstacles_are_accepted_and_terrain_is_refused(api):
+def test_obstacles_are_accepted_and_terrain_path_is_refused(api):
     env = {"obstacles": [{"x_min_m": 100, "y_min_m": -50, "x_max_m": 120, "y_max_m": 50,
                           "height_m": 20, "attenuation_db": 15}]}
     status, created = api.call("POST", "/api/v1/runs", {"scenario": _scenario(environment=env)})
@@ -474,17 +503,98 @@ def test_obstacles_are_accepted_and_terrain_is_refused(api):
     assert status == 422 and body["code"] == "terrain_not_allowed"
 
 
-def test_energy_is_refused_with_protocol_or_multi(api):
-    status, body = api.call("POST", "/api/v1/runs", {
-        "scenario": _scenario(), "energy_profile": "rak4631",
-        "protocol": {"downlink_every": 2}})
-    assert status == 422 and body["field"] == "energy_profile"
-    status, created = api.call("POST", "/api/v1/runs", {
-        "scenario": _scenario(), "energy_profile": "rak4631"})
+def _energy_rows(api, rid):
+    _, page = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    return [(x["energy_per_message_j"], x["average_current_ua"]) for x in page["items"]]
+
+
+def test_energy_without_protocol_matches_the_energy_model(api):
+    """Sans protocole, l'énergie de l'API égale celle de `run_scenario` (aucune régression)."""
+    d = _scenario()
+    scenario = srv._build_scenario(ApiScenario.model_validate(d))
+    expected = [(r.energy_per_message_j, r.average_current_ua)
+                for r in run_scenario(scenario, energy_profile="rak4631").rows]
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d, "energy_profile": "rak4631"})
     assert status == 202
     assert _wait_done(api, created["run_id"])["state"] == "done"
-    _, summary = api.call("GET", f"/api/v1/runs/{created['run_id']}/summary")
-    assert summary["energy_profile"] == "rak4631"
+    got = _energy_rows(api, created["run_id"])
+    assert len(got) == len(expected)
+    for (e1, c1), (e2, c2) in zip(got, expected):
+        assert e1 == pytest.approx(e2, rel=1e-12) and c1 == pytest.approx(c2, rel=1e-12)
+
+
+def test_energy_with_downlinks_counts_received_downlink_airtime(api):
+    """Les descendantes reçues ajoutent de la réception : énergie ≥ sans protocole, et > pour certains."""
+    d = _scenario(count=40, messages=4)
+    _, plain = api.call("POST", "/api/v1/runs", {"scenario": d, "energy_profile": "rak4631"})
+    _, withdl = api.call("POST", "/api/v1/runs", {
+        "scenario": d, "energy_profile": "rak4631", "protocol": {"downlink_every": 1}})
+    assert _wait_done(api, plain["run_id"])["state"] == "done"
+    assert _wait_done(api, withdl["run_id"])["state"] == "done"
+    base = _energy_rows(api, plain["run_id"])
+    with_dl = _energy_rows(api, withdl["run_id"])
+    pairs = [(a[0], b[0]) for a, b in zip(base, with_dl) if a[0] is not None]
+    assert pairs and all(b >= a - 1e-15 for a, b in pairs)
+    assert any(b > a for a, b in pairs)
+
+
+def test_energy_is_accepted_in_multi_gateway(api):
+    d = _scenario(count=60, messages=3)
+    d.pop("gateway")
+    d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+                     {"name": "b", "x_m": 2500, "y_m": 0, "antenna_gain_dbi": 2.15}]
+    status, created = api.call("POST", "/api/v1/runs", {
+        "scenario": d, "energy_profile": "rak4631", "protocol": {"downlink_every": 1}})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    assert summary["energy_profile"] == "rak4631" and "gateways" in summary
+    assert any(e is not None for e, _ in _energy_rows(api, rid))
+
+
+def test_terrain_catalog_lists_only_valid_ids(api_relief):
+    status, body = api_relief.call("GET", "/api/v1/terrains")
+    assert status == 200
+    listing = TerrainList.model_validate(body)
+    assert [t.id for t in listing.items] == ["quartier"]
+    expected = load_dem_csv(EXAMPLES / "relief_quartier_dem.csv").sha256
+    assert listing.items[0].sha256 == expected
+
+
+def test_terrain_id_is_resolved_on_the_server_and_hashed_into_the_scenario(api_relief):
+    env = {"gateway_height_m": 25, "device_height_m": 1.5, "obstacles": [
+        {"x_min_m": 400, "y_min_m": -150, "x_max_m": 550, "y_max_m": 150,
+         "height_m": 24, "attenuation_db": 18}]}
+    d = _scenario(count=50, messages=2, environment=env)
+    _, plain = api_relief.call("POST", "/api/v1/scenarios/validate", {"scenario": d})
+    status, with_relief = api_relief.call("POST", "/api/v1/scenarios/validate",
+                                          {"scenario": d, "terrain_id": "quartier"})
+    assert status == 200 and with_relief["valid"] is True
+    assert with_relief["scenario_sha256"] != plain["scenario_sha256"]
+    status, created = api_relief.call("POST", "/api/v1/runs", {
+        "scenario": d, "terrain_id": "quartier"})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api_relief, rid)["state"] == "done"
+    _, summary = api_relief.call("GET", f"/api/v1/runs/{rid}/summary")
+    assert summary["scenario_sha256"] == with_relief["scenario_sha256"]
+
+
+def test_unknown_or_unsafe_terrain_ids_are_refused(api_relief):
+    d = _scenario()
+    status, body = api_relief.call("POST", "/api/v1/runs", {"scenario": d, "terrain_id": "absent"})
+    assert status == 422 and body["field"] == "terrain_id"
+    for bad in ("../quartier", "Quartier", "a/b", ""):
+        status, body = api_relief.call("POST", "/api/v1/runs", {"scenario": d, "terrain_id": bad})
+        assert status == 422, bad
+
+
+def test_without_catalog_every_terrain_id_is_unknown(api):
+    status, body = api.call("POST", "/api/v1/runs", {"scenario": _scenario(), "terrain_id": "quartier"})
+    assert status == 422 and body["field"] == "terrain_id"
+    status, body = api.call("GET", "/api/v1/terrains")
+    assert status == 200 and body == {"items": []}
 
 
 def test_join_is_refused_in_multi_gateway(api):

@@ -9,9 +9,12 @@ Totaux, compteurs par dispositif, charges et événements viennent d'un seul cal
 (`build_trace` en mono-passerelle, `build_multi_trace` en multi-passerelles) : ils concordent par
 construction, et le serveur vérifie la somme des compteurs par dispositif avant de publier.
 
-Périmètre : mono et multi-passerelles, environnement à obstacles (sans relief). Refusés
-explicitement (`validation_error`) : mesh, join en multi-passerelles, énergie avec options
-protocole ou multi-passerelles. Relief (`terrain`) : `terrain_not_allowed` (catalogue à venir).
+Périmètre : mono et multi-passerelles, environnement à obstacles et relief. Relief : identifiant
+`terrain_id` résolu dans le catalogue serveur (`--terrain-catalog`, fichiers `<id>.csv`) ; le client
+ne fournit jamais de chemin. Refusés explicitement (`validation_error`) : mesh, join en
+multi-passerelles.
+
+L'énergie suit la trace : airtime des descendantes reçues par dispositif (mono et multi).
 
 Jetons : `python -m lsim.api_server issue-token --tokens FICHIER --owner NOM` affiche le jeton une
 seule fois ; le fichier ne contient que son SHA-256. `serve` refuse de démarrer sur une adresse
@@ -21,6 +24,7 @@ non locale sans `--tls-cert` et `--tls-key` (le jeton circule dans l'en-tête).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -44,13 +48,17 @@ from urllib.parse import parse_qs, urlsplit
 from pydantic import ValidationError
 
 from lsim.api_contract import (
-    API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, DevicePage, DeviceRowOut,
-    GatewayLoadOut, GatewayReportOut, Problem, RunCreate, RunStatus, RunSummary, Totals, TracePage,
-    TraceEvent, ValidateRequest, ValidateResponse, list_regions,
+    API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
+    DevicePage, DeviceRowOut, GatewayLoadOut, GatewayReportOut, Problem, RunCreate, RunStatus,
+    RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
+    ValidateResponse, list_regions,
 )
-from lsim.export import run_scenario
+from lsim.energy_report import device_energies_protocol
+from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
-from lsim.trace_events import ProtocolOptions, build_multi_trace, build_trace
+from lsim.trace_events import (
+    ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
+)
 
 log = logging.getLogger("lsim.api")
 
@@ -294,20 +302,20 @@ class RunStore:
     def delete_run(self, run_id: str) -> None:
         self._conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
 
-    def save_done(self, run_id: str, summary: dict[str, Any], devices: list[dict[str, Any]],
-                  events: list[dict[str, Any]]) -> None:
+    def save_done(self, run_id: str, summary_json: str, devices: list[tuple[int, str]],
+                  events: list[tuple[int, str]]) -> None:
+        """Écrit le run terminé. Les corps sont déjà sérialisés (hors verrou) : ici, seulement SQL."""
         with self._tx():
             self._conn.executemany(
                 "INSERT INTO devices (run_id, idx, body) VALUES (?, ?, ?)",
-                [(run_id, d["device_index"], json.dumps(d, ensure_ascii=False)) for d in devices])
+                [(run_id, idx, body) for idx, body in devices])
             self._conn.executemany(
                 "INSERT INTO events (run_id, seq, body) VALUES (?, ?, ?)",
-                [(run_id, e["seq"], json.dumps(e, ensure_ascii=False, allow_nan=False))
-                 for e in events])
+                [(run_id, seq, body) for seq, body in events])
             self._conn.execute(
                 "UPDATE runs SET state = 'done', progress = 1.0, summary = ?, trace_events = ? "
                 "WHERE run_id = ?",
-                (json.dumps(summary, ensure_ascii=False), len(events), run_id))
+                (summary_json, len(events), run_id))
 
     def devices_page(self, run_id: str, cursor: int, limit: int) -> tuple[list, Optional[int]]:
         rows = self._conn.execute(
@@ -340,22 +348,72 @@ def _check_request(req: RunCreate) -> None:
         raise ApiError(422, "validation_error",
                        "mesh : non exposé par l'API v1 (voir docs/API_CONTRACT.md)")
     multi = model.gateways is not None
-    protocol = req.protocol
-    protocol_active = protocol.join or protocol.confirmed_uplinks or protocol.downlink_every > 0
-    if multi and protocol.join:
+    if multi and req.protocol.join:
         raise ApiError(422, "validation_error",
                        "protocole.join : non modélisé en multi-passerelles", "protocol.join")
-    if req.energy_profile is not None and (multi or protocol_active):
-        raise ApiError(422, "validation_error",
-                       "energy_profile : seulement en mono-passerelle, sans options protocole",
-                       "energy_profile")
 
 
-def _build_scenario(model: Any) -> Scenario:
+class TerrainCatalog:
+    """Reliefs servis par identifiant : fichiers `<id>.csv` d'un dossier serveur.
+
+    Le client ne fournit jamais de chemin. Un relief est lu une fois puis gardé en mémoire.
+    """
+
+    def __init__(self, directory: Optional[Path]) -> None:
+        self._dir = directory.resolve() if directory is not None else None
+        self._loaded: dict[str, Terrain] = {}
+        self._lock = threading.Lock()
+
+    def ids(self) -> list[str]:
+        if self._dir is None:
+            return []
+        return sorted(p.stem for p in self._dir.glob("*.csv")
+                      if re.fullmatch(TERRAIN_ID_PATTERN, p.stem) and p.is_file())
+
+    def listing(self) -> dict[str, Any]:
+        items = [TerrainInfo(id=tid, sha256=self.get(tid).sha256).model_dump()
+                 for tid in self.ids()]
+        return TerrainList(items=items).model_dump()
+
+    def get(self, tid: str) -> Terrain:
+        unknown = ApiError(422, "validation_error", "relief inconnu du catalogue", "terrain_id")
+        if self._dir is None or not re.fullmatch(TERRAIN_ID_PATTERN, tid):
+            raise unknown
+        with self._lock:
+            hit = self._loaded.get(tid)
+            if hit is not None:
+                return hit
+            path = self._dir / f"{tid}.csv"
+            if not path.is_file():
+                raise unknown
+            try:
+                terrain = load_dem_csv(path)
+            except (ValueError, OSError) as exc:
+                raise ApiError(422, "validation_error", f"relief invalide : {exc}",
+                               "terrain_id") from None
+            self._loaded[tid] = terrain
+            return terrain
+
+
+def _build_scenario(model: Any, terrain: Optional[Terrain] = None) -> Scenario:
+    """Scénario d'API. Avec relief, l'environnement doit être déclaré : son empreinte entre alors
+    dans `scenario.sha256` (un même scénario avec un autre relief a un autre identifiant)."""
+    if terrain is not None and model.environment is None:
+        model = type(model).model_validate({**model.model_dump(), "environment": {}})
     env = None
     if model.environment is not None:
         env = _build_environment(model.environment, Path("."), model.propagation.frequency_hz)
+        if terrain is not None:
+            env = dataclasses.replace(env, terrain=terrain)
     return Scenario(model, environment=env)
+
+
+def _scenario_for(model: Any, terrain_id: Optional[str], catalog: TerrainCatalog) -> Scenario:
+    terrain = catalog.get(terrain_id) if terrain_id is not None else None
+    try:
+        return _build_scenario(model, terrain)
+    except ValueError as exc:
+        raise ApiError(422, "validation_error", str(exc)) from None
 
 
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
@@ -383,10 +441,12 @@ class RunService:
     """Files de calcul et état des runs. Un seul calcul à la fois ; état sous un verrou unique."""
 
     def __init__(self, store: RunStore, max_queue: int = MAX_QUEUE,
-                 limiter: Optional[RateLimiter] = None) -> None:
+                 limiter: Optional[RateLimiter] = None,
+                 terrains: Optional[TerrainCatalog] = None) -> None:
         self._lock = threading.RLock()
         self._store = store
         self.limiter = limiter or RateLimiter()
+        self.terrains = terrains or TerrainCatalog(None)
         self._queue: "queue.Queue[str]" = queue.Queue(maxsize=max_queue)
         self._pending: dict[str, _Job] = {}
         self._cancelled: set[str] = set()
@@ -412,10 +472,7 @@ class RunService:
         except ValidationError as exc:
             raise _validation_error(exc) from None
         _check_request(req)
-        try:
-            scenario = _build_scenario(req.scenario)
-        except ValueError as exc:
-            raise ApiError(422, "validation_error", str(exc)) from None
+        scenario = _scenario_for(req.scenario, req.terrain_id, self.terrains)
         job = _Job(scenario=scenario, options=ProtocolOptions(**req.protocol.model_dump()),
                    energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
         with self._lock:
@@ -537,8 +594,8 @@ class RunService:
                         self._cancelled.discard(run_id)
                         self._store.set_state(run_id, "cancelled")
                     else:
-                        self._store.save_done(run_id, payload["summary"], payload["devices"],
-                                              payload["events"])
+                        self._store.save_done(run_id, payload["summary_json"],
+                                              payload["devices"], payload["events"])
 
     def _fail(self, run_id: str, code: str, message: str) -> None:
         with self._lock:
@@ -566,8 +623,11 @@ class RunService:
             gateway_load, gateways = tr.gateway, None
         self._set(run_id, 0.7)
         if job.energy_profile is not None:
-            res = run_scenario(scenario, energy_profile=job.energy_profile)
-            energy_rows = {r.device_index: r for r in res.rows}
+            # Énergie depuis la trace : les descendantes reçues consomment de la réception.
+            dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
+            energies = device_energies_protocol(devices, dl_airtime, [c.sent for c in per_device],
+                                                job.energy_profile)
+            energy_rows = {r.device_index: r for r in energies}
         if len(events) > MAX_TRACE_EVENTS_PER_RUN:
             raise ApiError(422, "limit_exceeded", "événements au-delà de la borne du run")
 
@@ -598,7 +658,13 @@ class RunService:
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile)
         self._set(run_id, 0.95)
-        return {"summary": summary, "devices": rows, "events": events_out}
+        # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
+        return {
+            "summary_json": json.dumps(summary, ensure_ascii=False),
+            "devices": [(r["device_index"], json.dumps(r, ensure_ascii=False)) for r in rows],
+            "events": [(e["seq"], json.dumps(e, ensure_ascii=False, allow_nan=False))
+                       for e in events_out],
+        }
 
     def _set(self, run_id: str, progress: float) -> None:
         with self._lock:
@@ -750,6 +816,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         if method == "GET" and rest == "regions":
             return 200, list_regions().model_dump()
+        if method == "GET" and rest == "terrains":
+            return 200, svc.terrains.listing()
         if method == "POST" and rest == "scenarios/validate":
             return 200, self._validate()
         if method == "POST" and rest == "runs":
@@ -782,8 +850,9 @@ class _Handler(BaseHTTPRequestHandler):
                 Problem(code=err.code, message=err.message, field=err.field),
             ]).model_dump(exclude_none=True)
         try:
-            _check_request(RunCreate(scenario=req.scenario))
-            scenario = _build_scenario(req.scenario)
+            _check_request(RunCreate(scenario=req.scenario, terrain_id=req.terrain_id))
+            scenario = _scenario_for(req.scenario, req.terrain_id,
+                                     self.server.service.terrains)  # type: ignore[attr-defined]
         except (ApiError, ValueError) as exc:
             code = exc.code if isinstance(exc, ApiError) else "validation_error"
             msg = exc.message if isinstance(exc, ApiError) else str(exc)
@@ -802,9 +871,11 @@ def make_tls_context(cert: Path, key: Path) -> ssl.SSLContext:
 
 def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":memory:",
                 max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
-                tls: Optional[ssl.SSLContext] = None) -> ApiServer:
+                tls: Optional[ssl.SSLContext] = None,
+                terrain_dir: Optional[Path] = None) -> ApiServer:
     service = RunService(RunStore(runs_db), max_queue=max_queue,
-                         limiter=RateLimiter(per_minute=rate_per_min))
+                         limiter=RateLimiter(per_minute=rate_per_min),
+                         terrains=TerrainCatalog(terrain_dir))
     return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls)
 
 
@@ -826,6 +897,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_serve.add_argument("--tls-cert", type=Path, default=None)
     p_serve.add_argument("--tls-key", type=Path, default=None)
     p_serve.add_argument("--rate-per-minute", type=int, default=DEFAULT_RATE_PER_MIN)
+    p_serve.add_argument("--terrain-catalog", type=Path, default=None,
+                         help="dossier de reliefs <id>.csv (optionnel)")
     args = parser.parse_args(argv)
 
     if args.cmd == "issue-token":
@@ -842,7 +915,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     tls = make_tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
     server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
-                         rate_per_min=args.rate_per_minute, tls=tls)
+                         rate_per_min=args.rate_per_minute, tls=tls,
+                         terrain_dir=args.terrain_catalog)
     scheme = "https" if tls else "http"
     log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
     try:

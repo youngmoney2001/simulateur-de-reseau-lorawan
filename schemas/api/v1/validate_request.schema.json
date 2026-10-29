@@ -655,6 +655,19 @@
   "properties": {
     "scenario": {
       "$ref": "#/$defs/ApiScenario"
+    },
+    "terrain_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terrain Id"
     }
   },
   "required": [

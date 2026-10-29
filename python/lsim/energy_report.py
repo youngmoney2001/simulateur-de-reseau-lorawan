@@ -50,6 +50,38 @@ def _check_name(name: str) -> str:
     return name
 
 
+def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[int],
+                             sent: Sequence[int],
+                             profile: str = DEFAULT_ENERGY_PROFILE) -> tuple[DeviceEnergy, ...]:
+    """Énergie par message avec l'airtime des downlinks reçus (issu de la trace).
+
+    `sent[i]` : uplinks émis par le dispositif i ; `dl_airtime_ns[i]` : airtime total des downlinks
+    qu'il a reçus. Chaque message porte la part moyenne de ce airtime (`dl_airtime / sent`). Les
+    fenêtres RX1/RX2 restent comptées par le modèle classe A ; seul le temps de réception effectif
+    des trames descendantes s'ajoute. Sans downlink, le résultat égale `device_energies`.
+    """
+    if not (len(devices) == len(dl_airtime_ns) == len(sent)):
+        raise ValueError("devices, dl_airtime_ns et sent doivent avoir la même longueur")
+    pid = ENERGY_PROFILES[_check_name(profile)]
+    out = []
+    for i, d in enumerate(devices):
+        airtime = time_on_air_ns(
+            RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
+            d.payload_bytes)
+        per_message = dl_airtime_ns[i] // sent[i] if sent[i] else 0
+        try:
+            r = device_energy_class_a(
+                tx_power_dbm=d.tx_power_dbm, bandwidth_hz=_BANDWIDTH_HZ,
+                spreading_factor=d.spreading_factor, preamble_symbols=_PREAMBLE_SYMBOLS,
+                uplinks=1, airtime_ns=airtime, total_ns=d.period_ns,
+                downlink_ns_total=per_message, profile_id=pid)
+        except (ValueError, StatusError):
+            out.append(DeviceEnergy(i, None, None))
+            continue
+        out.append(DeviceEnergy(i, r.energy_j, r.average_current_ua))
+    return tuple(out)
+
+
 def device_energies(devices: Sequence[object], profile: str = DEFAULT_ENERGY_PROFILE
                     ) -> tuple[DeviceEnergy, ...]:
     """Énergie par message pour chaque dispositif (`EndDevice` de `Scenario.deploy()`)."""

@@ -5,8 +5,8 @@ publiés dans `schemas/api/v1/` (générés par `write_schemas`, vérifiés par 
 normatif est dans `docs/API_CONTRACT.md`.
 
 Principes :
-- Le navigateur ne lit jamais de fichier du serveur : le relief passe par un catalogue côté serveur
-  (`terrain` refusé dans le scénario d'API).
+- Le navigateur ne lit jamais de fichier du serveur : le relief est désigné par `terrain_id`, résolu
+  dans un catalogue côté serveur (un `terrain` avec chemin est refusé dans le scénario d'API).
 - Aucune clé de session ou de jointure ne figure dans une réponse.
 - Les réponses de liste sont paginées ; aucune réponse n'excède `MAX_BODY_BYTES`.
 - L'horloge de simulation est une lecture du journal d'événements (pas de calcul côté navigateur).
@@ -29,6 +29,7 @@ MAX_TRACE_EVENTS_PER_RUN = 200_000       # au-delà, le run est refusé (pas tro
 MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
 ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
+TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
 
 RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
@@ -66,6 +67,7 @@ class Problem(_Strict):
 
 class ValidateRequest(_Strict):
     scenario: ApiScenario
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
 
 
 class ValidateResponse(_Strict):
@@ -88,8 +90,18 @@ class ProtocolOptionsIn(_Strict):
 
 class RunCreate(_Strict):
     scenario: ApiScenario
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
     energy_profile: Optional[Literal["rak4631", "sx1262-stm32l072"]] = None
     protocol: ProtocolOptionsIn = ProtocolOptionsIn()
+
+
+class TerrainInfo(_Strict):
+    id: str = Field(pattern=TERRAIN_ID_PATTERN)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TerrainList(_Strict):
+    items: list[TerrainInfo] = Field(max_length=200)
 
 
 class RunStatus(_Strict):
@@ -253,6 +265,7 @@ _MODELS = {
     "trace_event": TraceEvent,
     "problem": Problem,
     "region_list": RegionList,
+    "terrain_list": TerrainList,
 }
 
 

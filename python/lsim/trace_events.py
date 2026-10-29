@@ -488,3 +488,26 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                       net.airtime_ns, net.lost_gateway_busy)
     return MultiTraceRun(per_device=result.per_device, totals=totals,
                          per_gateway=result.per_gateway, gateway_names=names, events=events)
+
+
+def downlink_airtime_by_device(scenario: Scenario, events: Sequence[ProtocolEvent],
+                               options: ProtocolOptions = ProtocolOptions()) -> tuple[int, ...]:
+    """Airtime total (ns) des descendantes effectivement reçues, par dispositif.
+
+    Dérivé des événements de la trace (même convention de longueur que les jobs de downlink) :
+    join-accept, données (en-tête + `downlink_payload_bytes`), ACK seul. Les descendantes perdues
+    (`lost_sensitivity`) et les fenêtres manquées ne consomment pas de réception.
+    """
+    radios = device_radios(scenario)
+    total = [0] * len(radios)
+    for ev in events:
+        if ev.outcome == "lost_sensitivity" or ev.kind not in ("join_accept", "downlink", "ack"):
+            continue
+        if ev.kind == "join_accept":
+            nbytes = JOIN_ACCEPT_BYTES
+        elif ev.kind == "ack":
+            nbytes = ACK_FRAME_BYTES
+        else:
+            nbytes = DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes
+        total[ev.device_index] += _downlink_airtime_ns(radios[ev.device_index], nbytes)
+    return tuple(total)

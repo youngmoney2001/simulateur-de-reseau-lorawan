@@ -9,11 +9,14 @@ vérifie le serveur (jetons, routes, pagination, refus, file bornée, annulation
 Lancer : `python -m lsim.api_server issue-token --tokens FICHIER --owner NOM` (jeton affiché une
 fois), puis `python -m lsim.api_server serve --tokens FICHIER --port 8765` (écoute sur 127.0.0.1).
 
-Régénérer les schémas après une modification :
+Régénérer les schémas après une modification, depuis la racine du dépôt :
 
 ```bash
-cd python && python -m lsim.api_contract ../schemas/api/v1
+PYTHONPATH=python python -m lsim.api_contract schemas/api/v1
 ```
+
+La génération est déterministe : `python/tests/test_api_contract.py` la relance en sous-processus
+et compare les octets obtenus aux fichiers publiés.
 
 ## 1. Principes
 
@@ -21,7 +24,7 @@ cd python && python -m lsim.api_contract ../schemas/api/v1
 |---|---|
 | Transport | HTTP/1.1 JSON, préfixe `/api/v1`. Le navigateur n'appelle que des chemins relatifs ; en développement, Vite fait le relais vers le serveur Python. Aucun `localhost` dans le code du navigateur. |
 | Calcul | Tout calcul radio, réseau et crypto est fait côté Python / cœur C++. Le navigateur affiche et rejoue. |
-| Fichiers | Le navigateur ne fournit jamais de chemin de fichier. Le relief (`terrain`) est refusé dans le scénario d'API ; il sera désigné par un identifiant de catalogue serveur (à définir). |
+| Fichiers | Le navigateur ne fournit jamais de chemin de fichier. Le relief est désigné par `terrain_id` (identifiant de catalogue, `[a-z0-9_-]{1,64}`) résolu sur le serveur (`--terrain-catalog`) ; un `terrain` avec chemin dans le scénario est refusé. |
 | Secrets | Aucune clé (NwkSKey, AppSKey, clés de jointure, `LSIM_DATA_KEY`) dans une réponse, un journal ou un événement. |
 | Erreurs | Format `Problem` (code stable + message), HTTP 4xx pour l'entrée, 5xx pour le serveur. Pas de trace Python dans la réponse. |
 | Bornes | Corps de requête et réponses non paginées : 256 KiB. Événements par run : 200 000 au plus. Page : 500 éléments au plus. Dispositifs et transmissions : bornes de `ScenarioModel`. |
@@ -32,8 +35,9 @@ cd python && python -m lsim.api_contract ../schemas/api/v1
 | Méthode | Chemin | Rôle | Réponse |
 |---|---|---|---|
 | GET | `/api/v1/regions` | Plans régionaux (lecture seule) : canaux, débits, RX2, charges N | `RegionList` |
-| POST | `/api/v1/scenarios/validate` | Valide un scénario sans lancer de calcul | `ValidateResponse` (`valid`, `scenario_sha256`, `problems`) |
-| POST | `/api/v1/runs` | Crée un run (file d'attente), options `protocol` incluses | 202 + `RunStatus` (`state: queued`) |
+| GET | `/api/v1/terrains` | Reliefs du catalogue serveur : identifiant et empreinte SHA-256 | `TerrainList` |
+| POST | `/api/v1/scenarios/validate` | Valide un scénario (et `terrain_id` optionnel) sans lancer de calcul | `ValidateResponse` (`valid`, `scenario_sha256`, `problems`) |
+| POST | `/api/v1/runs` | Crée un run (file d'attente), options `protocol`, `energy_profile` et `terrain_id` incluses | 202 + `RunStatus` (`state: queued`) |
 | GET | `/api/v1/runs/{run_id}` | État, avancement, erreur éventuelle | `RunStatus` |
 | GET | `/api/v1/runs/{run_id}/summary` | Totaux, PDR, charge passerelle (run terminé) | `RunSummary`, 409 tant que non terminé |
 | GET | `/api/v1/runs/{run_id}/devices?cursor=` | Lignes par dispositif, paginées | `DevicePage` |
@@ -100,20 +104,34 @@ La route `events` est exposée (v1). Sa trace provient de `lsim.trace_events.bui
 serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier le run.
 
 **Périmètre de la v1 (implémentation)** :
-- Scénarios **mono** et **multi-passerelles**, et environnement **à obstacles** (sans relief). Totaux,
-  compteurs par dispositif, charges et événements viennent d'un seul calcul natif par run
+- Scénarios **mono** et **multi-passerelles**, environnement **à obstacles** et **relief** (catalogue).
+  Totaux, compteurs par dispositif, charges et événements viennent d'un seul calcul natif par run
   (`build_trace`, ou `build_multi_trace` en multi) ; le serveur vérifie que la somme des compteurs par
   dispositif égale les totaux avant de publier (sinon `run_failed`).
-- Refusés explicitement (`validation_error`, jamais calculés à tort) : **mesh** ; **join** en
-  multi-passerelles (non modélisé) ; **energy_profile** avec options protocole ou multi-passerelles
-  (les pertes dues aux downlinks changeraient l'énergie non modélisée).
-- **Relief** (`terrain`) : `terrain_not_allowed` tant que le catalogue serveur n'existe pas.
-- Résumé : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. C'est une dérogation à
-  l'additivité : `gateway` n'est plus obligatoire dans `run_summary`, parce qu'un run multi n'a pas de
-  charge mono-passerelle. Les clients mono ne voient aucun changement.
+- **Énergie** (`energy_profile`) : calculée depuis la trace, en mono comme en multi. Chaque dispositif
+  compte ses uplinks et l'airtime des descendantes qu'il reçoit (`downlink_airtime_by_device` : join-accept,
+  données, ACK). Sans protocole, le résultat égale `run_scenario` (test de non-régression). Les fenêtres
+  RX1/RX2 restent comptées par le modèle classe A.
+- **Relief** : `terrain_id` désigne `<id>.csv` dans le dossier `--terrain-catalog`. Le client ne fournit
+  jamais de chemin. Le relief est lu une fois puis gardé en mémoire. Son empreinte entre dans
+  `scenario_sha256` (même scénario, autre relief : autre identifiant). `GET /terrains` liste le catalogue.
+  Sans `--terrain-catalog`, le catalogue est vide. Un identifiant inconnu ou invalide : 422 sur `terrain_id`.
+- Refusés explicitement (`validation_error`, jamais calculés à tort) : **mesh** (trace par saut non
+  construite) ; **join** en multi-passerelles (le calcul natif multi ne planifie pas le join-accept).
+- **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
+  dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel
+  et a ajouté `gateways` : c'est une rupture de la règle d'additivité, acceptée pour permettre le multi.
+  Consommateurs vérifiés dans le dépôt (`web/`, `python/`) : aucun ne lit `run_summary` ; les autres
+  occurrences de `gateway` sont des objets internes ou GeoJSON. Les clients mono ne voient aucun changement
+  de valeur, seulement la possibilité d'une absence pour le multi.
 - Runs **persistés** dans une base SQLite (`--runs-db`, mode WAL). Un run encore en file ou en cours
   au redémarrage passe à `failed` (« interrompu au redémarrage »). 20 runs par jeton, 200 au total.
   Une seule file de calcul (16 en attente, 4 actifs par jeton).
+- **Écriture d'un run terminé** : les corps JSON sont sérialisés hors du verrou ; l'écriture SQL (dispositifs,
+  événements, résumé) se fait sous le verrou. Mesure (base fichier, WAL, 500 dispositifs) : 5 ms pour
+  1 000 événements, 30 ms pour 10 000, 147 ms pour 50 000, 540 ms pour 200 000 (borne). Pendant ce temps,
+  les lectures attendent. Le déplacement de l'insertion hors verrou n'est pas fait : il exige de
+  revalider l'annulation et la suppression après écriture ; le coût reste borné par run.
 - **Débit** : seau à jetons par propriétaire, 120 requêtes par minute soutenues, rafale de 60. Au-delà :
   429 `rate_limited` avec `Retry-After`.
 - **TLS** : `--tls-cert` et `--tls-key` (TLS 1.2 minimum). `serve` refuse de démarrer sur une adresse
@@ -131,7 +149,7 @@ Corps `Problem` :
 | `code` | HTTP | Cas |
 |---|---|---|
 | `validation_error` | 422 | scénario ou requête invalide |
-| `terrain_not_allowed` | 422 | `terrain` présent dans le scénario d'API |
+| `terrain_not_allowed` | 422 | `terrain` avec chemin de fichier dans le scénario d'API |
 | `unsupported_region` | 422 | région absente des plans |
 | `limit_exceeded` | 413 / 422 | corps, page, événements, dispositifs, transmissions |
 | `not_found` | 404 | `run_id` inconnu ou supprimé |
@@ -176,10 +194,11 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 
 ## 9. Prochaines étapes
 
-1. Catalogue de reliefs (décision utilisateur ; données MNT à vérifier avant intégration).
-2. Exposer `events` à partir de `lsim.trace_events` (pagination par `seq`).
-3. ~~Implémenter le serveur~~ : fait (v1). Reste : mesh (trace par saut, à concevoir) ; relief
-   (catalogue serveur, décision utilisateur) ; join en multi-passerelles.
+1. Données MNT réelles : à vérifier avant tout usage d'étude (les exemples sont synthétiques).
+2. ~~Exposer `events`~~ : fait (pagination par `seq`).
+3. ~~Implémenter le serveur~~ : fait (v1). ~~Relief (catalogue)~~ : fait. ~~Énergie avec protocole ou
+   multi~~ : fait. Reste : mesh (trace par saut, à concevoir) ; join en multi-passerelles (planification du
+   join-accept dans le calcul natif multi).
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)
@@ -192,5 +211,6 @@ Ajouts additifs au schéma `scenario_input` (aucune clé existante retirée ou m
   `payload_bytes`).
 
 Les schémas `run_create`, `validate_request` et `scenario_input` sont régénérés depuis la racine
-du dépôt (`PYTHONPATH=python python -m lsim.api_contract`). Détail du comportement : `docs/USAGE.md`
+du dépôt (`PYTHONPATH=python python -m lsim.api_contract schemas/api/v1`) ; `terrain_list` est ajouté
+(`terrain_id` dans `run_create` et `validate_request`). Détail du comportement : `docs/USAGE.md`
 section 5sexies.
