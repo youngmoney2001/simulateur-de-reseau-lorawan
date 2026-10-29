@@ -564,25 +564,23 @@ def _native_plan_applies(options: ProtocolOptions, mac: Optional[MacSchedule]) -
     return not options.join and mac is None
 
 
-def _build_trace_native(devices, radios, gateway, propagation, environment, reservations,
+def _build_trace_native(devices, radios, gateway, propagation, environment,
                         options: ProtocolOptions) -> TraceRun:
-    """Point fixe identique à la version Python, la planification des descentes étant native."""
-    from lsim.downlink_plan import plan_native
-    busy: list[tuple[int, int]] = []
-    for _ in range(MAX_ITERATIONS):
-        result = simulate_uplinks_trace(devices, gateway, propagation, environment,
-                                        gateway_busy=busy, reservations=reservations)
-        events, new_busy = plan_native(result.records, radios, options)
-        if list(new_busy) == busy:
-            if len(events) > MAX_EVENTS:
-                raise ValueError(f"trop d'événements ({len(events)} ; limite {MAX_EVENTS})")
-            return TraceRun(per_device=result.per_device, totals=result.totals,
-                            gateway=result.gateway, records=result.records, events=events,
-                            gateway_tx=tuple(busy))
-        busy = list(new_busy)
-    raise RuntimeError(
-        f"pas de point fixe entre trames montantes et émissions passerelle "
-        f"après {MAX_ITERATIONS} itérations")
+    """Trace causale (S1) : une seule exécution, descentes planifiées à la fin de chaque trame.
+
+    Pas de point fixe : l'occupation passerelle utilisée par le moteur est celle que produit le
+    planificateur natif sur la trace obtenue (contrôle d'égalité, sans itération).
+    """
+    from lsim.downlink_plan import plan_native, simulate_causal
+    result, busy = simulate_causal(devices, gateway, propagation, environment, radios, options)
+    events, plan_busy = plan_native(result.records, radios, options)
+    if tuple(plan_busy) != tuple(busy):
+        raise RuntimeError("occupation passerelle incohérente entre le moteur et le planificateur")
+    if len(events) > MAX_EVENTS:
+        raise ValueError(f"trop d'événements ({len(events)} ; limite {MAX_EVENTS})")
+    return TraceRun(per_device=result.per_device, totals=result.totals,
+                    gateway=result.gateway, records=result.records, events=events,
+                    gateway_tx=tuple(busy))
 
 
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
@@ -601,9 +599,15 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     reservations = mac_reservations(scenario, devices)
 
     if _native_plan_applies(options, mac):
-        return _build_trace_native(devices, radios, gateway, propagation, environment, reservations,
-                                   options)
+        return _build_trace_native(devices, radios, gateway, propagation, environment, options)
 
+    return _build_trace_python(devices, radios, gateway, propagation, environment, reservations,
+                               options, mac)
+
+
+def _build_trace_python(devices, radios, gateway, propagation, environment, reservations,
+                        options: ProtocolOptions, mac: Optional[MacSchedule]) -> TraceRun:
+    """Point fixe Python (oracle, et chemin avec jointure ou MAC) : voir `build_trace`."""
     busy: list[tuple[int, int]] = []
     joined: dict[int, int] = {}
     for _ in range(MAX_ITERATIONS):

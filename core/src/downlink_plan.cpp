@@ -248,3 +248,55 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
 }
 
 }  // namespace lsim::plan
+
+namespace lsim::plan {
+
+DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options)
+    : options_(options), accepted_(radios.size(), 0), ack_air_(radios.size(), 0),
+      data_air_(radios.size(), 0) {
+    if (options.downlink_payload_bytes > kMaxDownlinkPayloadBytes) {
+        status_ = PlanStatus::InvalidOptions;
+        return;
+    }
+    if (!std::isfinite(options.gateway_tx_power_dbm) || !std::isfinite(options.device_antenna_gain_dbi) ||
+        !std::isfinite(options.device_rx_offset_db)) {
+        status_ = PlanStatus::InvalidOptions;
+        return;
+    }
+    for (const DeviceRadio& rad : radios) {
+        if (rad.rx1_sf < 7 || rad.rx1_sf > 12) {
+            status_ = PlanStatus::InvalidRadio;
+            return;
+        }
+    }
+    // Durées de trame : calculées à la première utilisation (comme `plan_downlinks`, une erreur
+    // n'est signalée que si une descente est réellement planifiée).
+    radios_ = radios;
+}
+
+std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns) {
+    if (status_ != PlanStatus::Ok) return std::nullopt;
+    ++accepted_[device];
+    const bool queued = options_.downlink_every > 0 && accepted_[device] % options_.downlink_every == 0;
+    std::uint32_t base = 0;
+    if (queued) {
+        base = kDataFrameOverheadBytes + options_.downlink_payload_bytes;
+    } else if (options_.confirmed_uplinks) {
+        base = kAckFrameBytes;
+    } else {
+        return std::nullopt;
+    }
+    std::int64_t& air = queued ? data_air_[device] : ack_air_[device];
+    if (air == 0 && downlink_airtime_ns(radios_[device], base, air) != lora::Status::Ok) {
+        status_ = PlanStatus::InvalidRadio;
+        return std::nullopt;
+    }
+    const std::int64_t t_open = end_ns + kReceiveDelay1Ns;
+    const std::int64_t start = any_busy_ ? std::max(t_open, busy_until_) : t_open;
+    if (start - t_open >= kRx1WindowNs) return std::nullopt;  // passerelle indisponible dans la RX1
+    any_busy_ = true;
+    busy_until_ = start + air;
+    return Interval{start, busy_until_};
+}
+
+}  // namespace lsim::plan

@@ -1069,6 +1069,24 @@ LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t 
                                         lsim_interval* busy, size_t busy_capacity,
                                         size_t* busy_count);
 
+/* ------------------------------------------- Boucle fermée causale (v1, S1)
+ * Passerelle unique, sans commande MAC ni jointure. Les descentes sont planifiées au fil de
+ * l'eau (fin de chaque trame reçue) : une seule exécution, sans point fixe. radios : device_count
+ * entrées (même ordre que devices). Sorties : trace (ordre temporel) et occupation passerelle
+ * planifiée. Statut 0, ou code d'erreur du moteur / du planificateur. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count);
+
 #ifdef __cplusplus
 }
 #endif

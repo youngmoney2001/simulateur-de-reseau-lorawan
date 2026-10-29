@@ -5,8 +5,11 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <numeric>
+#include <optional>
 
 #include "lsim/class_b.hpp"
+#include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/link_budget.hpp"
 
@@ -159,9 +162,12 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
                            DeviceStats* per_device, SimulationStats& totals,
                            const env::Environment* environment, std::vector<TxRecord>* trace,
                            const std::vector<Interval>* gateway_busy,
-                           const std::vector<MacReservation>* reservations) {
+                           const std::vector<MacReservation>* reservations,
+                           const CausalDownlinks* causal) {
     totals = SimulationStats{};
     if (trace != nullptr) trace->clear();
+    if (causal != nullptr && gateway_busy != nullptr) return SimStatus::InvalidInput;
+    if (causal != nullptr && causal->radios.size() != device_count) return SimStatus::InvalidInput;
     // Périodes d'émission passerelle : triées et fusionnées (intervalles disjoints, triés).
     std::vector<Interval> busy;
     if (gateway_busy != nullptr) {
@@ -183,10 +189,10 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         busy.swap(merged);
     }
     // Vrai si la trame [start, end) chevauche une période d'émission passerelle.
-    auto gateway_transmitting = [&busy](SimTime start, SimTime end) {
-        auto it = std::lower_bound(busy.begin(), busy.end(), start,
+    auto transmitting_in = [](const std::vector<Interval>& v, SimTime start, SimTime end) {
+        auto it = std::lower_bound(v.begin(), v.end(), start,
                                    [](const Interval& b, SimTime s) { return b.end <= s; });
-        return it != busy.end() && it->start < end;
+        return it != v.end() && it->start < end;
     };
     if (device_count > kMaxEndDevices) {
         return SimStatus::TooManyDevices;
@@ -431,16 +437,32 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     }
 
     // Évaluation : sensibilité, puis collision avec capture.
-    if (trace != nullptr) trace->reserve(txs.size());
-    for (std::size_t a = 0; a < txs.size(); ++a) {
+    // Chemin causal (S1) : les trames sont évaluées par fin croissante. Une trame ne dépend que des
+    // descentes planifiées pour des trames déjà terminées (une descente chevauchant [start, end)
+    // commence au plus tôt à end' + RX1 avec end' < end), donc l'occupation passerelle est connue.
+    std::vector<std::size_t> order(txs.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::optional<plan::DownlinkScheduler> scheduler;
+    std::vector<Interval> planned;  // descentes planifiées (chemin causal), triées et disjointes
+    if (causal != nullptr) {
+        std::stable_sort(order.begin(), order.end(),
+                         [&txs](std::size_t a, std::size_t b) { return txs[a].end < txs[b].end; });
+        scheduler.emplace(causal->radios, causal->options);
+        if (scheduler->status() != plan::PlanStatus::Ok) return SimStatus::InvalidInput;
+    }
+    std::vector<TxOutcome> outcomes(txs.size(), TxOutcome::LostSensitivity);
+    for (std::size_t k = 0; k < order.size(); ++k) {
+        const std::size_t a = order[k];
         const Tx& ta = txs[a];
         DeviceStats& st = per_device[ta.device];
         TxOutcome outcome = TxOutcome::LostSensitivity;
 
+        const bool on_air_gw = causal != nullptr ? transmitting_in(planned, ta.start, ta.end)
+                                                 : transmitting_in(busy, ta.start, ta.end);
         if (ta.rssi_dbm < sensitivity[ta.device]) {
             ++st.lost_sensitivity;
             ++totals.lost_sensitivity;
-        } else if (gateway_transmitting(ta.start, ta.end)) {
+        } else if (on_air_gw) {
             // Demi-duplex : la passerelle émet un downlink, elle ne reçoit pas cette trame.
             ++st.lost_gateway_busy;
             ++totals.lost_gateway_busy;
@@ -476,8 +498,23 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
                 outcome = TxOutcome::LostCollision;
             }
         }
-        if (trace != nullptr) {
-            trace->push_back(TxRecord{ta.device, ta.start, ta.end, ta.sf, ta.rssi_dbm, outcome});
+        outcomes[a] = outcome;
+        if (scheduler && outcome == TxOutcome::Received) {
+            if (const std::optional<plan::Interval> iv = scheduler->on_received(ta.device, ta.end)) {
+                planned.push_back(Interval{iv->start_ns, iv->end_ns});
+            }
+        }
+    }
+    if (scheduler && scheduler->status() != plan::PlanStatus::Ok) return SimStatus::InvalidInput;
+    if (causal != nullptr && causal->busy_out != nullptr) {
+        causal->busy_out->clear();
+        for (const Interval& iv : planned) causal->busy_out->push_back(plan::Interval{iv.start, iv.end});
+    }
+    if (trace != nullptr) {
+        trace->reserve(txs.size());
+        for (std::size_t a = 0; a < txs.size(); ++a) {
+            const Tx& ta = txs[a];
+            trace->push_back(TxRecord{ta.device, ta.start, ta.end, ta.sf, ta.rssi_dbm, outcomes[a]});
         }
     }
 

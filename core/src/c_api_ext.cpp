@@ -422,7 +422,8 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
                         const lsim_environment* env, lsim_device_stats* per_device,
                         lsim_sim_stats* totals, std::vector<lsim::sim::TxRecord>* trace,
                         const std::vector<lsim::sim::Interval>* busy = nullptr,
-                        const std::vector<lsim::sim::MacReservation>* reservations = nullptr) {
+                        const std::vector<lsim::sim::MacReservation>* reservations = nullptr,
+                        const lsim::sim::CausalDownlinks* causal = nullptr) {
     try {
         std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
         for (size_t i = 0; i < device_count; ++i) {
@@ -467,7 +468,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         const auto st = lsim::sim::simulate_uplinks(specs.data(), device_count, g, p,
                                                     stats.data(), tot,
                                                     env != nullptr ? &e : nullptr, trace, busy,
-                                                    reservations);
+                                                    reservations, causal);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }
@@ -590,6 +591,92 @@ int32_t lsim_simulate_uplinks_trace_v2(const lsim_end_device* devices, size_t de
             records[k].spreading_factor = t.spreading_factor;
             records[k].rssi_dbm = t.rssi_dbm;
             records[k].outcome = static_cast<uint8_t>(t.outcome);
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t device_count,
+                                        const lsim_gateway* gateway, const lsim_propagation* prop,
+                                        const lsim_environment* env, lsim_device_stats* per_device,
+                                        lsim_sim_stats* totals, lsim_tx_record* records,
+                                        size_t record_capacity, size_t* record_count,
+                                        const lsim_plan_device* radios,
+                                        const lsim_plan_options* options,
+                                        lsim_interval* busy_out, size_t busy_capacity,
+                                        size_t* busy_count) {
+    if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
+        busy_count == nullptr || options == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr))) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *record_count = 0;
+    *busy_count = 0;
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    std::uint64_t planned = 0;
+    for (size_t i = 0; i < device_count; ++i) {
+        planned += devices[i].messages;
+    }
+    if (planned > kMaxTraceRecords) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceTooLarge);
+    }
+    try {
+        lsim::sim::CausalDownlinks causal;
+        causal.radios.resize(device_count);
+        for (size_t i = 0; i < device_count; ++i) {
+            const lsim_plan_device& d = radios[i];
+            lsim::plan::DeviceRadio& r = causal.radios[i];
+            r.freq_hz = d.freq_hz;
+            r.dr = d.dr;
+            r.rx1_hz = d.rx1_hz;
+            r.tx_power_dbm = d.tx_power_dbm;
+            r.rx1_sf = d.rx1_sf;
+            r.rx1_bw_hz = d.rx1_bw_hz;
+        }
+        causal.options.confirmed_uplinks = options->confirmed_uplinks != 0;
+        causal.options.downlink_every = options->downlink_every;
+        causal.options.downlink_payload_bytes = options->downlink_payload_bytes;
+        causal.options.gateway_tx_power_dbm = options->gateway_tx_power_dbm;
+        causal.options.device_antenna_gain_dbi = options->device_antenna_gain_dbi;
+        causal.options.device_rx_offset_db = options->device_rx_offset_db;
+        // Options et radios validées avant la simulation (mêmes codes que lsim_plan_downlinks_v1).
+        const lsim::plan::DownlinkScheduler probe(causal.radios, causal.options);
+        if (probe.status() != lsim::plan::PlanStatus::Ok) {
+            return LSIM_STATUS_PLAN_BASE + static_cast<int32_t>(probe.status());
+        }
+        std::vector<lsim::plan::Interval> planned_busy;
+        causal.busy_out = &planned_busy;
+
+        std::vector<lsim::sim::TxRecord> trace;
+        const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
+                                           totals, &trace, nullptr, nullptr, &causal);
+        if (st != 0) {
+            return st;
+        }
+        *record_count = trace.size();
+        *busy_count = planned_busy.size();
+        if (trace.size() > record_capacity) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceBufferTooSmall);
+        }
+        if (planned_busy.size() > busy_capacity) {
+            return LSIM_STATUS_PLAN_BASE + 4;
+        }
+        for (size_t k = 0; k < trace.size(); ++k) {
+            const lsim::sim::TxRecord& t = trace[k];
+            records[k].device_index = t.device;
+            records[k].start_ns = t.start_ns;
+            records[k].end_ns = t.end_ns;
+            records[k].spreading_factor = t.spreading_factor;
+            records[k].rssi_dbm = t.rssi_dbm;
+            records[k].outcome = static_cast<uint8_t>(t.outcome);
+        }
+        for (size_t k = 0; k < planned_busy.size(); ++k) {
+            busy_out[k].start_ns = planned_busy[k].start_ns;
+            busy_out[k].end_ns = planned_busy[k].end_ns;
         }
         return 0;
     } catch (...) {

@@ -25,8 +25,8 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
   scénarios denses (RX1 manquées), traces converged (occupation passerelle, uplinks perdus) et descentes perdues
   (`test_downlink_plan_parity.py`) ; empreintes sans MAC identiques à la base.
   Non porté (reste Python) : jointure, commandes MAC, mesh, multi-passerelles.
-  Constat : 2 scénarios denses sur 40 n'atteignent pas le point fixe de `build_trace` (limite actuelle, à
-  résoudre par S1).
+  Constat : 2 scénarios denses sur 40 (seeds 11 et 38) n'atteignaient pas le point fixe de `build_trace`.
+  Résolu par S1 (voir ci-dessous).
   Décision de modèle conservée de Python : la passerelle réserve son émission même si le dispositif émet pendant
   RX1 (`device_missed` n'affecte que les événements).
 - (Détail initial, à titre de référence) porter `_downlink_jobs`, `_schedule_gateway` et
@@ -36,6 +36,22 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
 - **S1 : moteur à événements causal** : chaque dispositif a une machine d'état (prochaine
   émission connue dès le début de la précédente). Issue d'un uplink décidée à sa fin ; RX1 à
   fin+1 s ; occupation passerelle = descentes du moteur. Critère : identique à S0 sans commande.
+  **Fait pour le périmètre « passerelle unique, sans jointure ni MAC »**.
+  - Moteur : `simulate_uplinks(..., causal)` (paramètre `CausalDownlinks`, exclusif avec `gateway_busy`).
+    Les trames sont décidées par fin croissante ; chaque trame reçue planifie sa descente à sa fin via
+    `plan::DownlinkScheduler` (`downlink_plan.hpp`), qui ne lit que des descentes déjà planifiées. Une
+    descente chevauchant une trame commence au plus tôt à fin' + RX1 avec fin' < fin : l'occupation est
+    connue à temps. Sans `causal`, le chemin historique est inchangé.
+  - API C : `lsim_simulate_uplinks_causal_v1` (options et radios validées avant simulation).
+  - Python : `lsim.downlink_plan.simulate_causal` ; `build_trace` l'utilise pour ce périmètre, en une
+    seule exécution, sans point fixe. Contrôle : l'occupation du moteur doit égaler celle du planificateur.
+    Le point fixe Python reste dans `_build_trace_python` (jointure, MAC, oracle de test).
+  - Preuves : sur 281 scénarios denses dont le point fixe converge, trace, occupation, événements et
+    compteurs sont identiques à l'ancien point fixe ; les seeds 11 et 38 (sans point fixe avant) sont
+    résolus. Empreintes d'invariance inchangées : run `d2cb0fac…`, trace `ed126d7f…`.
+    Tests : `test_downlink_plan.cpp` (planificateur incrémental), `test_downlink_plan_parity.py`
+    (sans `skip`).
+  - Non porté : jointure, MAC (S2), mesh et multi-passerelles.
 - **S2 : commandes en boucle fermée** : LinkADRReq et DutyCycleReq émises par le serveur,
   appliquées (SF, puissance, duty cycle) à partir de l'émission suivant leur réception.
   LinkADRAns/DutyCycleAns : réservation conservatrice dans l'uplink suivant la commande ; l'octet

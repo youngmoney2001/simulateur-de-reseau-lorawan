@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Planification des descentes (S0) : cas élémentaires, RX1 manquée, capacité et options invalides.
+// Planificateur incrémental (S1) : occupation égale à `plan_downlinks` quand les fins sont traitées dans l'ordre.
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -148,5 +150,51 @@ void run_downlink_plan_tests() {
         CHECK_EQ(lsim_plan_downlinks_v1(&u, 1, &d, 1, &o, big, 4, &n_ev, bbig, 4, &n_busy), 0);
         CHECK_EQ(big[1].kind, 1);  // ACK
         CHECK_EQ(big[1].hop_count, 1);
+    }
+    // 7. Planificateur incrémental (S1) : mêmes intervalles que `plan_downlinks`, fins traitées
+    //    dans l'ordre. Les débuts et les fins ne suivent pas le même ordre (trames de durées variées).
+    {
+        PlanOptions o;
+        o.confirmed_uplinks = true;
+        o.downlink_every = 2;
+        o.downlink_payload_bytes = 40;
+        std::vector<UplinkRecord> ups;
+        const std::int64_t airs[] = {300'000'000, 20'000'000, 150'000'000, 20'000'000, 400'000'000,
+                                     40'000'000, 20'000'000, 90'000'000};
+        std::int64_t t = 0;
+        for (std::uint32_t k = 0; k < 8; ++k) {
+            const std::uint32_t dev = k % 3;
+            ups.push_back(up(dev, t, airs[k], k % 4 == 3 ? UplinkOutcome::LostCollision : UplinkOutcome::Received));
+            t += 120'000'000;
+        }
+        const std::vector<DeviceRadio> radios{radio_sf7(), radio_sf7(), radio_sf7()};
+        std::vector<Event> ev;
+        std::vector<Interval> ref;
+        CHECK_EQ(plan_downlinks(ups, radios, o, ev, ref), PlanStatus::Ok);
+
+        DownlinkScheduler sched(radios, o);
+        CHECK_EQ(sched.status(), PlanStatus::Ok);
+        std::vector<std::size_t> by_end(ups.size());
+        for (std::size_t k = 0; k < by_end.size(); ++k) by_end[k] = k;
+        std::stable_sort(by_end.begin(), by_end.end(), [&ups](std::size_t a, std::size_t b) {
+            return ups[a].end_ns < ups[b].end_ns;
+        });
+        std::vector<Interval> got;
+        for (std::size_t k : by_end) {
+            if (ups[k].outcome != UplinkOutcome::Received) continue;
+            if (const auto iv = sched.on_received(ups[k].device, ups[k].end_ns)) got.push_back(*iv);
+        }
+        CHECK_EQ(got.size(), ref.size());
+        std::sort(ref.begin(), ref.end(), [](const Interval& a, const Interval& b) {
+            return a.start_ns < b.start_ns;
+        });
+        for (std::size_t k = 0; k < std::min(got.size(), ref.size()); ++k) {
+            CHECK_EQ(got[k].start_ns, ref[k].start_ns);
+            CHECK_EQ(got[k].end_ns, ref[k].end_ns);
+        }
+        // Options invalides : signalées dès la construction.
+        PlanOptions bad;
+        bad.downlink_payload_bytes = 243;
+        CHECK_EQ(DownlinkScheduler(radios, bad).status(), PlanStatus::InvalidOptions);
     }
 }

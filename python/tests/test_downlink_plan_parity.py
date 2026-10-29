@@ -106,12 +106,7 @@ def test_native_plan_equals_oracle_when_downlinks_are_lost(seed):
     assert all(e.outcome == "lost_sensitivity" for e in replies)
 
 
-@pytest.mark.parametrize("seed", range(12))
-def test_native_plan_equals_oracle_on_converged_traces(seed):
-    # Traces complètes (point fixe de build_trace) : occupation passerelle, uplinks perdus à cause
-    # de la passerelle occupée, RX1 manquées faute de fenêtre. Les scénarios sans point fixe sont
-    # écartés explicitement (limite actuelle du calcul Python, traitée par la refonte S1).
-    from lsim.trace_events import build_trace
+def _dense_scenario(seed):
     rng = random.Random(2000 + seed)
     raw = {
         "schema_version": 1, "name": "busy", "seed": seed,
@@ -129,13 +124,36 @@ def test_native_plan_equals_oracle_on_converged_traces(seed):
     options = ProtocolOptions(confirmed_uplinks=True, downlink_every=rng.choice([1, 2]),
                               downlink_payload_bytes=rng.choice([40, 242]),
                               gateway_tx_power_dbm=27.0, device_rx_offset_db=rng.choice([0.0, 3.0]))
+    return scenario, options
+
+
+# Scénarios denses : 11 et 38 n'atteignaient pas le point fixe de la version Python (S0).
+@pytest.mark.parametrize("seed", range(40))
+def test_causal_trace_equals_python_fixed_point_when_it_converges(seed):
+    from lsim.trace_events import _build_trace_python, build_trace
+    scenario, options = _dense_scenario(seed)
+    causal = build_trace(scenario, options)
+    devices, _g, _i = scenario.deploy()
     try:
-        run = build_trace(scenario, options)
+        fixed = _build_trace_python(devices, device_radios(scenario), scenario.gateway(),
+                                    scenario.propagation(), scenario.environment, (), options, None)
     except RuntimeError:
-        pytest.skip("pas de point fixe (limite actuelle, couverte par la refonte S1)")
-    from lsim.trace_events import device_radios
+        return  # pas de point fixe : seule la trace causale existe (cas 11 et 38)
+    assert causal.records == fixed.records
+    assert causal.gateway_tx == fixed.gateway_tx
+    assert causal.events == fixed.events
+    assert causal.per_device == fixed.per_device
+    assert causal.totals == fixed.totals
+
+
+@pytest.mark.parametrize("seed", [11, 38])
+def test_causal_trace_resolves_scenarios_without_fixed_point(seed):
+    from lsim.trace_events import build_trace
+    scenario, options = _dense_scenario(seed)
+    run = build_trace(scenario, options)
     radios = device_radios(scenario)
     nev, nbusy = plan_native(run.records, radios, options)
     pev, pbusy = _python_plan(run.records, radios, options)
-    assert nbusy == pbusy
+    assert nbusy == pbusy == run.gateway_tx
     assert nev == pev
+    assert any(e.kind == "downlink" for e in nev), "scénario sans descente : test non significatif"

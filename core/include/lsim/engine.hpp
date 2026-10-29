@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "lsim/downlink.hpp"
+#include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
 
@@ -207,19 +208,31 @@ struct TxRecord {
     TxOutcome outcome = TxOutcome::LostSensitivity;
 };
 
+// Descentes planifiées pendant la simulation (S1, boucle fermée causale) : passerelle unique.
+// Chaque trame montante reçue est planifiée à sa fin (`plan::DownlinkScheduler`), de sorte que
+// l'occupation passerelle utilisée pour décider des pertes est connue au moment de la décision.
+// Exclusif avec `gateway_busy`. `radios` : un paramètre radio par dispositif (même ordre).
+struct CausalDownlinks {
+    std::vector<plan::DeviceRadio> radios;
+    plan::PlanOptions options;
+    std::vector<plan::Interval>* busy_out = nullptr;  // reçoit les émissions passerelle planifiées
+};
+
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
 // `environment` optionnel : relief et obstacles (nullptr = terrain plat sans obstacle).
 // `trace` optionnel : reçoit une entrée par transmission, dans l'ordre temporel (vidé puis rempli).
 // `gateway_busy` optionnel : périodes d'émission de la passerelle (intervalles [start, end)).
 // Une trame reçue qui chevauche une de ces périodes est perdue (LostGatewayBusy).
+// `causal` optionnel : descentes planifiées au fil de l'eau (S1), à la place de `gateway_busy`.
 LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                                     const GatewaySpec& gateway, const PropagationSpec& prop,
                                     DeviceStats* per_device, SimulationStats& totals,
                                     const env::Environment* environment = nullptr,
                                     std::vector<TxRecord>* trace = nullptr,
                                     const std::vector<Interval>* gateway_busy = nullptr,
-                                    const std::vector<MacReservation>* reservations = nullptr);
+                                    const std::vector<MacReservation>* reservations = nullptr,
+                                    const CausalDownlinks* causal = nullptr);
 
 // ------------------------------------------------------------- Plusieurs passerelles
 //

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "lsim/lora_phy.hpp"
@@ -118,5 +119,30 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
 // sans CRC, préambule 8, optimisation bas débit si Tsym > 16 ms), en ns.
 lora::Status downlink_airtime_ns(const DeviceRadio& radio, std::uint32_t payload_bytes,
                                  std::int64_t& out_ns);
+
+// Planificateur incrémental (S1) : mêmes règles que `plan_downlinks`, appelé à la fin de chaque trame
+// montante reçue, dans l'ordre temporel des fins. Ne donne que l'occupation passerelle (ce qui décide
+// des pertes montantes) ; les événements restent produits par `plan_downlinks`.
+class DownlinkScheduler {
+public:
+    DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options);
+
+    PlanStatus status() const { return status_; }
+
+    // Trame montante reçue par la passerelle, à `end_ns`. Retourne l'émission passerelle planifiée,
+    // ou nullopt (pas de réponse attendue, ou fenêtre RX1 perdue faute de passerelle libre).
+    // Les appels doivent se succéder par fins croissantes (ordre de la trace).
+    std::optional<Interval> on_received(std::uint32_t device, std::int64_t end_ns);
+
+private:
+    PlanOptions options_;
+    std::vector<DeviceRadio> radios_;
+    std::vector<std::uint32_t> accepted_;
+    std::vector<std::int64_t> ack_air_;  // 0 = non calculée
+    std::vector<std::int64_t> data_air_;
+    PlanStatus status_ = PlanStatus::Ok;
+    bool any_busy_ = false;
+    std::int64_t busy_until_ = 0;
+};
 
 }  // namespace lsim::plan

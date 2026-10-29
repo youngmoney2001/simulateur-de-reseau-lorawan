@@ -10,7 +10,28 @@ from __future__ import annotations
 import ctypes
 from typing import Sequence
 
-from lsim._native import LIB
+from lsim._native import (
+    LIB,
+    _CDeviceStats,
+    _CEndDevice,
+    _CEnvironment,
+    _CGateway,
+    _CInterval,
+    _CPropagation,
+    _CSimStats,
+    _CTxRecord,
+)
+from lsim.lora import StatusError
+from lsim.simulator import (
+    MAX_END_DEVICES,
+    MAX_TRACE_RECORDS,
+    Counters,
+    GatewayLoad,
+    TraceResult,
+    TxRecord,
+    _c_end_devices,
+    _c_environment,
+)
 from lsim.trace_events import HopEvent, ProtocolEvent
 
 PLAN_STATUS_BASE = 950
@@ -65,6 +86,86 @@ LIB.lsim_plan_downlinks_v1.argtypes = [
     ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CInterval), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t),
 ]
+
+
+LIB.lsim_simulate_uplinks_causal_v1.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_causal_v1.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+]
+
+
+def simulate_causal(devices, gateway, propagation, environment, radios, options):
+    """Boucle fermée causale (S1) : trace et occupation passerelle, en une seule exécution.
+
+    Chaque trame reçue planifie sa descente à sa fin (`lsim_simulate_uplinks_causal_v1`). Renvoie
+    `(TraceResult, occupation)`. Lève `StatusError` si le cœur refuse l'entrée.
+    `devices` et `radios` : même ordre (un `DeviceRadio` par dispositif). Pas de MAC ni de jointure.
+    """
+    n = len(devices)
+    if n > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    if len(radios) != n:
+        raise ValueError("un paramètre radio par dispositif")
+    capacity = sum(d.messages for d in devices)
+    if capacity > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    c_devs = _c_end_devices(devices)
+    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+    c_stats = (_CDeviceStats * n)()
+    c_tot = _CSimStats()
+    keep: list[object] = []
+    if environment is None:
+        c_env_ref = None
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+    c_radios = (_CPlanDevice * max(1, n))()
+    for i, d in enumerate(radios):
+        c_radios[i].freq_hz = d.freq_hz
+        c_radios[i].dr = -1 if d.dr is None else d.dr
+        c_radios[i].rx1_hz = d.rx1_hz
+        c_radios[i].tx_power_dbm = d.tx_power_dbm
+        c_radios[i].rx1_sf = d.rx1_sf
+        c_radios[i].rx1_bw_hz = d.rx1_bw_hz
+    c_opt = _CPlanOptions(1 if options.confirmed_uplinks else 0, options.downlink_every,
+                          options.downlink_payload_bytes, options.gateway_tx_power_dbm,
+                          options.device_antenna_gain_dbi, options.device_rx_offset_db)
+    records = (_CTxRecord * max(1, capacity))()
+    # Occupation passerelle : au plus une période par trame reçue (une descente au plus).
+    cap_busy = max(1, capacity)
+    count = ctypes.c_size_t(0)
+    n_busy = ctypes.c_size_t(0)
+    busy = (_CInterval * cap_busy)()
+    status = LIB.lsim_simulate_uplinks_causal_v1(
+        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
+        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
+        c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy))
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    per = tuple(
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
+        for s in c_stats
+    )
+    tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
+                   c_tot.airtime_ns, c_tot.lost_gateway_busy)
+    load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
+                       c_tot.observation_ns, c_tot.gateway_utilization)
+    trace = tuple(
+        TxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.rssi_dbm, r.outcome)
+        for r in records[:count.value]
+    )
+    occupation = tuple((busy[k].start_ns, busy[k].end_ns) for k in range(n_busy.value))
+    return TraceResult(per, tot, load, trace), occupation
 
 
 def plan_native(records, radios, options) -> tuple[tuple[ProtocolEvent, ...], tuple[tuple[int, int], ...]]:
