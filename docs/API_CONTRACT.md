@@ -92,14 +92,11 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   issue `gateway_busy`). Pendant ses émissions, elle ne reçoit pas : un uplink qui les chevauche
   est perdu (`lost_gateway_busy`, comptée dans `Totals.lost_gateway_busy`). Uplinks et downlinks
   dépendent les uns des autres : le calcul itère jusqu'à un point fixe, sinon il échoue.
-- Join en multi-passerelles : une trame est une join-request tant que son dispositif n'a pas reçu
-  son join-accept. Une join-request décodée reçoit un join-accept à fin + 5 s, par la meilleure
-  passerelle (17 octets, sans CFList), en RX1. Le dispositif est jointé à la réception du join-accept ;
-  une join-request perdue (ou un join-accept perdu) est répétée à l'émission suivante. Les
-  descendantes d'une passerelle ne se chevauchent jamais, quel que soit leur ordre de création.
-  **Écart avec le mono** : en mono, seule la première émission est une join-request (une join-request
-  perdue n'est jamais répétée). Le multi suit le comportement du dispositif réel ; le mono est à
-  aligner plus tard. À débit égal, sans contention, les deux traces sont identiques (test).
+- Join (mono et multi, même règle) : une émission est une join-request tant que son dispositif n'a pas
+  reçu son join-accept. La join-request décodée reçoit un join-accept à fin + 5 s, par la meilleure
+  passerelle (17 octets, sans CFList), en RX1. Le dispositif est jointé à la réception complète du
+  join-accept ; une join-request perdue, ou un join-accept perdu, est répétée à l'émission suivante.
+  Aucune donnée n'est émise avant le join. Les descendantes d'une passerelle ne se chevauchent jamais.
 - Limites assumées : le backhaul passerelle → serveur et le join-accept transmis par le serveur
   sont sans perte (`delivered`) ; sensibilité du récepteur de référence (SX1276) plus
   `device_rx_offset_db` ; une seule passerelle.

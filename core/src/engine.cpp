@@ -1086,7 +1086,10 @@ SimStatus simulate_uplinks_multi_downlinks(
             if (place(dl, a, kJoinAcceptBytes, m.best_rssi_dbm) != SimStatus::Ok) {
                 return SimStatus::InvalidInput;
             }
-            if (dl.outcome == DownlinkOutcome::Delivered) joined_at[d] = dl.end_ns;
+            if (dl.outcome == DownlinkOutcome::Delivered &&
+                (joined_at[d] == kNever || dl.end_ns < joined_at[d])) {
+                joined_at[d] = dl.end_ns;  // premier join-accept reçu
+            }
             dls.push_back(dl);
             continue;
         }

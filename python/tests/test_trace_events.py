@@ -18,6 +18,7 @@ from lsim.simulator import (
 )
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.trace_events import (
+    RX1_WINDOW_NS,
     JOIN_ACCEPT_DELAY1_NS,
     RECEIVE_DELAY1_NS,
     ProtocolOptions,
@@ -90,15 +91,39 @@ def test_join_accept_and_ack_use_engine_times(quartier):
     run = build_trace(quartier, ProtocolOptions(join=True, confirmed_uplinks=True))
     received_ends = {(r.device_index, r.end_ns) for r in run.records
                      if r.outcome == TxRecord.OUTCOME_RECEIVED}
-    joins = [e for e in run.events if e.kind == "join_request"]
-    assert len(joins) == len(quartier.deploy()[0])
+    # L'émission passerelle commence à l'ouverture RX1 ou plus tard, dans la fenêtre RX1 (1 s) :
+    # l'événement porte l'instant réel d'émission, et la fin de la trame montante est dans la fenêtre.
+    def received_before(device, t, delay):
+        return any(d == device and 0 <= t - delay - end < RX1_WINDOW_NS
+                   for d, end in received_ends)
     for e in run.events:
-        if e.kind == "join_accept":
-            assert (e.device_index, e.t_ns - JOIN_ACCEPT_DELAY1_NS) in received_ends
+        if e.kind == "join_accept" and e.outcome == "delivered":
+            assert received_before(e.device_index, e.t_ns, JOIN_ACCEPT_DELAY1_NS)
         elif e.kind in ("ack", "downlink"):
-            assert (e.device_index, e.t_ns - RECEIVE_DELAY1_NS) in received_ends
-    accepted = sum(1 for e in joins if e.outcome == "received")
-    assert sum(1 for e in run.events if e.kind == "join_accept") == accepted
+            assert received_before(e.device_index, e.t_ns, RECEIVE_DELAY1_NS)
+
+
+def test_join_requests_repeat_until_the_join_accept_is_received(quartier):
+    """Règle réelle (comme le multi) : une join-request perdue est répétée ; pas de donnée avant le join."""
+    run = build_trace(quartier, ProtocolOptions(join=True, confirmed_uplinks=True))
+    delivered = {}
+    for e in run.events:
+        if e.kind == "join_accept" and e.outcome == "delivered":
+            delivered.setdefault(e.device_index, []).append(e.t_ns)
+    assert all(len(v) == 1 for v in delivered.values())
+    # Une seule join-accept délivré, sinon ce serait une seconde jointure.
+    received_joins = {}
+    for e in run.events:
+        if e.kind == "join_request" and e.outcome == "received":
+            received_joins[e.device_index] = received_joins.get(e.device_index, 0) + 1
+    assert any(n > 1 for n in received_joins.values()) or len(delivered) == len(received_joins), (
+        "scénario sans répétition : le test doit couvrir une join-request perdue ou reçue plusieurs fois")
+    lost = [e for e in run.events if e.kind == "join_request" and e.outcome != "received"]
+    assert lost, "le scénario doit contenir des join-requests perdues"
+    for e in run.events:
+        if e.kind == "uplink":
+            assert e.device_index in delivered, "donnée émise avant le join"
+            assert e.t_ns >= delivered[e.device_index][0]
 
 
 def test_one_downlink_per_accepted_uplink(quartier):
@@ -231,7 +256,7 @@ def test_downlink_outcomes_partition_scenario(quartier):
 
 
 def test_gateway_serializes_downlinks_and_drops_late_ones():
-    from lsim.trace_events import _Job, _schedule_gateway, RX1_WINDOW_NS
+    from lsim.trace_events import _Job, _schedule_gateway
 
     def job(t_open, airtime):
         return _Job(record=0, device=0, kind="ack", content="ack_only", t_open=t_open,

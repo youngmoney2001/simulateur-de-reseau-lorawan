@@ -217,8 +217,34 @@ def _received_by_device(r: TxRecord, radio: DeviceRadio, options: ProtocolOption
     return rssi_dl >= threshold
 
 
+def _join_roles(records: Sequence[TxRecord], joined: dict[int, int],
+                options: ProtocolOptions) -> list[bool]:
+    """Rôle de chaque émission : join-request tant que le dispositif n'a pas reçu son join-accept.
+
+    `joined[d]` : instant (ns) où le join-accept de d est entièrement reçu (fin de transmission).
+    Une émission démarrée avant cet instant est une join-request, sinon une donnée. Identique au
+    multi (`engine.cpp`, `joined_at`).
+    """
+    if not options.join:
+        return [False] * len(records)
+    return [not (r.device_index in joined and r.start_ns >= joined[r.device_index])
+            for r in records]
+
+
+def _joined_times(jobs: Sequence[_Job], starts: Sequence[Optional[int]]) -> dict[int, int]:
+    """Instant de réception complète du premier join-accept délivré, par dispositif."""
+    out: dict[int, int] = {}
+    for k, job in enumerate(jobs):
+        start = starts[k]
+        if job.kind != "join_accept" or start is None or job.device_missed or not job.received:
+            continue
+        end = start + job.airtime_ns
+        out[job.device] = min(out.get(job.device, end), end)
+    return out
+
+
 def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
-                   options: ProtocolOptions) -> list[_Job]:
+                   options: ProtocolOptions, roles: Sequence[bool]) -> list[_Job]:
     """Une réponse attendue par uplink reçu, dans l'ordre de la trace (un seul downlink par uplink)."""
     if options.downlink_every < 0:
         raise ValueError("downlink_every doit être positif ou nul")
@@ -234,13 +260,11 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             next_start[a] = records[b].start_ns
 
     jobs: list[_Job] = []
-    joined: set[int] = set()
     accepted: dict[int, int] = defaultdict(int)
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
-        is_join = options.join and d not in joined
-        joined.add(d)
+        is_join = roles[i]
         if r.outcome != TxRecord.OUTCOME_RECEIVED:
             continue
 
@@ -292,7 +316,7 @@ def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[t
 
 
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
-            starts: Sequence[Optional[int]], options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
+            starts: Sequence[Optional[int]], roles: Sequence[bool]) -> tuple[ProtocolEvent, ...]:
     """Événements dans l'ordre temporel, à partir de la trace et de la planification."""
     pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
 
@@ -300,12 +324,10 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         pending.append((t, len(pending), kind, device, tuple(hops), outcome))
 
     job_of = {job.record: k for k, job in enumerate(jobs)}
-    joined: set[int] = set()
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
-        is_join = options.join and d not in joined
-        joined.add(d)
+        is_join = roles[i]
         hops = [HopEvent(_dev(d), "gw:0", r.start_ns, radio.freq_hz, radio.dr, r.rssi_dbm,
                          _HOP_OUTCOME[r.outcome])]
         if r.outcome == TxRecord.OUTCOME_RECEIVED:
@@ -346,16 +368,29 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
     )
 
 
+def _plan(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], options: ProtocolOptions,
+          joined: dict[int, int]):
+    """Une passe de planification : rôles, downlinks, émissions passerelle, jointures obtenues."""
+    roles = _join_roles(records, joined, options)
+    jobs = _downlink_jobs(records, radios, options, roles)
+    starts, busy = _schedule_gateway(jobs)
+    return roles, jobs, starts, busy, _joined_times(jobs, starts)
+
+
 def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
                           options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
     """Événements dérivés d'une trace déjà produite (sans nouvelle itération du moteur).
 
-    Les émissions passerelle sont celles des downlinks planifiés à partir de cette trace. Pour
-    une trace cohérente avec ces émissions, utiliser `build_trace`.
+    Les émissions passerelle sont celles des downlinks planifiés à partir de cette trace : seul
+    l'état des jointures est itéré. Pour une trace cohérente avec le moteur, utiser `build_trace`.
     """
-    jobs = _downlink_jobs(records, radios, options)
-    starts, _intervals = _schedule_gateway(jobs)
-    return _events(records, radios, jobs, starts, options)
+    joined: dict[int, int] = {}
+    for _ in range(MAX_ITERATIONS):
+        roles, jobs, starts, _busy, new_joined = _plan(records, radios, options, joined)
+        if new_joined == joined:
+            return _events(records, radios, jobs, starts, roles)
+        joined = new_joined
+    raise RuntimeError("pas de point fixe pour les jointures (build_protocol_events)")
 
 
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
@@ -372,13 +407,13 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
 
     busy: list[tuple[int, int]] = []
+    joined: dict[int, int] = {}
     for _ in range(MAX_ITERATIONS):
         result = simulate_uplinks_trace(devices, gateway, propagation, environment,
                                         gateway_busy=busy)
-        jobs = _downlink_jobs(result.records, radios, options)
-        starts, new_busy = _schedule_gateway(jobs)
-        if new_busy == busy:
-            events = _events(result.records, radios, jobs, starts, options)
+        roles, jobs, starts, new_busy, new_joined = _plan(result.records, radios, options, joined)
+        if new_busy == busy and new_joined == joined:
+            events = _events(result.records, radios, jobs, starts, roles)
             return TraceRun(
                 per_device=result.per_device,
                 totals=result.totals,
@@ -387,7 +422,7 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
                 events=events,
                 gateway_tx=tuple(busy),
             )
-        busy = new_busy
+        busy, joined = new_busy, new_joined
     raise RuntimeError(
         f"pas de point fixe entre trames montantes et émissions passerelle "
         f"après {MAX_ITERATIONS} itérations")
