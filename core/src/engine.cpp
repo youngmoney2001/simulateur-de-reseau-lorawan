@@ -1668,13 +1668,15 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         // Fenêtre : RX1 (fin + 1 s, débit montant, RX1DROffset 0) ; si la passerelle ne peut pas
         // émettre dans RX1, repli sur RX2 (fin + 2 s, SF kLoopRx2Sf). TS001 §3.3.1 et §3.3.3.
         SimTime t_open = ta.end + kLoopRxDelayNs;
-        SimTime start = any_busy ? std::max(t_open, busy_until) : t_open;
-        bool scheduled = start - t_open < kLoopRx1WindowNs;
+        // TS001 §3.3.5 : la descente débute exactement à l'ouverture de la fenêtre. Si la passerelle
+        // est encore occupée à cet instant, la fenêtre n'est pas utilisable (pas de décalage).
+        SimTime start = t_open;
+        bool scheduled = !any_busy || busy_until <= t_open;
         rad.rx1_sf = ta.sf;
         if (!scheduled) {
             t_open = ta.end + kLoopRx2DelayNs;
-            start = any_busy ? std::max(t_open, busy_until) : t_open;
-            scheduled = start - t_open < kLoopRx2WindowNs;
+            start = t_open;
+            scheduled = !any_busy || busy_until <= t_open;
             rad.rx1_sf = kLoopRx2Sf;
         }
         SimTime air = 0;

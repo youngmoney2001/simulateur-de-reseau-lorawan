@@ -274,7 +274,7 @@ void test_rx2_fallback_when_gateway_busy() {
     // Dispositif 1 : SF7, émis pendant cette occupation ; sa RX1 déborde, donc RX2 est utilisée.
     const EndDeviceSpec d[] = {
         dev(10.0, 12, 0, 60 * kS, 1),
-        dev(10.0, 7, 11 * kS / 10, 60 * kS, 1),  // émis pendant la descente du dispositif 0
+        dev(10.0, 7, 12 * kS / 10, 60 * kS, 1),  // RX1 occupée, RX2 libre (descente du dispositif 0 jusqu'à 3,15 s)
     };
     lsim::plan::DeviceRadio rv[2] = {radio(), radio()};
     LoopRegion regions[2] = {region(), region()};
@@ -310,9 +310,40 @@ void test_rx2_fallback_when_gateway_busy() {
     CHECK_TRUE(d0->start_ns >= 0);
     // Dispositif 1 : RX1 refusée (passerelle occupée au-delà de la fenêtre), RX2 utilisée.
     CHECK_EQ(d1->t_open, res.uplinks[d1->uplink].end_ns + 2 * kS);
-    CHECK_TRUE(d1->start_ns >= d1->t_open);
-    CHECK_TRUE(d1->start_ns - d1->t_open < kS);
+    CHECK_EQ(d1->start_ns, d1->t_open);  // départ exact à l'ouverture de RX2 (TS001 §3.3.5)
     CHECK_TRUE(d1->delivered);
+}
+
+void test_no_shift_inside_busy_windows() {
+    // TS001 §3.3.5 (A6) : la passerelle ne décale pas une descente dans la fenêtre. Ici la RX1 du
+    // dispositif 1 (ouverte à 2,04 s) et sa RX2 (3,04 s) tombent toutes deux pendant la descente du
+    // dispositif 0 (jusqu'à 3,15 s) : la descente est perdue, sans créneau décalé.
+    const EndDeviceSpec d[] = {
+        dev(10.0, 12, 0, 60 * kS, 1),
+        dev(10.0, 7, 1 * kS, 60 * kS, 1),
+    };
+    lsim::plan::DeviceRadio rv[2] = {radio(), radio()};
+    LoopRegion regions[2] = {region(), region()};
+    DeviceStats st[2];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    const LoopMacSlot slots[] = {
+        {0, 1, 0, kLoopMacLinkCheck},
+        {1, 1, 0, kLoopMacLinkCheck},
+    };
+    opt.mac = slots;
+    opt.mac_count = 2;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 2, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.downlinks.size(), std::size_t{2});
+    if (res.downlinks.size() != 2) return;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if (dl.device != 1) continue;
+        CHECK_EQ(dl.start_ns, SimTime{-1});  // aucun créneau : pas de décalage
+        CHECK_TRUE(!dl.delivered);
+    }
 }
 
 void test_mac_reservations_and_answers() {
@@ -556,7 +587,9 @@ void test_mac_queue_lifecycle_under_mixed_load() {
     CHECK_TRUE(res.mac.enqueued > 0);
     CHECK_TRUE(res.mac.delivered > 0);      // descentes reçues
     CHECK_TRUE(res.mac.dispatch_lost > 0);  // descentes non reçues
-    CHECK_TRUE(res.mac.expired > 0);        // expirations
+    // Expirations : aucune observée sous cette charge depuis le départ strict (A6) : ADR et DutyCycle ne
+    // sont plus en attente en même temps lors des uplinks reçus. L'expiration est vérifiée par
+    // `test_mac_queue_fairness_bounded_wait` et les tests déterministes de la file.
     // Réponses : expirent au premier report, donc deferred = expired ici ; seules les requêtes du
     // réseau (DevStatusReq, 1 octet) peuvent rester en file.
     CHECK_TRUE(res.mac.deferred >= res.mac.expired);
@@ -640,6 +673,7 @@ void run_closed_loop_tests() {
     test_duty_cycle_spacing_after_apply();
     test_next_uplink_waits_for_rx2_end();
     test_rx2_fallback_when_gateway_busy();
+    test_no_shift_inside_busy_windows();
     test_mac_reservations_and_answers();
     test_mac_queue_defers_expires_and_conserves();
     test_mac_queue_zero_deferrals_expires_at_once();
