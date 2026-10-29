@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "CriterionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "max_points": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Max Points",
+          "type": "integer"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "points": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Points",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "passed",
+        "points",
+        "max_points"
+      ],
+      "title": "CriterionResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "criteria": {
+      "items": {
+        "$ref": "#/$defs/CriterionResult"
+      },
+      "maxItems": 50,
+      "title": "Criteria",
+      "type": "array"
+    },
+    "exercise_id": {
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "title": "Exercise Id",
+      "type": "string"
+    },
+    "hints_used": {
+      "maximum": 10,
+      "minimum": 0,
+      "title": "Hints Used",
+      "type": "integer"
+    },
+    "max_score": {
+      "maximum": 1000,
+      "minimum": 1,
+      "title": "Max Score",
+      "type": "integer"
+    },
+    "score": {
+      "maximum": 1000,
+      "minimum": 0,
+      "title": "Score",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "exercise_id",
+    "score",
+    "max_score",
+    "hints_used",
+    "criteria"
+  ],
+  "title": "SubmitResult",
+  "type": "object"
+}

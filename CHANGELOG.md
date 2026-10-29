@@ -7,7 +7,8 @@
 - `POST /api/v1/scenarios/validate` accepte un `protocol` optionnel (additif) : la règle de trame mesh y est appliquée comme à la création (problème `validation_error` avec le champ). Schéma `validate_request` régénéré.
 - Export mesh : `MeshSummary.lost_mesh` (trames décodées à l'accès puis perdues sur le mesh). Avant, le total exporté ne s'équilibrait pas (sur `lossy`, 9 trames manquantes) ; désormais sent = received + pertes accès + lost_mesh, égal à la trace. Ajouté au rapport et à la CLI.
 - TLS : le test vérifie qu'un client sans confiance dans le certificat échoue et qu'un client en clair n'obtient jamais de 200. Redémarrage : déjà testé (runs terminés relus, runs en file marqués `failed`).
-- Étape 3 (`web/`) : non commencée à ce stade (voir la discussion de périmètre).
+- Étape 3 (`web/`) : non commencée. Choix de l'auteur : commencer par le contrat d'API du panneau d'étude.
+- Contrat du panneau d'étude (brouillon, `docs/STUDY_PANEL_SPEC.md` §7) : `python/lsim/study_contract.py`, schémas `schemas/api/study-draft/` (8 fichiers, séparés de `v1`). Règles portées par les types : clés uniquement « ****** », dépôt d'exercice sans résultat, catalogue sans critères ni solution, tailles bornées. Aucune route servie. Tests : `python/tests/test_study_contract.py`.
 
 ### Limites mesh et RX2 corrigées
 - RX2 modélisée (repli) : une descente qui ne peut partir en RX1 (passerelle occupée au-delà de la fenêtre RX1) tente RX2, ouverte 1 s après RX1 (fin + 2 s ; join : +6 s), fenêtre de 1 s, même passerelle, SF `rx2_sf` du plan régional (12 en EU868). `rx2_sf = 0` désactive le repli. Une émission du dispositif pendant RX2 la rend perdue, et la sensibilité reste finale. Fréquence RX2 non modélisée (le repli garde la fréquence RX1).

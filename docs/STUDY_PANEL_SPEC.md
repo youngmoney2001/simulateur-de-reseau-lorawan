@@ -150,7 +150,20 @@ Exemples (indicatifs) :
 3. Corriger un plan régional incohérent entre capteur et passerelle.
 4. Choisir une sous-bande US915 pour éviter une collision avec un autre groupe.
 
-## 7. Contrat d'API à ajouter (proposition, non implémentée)
+## 7. Contrat d'API à ajouter (brouillon de formes, routes non implémentées)
+
+Formes des données : `python/lsim/study_contract.py`, schémas dans `schemas/api/study-draft/`
+(séparés de `v1` tant qu'aucune route n'est servie). Décisions prises dans ce brouillon :
+
+- `POST /api/v1/sessions` (ajouté) : crée une session, optionnellement liée à un exercice.
+- Une commande CLI cible un équipement (`node_id`) : une session contient plusieurs équipements.
+- Le dépôt d'exercice n'envoie que `session_id` ; le serveur note l'état qu'il détient.
+- Score : somme des critères réussis, moins les indices (borné à 0).
+- Clés : seule la valeur `"******"` est exprimable en sortie.
+
+Points ouverts (à trancher avant d'implémenter) : route de demande d'indice (les indices sont
+comptés dans la note, mais aucune route ne les révèle) ; barème d'un indice (points retirés) ;
+durée de vie et purge des sessions ; journalisation des tentatives (sans secrets).
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
