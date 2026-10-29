@@ -130,7 +130,7 @@ Limites des trames de données :
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
 - Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
 - US915 et AU915 : le groupe de scénario peut porter `sub_band` (1 à 8) ; son canal doit alors appartenir à la sous-bande. Règle LinkADRReq (ChMaskCntl 0 à 7) dans `lsim.channel_mask`.
-- Sous-bande de la passerelle (`lsim serve --region US915|AU915 --sub-band N`, défaut 1) : la passerelle Basic Station annonce les 8 canaux 125 kHz et le canal 500 kHz de la sous-bande (radio_0, radio_1 pour le 500 kHz). À chaque jointure, le serveur envoie un LinkADRReq (ChMaskCntl 5, DataRate et TXPower ignorés) qui restreint le dispositif à cette sous-bande. Il part en FOpts du downlink et est renvoyé à chaque downlink tant que le dispositif ne répond pas par un LinkADRAns complet (débit, puissance, masque) : au plus 8 essais, persistés dans la table `mac_pending`. Limites : le dispositif ne reçoit la commande que s'il ouvre RX1 après un uplink ; une passerelle Semtech UDP se configure côté passerelle (GWMP ne permet pas au serveur de changer son plan de canaux) ; LR-FHSS non implémenté.
+- Sous-bande de la passerelle (`lsim serve --region US915|AU915 --sub-band N`, défaut 1) : la passerelle Basic Station annonce les 8 canaux 125 kHz et le canal 500 kHz de la sous-bande (radio_0, radio_1 pour le 500 kHz). À chaque jointure, le serveur envoie un LinkADRReq (ChMaskCntl 5, DataRate et TXPower ignorés) qui restreint le dispositif à cette sous-bande. Il part en FOpts du downlink et est renvoyé à chaque downlink tant que le dispositif ne répond pas par un LinkADRAns complet (débit, puissance, masque) : au plus 8 essais, persistés dans la table `mac_pending`. Limites : le dispositif ne reçoit la commande que s'il ouvre RX1 après un uplink ; une passerelle Semtech UDP se configure côté passerelle (GWMP ne permet pas au serveur de changer son plan de canaux) ; LR-FHSS non géré (voir section 5quater).
 - AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
@@ -174,9 +174,19 @@ file. Exemple : le DevEUI affiché `08-07-06-05-04-03-02-01` s'écrit `080706050
 **Limites** : authentification des passerelles seulement par TLS (pas de certificat client ni de
 jeton) ; `router` en format ID6 non accepté (EUI ou entier seulement) ; un seul concentrateur et
 seulement les 8 canaux 125 kHz de la sous-bande choisie (`--sub-band`, défaut 1 pour US915 et AU915 ; les 8 premiers canaux pour EU868). Le canal 500 kHz de la sous-bande est aussi annoncé. Pas de
-LR-FHSS) ; pas de beacon, de Class B/C ni de `rmtsh` ; formats EUI et MIC (petit-boutiste) validés
+LR-FHSS, refusé) ; pas de beacon, de Class B/C ni de `rmtsh` ; formats EUI et MIC (petit-boutiste) validés
 conformes aux vecteurs de test officiels de Basic Station (`selftest_lora.c`) ; reste à confirmer
 sur une passerelle réelle (non disponible pour ces essais).
+
+## 5quater. LR-FHSS (non géré)
+
+Le serveur ne gère pas LR-FHSS. Décision documentée, pas un oubli :
+
+- US915 : les débits DR5 (LR-FHSS CR1/3) et DR6 (LR-FHSS CR2/3) sont hors du plan. Un uplink DR5 ou DR6 est refusé en Semtech UDP (`datr` ou `modu` non LoRa) comme en Basic Station (débit hors plan) ; une jointure sur ce débit reçoit l'issue `join_unsupported_channel`, sans join-accept.
+- Le plan AU915 ne déclare aucun débit LR-FHSS : une trame `modu` `LRFHSS` est refusée, mais DR5 (SF7/125) et DR6 (SF8/500) restent des débits LoRa gérés.
+- Le DR RX1 d'un uplink LR-FHSS n'est donc jamais calculé, faute de source vérifiée.
+
+Test de référence : `python/tests/test_lrfhss_unsupported.py`. Une prise en charge future demandera une capture `rxpk` réelle et une source officielle pour la fenêtre RX1.
 
 ## 6. Limites connues
 

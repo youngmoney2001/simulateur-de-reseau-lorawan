@@ -17,7 +17,7 @@ DR3 115, DR4 à DR6 222, DR8 33, DR9 109, DR10 à DR13 222. Ces valeurs sont cel
 « not repeater compatible » du tableau AU ; la file est bornée par la plus petite N des
 fenêtres RX1 atteignables (DR10 à DR13) : 222 octets.
 
-Sous-bandes et règle LinkADRReq : `lsim.channel_mask` (comme US915), émission par `lsim.serve`. LR-FHSS non implémenté.
+Sous-bandes et règle LinkADRReq : `lsim.channel_mask` (comme US915), émission par `lsim.serve`. Aucun débit LR-FHSS dans ce plan (voir docs/USAGE.md 5quater).
 Le dispositif rejoint sur les 72 canaux par défaut, sans CFList.
 """
 

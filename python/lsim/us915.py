@@ -17,7 +17,7 @@ DR4 222, DR8 53, DR9 129, DR10 à DR13 222. La file est bornée par la plus peti
 RX1 atteignables (DR10 à DR13) : 222 octets.
 
 Sous-bandes et règle LinkADRReq (ChMaskCntl) : `lsim.channel_mask`, émission par `lsim.serve`.
-Non implémenté : LR-FHSS (DR5, DR6).
+LR-FHSS (DR5, DR6) non géré : refusé à la réception (décision, voir docs/USAGE.md 5quater).
 Le dispositif rejoint sur les 72 canaux par défaut sans CFList : c'est la règle de ce serveur.
 """
 

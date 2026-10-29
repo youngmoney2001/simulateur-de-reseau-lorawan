@@ -8,6 +8,8 @@
 - Régions : EU868 (ETSI EN 300 220-2, RP002), AS923 (Japon, partiel), RU864, KR920 (partiel).
 - US915 et AU915 : sous-bandes 1 à 8 (`sub_band` dans les groupes ; `lsim serve --sub-band`), règle LinkADRReq ChMaskCntl 0 à 7 (`lsim.channel_mask`). Le serveur envoie un LinkADRReq de sous-bande à chaque jointure, renvoyé jusqu'à acquittement (8 essais) ; la passerelle Basic Station annonce la sous-bande (canal 500 kHz sur radio_1).
 
+- LR-FHSS non géré (décision) : uplinks US915 DR5/DR6 et modulation `LRFHSS` refusés, aucun débit LR-FHSS dans AU915 (`docs/USAGE.md` 5quater, `python/tests/test_lrfhss_unsupported.py`).
+
 ### LoRaWAN 1.1
 - Codec de trame, crypto (mbedTLS), dérivation de clés 1.1, trame sécurisée (MIC avant déchiffrement).
 - Jointure, rejoin types 0/1/2, garde anti-rejeu, rekey, commandes MAC (codec et API).
