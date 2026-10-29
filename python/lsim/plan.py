@@ -108,6 +108,10 @@ class Plan:
         """Fréquence (Hz) et débit de la fenêtre RX2 par défaut (DLSettings)."""
         return self._rx2_hz, self._downlink_datr[self.dl_settings & 0x0F]
 
+    def rx2_spreading_factor(self) -> int:
+        """Facteur d'étalement du débit RX2 par défaut (repli des descentes)."""
+        return _parse_datr(self.rx2()[1])[0]
+
     def uplink_channels_hz(self) -> tuple[int, ...]:
         return self._uplink_channels
 

@@ -358,6 +358,7 @@ class _CDownlinkRule(ctypes.Structure):
         ("device_antenna_gain_dbi", ctypes.c_double),
         ("device_rx_offset_db", ctypes.c_double),
         ("join", ctypes.c_uint8),
+        ("rx2_sf", ctypes.c_uint8),
     ]
 
 
@@ -371,6 +372,7 @@ class _CDownlinkRecord(ctypes.Structure):
         ("end_ns", ctypes.c_int64),
         ("outcome", ctypes.c_uint8),
         ("join", ctypes.c_uint8),
+        ("rx_window", ctypes.c_uint8),
     ]
 
 
@@ -787,6 +789,13 @@ LIB.lsim_mesh_forward_log.restype = ctypes.c_int32
 LIB.lsim_mesh_forward_log.argtypes = [
     ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
     ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32, ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary), ctypes.POINTER(_CMeshHop), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_mesh_forward_routed_log.restype = ctypes.c_int32
+LIB.lsim_mesh_forward_routed_log.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_uint32), ctypes.c_int, ctypes.c_int64,
     ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
     ctypes.POINTER(_CMeshSummary), ctypes.POINTER(_CMeshHop), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t)]

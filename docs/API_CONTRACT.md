@@ -144,11 +144,12 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   frontière vers chaque relais (route mesh à la latence réelle, 15 o d'enveloppe) ; une descente part
   à l'arrivée de l'uplink à la frontière, et la passerelle relais la sert en RX1 (la même passerelle
   que pour l'accès, donc même demi-duplex). Le calcul est un point fixe (descentes ↔ trace), borné à
-  8 itérations. Charge mesh : `gateways[].mesh_transmissions`, `mesh_busy_ns`,
+  64 itérations. Charge mesh : `gateways[].mesh_transmissions`, `mesh_busy_ns`,
   `mesh_lost_collision`, `mesh_lost_half_duplex`, `mesh_suppressed`, comptés sur le relais émetteur
-  (uplink et descente additionnés). Absents hors mesh. Limites : RX2 non modélisée ; les passes
-  uplink et descente ne partagent pas le temps d'antenne mesh ; les descentes vers des relais
-  différents ne se disputent pas le mesh. Les compteurs `gateways` (reçues, collisions d'accès) sont
+  (uplink et descente additionnés). Absents hors mesh. Montant et descente partagent une passe mesh
+  (temps d'antenne, suppression, attente). Repli RX2 : une descente que la passerelle ne peut servir
+  en RX1 tente RX2 (fin + 2 s, SF `rx2_sf` du plan) ; la fréquence RX2 n'est pas modélisée. Limite :
+  une trame mesh est bornée à 255 o (charge descendante > 227 o refusée). Les compteurs `gateways` (reçues, collisions d'accès) sont
   ceux du décodage à l'accès.
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
   dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel

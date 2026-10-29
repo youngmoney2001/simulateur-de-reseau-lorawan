@@ -105,7 +105,13 @@ def test_mesh_downlinks_are_traced_by_hop(small, opts):
     # Une descente mesh-servie ne part pas avant son arrivée au relais (dernier saut descendant).
     starts = [e for e in trace.events if e.kind in ("ack", "downlink", "join_accept")
               and e.outcome not in ("lost_mesh", "lost_sensitivity")]
-    assert starts
+    assert starts, "aucune descente servie"
+    first_hop = {}
+    for e in down_hops:
+        first_hop[e.device_index] = min(first_hop.get(e.device_index, e.t_ns), e.t_ns)
+    served_by_mesh = [e for e in starts if e.device_index in first_hop]
+    assert served_by_mesh, "aucune descente acheminée par le mesh"
+    assert all(e.t_ns >= first_hop[e.device_index] for e in served_by_mesh)
 
 
 @pytest.mark.parametrize("opts", DOWNLINK_OPTIONS)
@@ -141,16 +147,20 @@ def test_mono_trace_has_no_mesh_loads():
 
 def test_lost_downlink_on_mesh_is_traced_and_costs_no_airtime(small, monkeypatch):
     """Descente perdue sur le mesh : issue `lost_mesh`, hors comptage d'airtime de réception."""
+    import dataclasses
+
     import lsim.trace_events as te
     from lsim.mesh_pass import MeshDownlinkRoute
 
-    real_routes = te.mesh_downlink_routes
+    real_pass = te.mesh_pass
 
-    def all_lost(scenario, models, requests):
-        out = real_routes(scenario, models, requests)
-        return {k: MeshDownlinkRoute(False, None, "collision", v.hops) for k, v in out.items()}
+    def all_lost(*args, **kwargs):
+        mp = real_pass(*args, **kwargs)
+        lost = {k: MeshDownlinkRoute(False, None, "collision", v.hops)
+                for k, v in mp.downlinks.items()}
+        return dataclasses.replace(mp, downlinks=lost)
 
-    monkeypatch.setattr(te, "mesh_downlink_routes", all_lost)
+    monkeypatch.setattr(te, "mesh_pass", all_lost)
     opts = ProtocolOptions(confirmed_uplinks=True, downlink_every=1)
     trace = build_multi_trace(small, opts)
     lost = [e for e in trace.events if e.outcome == "lost_mesh" and e.kind in ("ack", "downlink")]
@@ -180,3 +190,24 @@ def test_engine_ready_minus_one_is_identical_and_never_blocks_all(small):
     assert never.downlinks and all(d.start_ns == -1 for d in never.downlinks)
     with pytest.raises(ValueError):
         simulate_multi_downlinks(*args, dl_ready_ns=[-1] * (total - 1))
+
+
+def test_uplinks_and_downlinks_share_one_mesh_pass(small, monkeypatch):
+    """Montant et descente partagent une seule passe mesh : même temps d'antenne, même charge."""
+    import lsim.trace_events as te
+
+    calls = []
+    real_pass = te.mesh_pass
+
+    def spy(*args, **kwargs):
+        mp = real_pass(*args, **kwargs)
+        calls.append((len(args[3]), len(kwargs.get("downlinks", ())), mp))
+        return mp
+
+    monkeypatch.setattr(te, "mesh_pass", spy)
+    build_multi_trace(small, ProtocolOptions(confirmed_uplinks=True, downlink_every=1))
+    base, n_dl, mp = calls[-1]
+    assert n_dl > 0, "aucune descente dans la passe finale"
+    frame_ids = {h.frame_id for h in mp.mesh_result.hops}
+    assert any(f < base for f in frame_ids) and any(f >= base for f in frame_ids)
+    assert all(h.frame_id < base for h in mp.uplink_hops)

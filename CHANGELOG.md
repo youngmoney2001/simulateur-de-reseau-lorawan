@@ -3,13 +3,24 @@
 ## 0.1.0 (non publiée)
 
 
+### Limites mesh et RX2 corrigées
+- RX2 modélisée (repli) : une descente qui ne peut partir en RX1 (passerelle occupée au-delà de la fenêtre RX1) tente RX2, ouverte 1 s après RX1 (fin + 2 s ; join : +6 s), fenêtre de 1 s, même passerelle, SF `rx2_sf` du plan régional (12 en EU868). `rx2_sf = 0` désactive le repli. Une émission du dispositif pendant RX2 la rend perdue, et la sensibilité reste finale. Fréquence RX2 non modélisée (le repli garde la fréquence RX1).
+- **Changement de résultats par défaut** : des descentes autrefois `GatewayBusy` sont désormais servies en RX2 (`DownlinkRecord.rx_window = 2`, départ entre t_open + 1 s et t_open + 2 s). Champs ajoutés en fin de struct : `lsim_downlink_rule.rx2_sf`, `lsim_downlink_record.rx_window`. La trace API v1 ne porte pas `rx_window` : l'instant de départ le révèle.
+- Un scénario dont les régions ont des RX2 de SF différents est refusé (un seul débit de repli par scénario).
+- Passe jointe : montant et descente partagent une seule passe mesh (`lsim.mesh_pass.mesh_pass`, `forward_frames` avec destination par trame). Ils partagent donc le temps d'antenne, la suppression des doublons et l'attente. Les descentes vers des relais différents se disputent désormais le mesh. La charge par relais est comptée une fois, sur le journal complet.
+- Point fixe : sur (départs au plus tôt des descentes, délai frontière de chaque uplink), par message. Cap inchangé à 64.
+- Natif : `lsim_mesh_forward_routed_log` (destination par trame) ; `lsim_mesh_forward[_log]` reste un wrapper aux résultats identiques.
+- Enveloppe mesh : 14 o (montant) et 15 o (descente) confirmés par la documentation ChirpStack (MHDR, métadonnées, relay ID, MIC). Non vérifiés sur un relais physique. La taille de trame relayée par défaut (32 o) reste une hypothèse.
+- Limite trouvée : une trame mesh est bornée à 255 o. Une descente de plus de 227 o (PHY 13 + charge + enveloppe 15) est refusée à l'exécution (`ValueError`) ; à refuser plus tôt côté API (non fait).
+- Tests : `python/tests/test_rx2_fallback.py` (repli avec `dl_ready_ns`, désactivation, validation du SF, SF issu du plan), `test_mesh_trace.py` (passe jointe, descente perdue sans airtime, départ non avant le premier saut). Suite : 1359 passés, 1 ignoré.
+
 ### Descentes et charge par relais sur mesh
 - Moteur natif (`simulate_uplinks_multi_downlinks`) : paramètre optionnel `dl_ready_ns` (départ au plus tôt de chaque descente, par émission ; `kDownlinkNever` pour une descente jamais acheminée). API C : `lsim_simulate_uplinks_multi_dl` prend `dl_ready_ns` et `ready_count` en fin de signature (NULL pour l'ancien comportement). `simulator.simulate_multi_downlinks(..., dl_ready_ns=...)`, `DL_READY_NEVER`.
-- Descentes sur mesh (`lsim.mesh_pass.mesh_downlink_routes`) : chaque descente part de la frontière à l'arrivée de son uplink et est routée jusqu'au relais cible (graphe rooted au relais, une copie, 15 o d'enveloppe). Le relais la sert en RX1 après son arrivée. `join`, `confirmed_uplinks` et `downlink_every` acceptés en mesh (API et trace).
-- Point fixe : la trace (passe moteur) et les arrivées mesh des descentes dépendent l'une de l'autre ; itération bornée (`MAX_MESH_RETURN_ITERATIONS` = 64, levée explicite au-delà). Exemple SF12 avec join : 11 itérations. Hors mesh, une seule passe.
+- Descentes sur mesh (`lsim.mesh_pass.mesh_pass`, passe partagée avec le montant depuis la section ci-dessus) : chaque descente part de la frontière à l'arrivée de son uplink et est routée jusqu'au relais cible (graphe rooted au relais, une copie, 15 o d'enveloppe). Le relais la sert en RX1 après son arrivée. `join`, `confirmed_uplinks` et `downlink_every` acceptés en mesh (API et trace).
+- Point fixe : la trace (passe moteur) et les arrivées mesh des descentes dépendent l'une de l'autre ; itération bornée (`MAX_MESH_RETURN_ITERATIONS` = 64, levée explicite au-delà). Hors mesh, une seule passe.
 - Trace : événements `mesh_downlink_hop` (sauts descendants) ; issue `lost_mesh` d'une descente perdue sur le mesh (un saut `ns` → relais) ; issue `mesh_late` d'une `rx_window_missed` quand l'arrivée mesh dépasse la fenêtre RX1. Une descente d'un uplink non remis au LNS n'est pas émise. Airtime de réception : seules les descentes reçues (`_DELIVERED_DOWNLINK_OUTCOMES`) comptent.
 - Charge mesh par relais : `gateways[].mesh_transmissions`, `mesh_busy_ns`, `mesh_lost_collision`, `mesh_lost_half_duplex`, `mesh_suppressed` (uplink et descente additionnés, comptés sur l'émetteur). Absents pour les passerelles sans mesh.
-- Limites restantes : RX2 non modélisée ; les passes uplink et descente ne partagent pas le temps d'antenne mesh ; les descentes vers des relais différents ne se disputent pas le mesh (passes séparées par cible).
+- Les deux limites documentées ici (RX2 et passe jointe) sont corrigées dans la section « Limites mesh et RX2 corrigées » ci-dessus.
 - Contrat : `EventKind` += `mesh_downlink_hop` ; `HopOutcome` += `lost_mesh` ; `GatewayReportOut` += 5 champs optionnels. Schémas régénérés. Tests : `python/tests/test_mesh_trace.py` (descentes par saut, concordance de charge avec le journal, point fixe déterministe, descente perdue), `test_api_server.py` (descentes acceptées, champs par relais).
 
 ### Mesh par saut dans la trace API

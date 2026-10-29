@@ -6,6 +6,10 @@ une seule implémentation, donc totaux et trace concordent par construction.
 Entrée : les émissions de la trace multi (`decoded_mask` par passerelle, instants de fin) et la
 liste des passerelles. Sortie : copies sur le mesh, issues par trame, journal des sauts (si
 demandé) et fenêtres de descente d'acquittement.
+
+Descentes (`downlinks`) : elles partagent la même passe que les uplinks, donc le même temps
+d'antenne et la même suppression des doublons. Chaque descente part de la frontière vers son
+relais cible (destination par trame). Ses identifiants de trame sont `len(trace) + clé`.
 """
 
 from __future__ import annotations
@@ -19,8 +23,8 @@ from lsim.mesh import (
     DOWNLINK_ACK_PHY_BYTES,
     MESH_ENVELOPE_DOWN_BYTES,
     MESH_ENVELOPE_UP_BYTES,
-    MeshDelivery,
     MeshFrame,
+    MeshHop,
     MeshNode,
     MeshRadio,
     MeshResult,
@@ -35,19 +39,43 @@ from lsim.simulator import environment_path_loss_matrix
 
 
 @dataclass(frozen=True)
-class MeshPass:
-    """Résultat de la passe mesh. Les ensembles sont des indices de trame (= indice de trace)."""
+class MeshDownlinkRoute:
+    """Acheminement d'une descente de la frontière vers un relais cible.
 
-    seen_frames: int                  # trames décodées par au moins une passerelle
-    direct_frames: frozenset          # remises sans saut mesh (passerelle à backhaul IP, ou frontière)
-    via_mesh_frames: frozenset        # remises après au moins un saut mesh
-    delivered_frames: frozenset       # remises au LNS (direct ∪ via mesh)
-    copies_on_mesh: int               # copies confiées au mesh
-    no_route: int                     # copies sans route vers la frontière
-    mesh_result: MeshResult
+    `arrival_ns` : instant de réception par le relais (None si perdue sur le mesh).
+    `loss` : "" si remise ; sinon no_route, collision ou half_duplex (issue du dernier saut
+    perdu). `hops` : sauts du journal natif de cette descente (sens descendant).
+    """
+
+    delivered: bool
+    arrival_ns: Optional[int]
+    loss: str
+    hops: tuple = ()
+
+
+@dataclass(frozen=True)
+class MeshPass:
+    """Résultat de la passe mesh. Les ensembles sont des indices de trame (= indice de trace).
+
+    Vues montantes (uplinks) : `delivered_frames`, `direct_frames`, `via_mesh_frames`,
+    `border_delay_ns`, `uplink_hops`, `delivered_by_device`. `mesh_result` contient la passe
+    complète (montant et descente) : c'est elle qui porte le temps d'antenne et la charge.
+    `downlinks` : route de chaque descente demandée, par clé.
+    """
+
+    delivered_frames: frozenset       # uplinks remis au LNS (direct ∪ via mesh)
+    direct_frames: frozenset          # uplinks remis sans saut mesh
+    via_mesh_frames: frozenset        # uplinks remis après au moins un saut mesh
+    border_delay_ns: dict             # uplink remis -> délai de la copie utile jusqu'à la frontière
+    copies_on_mesh: int               # copies montantes confiées au mesh
+    no_route: int                     # copies montantes sans route vers la frontière
+    mesh_result: MeshResult           # passe complète : montant + descente
+    uplink_hops: tuple                # sauts du montant (MeshHop)
+    downlinks: dict = field(default_factory=dict)   # clé -> MeshDownlinkRoute
+    seen_frames: int = 0              # trames décodées par au moins une passerelle
     dl_counts: dict = field(default_factory=dict)   # fenêtres de l'acquittement : rx1/rx2/missed
     mesh_air_ns: int = 0              # temps d'antenne de l'acquittement mesh
-    delivered_by_device: tuple = ()   # remises par dispositif (indexé comme `devices`)
+    delivered_by_device: tuple = ()   # uplinks remis par dispositif (indexé comme `devices`)
 
 
 def _mesh_radio(mesh_cfg):
@@ -56,12 +84,9 @@ def _mesh_radio(mesh_cfg):
                      payload_bytes=mesh_cfg.payload_bytes, capture_db=mesh_cfg.capture_db)
 
 
-def mesh_graph(scenario, gw_models, border_id: str):
-    """Graphe mesh dont la racine (passerelle à backhaul IP) est `border_id`.
-
-    Pour les uplinks, la racine est la frontière du scénario. Pour une descente vers un relais R,
-    la racine est R : la trame part de la frontière et la route est calculée depuis R.
-    """
+def mesh_graph(scenario, gw_models, border_id: Optional[str] = None):
+    """Graphe mesh : liens, puissances et routes vers la frontière (`border_id`, par défaut celle du
+    scénario). Les routes vers les autres relais sont calculées à partir du même graphe."""
     mesh_cfg = scenario.model.mesh
     nodes = []
     for g in gw_models:
@@ -80,22 +105,26 @@ def mesh_graph(scenario, gw_models, border_id: str):
             [(g.x_m, g.y_m) for g in gw_models], mesh_prop, scenario.environment)
     mesh_model = LogDistanceModel(frequency_hz=mesh_prop.frequency_hz,
                                   exponent=mesh_prop.exponent)
-    return build_mesh(nodes, border_id, radio, path_loss=mesh_model,
+    return build_mesh(nodes, border_id or mesh_cfg.border, radio, path_loss=mesh_model,
                       max_hops=mesh_cfg.max_hops, path_loss_db=path_matrix,
                       shadowing_sigma_db=mesh_cfg.shadowing_sigma_db,
                       shadowing_seed=scenario.propagation().shadowing_seed)
 
 
-def mesh_pass(scenario, devices, gw_models, trace: Sequence, with_hops: bool = False) -> MeshPass:
-    """Relais mesh de la trace multi. `scenario.model.mesh` doit être renseigné."""
+def mesh_pass(scenario, devices, gw_models, trace: Sequence, with_hops: bool = False,
+              downlinks: Sequence[tuple] = ()) -> MeshPass:
+    """Relais mesh de la trace multi, montant et descentes dans la même passe.
+
+    `downlinks` : (clé, relais cible, instant de départ à la frontière (ns), taille PHY en octets).
+    Les clés doivent être des entiers distincts >= 0.
+    """
     mesh_cfg = scenario.model.mesh
-    radio = _mesh_radio(mesh_cfg)
     fixed_size = mesh_cfg.payload_bytes if mesh_cfg.frame_size == "fixed" else None
-    graph = mesh_graph(scenario, gw_models, mesh_cfg.border)
+    graph = mesh_graph(scenario, gw_models)
+    base = len(trace)
 
     # Une copie par passerelle décodeuse. Passerelle sans mesh : backhaul IP, remise directe.
-    # Relais : une émission par trame si la suppression est active (identifiant de trame),
-    # après une attente déterministe de `relay_backoff_airtimes` temps d'antenne.
+    # Relais : une émission par trame, la suppression et l'attente sont celles du mesh.
     frames: list[MeshFrame] = []
     direct_frame: set[int] = set()
     seen_frames = 0
@@ -115,16 +144,25 @@ def mesh_pass(scenario, devices, gw_models, trace: Sequence, with_hops: bool = F
                                         t_ns=rec.end_ns, payload_bytes=size))
             else:
                 direct_frame.add(rec_index)
-    backoff_ns = mesh_cfg.relay_backoff_airtimes * radio.airtime_ns
+    # Descentes : de la frontière vers le relais cible (15 o d'enveloppe, PHY fourni).
+    for key, target, t_ns, phy_bytes in downlinks:
+        if key < 0 or key >= 1 << 48:
+            raise ValueError("clé de descente hors domaine")
+        frames.append(MeshFrame(frame_id=base + key, rx_gateway_id=mesh_cfg.border, t_ns=t_ns,
+                                payload_bytes=phy_bytes + MESH_ENVELOPE_DOWN_BYTES,
+                                dest_id=target))
+    radio = _mesh_radio(mesh_cfg)
     mesh_result = forward_frames(frames, graph, radio,
                                  suppress_duplicates=mesh_cfg.suppress_duplicates,
-                                 backoff_window_ns=backoff_ns, with_hops=with_hops)
+                                 backoff_window_ns=mesh_cfg.relay_backoff_airtimes * radio.airtime_ns,
+                                 with_hops=with_hops)
 
-    # « Direct » : remise sans saut mesh (passerelle à backhaul IP, ou frontière elle-même).
+    # Vue montante. « Direct » : remise sans saut mesh (passerelle à backhaul IP, ou frontière).
+    up_deliveries = [d for d in mesh_result.deliveries if d.frame_id < base]
     delivered_frames: set[int] = set(direct_frame)
     via_mesh_frames: set[int] = set()
     no_route = 0
-    for d in mesh_result.deliveries:
+    for d in up_deliveries:
         if d.delivered:
             delivered_frames.add(d.frame_id)
             if d.hops == 0:
@@ -134,96 +172,66 @@ def mesh_pass(scenario, devices, gw_models, trace: Sequence, with_hops: bool = F
         elif d.copy_state == "no_route":
             no_route += 1
     via_mesh_frames -= direct_frame
-    # Descente : une réponse par trame remise. Le natif donne le même saut et la même
-    # latence pour toutes les copies d'une trame ; une trame décodée par la frontière
-    # elle-même a 0 saut.
-    # Descente : acquittement seul sur le lien mesh (taille PHY 12 o + enveloppe 15 o).
+    best_by_frame = {d.frame_id: d for d in up_deliveries if d.delivered}
+    border_delay = {}
+    for frame_id in delivered_frames:
+        if frame_id in direct_frame or frame_id not in best_by_frame:
+            border_delay[frame_id] = 0
+        else:
+            border_delay[frame_id] = best_by_frame[frame_id].latency_ns or 0
+
+    # Acquittement (fenêtres) : taille PHY 12 o + enveloppe mesh, comme avant.
     mesh_air = time_on_air_ns(mesh_cfg.spreading_factor, mesh_cfg.bandwidth_khz * 1000,
                               DOWNLINK_ACK_PHY_BYTES + MESH_ENVELOPE_DOWN_BYTES,
                               mesh_cfg.coding_rate)
-    best_by_frame = {d.frame_id: d for d in mesh_result.deliveries if d.delivered}
     dl_counts = {"rx1": 0, "rx2": 0, "missed": 0}
     for frame_id in delivered_frames:
         if frame_id in direct_frame or frame_id not in best_by_frame:
-            hops, latency = 0, 0
+            latency, hops = 0, 0
         else:
-            hops, latency = best_by_frame[frame_id].hops, best_by_frame[frame_id].latency_ns or 0
+            latency, hops = best_by_frame[frame_id].latency_ns or 0, best_by_frame[frame_id].hops
         dl_counts[downlink_window(latency, hops, mesh_air)] += 1
     delivered_by_device = [0] * len(devices)
     for rec_index in delivered_frames:
         delivered_by_device[trace[rec_index].device_index] += 1
 
+    # Descentes : route de chaque descente demandée.
+    hops_by_frame: dict[int, list[MeshHop]] = {}
+    for h in mesh_result.hops:
+        hops_by_frame.setdefault(h.frame_id, []).append(h)
+    best_dl = {}
+    lost_dl = {}
+    for d in mesh_result.deliveries:
+        if d.frame_id < base:
+            continue
+        if d.delivered:
+            cur = best_dl.get(d.frame_id)
+            if cur is None or (d.latency_ns or 0) < (cur.latency_ns or 0):
+                best_dl[d.frame_id] = d
+        else:
+            lost_dl[d.frame_id] = d.loss or "no_route"
+    routes = {}
+    for key, _target, t_ns, _phy in downlinks:
+        fid = base + key
+        hops = tuple(hops_by_frame.get(fid, ()))
+        dv = best_dl.get(fid)
+        if dv is None:
+            routes[key] = MeshDownlinkRoute(False, None, lost_dl.get(fid, "no_route"), hops)
+        else:
+            routes[key] = MeshDownlinkRoute(True, t_ns + (dv.latency_ns or 0), "", hops)
+
     return MeshPass(
-        seen_frames=seen_frames,
+        delivered_frames=frozenset(delivered_frames),
         direct_frames=frozenset(direct_frame),
         via_mesh_frames=frozenset(via_mesh_frames),
-        delivered_frames=frozenset(delivered_frames),
-        copies_on_mesh=len(frames),
+        border_delay_ns=border_delay,
+        copies_on_mesh=len(frames) - len(downlinks),
         no_route=no_route,
         mesh_result=mesh_result,
+        uplink_hops=tuple(h for h in mesh_result.hops if h.frame_id < base),
+        downlinks=routes,
+        seen_frames=seen_frames,
         dl_counts=dl_counts,
         mesh_air_ns=mesh_air,
         delivered_by_device=tuple(delivered_by_device),
     )
-
-
-@dataclass(frozen=True)
-class MeshDownlinkRoute:
-    """Acheminement d'une descente de la frontière vers un relais cible.
-
-    `arrival_ns` : instant de réception par le relais (None si perdue sur le mesh).
-    `loss` : "" si remise ; sinon no_route, collision ou half_duplex (issue du dernier saut
-    perdu). `hops` : sauts du journal natif de cette descente (sens descendant).
-    """
-
-    delivered: bool
-    arrival_ns: Optional[int]
-    loss: str
-    hops: tuple = ()
-
-
-def mesh_downlink_routes(scenario, gw_models, requests: Sequence[tuple[int, str, int, int]]
-                         ) -> dict[int, MeshDownlinkRoute]:
-    """Route des descentes mesh. `requests` : (clé, relais cible, instant de départ à la
-    frontière, taille PHY de la descente en octets).
-
-    Une racine de graphe par relais cible : la route est calculée depuis le relais, pas depuis la
-    frontière. Une seule copie par descente (pas de suppression de doublons ni d'attente), comme
-    un relais qui relaie la trame de la frontière. Les descentes d'un même relais partagent la
-    passe ; les descentes vers des relais différents sont des passes séparées (pas de contention
-    mesh entre elles). Le temps d'antenne mesh des uplinks n'est pas partagé avec ces passes.
-    """
-    mesh_cfg = scenario.model.mesh
-    radio = _mesh_radio(mesh_cfg)
-    by_target: dict[str, list[tuple[int, int, int]]] = {}
-    for key, target, t_ns, phy_bytes in requests:
-        by_target.setdefault(target, []).append((key, t_ns, phy_bytes))
-    routes: dict[int, MeshDownlinkRoute] = {}
-    for target, items in by_target.items():
-        graph = mesh_graph(scenario, gw_models, target)
-        frames = [MeshFrame(frame_id=k, rx_gateway_id=mesh_cfg.border, t_ns=t_ns,
-                            payload_bytes=phy + MESH_ENVELOPE_DOWN_BYTES)
-                  for k, (_key, t_ns, phy) in enumerate(items)]
-        result = forward_frames(frames, graph, radio, suppress_duplicates=False,
-                                backoff_window_ns=0, with_hops=True)
-        best: dict[int, MeshDelivery] = {}
-        losses: dict[int, str] = {}
-        for dv in result.deliveries:
-            if dv.delivered:
-                cur = best.get(dv.frame_id)
-                if cur is None or (dv.latency_ns or 0) < (cur.latency_ns or 0):
-                    best[dv.frame_id] = dv
-            else:
-                losses[dv.frame_id] = dv.loss or "no_route"
-        hops_of: dict[int, list] = {}
-        for h in result.hops:
-            hops_of.setdefault(h.frame_id, []).append(h)
-        for k, (key, t_ns, _phy) in enumerate(items):
-            dv = best.get(k)
-            if dv is None:
-                routes[key] = MeshDownlinkRoute(False, None, losses.get(k, "no_route"),
-                                                tuple(hops_of.get(k, ())))
-            else:
-                routes[key] = MeshDownlinkRoute(True, t_ns + (dv.latency_ns or 0), "",
-                                                tuple(hops_of.get(k, ())))
-    return routes

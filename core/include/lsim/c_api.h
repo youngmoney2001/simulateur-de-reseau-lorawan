@@ -473,7 +473,8 @@ LSIM_API int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, siz
 
 /* Passerelles multiples avec downlinks (ordre de fin, calcul exact sans itération) : chaque uplink
  * décodé est acquitté (ack_uplinks) ou reçoit une charge (une par `every` uplinks décodés) par la
- * meilleure passerelle décodeuse, en RX1. Chaque passerelle sérialise ses downlinks et ne décode
+ * meilleure passerelle décodeuse, en RX1 (repli en RX2 si la passerelle est occupée en RX1,
+ * voir rx2_sf). Chaque passerelle sérialise ses downlinks et ne décode
  * pas pendant les siens (demi-duplex par passerelle). Voir lsim/engine.hpp. */
 typedef struct lsim_downlink_rule {
     uint8_t  ack_uplinks;             /* 0 ou 1 */
@@ -483,10 +484,11 @@ typedef struct lsim_downlink_rule {
     double   device_antenna_gain_dbi;
     double   device_rx_offset_db;
     uint8_t  join;                    /* 0 ou 1 : join-accept après une join-request décodée */
+    uint8_t  rx2_sf;                  /* SF de RX2 de repli (7..12, BW 125 kHz) ; 0 : pas de repli */
 } lsim_downlink_rule;
 
-/* outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors fenêtre RX1, 3 dispositif en émission.
- * start_ns/end_ns = -1 si non émis. */
+/* outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors RX1 et RX2, 3 dispositif en émission.
+ * start_ns/end_ns = -1 si non émis. rx_window : 1 RX1, 2 RX2 (repli après RX1 occupée). */
 typedef struct lsim_downlink_record {
     uint32_t device_index;
     uint32_t gateway_index;
@@ -496,6 +498,7 @@ typedef struct lsim_downlink_record {
     int64_t  end_ns;
     uint8_t  outcome;
     uint8_t  join;                    /* 1 : join-accept (17 octets) */
+    uint8_t  rx_window;               /* 1 : RX1 ; 2 : RX2 (repli) */
 } lsim_downlink_record;
 
 LSIM_API int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,
@@ -964,6 +967,18 @@ LSIM_API int32_t lsim_mesh_forward_log(const lsim_mesh_radio* radio, size_t node
                                        lsim_mesh_delivery* out, lsim_mesh_summary* summary,
                                        lsim_mesh_hop* hops, size_t hop_capacity,
                                        size_t* hop_count);
+
+/* Comme lsim_mesh_forward_log, avec une destination par trame. `next_by_dest` : node_count x
+   node_count (ligne d = routes vers la passerelle d, -1 si aucune route) ; `dests[k]` : passerelle
+   de destination de la trame k (capable). Une même trame ne peut viser deux destinations. */
+LSIM_API int32_t lsim_mesh_forward_routed_log(const lsim_mesh_radio* radio, size_t node_count,
+                                              const uint8_t* capable, const double* rssi_dbm,
+                                              const int32_t* next_by_dest, const uint32_t* dests,
+                                              int suppress, int64_t backoff_window_ns,
+                                              const lsim_mesh_frame* frames, size_t frame_count,
+                                              lsim_mesh_delivery* out, lsim_mesh_summary* summary,
+                                              lsim_mesh_hop* hops, size_t hop_capacity,
+                                              size_t* hop_count);
 
 #ifdef __cplusplus
 }

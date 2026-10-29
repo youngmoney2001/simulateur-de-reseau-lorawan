@@ -290,6 +290,8 @@ struct MultiDownlinkRule {
     bool join = false;                      // join : une join-request décodée reçoit un join-accept
                                             // (à fin + 5 s, 17 octets) ; les uplinks sont des données
                                             // tant que le join-accept n'est pas délivré
+    std::uint8_t rx2_sf = 12;               // SF de la fenêtre RX2 de repli (7..12, BW 125 kHz) ;
+                                            // 0 : pas de repli (GatewayBusy en RX1 reste final)
 };
 
 enum class DownlinkOutcome : std::uint8_t {
@@ -305,10 +307,11 @@ struct MultiDownlink {
     std::uint32_t gateway = 0;
     bool data = false;          // false : ACK seul ; true : charge
     bool join = false;          // true : join-accept (charge de 17 octets)
-    SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif
+    SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif (RX2 : +1 s)
     SimTime start_ns = -1;
     SimTime end_ns = -1;
     DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;
+    std::uint8_t rx_window = 1; // 1 : RX1 ; 2 : RX2 (repli après GatewayBusy en RX1)
 };
 
 // `dl_ready_ns` (optionnel) : départ au plus tôt de la descente de chaque émission, indexé comme

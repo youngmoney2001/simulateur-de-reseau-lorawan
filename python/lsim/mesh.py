@@ -157,7 +157,11 @@ class MeshRadio:
 
 @dataclass
 class MeshGraph:
-    """Routes vers la frontière, calculées par le natif."""
+    """Routes vers la frontière (`next_hop`), et vers toute autre passerelle capable (`route_row`).
+
+    Les liens (rssi, capacités, sensibilité) ne dépendent pas de la destination : une seule
+    matrice sert à toutes les routes, calculées par le natif et mises en cache.
+    """
 
     border_id: str
     ids: tuple[str, ...]
@@ -165,7 +169,26 @@ class MeshGraph:
     rssi: ctypes.Array                 # rssi[i*n+j] : reçu en j, émis par i (dBm)
     capable: tuple[int, ...]
     radio: MeshRadio
+    max_hops: int = MAX_HOPS
     _index: dict = field(default_factory=dict, repr=False)
+    _routes: dict = field(default_factory=dict, repr=False)
+
+    def route_row(self, dest_id: str) -> tuple[int, ...]:
+        """Saut suivant de chaque passerelle vers `dest_id` (-1 si aucune route).
+
+        Destination frontière : `next_hop`. Autre destination (relais) : route calculée par le
+        natif avec la même matrice de liens et la même limite de sauts.
+        """
+        if dest_id == self.border_id:
+            return self.next_hop
+        if dest_id not in self._routes:
+            n = len(self.ids)
+            nxt = (ctypes.c_int32 * n)()
+            cap = (ctypes.c_uint8 * n)(*self.capable)
+            _check(_LIB.lsim_mesh_routes(ctypes.byref(_c_radio(self.radio)), n, cap, self.rssi,
+                                         self._index[dest_id], self.max_hops, nxt))
+            self._routes[dest_id] = tuple(nxt)
+        return self._routes[dest_id]
 
     def route(self, gateway_id: str) -> Optional[tuple[str, ...]]:
         """Suite de passerelles jusqu'à la frontière (frontière incluse), () pour elle-même."""
@@ -256,7 +279,7 @@ def build_mesh(nodes: Sequence[MeshNode], border_id: str, radio: MeshRadio,
     _check(_LIB.lsim_mesh_routes(ctypes.byref(_c_radio(radio)), n, cap, rssi,
                                  border, max_hops, nxt))
     return MeshGraph(border_id=border_id, ids=tuple(ids), next_hop=tuple(nxt),
-                     rssi=rssi, capable=capable, radio=radio,
+                     rssi=rssi, capable=capable, radio=radio, max_hops=max_hops,
                      _index={g: k for k, g in enumerate(ids)})
 
 
@@ -280,9 +303,11 @@ def downlink_window(latency_ns: int, hops: int, mesh_airtime_ns: int) -> str:
 @dataclass(frozen=True)
 class MeshFrame:
     frame_id: int
-    rx_gateway_id: str   # passerelle qui a reçu la trame sur la bande d'accès
-    t_ns: int            # fin de réception sur l'accès
+    rx_gateway_id: str   # passerelle qui a reçu la trame (accès, ou frontière pour une descente)
+    t_ns: int            # fin de réception (accès), ou départ de la frontière (descente)
     payload_bytes: int = 32  # taille relayée : trame LoRaWAN + enveloppe mesh (0..255)
+    # Destination : passerelle capable visée. None : la frontière du graphe (montant).
+    dest_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -341,6 +366,10 @@ def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
                    with_hops: bool = False) -> MeshResult:
     """Relais des trames saut par saut sur la bande mesh (calcul natif).
 
+    Chaque trame va vers sa destination (`dest_id`, la frontière par défaut). Les trames de
+    destinations différentes partagent le temps d'antenne et la suppression des doublons : une
+    seule passe, une même politique pour le montant et la descente.
+
     `suppress_duplicates=True` (défaut) : un relais n'émet la trame qu'une fois et
     renonce à sa copie s'il entend un autre relais la transmettre avant son départ.
     `False` : chaque copie reçue est relayée, comportement sans identifiant de trame.
@@ -354,43 +383,55 @@ def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
     n = len(graph.ids)
     if len(frames) > MAX_FRAMES:
         raise ValueError("trop de trames pour un seul calcul mesh")
+    border_id = graph.border_id
+    dest_ids = [f.dest_id if f.dest_id is not None else border_id for f in frames]
     c_frames = (_CMeshFrame * len(frames))()
+    c_dests = (ctypes.c_uint32 * len(frames))()
     for k, f in enumerate(frames):
         if f.rx_gateway_id not in index:
             raise ValueError(f"passerelle inconnue : {f.rx_gateway_id!r}")
+        if dest_ids[k] not in index:
+            raise ValueError(f"destination inconnue : {dest_ids[k]!r}")
         c_frames[k].frame_id = f.frame_id
         c_frames[k].rx_node = index[f.rx_gateway_id]
         if not 0 <= f.payload_bytes <= 255:
             raise ValueError("taille de trame mesh hors domaine (0..255)")
         c_frames[k].t_ns = f.t_ns
         c_frames[k].payload_bytes = f.payload_bytes
+        c_dests[k] = index[dest_ids[k]]
+    # Matrice des routes : une ligne par destination utilisée (les autres lignes restent -1).
+    by_dest = (ctypes.c_int32 * (n * n))(*([-1] * (n * n)))
+    for d in set(dest_ids):
+        row = graph.route_row(d)
+        base = index[d] * n
+        for i in range(n):
+            by_dest[base + i] = row[i]
     c_out = (_CMeshDelivery * len(frames))()
     c_sum = _CMeshSummary()
-    nxt = (ctypes.c_int32 * n)(*graph.next_hop)
     cap = (ctypes.c_uint8 * n)(*graph.capable)
-    args = (ctypes.byref(_c_radio(radio)), n, cap, graph.rssi, nxt, graph._index[graph.border_id],
+    head = (ctypes.byref(_c_radio(radio)), n, cap, graph.rssi, by_dest, c_dests,
             1 if suppress_duplicates else 0, backoff_window_ns, c_frames, len(frames), c_out,
             ctypes.byref(c_sum))
     hops: tuple[MeshHop, ...] = ()
-    if with_hops:
-        # Journal borné : si le tampon est trop petit, le natif donne la taille requise.
-        size = max(1024, 4 * len(frames))
-        while True:
-            c_hops = (_CMeshHop * size)()
-            c_count = ctypes.c_size_t(0)
-            status = _LIB.lsim_mesh_forward_log(*args, c_hops, size, ctypes.byref(c_count))
-            if status != _BUFFER_TOO_SMALL:
-                break
-            size = int(c_count.value)
+    # Journal des sauts : toujours produit par le natif. Sans `with_hops`, tampon nul : le natif
+    # ne renvoie que la taille (statut « tampon trop petit », ignoré ici).
+    size = max(1024, 4 * len(frames)) if with_hops else 0
+    while True:
+        c_hops = (_CMeshHop * size)()
+        c_count = ctypes.c_size_t(0)
+        status = _LIB.lsim_mesh_forward_routed_log(*head, c_hops, size, ctypes.byref(c_count))
+        if status != _BUFFER_TOO_SMALL or not with_hops:
+            break
+        size = int(c_count.value)
+    if not (status == _BUFFER_TOO_SMALL and not with_hops):
         _check(status)
+    if with_hops:
         hops = tuple(
             MeshHop(frame_id=int(h.frame_id), sender_id=graph.ids[h.sender],
                     receiver_id=graph.ids[h.receiver], t_start_ns=int(h.t_start_ns),
                     t_end_ns=int(h.t_end_ns), outcome=_HOP_OUTCOMES[h.outcome],
                     hop_index=int(h.hop_index))
             for h in c_hops[:c_count.value])
-    else:
-        _check(_LIB.lsim_mesh_forward(*args))
     out: list[MeshDelivery] = []
     for k in range(len(frames)):
         d = c_out[k]

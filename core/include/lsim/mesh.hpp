@@ -135,4 +135,15 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                std::size_t frame_count, Delivery* out, Summary* summary,
                std::vector<HopEvent>* log = nullptr);
 
+// Comme `forward`, avec une destination par trame. `next_by_dest` : n*n, ligne d = routes vers
+// la passerelle d (next_by_dest[d*n+i] : saut suivant de i, -1 si aucune route). `dests[k]` :
+// destination de la trame k (passerelle capable). Les trames de destinations différentes
+// partagent le temps d'antenne et la suppression des doublons (même politique pour toutes).
+// Une même trame ne peut viser deux destinations (InvalidInput).
+Status forward_routed(const Radio& radio, std::size_t n, const std::uint8_t* capable,
+                      const double* rssi, const std::int32_t* next_by_dest,
+                      const std::uint32_t* dests, bool suppress, std::int64_t backoff_window_ns,
+                      const Frame* frames, std::size_t frame_count, Delivery* out, Summary* summary,
+                      std::vector<HopEvent>* log = nullptr);
+
 }  // namespace lsim::mesh

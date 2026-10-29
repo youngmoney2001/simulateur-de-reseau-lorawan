@@ -1090,6 +1090,10 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
         r.device_antenna_gain_dbi = rule->device_antenna_gain_dbi;
         r.device_rx_offset_db = rule->device_rx_offset_db;
         r.join = rule->join != 0;
+        if (rule->rx2_sf != 0 && (rule->rx2_sf < 7 || rule->rx2_sf > 12)) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+        }
+        r.rx2_sf = rule->rx2_sf;
 
         lsim::env::ElevationGrid grid;
         std::vector<lsim::env::Obstacle> obstacles;
@@ -1145,6 +1149,7 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             downlinks[k].end_ns = d.end_ns;
             downlinks[k].outcome = static_cast<uint8_t>(d.outcome);
             downlinks[k].join = d.join ? 1 : 0;
+            downlinks[k].rx_window = d.rx_window;
         }
         totals->sent = tot.sent;
         totals->received = tot.received;

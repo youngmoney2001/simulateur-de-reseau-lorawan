@@ -247,8 +247,9 @@ liens entre passerelles (calcul natif, antennes à hauteur passerelle).
 `lsim run` affiche le bilan : remises directes et après saut mesh, émissions mesh, copies
 supprimées, sauts perdus (collisions, demi-duplex), copies sans route, et la descente. La
 descente est une borne optimiste : la réponse part de la frontière dès réception, redescend le
-chemin inverse (un temps d'antenne mesh par saut) et le relais l'émet en RX1 (+1 s) ou RX2
-(+2 s). Ni collision ni file d'attente sur le retour ne sont comptées.
+chemin inverse (un temps d'antenne mesh par saut, partagé avec les uplinks) et le relais l'émet en
+RX1 (+1 s) ou, si RX1 est occupée côté passerelle, en RX2 (+2 s, SF du plan). Les collisions et
+l'attente sur le retour sont comptées.
 
 Par passerelle, la charge de réception (trames audibles, occupation, simultanéité) est remontée
 dans le rapport et dans les métadonnées Parquet (`lsim.gateways`).

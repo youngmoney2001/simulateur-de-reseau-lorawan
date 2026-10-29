@@ -67,6 +67,7 @@ enum class RelayState : std::uint8_t { Pending = 1, Forwarded = 2, Suppressed = 
 // Une émission mesh (une copie qui saute d'un relais vers le suivant).
 struct Tx {
     std::uint32_t sender = 0;
+    std::uint32_t dest = 0;         // destination de la trame (frontière de la passe)
     std::uint64_t frame_id = 0;
     std::size_t copy = 0;           // copie d'origine (indice dans le tableau d'entrée)
     std::uint8_t index = 0;         // numéro du saut, 0 = premier
@@ -87,6 +88,7 @@ struct Rx {
 };
 
 struct FrameInfo {
+    std::uint32_t dest = 0;         // destination (frontière) de la trame
     std::int64_t t_first = 0;       // première réception à l'accès
     bool delivered = false;
     std::int64_t best_end = 0;      // fin de la première copie livrée
@@ -179,21 +181,23 @@ std::int64_t backoff_ns(std::uint32_t relay, std::uint64_t frame_id, std::int64_
     return static_cast<std::int64_t>(z % static_cast<std::uint64_t>(window));
 }
 
-Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
-               const double* rssi, const std::int32_t* next, std::uint32_t border,
-               bool suppress, std::int64_t backoff_window_ns, const Frame* frames,
-               std::size_t frame_count, Delivery* out, Summary* summary,
-               std::vector<HopEvent>* log) {
-    if (capable == nullptr || rssi == nullptr || next == nullptr || summary == nullptr ||
-        (frame_count > 0 && (frames == nullptr || out == nullptr))) {
+Status forward_routed(const Radio& radio, std::size_t n, const std::uint8_t* capable,
+                      const double* rssi, const std::int32_t* next_by_dest,
+                      const std::uint32_t* dests, bool suppress, std::int64_t backoff_window_ns,
+                      const Frame* frames, std::size_t frame_count, Delivery* out, Summary* summary,
+                      std::vector<HopEvent>* log) {
+    if (capable == nullptr || rssi == nullptr || next_by_dest == nullptr || summary == nullptr ||
+        (frame_count > 0 && (frames == nullptr || dests == nullptr || out == nullptr))) {
         return Status::InvalidInput;
     }
     if (backoff_window_ns < 0) return Status::InvalidInput;
     if (n == 0 || n > kMaxNodes) return Status::TooManyNodes;
     if (frame_count > kMaxFrames) return Status::TooManyFrames;
-    if (border >= n) return Status::UnknownBorder;
-    if (capable[border] == 0) return Status::BorderNotCapable;
     if (validate_radio(radio) != Status::Ok) return Status::InvalidRadio;
+    for (std::size_t k = 0; k < frame_count; ++k) {
+        if (dests[k] >= n) return Status::UnknownBorder;
+        if (capable[dests[k]] == 0) return Status::BorderNotCapable;
+    }
     std::int32_t sens_i = 0;
     if (sensitivity_dbm(radio, sens_i) != Status::Ok) return Status::InvalidRadio;
     const double sens = static_cast<double>(sens_i);
@@ -215,6 +219,10 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         max_air = std::max(max_air, frame_air[k]);
     }
     const double capture = radio.capture_db;
+    // Route vers la destination `d` : prochain saut du nœud `i` (-1 si aucune route).
+    auto nxt = [&](std::uint32_t d, std::uint32_t i) -> std::int32_t {
+        return next_by_dest[static_cast<std::size_t>(d) * n + i];
+    };
 
     *summary = Summary{};
     std::vector<Tx> txs;
@@ -232,10 +240,15 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         heap.push(Event{t, seq++, kind, id});
     };
 
-    // Premier passage : première réception à l'accès de chaque trame.
+    // Premier passage : première réception à l'accès de chaque trame, destination de la trame.
     for (std::size_t k = 0; k < frame_count; ++k) {
         if (frames[k].rx_node >= n) return Status::UnknownNode;
         auto [it, inserted] = frame_info.try_emplace(frames[k].frame_id);
+        if (inserted) {
+            it->second.dest = dests[k];
+        } else if (it->second.dest != dests[k]) {
+            return Status::InvalidInput;  // une même trame ne peut viser deux destinations
+        }
         if (inserted || frames[k].t_ns < it->second.t_first) {
             it->second.t_first = frames[k].t_ns;
         }
@@ -258,7 +271,8 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
     // Relais d'une copie : elle devient disponible au nœud `r` à l'instant `t`.
     auto obtain = [&](std::uint32_t r, std::uint64_t frame_id, std::size_t copy,
                       std::uint8_t index, std::int64_t t) {
-        if (next[r] < 0) {
+        const std::uint32_t dest = frame_info[frame_id].dest;
+        if (nxt(dest, r) < 0) {
             note_loss(frame_id, static_cast<std::uint8_t>(Loss::NoRoute));
             return;
         }
@@ -267,7 +281,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
             if (relay_state.count(key) != 0) {        // déjà pris en charge : copie superflue
                 ++summary->suppressed;
                 if (log != nullptr) {
-                    log->push_back(HopEvent{frame_id, r, static_cast<std::uint32_t>(next[r]), t, t,
+                    log->push_back(HopEvent{frame_id, r, static_cast<std::uint32_t>(nxt(dest, r)), t, t,
                                             static_cast<std::uint8_t>(HopOutcome::Suppressed), index});
                 }
                 return;
@@ -276,6 +290,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         }
         Tx tx;
         tx.sender = r;
+        tx.dest = dest;
         tx.frame_id = frame_id;
         tx.copy = copy;
         tx.index = index;
@@ -291,7 +306,8 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
 
         if (ev.kind == Kind::Access) {
             const Frame& f = frames[ev.id];
-            if (f.rx_node == border) {
+            const std::uint32_t dest = frame_info[f.frame_id].dest;
+            if (f.rx_node == dest) {
                 deliver(f.frame_id, f.t_ns, 0);
             } else {
                 obtain(f.rx_node, f.frame_id, ev.id, 0, f.t_ns);
@@ -307,7 +323,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                 if (st != RelayState::Pending) {
                     ++summary->suppressed;  // copie en file, supprimée par un doublon entendu
                     if (log != nullptr) {
-                        log->push_back(HopEvent{tx.frame_id, s, static_cast<std::uint32_t>(next[s]),
+                        log->push_back(HopEvent{tx.frame_id, s, static_cast<std::uint32_t>(nxt(tx.dest, s)),
                                                 ev.t, ev.t,
                                                 static_cast<std::uint8_t>(HopOutcome::Suppressed), tx.index});
                     }
@@ -325,7 +341,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
             if (suppress) relay_state[{s, tx.frame_id}] = RelayState::Forwarded;
             ++summary->transmissions;
 
-            const std::uint32_t intended = static_cast<std::uint32_t>(next[s]);
+            const std::uint32_t intended = static_cast<std::uint32_t>(nxt(tx.dest, s));
             for (std::uint32_t r = 0; r < n; ++r) {
                 if (r == s || capable[r] == 0) continue;
                 if (rssi[static_cast<std::size_t>(s) * n + r] < sens) continue;
@@ -353,6 +369,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         const std::size_t tx_copy = txs[ev.id].copy;
         const std::uint8_t tx_index = txs[ev.id].index;
         const std::uint32_t tx_sender = txs[ev.id].sender;
+        const std::uint32_t tx_dest = txs[ev.id].dest;
         const std::int64_t tx_start = txs[ev.id].start;
         const std::int64_t tx_end = txs[ev.id].end;
         for (const std::size_t rid : tx_rx) {
@@ -399,7 +416,7 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
             }
 
             if (q.intended) {
-                if (r == border) {
+                if (r == tx_dest) {
                     deliver(tx_frame, q.end, static_cast<std::uint8_t>(tx_index + 1));
                 } else {
                     obtain(r, tx_frame, tx_copy, static_cast<std::uint8_t>(tx_index + 1), q.end);
@@ -435,9 +452,9 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
             d.latency_ns = -1;
         }
         CopyState cs;
-        if (f.rx_node == border) {
+        if (f.rx_node == fi.dest) {
             cs = CopyState::Border;
-        } else if (next[f.rx_node] < 0) {
+        } else if (nxt(fi.dest, f.rx_node) < 0) {
             cs = CopyState::NoRoute;
         } else if (suppress) {
             const auto it = relay_state.find({f.rx_node, f.frame_id});
@@ -450,6 +467,23 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         d.copy_state = static_cast<std::uint8_t>(cs);
     }
     return Status::Ok;
+}
+
+Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
+               const double* rssi, const std::int32_t* next, std::uint32_t border,
+               bool suppress, std::int64_t backoff_window_ns, const Frame* frames,
+               std::size_t frame_count, Delivery* out, Summary* summary,
+               std::vector<HopEvent>* log) {
+    if (next == nullptr) return Status::InvalidInput;
+    if (n == 0 || n > kMaxNodes) return Status::TooManyNodes;
+    if (border >= n) return Status::UnknownBorder;
+    // Une seule destination : la ligne de la frontière porte les routes, les autres sont absentes.
+    std::vector<std::int32_t> by_dest(n * n, -1);
+    for (std::size_t i = 0; i < n; ++i) by_dest[static_cast<std::size_t>(border) * n + i] = next[i];
+    std::vector<std::uint32_t> dests(frame_count, border);
+    return forward_routed(radio, n, capable, rssi, by_dest.data(),
+                          frame_count > 0 ? dests.data() : nullptr, suppress, backoff_window_ns,
+                          frames, frame_count, out, summary, log);
 }
 
 }  // namespace lsim::mesh

@@ -562,6 +562,7 @@ class DownlinkRule:
     device_antenna_gain_dbi: float = 0.0
     device_rx_offset_db: float = 0.0
     join: bool = False  # join-request décodée -> join-accept (17 octets, fin + 5 s)
+    rx2_sf: int = 12    # SF de la fenêtre RX2 de repli (0 : pas de repli ; 7..12, BW 125 kHz)
 
 
 @dataclass(frozen=True)
@@ -577,6 +578,7 @@ class DownlinkRecord:
     end_ns: int
     outcome: int
     join: bool = False
+    rx_window: int = 1  # 1 : RX1 ; 2 : RX2 (repli après une RX1 occupée côté passerelle)
 
 
 @dataclass(frozen=True)
@@ -625,7 +627,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
     c_rule = _CDownlinkRule(1 if rule.ack_uplinks else 0, rule.every, rule.payload_bytes,
                             rule.gateway_tx_power_dbm, rule.device_antenna_gain_dbi,
-                            rule.device_rx_offset_db, 1 if rule.join else 0)
+                            rule.device_rx_offset_db, 1 if rule.join else 0, rule.rx2_sf)
     c_stats = (_CDeviceStats * n)()
     c_tot = _CNetworkStats()
     c_gw_stats = (_CGatewayRxStats * g_count)()
@@ -670,7 +672,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
         for r in c_records[:c_record_count.value])
     dls = tuple(
         DownlinkRecord(r.device_index, r.gateway_index, bool(r.data), r.t_open_ns, r.start_ns,
-                       r.end_ns, r.outcome, bool(r.join))
+                       r.end_ns, r.outcome, bool(r.join), r.rx_window)
         for r in c_dls[:c_dl_count.value])
     return MultiDownlinkResult(per_device=per, network=network, per_gateway=per_gw,
                                trace=trace, downlinks=dls)

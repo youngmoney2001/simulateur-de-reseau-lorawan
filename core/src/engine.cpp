@@ -978,11 +978,15 @@ SimStatus simulate_uplinks_multi_downlinks(
     // Place un downlink de `a` (RX1 à dl.t_open_ns) sur sa passerelle, ou le marque perdu.
     // Première place libre à partir de t_open : un join-accept (ouverture tardive) ne retarde
     // pas un downlink de données dont l'ouverture est plus tôt.
+    // Repli RX2 : si la passerelle ne peut émettre dans la fenêtre RX1, la descente tente RX2
+    // (ouverte 1 s après RX1, fenêtre de 1 s, SF `rule.rx2_sf`, même passerelle). Une émission
+    // du dispositif pendant RX2 est une perte finale. Fréquence RX2 non modélisée.
     auto place = [&](MultiDownlink& dl, std::size_t a, std::uint32_t payload,
                      double rssi_up) -> SimStatus {
         const Tx& ta = txs[a];
         SimTime air = 0;
         if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
+        std::uint8_t sf_used = ta.sf;
         // Départ au plus tôt : arrivée de la descente à la passerelle (retour mesh). Absent : t_open.
         const SimTime ready = dl_ready_ns != nullptr ? dl_ready_ns[ta.msg] : -1;
         if (ready == kDownlinkNever) {
@@ -994,17 +998,37 @@ SimStatus simulate_uplinks_multi_downlinks(
             return SimStatus::Ok;
         }
         const std::size_t g = dl.gateway;
-        const SimTime start = first_free(busy[g], std::max(dl.t_open_ns, ready), air);
+        SimTime start = first_free(busy[g], std::max(dl.t_open_ns, ready), air);
         if (start - dl.t_open_ns >= kRx1WindowNs) {
-            dl.outcome = DownlinkOutcome::GatewayBusy;  // la passerelle ne peut plus émettre à temps
-            return SimStatus::Ok;
+            // La passerelle ne peut émettre dans RX1 : repli sur RX2, sinon perte.
+            const SimTime open2 = dl.t_open_ns + kRx1WindowNs;
+            if (rule.rx2_sf == 0) {
+                dl.outcome = DownlinkOutcome::GatewayBusy;
+                return SimStatus::Ok;
+            }
+            SimTime air2 = 0;
+            if (downlink_airtime(rule.rx2_sf, payload, air2) != SimStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            if (next_start[a] >= 0 && next_start[a] < open2 + kRx1WindowNs) {
+                dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX2
+                return SimStatus::Ok;
+            }
+            start = first_free(busy[g], std::max(open2, ready), air2);
+            if (start - open2 >= kRx1WindowNs) {
+                dl.outcome = DownlinkOutcome::GatewayBusy;  // ni RX1 ni RX2 : perte
+                return SimStatus::Ok;
+            }
+            air = air2;
+            sf_used = rule.rx2_sf;
+            dl.rx_window = 2;
         }
         dl.start_ns = start;
         dl.end_ns = start + air;
         busy[g][start] = start + air;
         // Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev.
         double s = 0.0;
-        if (lora::receiver_sensitivity_dbm(ta.sf, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
+        if (lora::receiver_sensitivity_dbm(sf_used, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
             return SimStatus::InvalidInput;
         }
         const double rssi_dl = rssi_up - devices[ta.device].tx_power_dbm +
