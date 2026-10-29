@@ -2,6 +2,11 @@
 
 ## 0.1.0 (non publiée)
 
+### Relais mesh (phase 3, premier incrément)
+- `lsim.mesh` : backhaul par relais LoRa sur 2,4 GHz (style ChirpStack Gateway Mesh). Routes vers la passerelle frontière, au plus 8 sauts ; liens réciproques ; demi-duplex et collisions avec capture (6 dB) ; sensibilité SX1280 (tableau basse consommation, CR 4/5, DS Rev 3.0 table 6-1) ; airtime AN1200.13 vérifié contre le cœur natif à 125 kHz.
+- Catalogue : RAK5148 (module 2,4 GHz, mesh) ajouté ; RAK7249 reste sans mesh (radio mesh non documentée).
+- Pas encore : downlinks sur le mesh, intégration dans `lsim run` et le contrat.
+
 ### Contrat d'API et traces
 - Trace par transmission exportée par le cœur natif (`lsim_simulate_uplinks_trace`) : début, fin, SF, RSSI, issue. Mêmes compteurs que l'appel sans trace ; borne 200 000 émissions (statut 309).
 - Événements du protocole dérivés de la trace (`lsim.trace_events`) : join-request / join-accept (fin + 5 s), ACK et downlink (fin + 1 s, un par uplink accepté), `rx_window_missed` en demi-duplex. Même `t_ns` que le moteur ; options `join`, `confirmed_uplinks`, `downlink_every`.
