@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
+from typing import Optional
 
 from lsim.status import describe
 
@@ -32,7 +33,8 @@ class RadioConfig:
     preamble_symbols: int = 8
     crc_on: bool = True
     explicit_header: bool = True
-    low_data_rate_optimize: bool = False
+    # None : règle LoRaWAN, activée si la durée d'un symbole dépasse 16 ms.
+    low_data_rate_optimize: Optional[bool] = None
 
     def __post_init__(self) -> None:
         # Validation défensive côté Python : rejet précoce, message clair.
@@ -45,6 +47,13 @@ class RadioConfig:
         if not 6 <= self.preamble_symbols <= 65_535:
             raise ValueError("preamble_symbols doit être compris entre 6 et 65535")
 
+    @property
+    def ldro_effective(self) -> bool:
+        """Optimisation bas débit réellement appliquée (Tsym > 16 ms => obligatoire)."""
+        if self.low_data_rate_optimize is not None:
+            return bool(self.low_data_rate_optimize)
+        return (2 ** self.spreading_factor) / self.bandwidth_hz > 0.016
+
     def _to_c(self) -> _CRadioConfig:
         return _CRadioConfig(
             spreading_factor=self.spreading_factor,
@@ -53,7 +62,7 @@ class RadioConfig:
             preamble_symbols=self.preamble_symbols,
             crc_on=int(self.crc_on),
             explicit_header=int(self.explicit_header),
-            low_data_rate_optimize=int(self.low_data_rate_optimize),
+            low_data_rate_optimize=int(self.ldro_effective),
         )
 
 

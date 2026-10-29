@@ -1,0 +1,56 @@
+# Exemple : backhaul mesh 2,4 GHz (RAK5148) vers une passerelle frontière.
+# - « frontiere » est reliée au LNS par IP (mesh: true, car elle reçoit les relais).
+# - « relais-1 » et « relais-2 » n'ont pas de backhaul IP : leurs trames passent par le mesh.
+# - « ip-ouest » a un backhaul IP direct et ne relaie pas.
+# Le mesh vit à 2,4 GHz avec le même exposant de propagation que l'accès (obstacles et relief ignorés).
+schema_version: 1
+name: Quartier avec relais mesh RAK5148
+seed: 42
+gateways:
+  - name: frontiere
+    x_m: 0
+    y_m: 0
+    antenna_gain_dbi: 2.15
+    profile: rak5148
+    mesh: true
+  - name: relais-1
+    x_m: 1200
+    y_m: 0
+    antenna_gain_dbi: 2.15
+    profile: rak5148
+    mesh: true
+  - name: relais-2
+    x_m: 2400
+    y_m: 0
+    antenna_gain_dbi: 2.15
+    profile: rak5148
+    mesh: true
+  - name: ip-ouest
+    x_m: -2500
+    y_m: 0
+    antenna_gain_dbi: 2.15
+mesh:
+  border: frontiere
+  spreading_factor: 12
+  bandwidth_khz: 203
+  coding_rate: 1
+  payload_bytes: 32
+  capture_db: 6
+  max_hops: 8
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: compteurs
+    count: 300
+    placement:
+      type: disk
+      radius_m: 3500
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 900
+    messages: 10
+    start_spread_s: 900

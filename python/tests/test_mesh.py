@@ -37,8 +37,7 @@ def test_sensitivity_table_spot_checks():
 def test_airtime_matches_native_at_125_khz(sf, payload):
     mine = time_on_air_ns(sf, 125_000, payload, 1)
     native = native_time_on_air_ns(RadioConfig(
-        spreading_factor=sf, bandwidth_hz=125_000, coding_rate=1,
-        low_data_rate_optimize=(sf >= 11)), payload)
+        spreading_factor=sf, bandwidth_hz=125_000, coding_rate=1), payload)
     assert mine == native
 
 

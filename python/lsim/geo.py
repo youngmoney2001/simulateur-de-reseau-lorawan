@@ -124,6 +124,8 @@ def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) ->
 def to_geojson(run: RunResult, scenario: Scenario, origin_lat: float, origin_lon: float) -> dict[str, Any]:
     """Construit une FeatureCollection : passerelle, couvertures par groupe, dispositifs."""
     _validate_origin(origin_lat, origin_lon)
+    if scenario.is_multi_gateway:
+        raise ValueError("export GeoJSON : une seule passerelle pour l'instant (scénario multi-passerelles refusé)")
     features: list[dict[str, Any]] = []
     gw = scenario.model.gateway
     env = scenario.environment

@@ -901,6 +901,7 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
                 records[k].best_gateway = m.best_gateway;
                 records[k].best_rssi_dbm = m.best_rssi_dbm;
                 records[k].outcome = static_cast<uint8_t>(m.outcome);
+                records[k].decoded_mask = m.decoded_mask;
             }
         }
         totals->sent = tot.sent;
@@ -1027,6 +1028,7 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             records[k].best_gateway = m.best_gateway;
             records[k].best_rssi_dbm = m.best_rssi_dbm;
             records[k].outcome = static_cast<uint8_t>(m.outcome);
+            records[k].decoded_mask = m.decoded_mask;
         }
         for (size_t k = 0; k < dls.size(); ++k) {
             const lsim::sim::MultiDownlink& d = dls[k];

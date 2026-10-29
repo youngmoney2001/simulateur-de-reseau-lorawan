@@ -126,6 +126,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"scénario : {result.scenario_name} (sha256 {result.scenario_sha256[:12]})")
     print(f"émises {t.sent}, reçues {t.received}, PDR {pdr}")
     print(f"pertes : sensibilité {t.lost_sensitivity}, collision {t.lost_collision}")
+    if result.mesh is not None:
+        m = result.mesh
+        print(f"mesh : décodées à l'accès {m.frames}, remises au LNS {m.delivered} "
+              f"(sans saut {m.direct}, après saut mesh {m.via_mesh}), "
+              f"copies perdues sur le mesh : {sum(n for _, n in m.losses)}")
     print(f"résultats : {args.output}")
     return 0
 

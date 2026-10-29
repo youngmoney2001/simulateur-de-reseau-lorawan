@@ -378,6 +378,7 @@ class _CMultiTxRecord(ctypes.Structure):
         ("best_gateway", ctypes.c_int32),
         ("best_rssi_dbm", ctypes.c_double),
         ("outcome", ctypes.c_uint8),
+        ("decoded_mask", ctypes.c_uint64),
     ]
 
 
@@ -696,3 +697,47 @@ LIB.lsim_registry_export.argtypes = [
     ctypes.c_uint64, _U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 LIB.lsim_registry_import.restype = ctypes.c_int32
 LIB.lsim_registry_import.argtypes = [_U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint64)]
+
+
+class _CMeshRadio(ctypes.Structure):
+    _fields_ = [
+        ("spreading_factor", ctypes.c_uint8),
+        ("coding_rate", ctypes.c_uint8),
+        ("bandwidth_hz", ctypes.c_uint32),
+        ("payload_bytes", ctypes.c_uint32),
+        ("preamble_symbols", ctypes.c_uint32),
+        ("capture_db", ctypes.c_double),
+    ]
+
+
+class _CMeshFrame(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("rx_node", ctypes.c_uint32),
+        ("t_ns", ctypes.c_int64),
+    ]
+
+
+class _CMeshDelivery(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("delivered", ctypes.c_uint8),
+        ("loss", ctypes.c_uint8),
+        ("hops", ctypes.c_uint8),
+        ("latency_ns", ctypes.c_int64),
+    ]
+
+
+LIB.lsim_mesh_airtime_ns.restype = ctypes.c_int32
+LIB.lsim_mesh_airtime_ns.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int64)]
+LIB.lsim_mesh_sensitivity_dbm.restype = ctypes.c_int32
+LIB.lsim_mesh_sensitivity_dbm.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_mesh_routes.restype = ctypes.c_int32
+LIB.lsim_mesh_routes.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_mesh_forward.restype = ctypes.c_int32
+LIB.lsim_mesh_forward.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery)]

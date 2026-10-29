@@ -31,10 +31,12 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
+from lsim.gateway_profiles import can_relay, get_profile
 
 SCHEMA_VERSION = 1
 MAX_DEVICES = 10_000
 MAX_TRANSMISSIONS = 5_000_000
+MAX_GATEWAYS = 64
 _NS_PER_S = 1_000_000_000
 
 
@@ -46,6 +48,22 @@ class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    # Multi-passerelles seulement : nom unique, profil du catalogue, relais mesh.
+    name: Optional[str] = Field(None, min_length=1, max_length=64)
+    profile: Optional[str] = Field(None, min_length=1, max_length=64)
+    mesh: bool = False
+
+
+class MeshModel(_Strict):
+    """Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau."""
+
+    border: str = Field(min_length=1, max_length=64)
+    spreading_factor: int = Field(12, ge=5, le=12)
+    bandwidth_khz: Literal[203, 406, 812, 1625] = 203
+    coding_rate: int = Field(1, ge=1, le=4)
+    payload_bytes: int = Field(32, ge=0, le=255)
+    capture_db: float = Field(6.0, ge=0.0, le=30.0)
+    max_hops: int = Field(8, ge=1, le=8)
 
 
 class PropagationModel(_Strict):
@@ -216,6 +234,8 @@ class ScenarioModel(_Strict):
     name: str = Field(min_length=1, max_length=128)
     seed: int = Field(0, ge=0, le=2**32 - 1)
     gateway: GatewayModel = GatewayModel()
+    gateways: Optional[list[GatewayModel]] = Field(None, min_length=1, max_length=MAX_GATEWAYS)
+    mesh: Optional[MeshModel] = None
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
     energy: Optional[EnergyModel] = None
@@ -226,6 +246,35 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.gateways is None:
+            if self.mesh is not None:
+                raise ValueError("mesh exige la liste « gateways » (plusieurs passerelles)")
+            if any(getattr(self.gateway, f) is not None for f in ("name", "profile")) or self.gateway.mesh:
+                raise ValueError("nom, profil et mesh d'une passerelle exigent « gateways »")
+        else:
+            if "gateway" in self.model_fields_set:
+                raise ValueError("utiliser « gateway » ou « gateways », pas les deux")
+            gw_names = [g.name for g in self.gateways]
+            if any(n is None for n in gw_names):
+                raise ValueError("chaque passerelle de « gateways » doit avoir un nom")
+            if len(set(gw_names)) != len(gw_names):
+                raise ValueError("les noms de passerelles doivent être uniques")
+            for g in self.gateways:
+                if g.profile is not None:
+                    try:
+                        get_profile(g.profile)
+                    except KeyError:
+                        raise ValueError(f"profil inconnu : {g.profile!r}") from None
+                if g.mesh and (g.profile is None or not can_relay(get_profile(g.profile))):
+                    raise ValueError(f"passerelle {g.name!r} : mesh exige un profil à radio mesh documentée")
+            if self.mesh is not None:
+                border = next((g for g in self.gateways if g.name == self.mesh.border), None)
+                if border is None:
+                    raise ValueError("mesh.border doit désigner une passerelle")
+                if not border.mesh:
+                    raise ValueError("la passerelle frontière doit avoir mesh: true")
+                if sum(1 for g in self.gateways if g.mesh) < 1:
+                    raise ValueError("au moins une passerelle doit avoir mesh: true")
         devices = sum(g.device_count for g in self.groups)
         if devices > MAX_DEVICES:
             raise ValueError(f"au plus {MAX_DEVICES} dispositifs (demandé : {devices})")
@@ -252,6 +301,20 @@ class Scenario:
         # Profil énergie absent : hash des scénarios antérieurs inchangé.
         if model.energy is None:
             dumped.pop("energy", None)
+        # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
+        if model.gateways is None:
+            dumped.pop("gateways", None)
+        if model.mesh is None:
+            dumped.pop("mesh", None)
+        gw_dumps = ([dumped["gateway"]] if model.gateways is None else dumped.get("gateways", []))
+        for gw_dump in gw_dumps:
+            for key in ("name", "profile"):
+                if gw_dump.get(key) is None:
+                    gw_dump.pop(key, None)
+            if not gw_dump.get("mesh"):
+                gw_dump.pop("mesh", None)
+        if model.gateways is None:
+            dumped["gateway"] = gw_dumps[0]
         # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
         for group in dumped.get("groups", []):
             if group.get("duty_cycle") == 1.0:
@@ -310,6 +373,20 @@ class Scenario:
     def gateway(self) -> Gateway:
         g = self.model.gateway
         return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
+
+    def gateway_models(self) -> list[GatewayModel]:
+        """Toutes les passerelles, dans l'ordre du fichier (une seule si « gateway »)."""
+        if self.model.gateways is not None:
+            return list(self.model.gateways)
+        return [self.model.gateway]
+
+    def gateways(self) -> list[Gateway]:
+        return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
+                for g in self.gateway_models()]
+
+    @property
+    def is_multi_gateway(self) -> bool:
+        return self.model.gateways is not None
 
     def propagation(self) -> Propagation:
         p = self.model.propagation

@@ -43,10 +43,22 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
         ("Pertes par sensibilité", t.lost_sensitivity),
         ("Pertes par collision", t.lost_collision),
         ("Temps d'antenne total (ns)", t.airtime_ns),
-        ("Charge passerelle : durée occupée (ns)", g.busy_ns),
-        ("Charge passerelle : pic de trames simultanées", g.peak_concurrent),
-        ("Charge passerelle : taux d'occupation", round(g.utilization, 6)),
     ]
+    if g is not None:
+        rows += [
+            ("Charge passerelle : durée occupée (ns)", g.busy_ns),
+            ("Charge passerelle : pic de trames simultanées", g.peak_concurrent),
+            ("Charge passerelle : taux d'occupation", round(g.utilization, 6)),
+        ]
+    if result.mesh is not None:
+        m = result.mesh
+        rows += [
+            ("Mesh : trames décodées à l'accès", m.frames),
+            ("Mesh : trames remises au LNS", m.delivered),
+            ("Mesh : remises sans saut mesh", m.direct),
+            ("Mesh : remises après saut mesh", m.via_mesh),
+            ("Mesh : copies confiées au mesh", m.copies_on_mesh),
+        ] + [(f"Mesh : copies perdues ({reason})", n) for reason, n in m.losses]
     if result.energy_profile is not None:
         rows.append((_ENERGY_SUMMARY_LABEL, profile_name(result.energy_profile)))
     return rows

@@ -412,6 +412,7 @@ class MultiTxRecord:
     best_gateway: int      # -1 si aucune passerelle ne décode
     best_rssi_dbm: float
     outcome: int
+    decoded_mask: int = 0  # bit g : la passerelle g a décodé la trame (g < 64)
 
 
 @dataclass(frozen=True)
@@ -502,7 +503,7 @@ def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gate
     if with_trace:
         trace = tuple(
             MultiTxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.receivers,
-                          r.best_gateway, r.best_rssi_dbm, r.outcome)
+                          r.best_gateway, r.best_rssi_dbm, r.outcome, r.decoded_mask)
             for r in c_records[:c_record_count.value])
     return MultiGatewayResult(per_device=per, network=network, per_gateway=per_gw, trace=trace)
 

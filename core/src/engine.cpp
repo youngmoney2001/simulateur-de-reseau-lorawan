@@ -695,6 +695,7 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
             if (captured) {
                 ++per_gateway[g].received;
                 ++out.receivers;
+                out.decoded_mask |= std::uint64_t{1} << g;
                 if (r > out.best_rssi_dbm) {
                     out.best_rssi_dbm = r;
                     out.best_gateway = static_cast<std::int32_t>(g);
@@ -925,6 +926,7 @@ SimStatus simulate_uplinks_multi_downlinks(
             }
             ++gs.received;
             ++receivers;
+            m.decoded_mask |= bit;
             const double r = rssi[d * G + g];
             if (r > m.best_rssi_dbm) {
                 m.best_rssi_dbm = r;

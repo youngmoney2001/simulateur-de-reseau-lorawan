@@ -1,58 +1,73 @@
 """Backhaul mesh par relais LoRa : passerelles relais vers une passerelle frontière.
 
+Les calculs (sensibilité SX1280, airtime, routes, relais saut par saut, demi-duplex,
+collisions) sont dans le cœur natif (`core/src/mesh.cpp`). Ce module valide les
+entrées, calcule les puissances reçues avec le modèle de propagation, et convertit
+les résultats.
+
 Modèle (style ChirpStack Gateway Mesh) :
-- les capteurs ne sont pas concernés : seules les passerelles relaient ;
-- chaque passerelle qui a reçu une trame la transmet saut par saut sur la bande
-  mesh, jusqu'à la passerelle frontière, qui la remet au serveur (LNS) ;
-- au plus `MAX_HOPS` sauts (8 par défaut, valeur ChirpStack) ;
-- demi-duplex : une passerelle ne reçoit pas pendant ses propres émissions ;
-- collision : deux réceptions simultanées au même récepteur ; la plus forte
-  survit si elle dépasse l'autre de `capture_db`, sinon les deux sont perdues.
+- seules les passerelles relaient ; les capteurs ne sont pas concernés ;
+- une passerelle qui a reçu une trame la transmet saut par saut jusqu'à la
+  frontière, qui la remet au serveur ;
+- au plus `MAX_HOPS` sauts (8, valeur ChirpStack) ;
+- demi-duplex : une passerelle ne reçoit pas pendant son propre relais ;
+- collision : la plus forte survit si elle dépasse l'autre de `capture_db`.
 
 Sensibilité : tableau SX1280 « low power mode », CR 4/5, PER 1 %, 10 octets
-(Semtech DS.SX1280-1 Rev 3.0, table 6-1). Le mode haute sensibilité donne 2 dB
-de mieux, mais seulement aux points publiés (SF12/203 kHz) : on reste donc
-sur le tableau complet, plus conservateur.
-
-Temps d'antenne : formule AN1200.13 en fraction exacte (le cœur natif ne
-gère que 125/250/500 kHz ; le test de cohérence vérifie l'accord à 125 kHz).
+(Semtech DS.SX1280-1 Rev 3.0, table 6-1), plus conservateur que le mode haute
+sensibilité, dont seul le point SF12/203 kHz est publié.
 """
 
 from __future__ import annotations
 
-import heapq
+import ctypes
 from dataclasses import dataclass, field
-from fractions import Fraction
 from typing import Optional, Sequence
 
+from lsim._native import LIB as _LIB
+from lsim._native import _CMeshDelivery, _CMeshFrame, _CMeshRadio
+from lsim.lora import StatusError
 from lsim.radio import LogDistanceModel
 
 MAX_HOPS = 8
+MAX_NODES = 64          # kMaxGateways côté natif
 MESH_BAND_HZ = 2_400_000_000
+_BW_KHZ = (203, 406, 812, 1625)
+_LOSS_NAMES = ("", "no_route", "half_duplex", "collision")
 
-# Tableau SX1280 : BW (kHz) -> sensibilités SF5..SF12 (dBm).
-_SX1280_SENSITIVITY_DBM: dict[int, tuple[int, ...]] = {
-    203: (-109, -111, -115, -118, -121, -124, -127, -130),
-    406: (-107, -110, -113, -116, -119, -122, -125, -128),
-    812: (-105, -108, -112, -115, -117, -120, -123, -126),
-    1625: (-99, -103, -106, -109, -111, -114, -117, -120),
-}
+
+def _check(status: int) -> None:
+    if status != 0:
+        raise StatusError(status)
+
+
+def _c_radio(radio: "MeshRadio", bandwidth_hz: Optional[int] = None) -> _CMeshRadio:
+    return _CMeshRadio(
+        spreading_factor=radio.spreading_factor,
+        coding_rate=radio.coding_rate,
+        bandwidth_hz=radio.bandwidth_khz * 1000 if bandwidth_hz is None else bandwidth_hz,
+        payload_bytes=radio.payload_bytes,
+        preamble_symbols=8,
+        capture_db=radio.capture_db,
+    )
 
 
 def sx1280_sensitivity_dbm(spreading_factor: int, bandwidth_khz: int) -> int:
     """Sensibilité SX1280 (dBm), mode basse consommation, CR 4/5, PER 1 %."""
-    if bandwidth_khz not in _SX1280_SENSITIVITY_DBM:
+    if bandwidth_khz not in _BW_KHZ:
         raise ValueError("bandwidth_khz doit valoir 203, 406, 812 ou 1625")
     if not 5 <= spreading_factor <= 12:
         raise ValueError("spreading_factor doit être compris entre 5 et 12")
-    return _SX1280_SENSITIVITY_DBM[bandwidth_khz][spreading_factor - 5]
+    radio = MeshRadio(spreading_factor=spreading_factor, bandwidth_khz=bandwidth_khz)
+    return radio.sensitivity_dbm
 
 
 def time_on_air_ns(spreading_factor: int, bandwidth_hz: int, payload_bytes: int,
                    coding_rate: int = 1, preamble_symbols: int = 8) -> int:
-    """Temps d'antenne (ns), AN1200.13, CRC activé, en-tête explicite.
+    """Temps d'antenne (ns), AN1200.13, optimisation bas débit si Tsym > 16 ms.
 
-    `coding_rate` : 1 = 4/5 … 4 = 4/8, comme dans `RadioConfig`.
+    Accepte toute bande positive (125 kHz comme 2,4 GHz) ; à 125/250/500 kHz,
+    le résultat est identique à `lsim.time_on_air_ns` (test de cohérence).
     """
     if not 5 <= spreading_factor <= 12:
         raise ValueError("spreading_factor doit être compris entre 5 et 12")
@@ -62,13 +77,14 @@ def time_on_air_ns(spreading_factor: int, bandwidth_hz: int, payload_bytes: int,
         raise ValueError("payload_bytes doit être compris entre 0 et 255")
     if not 1 <= coding_rate <= 4:
         raise ValueError("coding_rate doit être compris entre 1 et 4")
-    t_sym_ns = Fraction(2 ** spreading_factor * 1_000_000_000, bandwidth_hz)
-    de = 1 if t_sym_ns > 16_000_000 else 0
-    num = 8 * payload_bytes - 4 * spreading_factor + 28 + 16
-    den = 4 * (spreading_factor - 2 * de)
-    n_payload = 8 + max(-(-num // den) * (coding_rate + 4), 0)
-    total = (Fraction(preamble_symbols) + Fraction(17, 4) + n_payload) * t_sym_ns
-    return round(total)
+    if not 6 <= preamble_symbols <= 65_535:
+        raise ValueError("preamble_symbols doit être compris entre 6 et 65535")
+    c = _CMeshRadio(spreading_factor=spreading_factor, coding_rate=coding_rate,
+                    bandwidth_hz=bandwidth_hz, payload_bytes=payload_bytes,
+                    preamble_symbols=preamble_symbols, capture_db=0.0)
+    out = ctypes.c_int64(0)
+    _check(_LIB.lsim_mesh_airtime_ns(ctypes.byref(c), ctypes.byref(out)))
+    return out.value
 
 
 @dataclass(frozen=True)
@@ -83,54 +99,73 @@ class MeshNode:
 
 @dataclass(frozen=True)
 class MeshRadio:
-    """Paramètres de la liaison mesh sur 2,4 GHz (toutes les passerelles identiques)."""
+    """Paramètres de la liaison mesh sur 2,4 GHz (passerelles identiques)."""
 
     spreading_factor: int = 12
     bandwidth_khz: int = 203
     coding_rate: int = 1
-    payload_bytes: int = 32  # taille d'une trame relayée (LoRaWAN + enveloppe mesh)
+    payload_bytes: int = 32   # trame relayée (LoRaWAN + enveloppe mesh)
     capture_db: float = 6.0
 
     def __post_init__(self) -> None:
-        sx1280_sensitivity_dbm(self.spreading_factor, self.bandwidth_khz)  # validation
+        if self.bandwidth_khz not in _BW_KHZ:
+            raise ValueError("bandwidth_khz doit valoir 203, 406, 812 ou 1625")
+        if not 5 <= self.spreading_factor <= 12:
+            raise ValueError("spreading_factor doit être compris entre 5 et 12")
+        if not 1 <= self.coding_rate <= 4:
+            raise ValueError("coding_rate doit être compris entre 1 et 4")
         if not 0 <= self.payload_bytes <= 255:
             raise ValueError("payload_bytes doit être compris entre 0 et 255")
-        if self.capture_db < 0:
+        if not self.capture_db >= 0:
             raise ValueError("capture_db ne peut pas être négatif")
 
     @property
     def sensitivity_dbm(self) -> int:
-        return sx1280_sensitivity_dbm(self.spreading_factor, self.bandwidth_khz)
+        out = ctypes.c_int32(0)
+        _check(_LIB.lsim_mesh_sensitivity_dbm(ctypes.byref(_c_radio(self)), ctypes.byref(out)))
+        return out.value
 
     @property
     def airtime_ns(self) -> int:
-        return time_on_air_ns(self.spreading_factor, self.bandwidth_khz * 1000,
-                              self.payload_bytes, self.coding_rate)
+        out = ctypes.c_int64(0)
+        _check(_LIB.lsim_mesh_airtime_ns(ctypes.byref(_c_radio(self)), ctypes.byref(out)))
+        return out.value
 
 
-@dataclass(frozen=True)
+@dataclass
 class MeshGraph:
-    """Routes vers la frontière et puissances reçues sur chaque lien (réciproques)."""
+    """Routes vers la frontière, calculées par le natif."""
 
     border_id: str
-    routes: dict[str, tuple[str, ...]]          # gw -> (saut1, ..., frontière) ; () pour la frontière
-    rssi_dbm: dict[tuple[str, str], float]      # (émetteur, récepteur) -> dBm, liens faisables
+    ids: tuple[str, ...]
+    next_hop: tuple[int, ...]          # indice du saut suivant, -1 si aucune route
+    rssi: ctypes.Array                 # rssi[i*n+j] : reçu en j, émis par i (dBm)
+    capable: tuple[int, ...]
+    radio: MeshRadio
+    _index: dict = field(default_factory=dict, repr=False)
 
     def route(self, gateway_id: str) -> Optional[tuple[str, ...]]:
-        return self.routes.get(gateway_id)
+        """Suite de passerelles jusqu'à la frontière (frontière incluse), () pour elle-même."""
+        i = self._index.get(gateway_id)
+        if i is None or self.next_hop[i] < 0:
+            return None
+        border = self._index[self.border_id]
+        path: list[str] = []
+        j = i
+        while j != border:
+            j = self.next_hop[j]
+            path.append(self.ids[j])
+        return tuple(path)
 
 
 def build_mesh(nodes: Sequence[MeshNode], border_id: str, radio: MeshRadio,
                path_loss: Optional[LogDistanceModel] = None,
                max_hops: int = MAX_HOPS) -> MeshGraph:
-    """Calcule les liens faisables et la route la plus courte vers la frontière.
-
-    Un lien A-B existe si la puissance reçue atteint la sensibilité mesh dans
-    les deux sens. Toutes les passerelles d'une route, frontière comprise,
-    doivent avoir une radio mesh.
-    """
+    """Calcule les liens faisables et les routes les plus courtes vers la frontière."""
     if not 1 <= max_hops <= MAX_HOPS:
         raise ValueError(f"max_hops doit être compris entre 1 et {MAX_HOPS}")
+    if not 1 <= len(nodes) <= MAX_NODES:
+        raise ValueError(f"le réseau mesh compte au plus {MAX_NODES} passerelles")
     ids = [n.gateway_id for n in nodes]
     if len(set(ids)) != len(ids):
         raise ValueError("identifiants de passerelles en double")
@@ -141,35 +176,25 @@ def build_mesh(nodes: Sequence[MeshNode], border_id: str, radio: MeshRadio,
         raise ValueError("la passerelle frontière doit avoir une radio mesh")
     model = path_loss or LogDistanceModel(frequency_hz=MESH_BAND_HZ)
 
-    mesh_nodes = [n for n in nodes if n.mesh_capable]
-    rssi: dict[tuple[str, str], float] = {}
-    adj: dict[str, list[str]] = {n.gateway_id: [] for n in mesh_nodes}
-    for i, a in enumerate(mesh_nodes):
-        for b in mesh_nodes[i + 1:]:
+    n = len(nodes)
+    rssi = (ctypes.c_double * (n * n))()
+    capable = tuple(1 if x.mesh_capable else 0 for x in nodes)
+    for i, a in enumerate(nodes):
+        for j, b in enumerate(nodes):
+            if i == j:
+                rssi[i * n + j] = float("-inf")
+                continue
             d = max(((a.x_m - b.x_m) ** 2 + (a.y_m - b.y_m) ** 2) ** 0.5, 1.0)
             pl = model.path_loss_db(d)
-            ab = a.tx_power_dbm + a.antenna_gain_dbi - pl + b.antenna_gain_dbi
-            ba = b.tx_power_dbm + b.antenna_gain_dbi - pl + a.antenna_gain_dbi
-            if ab >= radio.sensitivity_dbm and ba >= radio.sensitivity_dbm:
-                rssi[(a.gateway_id, b.gateway_id)] = ab
-                rssi[(b.gateway_id, a.gateway_id)] = ba
-                adj[a.gateway_id].append(b.gateway_id)
-                adj[b.gateway_id].append(a.gateway_id)
-
-    # BFS depuis la frontière : routes les plus courtes, bornées par max_hops.
-    routes: dict[str, tuple[str, ...]] = {border_id: ()}
-    frontier = [border_id]
-    for _ in range(max_hops):
-        nxt: list[str] = []
-        for u in frontier:
-            for v in adj.get(u, ()):
-                if v not in routes:
-                    routes[v] = (u,) + routes[u]
-                    nxt.append(v)
-        frontier = nxt
-        if not frontier:
-            break
-    return MeshGraph(border_id=border_id, routes=routes, rssi_dbm=rssi)
+            rssi[i * n + j] = a.tx_power_dbm + a.antenna_gain_dbi - pl + b.antenna_gain_dbi
+    cap = (ctypes.c_uint8 * n)(*capable)
+    nxt = (ctypes.c_int32 * n)()
+    border = ids.index(border_id)
+    _check(_LIB.lsim_mesh_routes(ctypes.byref(_c_radio(radio)), n, cap, rssi,
+                                 border, max_hops, nxt))
+    return MeshGraph(border_id=border_id, ids=tuple(ids), next_hop=tuple(nxt),
+                     rssi=rssi, capable=capable, radio=radio,
+                     _index={g: k for k, g in enumerate(ids)})
 
 
 @dataclass(frozen=True)
@@ -200,84 +225,35 @@ class MeshResult:
         return sum(1 for d in self.deliveries if d.loss == loss)
 
 
-@dataclass
-class _Hop:
-    frame: MeshFrame
-    index: int                 # numéro du saut (0 = premier)
-    sender: str
-    path: tuple[str, ...]      # passerelles restantes, la dernière est la frontière
-    start: int
-    end: int
-    rssi: float
-
-
 def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
-                   radio: MeshRadio) -> MeshResult:
-    """Relais saut par saut sur la bande mesh, par événements datés.
-
-    Un saut part dès que l'émetteur est libre (file FIFO). Sa réception est
-    évaluée à sa fin : à cette date, tous les sauts qui commencent avant sont
-    connus, donc demi-duplex et collisions sont exacts.
-    """
-    airtime = radio.airtime_ns
-    cap = radio.capture_db
-    busy_until: dict[str, int] = {}
-    tx_intervals: dict[str, list[tuple[int, int]]] = {}
-    rx_hops: dict[str, list[_Hop]] = {}
-    results: dict[int, MeshDelivery] = {}
-    heap: list[tuple[int, int, _Hop]] = []
-    seq = 0
-
-    def schedule(hop: _Hop) -> None:
-        nonlocal seq
-        seq += 1
-        heapq.heappush(heap, (hop.end, seq, hop))
-
-    def transmit(frame: MeshFrame, index: int, sender: str, path: tuple[str, ...],
-                 ready: int) -> None:
-        receiver = path[0]
-        start = max(ready, busy_until.get(sender, 0))
-        end = start + airtime
-        busy_until[sender] = end
-        tx_intervals.setdefault(sender, []).append((start, end))
-        hop = _Hop(frame, index, sender, path, start, end, graph.rssi_dbm[(sender, receiver)])
-        rx_hops.setdefault(receiver, []).append(hop)
-        schedule(hop)
-
-    for f in sorted(frames, key=lambda x: (x.t_ns, x.frame_id)):
-        route = graph.route(f.rx_gateway_id)
-        if route is None:
-            results[f.frame_id] = MeshDelivery(f.frame_id, False, 0, None, "no_route")
-        elif not route:
-            results[f.frame_id] = MeshDelivery(f.frame_id, True, 0, 0)
-        else:
-            transmit(f, 0, f.rx_gateway_id, route, f.t_ns)
-
-    frames_by_id = {f.frame_id: f for f in frames}
-    while heap:
-        _, _, hop = heapq.heappop(heap)
-        receiver = hop.path[0]
-        # Demi-duplex : le récepteur émettait pendant tout ou partie de la trame.
-        if any(s < hop.end and hop.start < e for (s, e) in tx_intervals.get(receiver, ())):
-            loss = "half_duplex"
-        else:
-            # Collision : un autre saut audible se chevauche et n'est pas
-            # plus fort de `cap` dB.
-            loss = ""
-            for other in rx_hops.get(receiver, ()):
-                if other is hop or not (other.start < hop.end and hop.start < other.end):
-                    continue
-                if hop.rssi < other.rssi + cap:
-                    loss = "collision"
-                    break
-        fid = hop.frame.frame_id
-        if loss:
-            results[fid] = MeshDelivery(fid, False, hop.index + 1, None, loss)
-        elif len(hop.path) == 1:
-            results[fid] = MeshDelivery(fid, True, hop.index + 1,
-                                        hop.end - hop.frame.t_ns)
-        else:
-            transmit(hop.frame, hop.index + 1, receiver, hop.path[1:], hop.end)
-    ordered = [results[f.frame_id] for f in sorted(frames_by_id.values(),
-                                                   key=lambda x: x.frame_id)]
-    return MeshResult(deliveries=ordered)
+                   radio: Optional[MeshRadio] = None) -> MeshResult:
+    """Relais des trames saut par saut sur la bande mesh (calcul natif)."""
+    radio = radio or graph.radio
+    index = graph._index
+    n = len(graph.ids)
+    if len(frames) > 5_000_000:
+        raise ValueError("trop de trames pour un seul calcul mesh")
+    c_frames = (_CMeshFrame * len(frames))()
+    for k, f in enumerate(frames):
+        if f.rx_gateway_id not in index:
+            raise ValueError(f"passerelle inconnue : {f.rx_gateway_id!r}")
+        c_frames[k].frame_id = f.frame_id
+        c_frames[k].rx_node = index[f.rx_gateway_id]
+        c_frames[k].t_ns = f.t_ns
+    c_out = (_CMeshDelivery * len(frames))()
+    nxt = (ctypes.c_int32 * n)(*graph.next_hop)
+    _check(_LIB.lsim_mesh_forward(
+        ctypes.byref(_c_radio(radio)), n, graph.rssi, nxt, graph._index[graph.border_id],
+        c_frames, len(frames), c_out))
+    out: list[MeshDelivery] = []
+    for k in range(len(frames)):
+        d = c_out[k]
+        out.append(MeshDelivery(
+            frame_id=int(d.frame_id),
+            delivered=bool(d.delivered),
+            hops=int(d.hops),
+            latency_ns=int(d.latency_ns) if d.delivered else None,
+            loss=_LOSS_NAMES[d.loss],
+        ))
+    out.sort(key=lambda x: x.frame_id)
+    return MeshResult(deliveries=out)

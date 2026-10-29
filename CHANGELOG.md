@@ -2,10 +2,15 @@
 
 ## 0.1.0 (non publiée)
 
-### Relais mesh (phase 3, premier incrément)
-- `lsim.mesh` : backhaul par relais LoRa sur 2,4 GHz (style ChirpStack Gateway Mesh). Routes vers la passerelle frontière, au plus 8 sauts ; liens réciproques ; demi-duplex et collisions avec capture (6 dB) ; sensibilité SX1280 (tableau basse consommation, CR 4/5, DS Rev 3.0 table 6-1) ; airtime AN1200.13 vérifié contre le cœur natif à 125 kHz.
+### Relais mesh et passerelles multiples
+- Relais mesh 2,4 GHz (style ChirpStack Gateway Mesh) : moteur C++ `core/src/mesh.cpp`, API C `lsim_mesh_*` (statuts 800..849). Routes vers la frontière, au plus 8 sauts ; liens réciproques ; demi-duplex et collisions avec capture ; sensibilité SX1280 (tableau basse consommation, CR 4/5, DS Rev 3.0 table 6-1) ; airtime AN1200.13 (vérifié contre le cœur natif à 125 kHz). `lsim.mesh` reste l'interface Python.
 - Catalogue : RAK5148 (module 2,4 GHz, mesh) ajouté ; RAK7249 reste sans mesh (radio mesh non documentée).
-- Pas encore : downlinks sur le mesh, intégration dans `lsim run` et le contrat.
+- Scénario : `gateways` (liste nommée, profil du catalogue, `mesh: true` pour les relais) et `mesh` (frontière, SF, BW, CR, charge utile, capture, sauts). `lsim run` exécute le multi-passerelles ; avec mesh, chaque copie d'un relais suit le mesh jusqu'à la frontière, et une trame est remise au LNS si une copie y arrive. Bilan `MeshSummary` et lignes dans le rapport. Les relais réémettent toutes les copies décodées (pas de suppression) : le canal mesh peut saturer.
+- Limites : exports GeoJSON refusés en multi-passerelles ; charge par passerelle non calculée en multi ; obstacles et relief ignorés sur le mesh ; downlinks sur le mesh non modélisés.
+- Moteur multi-passerelles : `decoded_mask` par émission (bit g : passerelle g a décodé), ajouté en fin de `lsim_multi_tx_record`.
+
+### Correctif : optimisation bas débit
+- `RadioConfig.low_data_rate_optimize` vaut `None` par défaut : la règle LoRaWAN s'applique (Tsym > 16 ms, donc SF11 et SF12 à 125 kHz). Avant, la valeur `False` sous-estimait la durée d'émission de ces configurations dans l'API directe `time_on_air_ns`. Le moteur de simulation calculait déjà l'optimisation à partir du SF et de la bande : aucun résultat publié de simulation n'est modifié.
 
 ### Contrat d'API et traces
 - Trace par transmission exportée par le cœur natif (`lsim_simulate_uplinks_trace`) : début, fin, SF, RSSI, issue. Mêmes compteurs que l'appel sans trace ; borne 200 000 émissions (statut 309).

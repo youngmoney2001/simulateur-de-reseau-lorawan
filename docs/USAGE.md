@@ -212,6 +212,28 @@ ensuite comme `terrain` du scénario (`type: dem_csv`, chemin relatif au YAML). 
 - les coins de la grille UTM, hors de la boîte demandée, valent 0 m ;
 - les tuiles sont mises en cache dans `data/cache/copernicus_dem`, exclu du dépôt par `.gitignore`.
 
+## 5sexies. Passerelles multiples et relais mesh
+
+Plusieurs passerelles se déclarent dans `gateways` (au lieu de `gateway`). Chaque passerelle a un
+`name` unique ; un `profile` du catalogue (`python/lsim/gateway_profiles.py`) est requis pour
+qu'elle relaie.
+
+- `mesh: true` : la passerelle relaie sur la bande mesh 2,4 GHz (profil à radio mesh publiée :
+  RAK5148). Sans `mesh`, la passerelle a un backhaul IP direct vers le LNS.
+- `mesh` (bloc de scénario) : `border` (nom de la passerelle frontière, `mesh: true`),
+  `spreading_factor` (5 à 12), `bandwidth_khz` (203, 406, 812 ou 1625), `coding_rate`,
+  `payload_bytes`, `capture_db`, `max_hops` (1 à 8, 8 par défaut).
+
+Une trame décodée par un relais suit le mesh saut par saut jusqu'à la frontière. Une trame est
+remise au LNS si au moins une copie y arrive ; `lsim run` affiche le bilan (remises directes,
+remises après saut mesh, copies perdues par raison). Les relais réémettent toutes les copies
+qu'ils décodent : le canal mesh peut saturer (voir CHANGELOG).
+
+Limites : le mesh ignore obstacles et relief, les downlinks sur le mesh ne sont pas modélisés, et
+les exports GeoJSON refusent les scénarios multi-passerelles.
+
+Exemple : `examples/mesh_relais_quartier.yaml`.
+
 ## 6. Limites connues
 
 Voir `docs/ROADMAP.md`. Points notables pour l'usage :

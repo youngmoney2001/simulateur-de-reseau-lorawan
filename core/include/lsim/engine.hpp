@@ -243,6 +243,7 @@ struct MultiTx {
     SimTime end_ns = 0;
     std::uint8_t spreading_factor = 7;
     std::uint32_t receivers = 0;
+    std::uint64_t decoded_mask = 0;     // bit g : passerelle g a décodé la trame (g < 64)
     std::int32_t best_gateway = -1;     // meilleure passerelle parmi les décodeurs (-1 : aucune)
     double best_rssi_dbm = 0.0;         // RSSI à cette passerelle (ou RSSI max si aucune)
     TxOutcome outcome = TxOutcome::LostSensitivity;  // Received si receivers > 0

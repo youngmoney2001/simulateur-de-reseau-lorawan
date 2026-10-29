@@ -29,6 +29,7 @@ extern "C" {
  *   600..649 commandes MAC (mac::MacStatus + 600)
  *   650..699 rejoin-request (RejoinStatus + 650)
  *   700..749 registre serveur (RegistryStatus + 700 ; 740 handle inconnu, 741 paramètre invalide)
+ *   800..849 relais mesh (mesh::Status + 800)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -38,6 +39,7 @@ extern "C" {
 #define LSIM_STATUS_ENV_BASE    500
 #define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_MAC_BASE    600
+#define LSIM_STATUS_MESH_BASE   800
 #define LSIM_STATUS_REJOIN_BASE 650
 #define LSIM_STATUS_REGISTRY_BASE 700
 #define LSIM_STATUS_ADR_BASE    760
@@ -431,6 +433,7 @@ typedef struct lsim_multi_tx_record {
     int32_t  best_gateway;
     double   best_rssi_dbm;
     uint8_t  outcome;
+    uint64_t decoded_mask;   /* bit g : passerelle g a décodé (g < 64) */
 } lsim_multi_tx_record;
 
 /* busy : NULL = aucune émission passerelle. Sinon, périodes [start, end) de toutes les passerelles
@@ -856,6 +859,40 @@ LSIM_API int32_t lsim_classb_beacon_state(const lsim_classb_device* d, uint64_t 
                                           uint8_t* state);
 LSIM_API int32_t lsim_classb_next_ping_slot(const lsim_classb_device* d, uint64_t now_ns,
                                             lsim_classb_ping_slot* out);
+
+/* Relais mesh 2,4 GHz (core/src/mesh.cpp). Disposition identique aux structures ctypes. */
+typedef struct lsim_mesh_radio {
+    uint8_t  spreading_factor;   /* 5..12 */
+    uint8_t  coding_rate;        /* 1..4 : 4/5 à 4/8 */
+    uint32_t bandwidth_hz;
+    uint32_t payload_bytes;      /* 0..255 */
+    uint32_t preamble_symbols;   /* 6..65535 */
+    double   capture_db;         /* >= 0 */
+} lsim_mesh_radio;
+
+typedef struct lsim_mesh_frame {
+    uint64_t frame_id;
+    uint32_t rx_node;            /* indice de la passerelle qui a reçu la trame */
+    int64_t  t_ns;               /* fin de réception sur l'accès */
+} lsim_mesh_frame;
+
+typedef struct lsim_mesh_delivery {
+    uint64_t frame_id;
+    uint8_t  delivered;          /* 0 ou 1 */
+    uint8_t  loss;               /* 0 livré, 1 no_route, 2 half_duplex, 3 collision */
+    uint8_t  hops;               /* sauts tentés */
+    int64_t  latency_ns;         /* -1 si non livré */
+} lsim_mesh_delivery;
+
+LSIM_API int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out);
+LSIM_API int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out);
+LSIM_API int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_count,
+                                  const uint8_t* capable, const double* rssi_dbm,
+                                  uint32_t border, uint32_t max_hops, int32_t* next);
+LSIM_API int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
+                                   const double* rssi_dbm, const int32_t* next,
+                                   uint32_t border, const lsim_mesh_frame* frames,
+                                   size_t frame_count, lsim_mesh_delivery* out);
 
 #ifdef __cplusplus
 }

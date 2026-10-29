@@ -132,6 +132,39 @@
           "title": "Antenna Gain Dbi",
           "type": "number"
         },
+        "mesh": {
+          "default": false,
+          "title": "Mesh",
+          "type": "boolean"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
         "x_m": {
           "default": 0.0,
           "title": "X M",
@@ -269,6 +302,69 @@
         "placement"
       ],
       "title": "GroupModel",
+      "type": "object"
+    },
+    "MeshModel": {
+      "additionalProperties": false,
+      "description": "Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau.",
+      "properties": {
+        "bandwidth_khz": {
+          "default": 203,
+          "enum": [
+            203,
+            406,
+            812,
+            1625
+          ],
+          "title": "Bandwidth Khz",
+          "type": "integer"
+        },
+        "border": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Border",
+          "type": "string"
+        },
+        "capture_db": {
+          "default": 6.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Capture Db",
+          "type": "number"
+        },
+        "coding_rate": {
+          "default": 1,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Coding Rate",
+          "type": "integer"
+        },
+        "max_hops": {
+          "default": 8,
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Hops",
+          "type": "integer"
+        },
+        "payload_bytes": {
+          "default": 32,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "spreading_factor": {
+          "default": 12,
+          "maximum": 12,
+          "minimum": 5,
+          "title": "Spreading Factor",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "border"
+      ],
+      "title": "MeshModel",
       "type": "object"
     },
     "ObstacleModel": {
@@ -445,9 +541,29 @@
       "$ref": "#/$defs/GatewayModel",
       "default": {
         "antenna_gain_dbi": 0.0,
+        "mesh": false,
+        "name": null,
+        "profile": null,
         "x_m": 0.0,
         "y_m": 0.0
       }
+    },
+    "gateways": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/GatewayModel"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateways"
     },
     "groups": {
       "items": {
@@ -456,6 +572,17 @@
       "minItems": 1,
       "title": "Groups",
       "type": "array"
+    },
+    "mesh": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MeshModel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "name": {
       "maxLength": 128,
