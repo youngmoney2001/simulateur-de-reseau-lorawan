@@ -304,6 +304,28 @@
       "title": "GroupModel",
       "type": "object"
     },
+    "MacModel": {
+      "additionalProperties": false,
+      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période\nd'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :\nle bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.",
+      "properties": {
+        "device_status_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Device Status Every",
+          "type": "integer"
+        },
+        "link_check_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Link Check Every",
+          "type": "integer"
+        }
+      },
+      "title": "MacModel",
+      "type": "object"
+    },
     "MeshModel": {
       "additionalProperties": false,
       "description": "Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau.",
@@ -600,6 +622,17 @@
       "minItems": 1,
       "title": "Groups",
       "type": "array"
+    },
+    "mac": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MacModel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "mesh": {
       "anyOf": [

@@ -243,6 +243,17 @@ class EnergyModel(_Strict):
     profile: Literal["rak4631", "sx1262-stm32l072"]
 
 
+class MacModel(_Strict):
+    """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
+
+    Phase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période
+    d'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :
+    le bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.
+    """
+    link_check_every: int = Field(0, ge=0, le=1000)
+    device_status_every: int = Field(0, ge=0, le=1000)
+
+
 class ScenarioModel(_Strict):
     schema_version: Literal[1]
     name: str = Field(min_length=1, max_length=128)
@@ -253,6 +264,7 @@ class ScenarioModel(_Strict):
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
     energy: Optional[EnergyModel] = None
+    mac: Optional[MacModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -328,6 +340,9 @@ class Scenario:
         # Profil énergie absent : hash des scénarios antérieurs inchangé.
         if model.energy is None:
             dumped.pop("energy", None)
+        # Bloc MAC absent : hash des scénarios antérieurs inchangé.
+        if model.mac is None:
+            dumped.pop("mac", None)
         # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
         if model.gateways is None:
             dumped.pop("gateways", None)
