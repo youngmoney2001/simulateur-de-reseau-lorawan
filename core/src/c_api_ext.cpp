@@ -188,6 +188,94 @@ int32_t lsim_derive_session_keys_11(const uint8_t nwk_key[16], const uint8_t app
     }
 }
 
+static void load_keys_10(const lsim_session_keys_10& in, lsim::lorawan::SessionKeys10& out) {
+    std::memcpy(out.nwk_s_key.data(), in.nwk_s_key, 16);
+    std::memcpy(out.app_s_key.data(), in.app_s_key, 16);
+}
+
+int32_t lsim_derive_session_keys_10(const uint8_t app_key[16], const uint8_t app_nonce[3],
+                                    const uint8_t net_id[3], const uint8_t dev_nonce[2],
+                                    lsim_session_keys_10* out) {
+    if (app_key == nullptr || app_nonce == nullptr || net_id == nullptr || dev_nonce == nullptr ||
+        out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    try {
+        lsim::crypto::Key128 ak{};
+        std::memcpy(ak.data(), app_key, 16);
+        std::array<std::uint8_t, 3> an{};
+        std::array<std::uint8_t, 3> ni{};
+        std::array<std::uint8_t, 2> dn{};
+        std::memcpy(an.data(), app_nonce, 3);
+        std::memcpy(ni.data(), net_id, 3);
+        std::memcpy(dn.data(), dev_nonce, 2);
+        lsim::lorawan::SessionKeys10 k{};
+        const auto st = lsim::lorawan::derive_session_keys_10(ak, an, ni, dn, k);
+        if (st != lsim::crypto::CryptoStatus::Ok) {
+            return LSIM_STATUS_CRYPTO_BASE + static_cast<int32_t>(st);
+        }
+        std::memcpy(out->nwk_s_key, k.nwk_s_key.data(), 16);
+        std::memcpy(out->app_s_key, k.app_s_key.data(), 16);
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_seal_uplink_10(const lsim_uplink_frame* frame, const lsim_session_keys_10* keys,
+                            const lsim_uplink_context* ctx, uint8_t* out, size_t cap,
+                            size_t* out_written) {
+    if (frame == nullptr || keys == nullptr || ctx == nullptr || out == nullptr ||
+        out_written == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_written = 0;
+    if (frame->payload_len > lsim::lorawan::kMaxFrmPayload || frame->fopts_len > 15) {
+        return map_secure(lsim::lorawan::SecureStatus::InvalidPayload);
+    }
+    try {
+        DataFrame f;
+        to_frame(*frame, f);
+        lsim::lorawan::SessionKeys10 k{};
+        load_keys_10(*keys, k);
+        lsim::lorawan::Context10 c{ctx->fcnt32};
+        const auto st = lsim::lorawan::seal_uplink_10(f, k, c, out, cap, *out_written);
+        if (st != lsim::lorawan::SecureStatus::Ok) {
+            *out_written = 0;
+        }
+        return map_secure(st);
+    } catch (...) {
+        *out_written = 0;
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_open_uplink_10(const uint8_t* in, size_t len, const lsim_session_keys_10* keys,
+                            const lsim_uplink_context* ctx, lsim_uplink_frame* out) {
+    if (in == nullptr || keys == nullptr || ctx == nullptr || out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    try {
+        lsim::lorawan::SessionKeys10 k{};
+        load_keys_10(*keys, k);
+        DataFrame f;
+        const lsim::lorawan::Context10 c{ctx->fcnt32};
+        const auto st = lsim::lorawan::open_uplink_10(in, len, k, c, f);
+        from_frame(f, *out);
+        if (st != lsim::lorawan::SecureStatus::Ok) {
+            std::memset(out->payload, 0, sizeof out->payload);
+            out->payload_len = 0;
+            std::memset(out->fopts, 0, sizeof out->fopts);
+            out->fopts_len = 0;
+        }
+        return map_secure(st);
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 int32_t lsim_seal_uplink(const lsim_uplink_frame* frame, const lsim_session_keys_11* keys,
                          const lsim_uplink_context* ctx, uint8_t* out, size_t cap,
                          size_t* out_written) {

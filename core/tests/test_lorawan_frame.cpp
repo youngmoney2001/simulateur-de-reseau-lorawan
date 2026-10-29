@@ -117,6 +117,16 @@ void test_encode_rejects_inconsistent_frames() {
     CHECK_EQ(static_cast<int>(encode(reserved_port, buf, sizeof buf, n)),
              static_cast<int>(FrameStatus::FieldOutOfRange));
 
+    // FPort 224 (test MAC, TS001 §4.3.2) est valide ; 225 est le premier port réservé.
+    DataFrame test_port;
+    test_port.mtype = MType::UnconfirmedDataUp;
+    test_port.has_fport = true;
+    test_port.fport = 224;
+    CHECK_EQ(static_cast<int>(encode(test_port, buf, sizeof buf, n)), static_cast<int>(FrameStatus::Ok));
+    DataFrame back;
+    CHECK_EQ(static_cast<int>(decode(buf, n, back)), static_cast<int>(FrameStatus::Ok));
+    CHECK_EQ(back.fport, std::uint8_t{224});
+
     DataFrame fopts_on_port0;
     fopts_on_port0.mtype = MType::UnconfirmedDataUp;
     fopts_on_port0.has_fport = true;

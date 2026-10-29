@@ -167,6 +167,20 @@ LSIM_API int32_t lsim_derive_session_keys_11(const uint8_t nwk_key[16],
                                              const uint8_t dev_nonce[2],
                                              lsim_session_keys_11* out);
 
+/* Clés de session LoRaWAN 1.0.x (profil 1.0.4 par défaut, TS001-1.0.x). */
+typedef struct lsim_session_keys_10 {
+    uint8_t nwk_s_key[16];
+    uint8_t app_s_key[16];
+} lsim_session_keys_10;
+
+/* Dérivation des clés de session 1.0.x. app_nonce 3 octets, net_id 3, dev_nonce 2,
+ * tous en ordre de transmission (LSB first). */
+LSIM_API int32_t lsim_derive_session_keys_10(const uint8_t app_key[16],
+                                             const uint8_t app_nonce[3],
+                                             const uint8_t net_id[3],
+                                             const uint8_t dev_nonce[2],
+                                             lsim_session_keys_10* out);
+
 /* ------------------------------------------------------- Trame sécurisée */
 
 /* Trame uplink à plat. FOpts (LoRaWAN 1.1) : chiffrés/déchiffrés avec NwkSEncKey. */
@@ -226,6 +240,17 @@ LSIM_API int32_t lsim_open_uplink(const uint8_t* in, size_t len,
                                   const lsim_session_keys_11* keys,
                                   const lsim_uplink_context* ctx,
                                   lsim_uplink_frame* out);
+
+/* Profil 1.0.x : scelle / ouvre une trame uplink (FOpts en clair, MIC avec NwkSKey,
+ * FPort 0 chiffré avec NwkSKey). Seul ctx->fcnt32 est utilisé. */
+LSIM_API int32_t lsim_seal_uplink_10(const lsim_uplink_frame* frame,
+                                     const lsim_session_keys_10* keys,
+                                     const lsim_uplink_context* ctx,
+                                     uint8_t* out, size_t cap, size_t* out_written);
+LSIM_API int32_t lsim_open_uplink_10(const uint8_t* in, size_t len,
+                                     const lsim_session_keys_10* keys,
+                                     const lsim_uplink_context* ctx,
+                                     lsim_uplink_frame* out);
 
 /* ------------------------------------------------------ Jointure OTAA 1.1 */
 

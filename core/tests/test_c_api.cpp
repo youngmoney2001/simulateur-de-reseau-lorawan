@@ -135,6 +135,52 @@ void test_simulate_with_environment() {
              500 + 5);
 }
 
+void test_v104_c_api_vectors() {
+    // Mêmes vecteurs que test_secure_frame.cpp (recalculés hors C++ avec cryptography).
+    uint8_t app_key[16];
+    for (int i = 0; i < 16; ++i) app_key[i] = static_cast<uint8_t>(0x10 + i);
+    const uint8_t an[3] = {0x01, 0x02, 0x03};
+    const uint8_t ni[3] = {0x00, 0x00, 0x13};
+    const uint8_t dn[2] = {0xaa, 0x55};
+    lsim_session_keys_10 k{};
+    CHECK_EQ(lsim_derive_session_keys_10(app_key, an, ni, dn, &k), 0);
+    CHECK_EQ(k.nwk_s_key[0], uint8_t{0x1b});
+    CHECK_EQ(k.app_s_key[15], uint8_t{0xfd});
+
+    lsim_session_keys_10 keys{};
+    for (int i = 0; i < 16; ++i) {
+        keys.nwk_s_key[i] = static_cast<uint8_t>(i);
+        keys.app_s_key[i] = static_cast<uint8_t>(0xf0 + i);
+    }
+    lsim_uplink_frame f{};
+    f.dev_addr = 0x01020304u;
+    f.mtype = 2;
+    f.fcnt = 5;
+    f.fopts[0] = 0x02;
+    f.fopts_len = 1;
+    f.has_fport = 1;
+    f.fport = 1;
+    f.payload_len = 5;
+    std::memcpy(f.payload, "hello", 5);
+    lsim_uplink_context c{};
+    c.fcnt32 = 5;
+    uint8_t wire[64];
+    size_t n = 0;
+    CHECK_EQ(lsim_seal_uplink_10(&f, &keys, &c, wire, sizeof wire, &n), 0);
+    const uint8_t expected[19] = {0x40, 0x04, 0x03, 0x02, 0x01, 0x01, 0x05, 0x00, 0x02, 0x01,
+                                  0xc5, 0xcb, 0x1f, 0xc5, 0xa6, 0x9b, 0x45, 0x16, 0x09};
+    CHECK_EQ(n, size_t{19});
+    CHECK_TRUE(std::memcmp(wire, expected, 19) == 0);
+
+    lsim_uplink_frame out{};
+    CHECK_EQ(lsim_open_uplink_10(wire, n, &keys, &c, &out), 0);
+    CHECK_EQ(out.payload_len, 5);
+    CHECK_TRUE(std::memcmp(out.payload, "hello", 5) == 0);
+    // Le profil 1.1 ne doit pas accepter une trame 1.0.x.
+    lsim_session_keys_11 k11 = derive();
+    CHECK_TRUE(lsim_open_uplink(wire, n, &k11, &c, &out) != 0);
+}
+
 void test_status_ranges_are_disjoint() {
     // Un statut de crypto (100+) ne doit jamais se confondre avec un PHY (0..99).
     lsim_session_keys_11 k{};
@@ -250,6 +296,7 @@ void run_c_api_tests() {
     test_derive_matches_cpp_vectors();
     test_null_pointers_refused();
     test_seal_open_roundtrip_and_tamper();
+    test_v104_c_api_vectors();
     test_status_ranges_are_disjoint();
     test_simulate_totals();
     test_simulate_with_environment();
