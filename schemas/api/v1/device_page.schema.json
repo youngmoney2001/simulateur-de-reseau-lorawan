@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "DeviceRowOut": {
+      "additionalProperties": false,
+      "properties": {
+        "airtime_ns": {
+          "minimum": 0,
+          "title": "Airtime Ns",
+          "type": "integer"
+        },
+        "average_current_ua": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Average Current Ua"
+        },
+        "device_index": {
+          "minimum": 0,
+          "title": "Device Index",
+          "type": "integer"
+        },
+        "energy_per_message_j": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Per Message J"
+        },
+        "group": {
+          "maxLength": 64,
+          "title": "Group",
+          "type": "string"
+        },
+        "index_in_group": {
+          "minimum": 0,
+          "title": "Index In Group",
+          "type": "integer"
+        },
+        "lost_collision": {
+          "minimum": 0,
+          "title": "Lost Collision",
+          "type": "integer"
+        },
+        "lost_sensitivity": {
+          "minimum": 0,
+          "title": "Lost Sensitivity",
+          "type": "integer"
+        },
+        "received": {
+          "minimum": 0,
+          "title": "Received",
+          "type": "integer"
+        },
+        "sent": {
+          "minimum": 0,
+          "title": "Sent",
+          "type": "integer"
+        },
+        "spreading_factor": {
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "x_m": {
+          "title": "X M",
+          "type": "number"
+        },
+        "y_m": {
+          "title": "Y M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "device_index",
+        "group",
+        "index_in_group",
+        "x_m",
+        "y_m",
+        "spreading_factor",
+        "sent",
+        "received",
+        "lost_sensitivity",
+        "lost_collision",
+        "airtime_ns"
+      ],
+      "title": "DeviceRowOut",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/DeviceRowOut"
+      },
+      "maxItems": 500,
+      "title": "Items",
+      "type": "array"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Cursor"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "DevicePage",
+  "type": "object"
+}

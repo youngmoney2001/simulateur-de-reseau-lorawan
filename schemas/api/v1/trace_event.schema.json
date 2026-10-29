@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "Hop": {
+      "additionalProperties": false,
+      "description": "Un saut de la trame : émetteur -> récepteur, avec le résultat sur ce saut.",
+      "properties": {
+        "dr": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dr"
+        },
+        "freq_hz": {
+          "exclusiveMinimum": 0,
+          "title": "Freq Hz",
+          "type": "integer"
+        },
+        "from_id": {
+          "maxLength": 64,
+          "title": "From Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "delivered",
+            "lost_sensitivity",
+            "lost_collision",
+            "not_listened",
+            "sent"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "rssi_dbm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rssi Dbm"
+        },
+        "t_ns": {
+          "minimum": 0,
+          "title": "T Ns",
+          "type": "integer"
+        },
+        "to_id": {
+          "maxLength": 64,
+          "title": "To Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_id",
+        "to_id",
+        "t_ns",
+        "freq_hz",
+        "outcome"
+      ],
+      "title": "Hop",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "device_index": {
+      "minimum": 0,
+      "title": "Device Index",
+      "type": "integer"
+    },
+    "gateway_index": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Gateway Index",
+      "type": "integer"
+    },
+    "hops": {
+      "items": {
+        "$ref": "#/$defs/Hop"
+      },
+      "maxItems": 8,
+      "title": "Hops",
+      "type": "array"
+    },
+    "kind": {
+      "enum": [
+        "join_request",
+        "join_accept",
+        "uplink",
+        "ack",
+        "downlink",
+        "lost_sensitivity",
+        "lost_collision",
+        "rx_window_missed"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "outcome": {
+      "maxLength": 64,
+      "title": "Outcome",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "t_ns": {
+      "minimum": 0,
+      "title": "T Ns",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seq",
+    "t_ns",
+    "kind",
+    "device_index",
+    "outcome"
+  ],
+  "title": "TraceEvent",
+  "type": "object"
+}

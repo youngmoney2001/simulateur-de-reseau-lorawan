@@ -1,0 +1,510 @@
+{
+  "$defs": {
+    "ApiScenario": {
+      "additionalProperties": false,
+      "description": "Scénario accepté par l'API : comme `ScenarioModel`, sans lecture de fichier serveur.",
+      "properties": {
+        "energy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnergyModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gateway": {
+          "$ref": "#/$defs/GatewayModel",
+          "default": {
+            "antenna_gain_dbi": 0.0,
+            "x_m": 0.0,
+            "y_m": 0.0
+          }
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/GroupModel"
+          },
+          "minItems": 1,
+          "title": "Groups",
+          "type": "array"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "propagation": {
+          "$ref": "#/$defs/PropagationModel",
+          "default": {
+            "capture_threshold_db": 6.0,
+            "exponent": 2.7,
+            "frequency_hz": 868100000.0,
+            "reference_distance_m": 1.0,
+            "shadowing_seed": null,
+            "shadowing_sigma_db": 0.0
+          }
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "name",
+        "groups"
+      ],
+      "title": "ApiScenario",
+      "type": "object"
+    },
+    "DiskPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "center_x_m": {
+          "default": 0.0,
+          "title": "Center X M",
+          "type": "number"
+        },
+        "center_y_m": {
+          "default": 0.0,
+          "title": "Center Y M",
+          "type": "number"
+        },
+        "radius_m": {
+          "exclusiveMinimum": 0,
+          "title": "Radius M",
+          "type": "number"
+        },
+        "type": {
+          "const": "disk",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "radius_m"
+      ],
+      "title": "DiskPlacement",
+      "type": "object"
+    },
+    "EnergyModel": {
+      "additionalProperties": false,
+      "description": "Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace).",
+      "properties": {
+        "profile": {
+          "enum": [
+            "rak4631",
+            "sx1262-stm32l072"
+          ],
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "EnergyModel",
+      "type": "object"
+    },
+    "EnvironmentModel": {
+      "additionalProperties": false,
+      "properties": {
+        "device_height_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Device Height M",
+          "type": "number"
+        },
+        "gateway_height_m": {
+          "default": 15.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Gateway Height M",
+          "type": "number"
+        },
+        "obstacles": {
+          "items": {
+            "$ref": "#/$defs/ObstacleModel"
+          },
+          "maxItems": 10000,
+          "title": "Obstacles",
+          "type": "array"
+        },
+        "terrain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerrainModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "EnvironmentModel",
+      "type": "object"
+    },
+    "ExplicitPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "positions": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 1,
+          "title": "Positions",
+          "type": "array"
+        },
+        "type": {
+          "const": "explicit",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "positions"
+      ],
+      "title": "ExplicitPlacement",
+      "type": "object"
+    },
+    "GatewayModel": {
+      "additionalProperties": false,
+      "properties": {
+        "antenna_gain_dbi": {
+          "default": 0.0,
+          "title": "Antenna Gain Dbi",
+          "type": "number"
+        },
+        "x_m": {
+          "default": 0.0,
+          "title": "X M",
+          "type": "number"
+        },
+        "y_m": {
+          "default": 0.0,
+          "title": "Y M",
+          "type": "number"
+        }
+      },
+      "title": "GatewayModel",
+      "type": "object"
+    },
+    "GroupModel": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_freq_hz": {
+          "default": 868100000,
+          "exclusiveMinimum": 0,
+          "title": "Channel Freq Hz",
+          "type": "integer"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Count"
+        },
+        "duty_cycle": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1.0,
+          "title": "Duty Cycle",
+          "type": "number"
+        },
+        "messages": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Messages",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "payload_bytes": {
+          "default": 10,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "period_s": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "title": "Period S",
+          "type": "number"
+        },
+        "placement": {
+          "discriminator": {
+            "mapping": {
+              "disk": "#/$defs/DiskPlacement",
+              "explicit": "#/$defs/ExplicitPlacement"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DiskPlacement"
+            },
+            {
+              "$ref": "#/$defs/ExplicitPlacement"
+            }
+          ],
+          "title": "Placement"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "spreading_factor": {
+          "default": 7,
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "start_spread_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Start Spread S",
+          "type": "number"
+        },
+        "sub_band": {
+          "anyOf": [
+            {
+              "maximum": 8,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sub Band"
+        },
+        "tx_power_dbm": {
+          "default": 14.0,
+          "title": "Tx Power Dbm",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "placement"
+      ],
+      "title": "GroupModel",
+      "type": "object"
+    },
+    "ObstacleModel": {
+      "additionalProperties": false,
+      "properties": {
+        "attenuation_db": {
+          "default": 0.0,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Attenuation Db",
+          "type": "number"
+        },
+        "height_m": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Height M",
+          "type": "number"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "thickness_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thickness M"
+        },
+        "x_max_m": {
+          "title": "X Max M",
+          "type": "number"
+        },
+        "x_min_m": {
+          "title": "X Min M",
+          "type": "number"
+        },
+        "y_max_m": {
+          "title": "Y Max M",
+          "type": "number"
+        },
+        "y_min_m": {
+          "title": "Y Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min_m",
+        "y_min_m",
+        "x_max_m",
+        "y_max_m",
+        "height_m"
+      ],
+      "title": "ObstacleModel",
+      "type": "object"
+    },
+    "PropagationModel": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_threshold_db": {
+          "default": 6.0,
+          "minimum": 0,
+          "title": "Capture Threshold Db",
+          "type": "number"
+        },
+        "exponent": {
+          "default": 2.7,
+          "maximum": 6.0,
+          "minimum": 1.0,
+          "title": "Exponent",
+          "type": "number"
+        },
+        "frequency_hz": {
+          "default": 868100000.0,
+          "title": "Frequency Hz",
+          "type": "number"
+        },
+        "reference_distance_m": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Reference Distance M",
+          "type": "number"
+        },
+        "shadowing_seed": {
+          "anyOf": [
+            {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shadowing Seed"
+        },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        }
+      },
+      "title": "PropagationModel",
+      "type": "object"
+    },
+    "TerrainModel": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "type": {
+          "const": "dem_csv",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "title": "TerrainModel",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "scenario": {
+      "$ref": "#/$defs/ApiScenario"
+    }
+  },
+  "required": [
+    "scenario"
+  ],
+  "title": "ValidateRequest",
+  "type": "object"
+}

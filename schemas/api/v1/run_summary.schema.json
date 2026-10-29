@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "GatewayLoadOut": {
+      "additionalProperties": false,
+      "properties": {
+        "busy_ns": {
+          "minimum": 0,
+          "title": "Busy Ns",
+          "type": "integer"
+        },
+        "observation_ns": {
+          "minimum": 0,
+          "title": "Observation Ns",
+          "type": "integer"
+        },
+        "peak_concurrent": {
+          "minimum": 0,
+          "title": "Peak Concurrent",
+          "type": "integer"
+        },
+        "utilization": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Utilization",
+          "type": "number"
+        }
+      },
+      "required": [
+        "busy_ns",
+        "peak_concurrent",
+        "observation_ns",
+        "utilization"
+      ],
+      "title": "GatewayLoadOut",
+      "type": "object"
+    },
+    "Totals": {
+      "additionalProperties": false,
+      "properties": {
+        "airtime_ns": {
+          "minimum": 0,
+          "title": "Airtime Ns",
+          "type": "integer"
+        },
+        "lost_collision": {
+          "minimum": 0,
+          "title": "Lost Collision",
+          "type": "integer"
+        },
+        "lost_sensitivity": {
+          "minimum": 0,
+          "title": "Lost Sensitivity",
+          "type": "integer"
+        },
+        "received": {
+          "minimum": 0,
+          "title": "Received",
+          "type": "integer"
+        },
+        "sent": {
+          "minimum": 0,
+          "title": "Sent",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sent",
+        "received",
+        "lost_sensitivity",
+        "lost_collision",
+        "airtime_ns"
+      ],
+      "title": "Totals",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "energy_profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Energy Profile"
+    },
+    "gateway": {
+      "$ref": "#/$defs/GatewayLoadOut"
+    },
+    "pdr": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pdr"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scenario_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scenario Sha256",
+      "type": "string"
+    },
+    "seed": {
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "totals": {
+      "$ref": "#/$defs/Totals"
+    }
+  },
+  "required": [
+    "run_id",
+    "scenario_sha256",
+    "seed",
+    "totals",
+    "gateway"
+  ],
+  "title": "RunSummary",
+  "type": "object"
+}

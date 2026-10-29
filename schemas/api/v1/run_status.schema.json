@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "Problem": {
+      "additionalProperties": false,
+      "description": "Erreur au format problème (code stable, message lisible, champ éventuel).",
+      "properties": {
+        "code": {
+          "enum": [
+            "validation_error",
+            "not_found",
+            "limit_exceeded",
+            "terrain_not_allowed",
+            "run_failed",
+            "conflict",
+            "unsupported_region"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "message": {
+          "maxLength": 500,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Problem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "problem": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Problem"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "progress": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Progress",
+      "type": "number"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scenario_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scenario Sha256"
+    },
+    "state": {
+      "enum": [
+        "queued",
+        "running",
+        "done",
+        "failed",
+        "cancelled"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "trace_events": {
+      "anyOf": [
+        {
+          "maximum": 200000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trace Events"
+    }
+  },
+  "required": [
+    "run_id",
+    "state",
+    "progress"
+  ],
+  "title": "RunStatus",
+  "type": "object"
+}
