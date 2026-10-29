@@ -643,7 +643,49 @@ void test_downlink_invariants_dense_traffic() {
     CHECK_EQ(ta.lost_sensitivity, tb.lost_sensitivity);
 }
 
+// LinkCheckReq en FOpts : l'émission de rang multiple de N (1-based) porte 1 octet de plus, donc
+// un temps d'antenne plus long ; les autres gardent la durée de la charge seule.
+void test_mac_link_check_airtime() {
+    EndDeviceSpec d = device_at(100.0, 7, 0);
+    d.period_ns = 1'000'000'000;
+    d.messages = 4;
+    d.payload_bytes = 12;  // SF7 : 12 -> 13 octets franchit un bloc de symboles (20 -> 25)
+    d.link_check_every = 2;
+    DeviceStats per[1];
+    SimulationStats totals;
+    std::vector<TxRecord> trace;
+    CHECK_TRUE(simulate_uplinks(&d, 1, gateway(), PropagationSpec{}, per, totals, nullptr,
+                                &trace) == SimStatus::Ok);
+    CHECK_EQ(trace.size(), std::size_t{4});
+    const SimTime plain = trace[0].end_ns - trace[0].start_ns;
+    const SimTime with = trace[1].end_ns - trace[1].start_ns;
+    CHECK_TRUE(with > plain);
+    CHECK_EQ(trace[2].end_ns - trace[2].start_ns, plain);   // rang 3 : sans FOpts
+    CHECK_EQ(trace[3].end_ns - trace[3].start_ns, with);    // rang 4 : LinkCheckReq
+    CHECK_EQ(per[0].airtime_ns, static_cast<std::uint64_t>(2 * plain + 2 * with));
+    CHECK_EQ(totals.airtime_ns, per[0].airtime_ns);
+    // Sans MAC : toutes les émissions gardent la durée de base.
+    EndDeviceSpec plain_dev = d;
+    plain_dev.link_check_every = 0;
+    std::vector<TxRecord> base;
+    CHECK_TRUE(simulate_uplinks(&plain_dev, 1, gateway(), PropagationSpec{}, per, totals, nullptr,
+                                &base) == SimStatus::Ok);
+    CHECK_EQ(base[1].end_ns - base[1].start_ns, plain);
+    // Charge de 255 octets : la trame allongée dépasserait la limite, refus explicite.
+    EndDeviceSpec full = d;
+    full.payload_bytes = 255;
+    CHECK_TRUE(simulate_uplinks(&full, 1, gateway(), PropagationSpec{}, per, totals) ==
+               SimStatus::InvalidInput);
+    // Passerelles multiples : option refusée (non modélisée).
+    const GatewaySpec gws[1] = {gateway()};
+    GatewayRxStats gw[1];
+    NetworkStats net;
+    CHECK_TRUE(simulate_uplinks_multi(&d, 1, gws, 1, PropagationSpec{}, per, net, gw) ==
+               SimStatus::InvalidInput);
+}
+
 void run_engine_tests() {
+    test_mac_link_check_airtime();
     test_downlink_blocks_only_its_gateway();
     test_downlink_invariants_dense_traffic();
     test_multi_busy_is_per_gateway();

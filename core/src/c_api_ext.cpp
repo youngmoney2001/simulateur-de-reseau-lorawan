@@ -320,6 +320,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
+            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -431,6 +432,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
+            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -596,6 +598,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
+            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -930,6 +933,7 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
+            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -1066,6 +1070,7 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
+            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;

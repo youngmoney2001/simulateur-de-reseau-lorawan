@@ -34,6 +34,12 @@ bool overlap(const Tx& a, const Tx& b) {
     return a.start < b.end && b.start < a.end;
 }
 
+// Temps d'antenne de l'émission k (0-based) : plus long si elle porte LinkCheckReq (rang k+1).
+SimTime airtime_of(const EndDeviceSpec& d, SimTime plain, SimTime with_fopts, std::uint32_t k) {
+    const std::uint32_t rank = k + 1;
+    return (d.link_check_every > 0 && rank % d.link_check_every == 0) ? with_fopts : plain;
+}
+
 SimStatus validate_device(const EndDeviceSpec& d) {
     if (!finite(d.position.x_m) || !finite(d.position.y_m) || !finite(d.tx_power_dbm)) {
         return SimStatus::InvalidInput;
@@ -42,6 +48,9 @@ SimStatus validate_device(const EndDeviceSpec& d) {
         return SimStatus::InvalidInput;
     }
     if (d.payload_bytes > 255) {
+        return SimStatus::InvalidInput;
+    }
+    if (d.link_check_every > 1000 || (d.link_check_every > 0 && d.payload_bytes > 254)) {
         return SimStatus::InvalidInput;
     }
     if (d.period_ns <= 0 || d.start_offset_ns < 0 || d.messages == 0) {
@@ -204,6 +213,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
 
     // Précalcul par dispositif : airtime, RSSI à la passerelle, sensibilité.
     std::vector<SimTime> airtime(device_count);
+    std::vector<SimTime> airtime_fopts(device_count);  // émission portant LinkCheckReq
     std::vector<double> rssi(device_count);
     std::vector<double> sensitivity(device_count);
     std::uint64_t total_tx = 0;
@@ -231,6 +241,15 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             return SimStatus::InvalidInput;
         }
         airtime[i] = at.nanoseconds;
+        airtime_fopts[i] = airtime[i];
+        if (d.link_check_every > 0) {
+            // LinkCheckReq : 1 octet en FOpts, dans l'en-tête de la trame (PHYPayload).
+            const lora::AirtimeResult atf = lora::time_on_air(rc, d.payload_bytes + 1);
+            if (atf.status != lora::Status::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            airtime_fopts[i] = atf.nanoseconds;
+        }
 
         // Distance minimale : d0 (évite les pertes négatives à très courte portée).
         const double dx = d.position.x_m - gateway.position.x_m;
@@ -288,10 +307,11 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             if (nominal_d > kMaxHorizonNs) {
                 return SimStatus::InvalidInput;
             }
+            const SimTime air_k = airtime_of(d, airtime[i], airtime_fopts[i], k);
             SimTime t = static_cast<SimTime>(nominal_d);
             if (k > 0 && off_factor > 0.0) {
                 const double earliest_d = static_cast<double>(prev_end) +
-                                          std::round(static_cast<double>(airtime[i]) * off_factor);
+                                          std::round(static_cast<double>(air_k) * off_factor);
                 if (earliest_d > kMaxHorizonNs) {
                     return SimStatus::InvalidInput;
                 }
@@ -300,7 +320,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             if (!queue.push(t, kKindTxStart, static_cast<std::uint32_t>(i))) {
                 return SimStatus::QueueFull;
             }
-            prev_end = t + airtime[i];
+            prev_end = t + air_k;
             ++per_device[i].sent;
         }
     }
@@ -309,21 +329,25 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     std::vector<Tx> txs;
     txs.reserve(static_cast<std::size_t>(total_tx));
     SimTime max_airtime = 0;
+    // Les émissions d'un dispositif sont extraites dans l'ordre de ses messages (débuts stricts-
+    // ment croissants) : le compteur par dispositif donne le rang de l'émission.
+    std::vector<std::uint32_t> popped(device_count, 0);
     Event ev;
     while (queue.pop(ev)) {
         if (ev.kind != kKindTxStart || ev.target >= device_count) {
             continue;
         }
         const std::uint32_t i = ev.target;
+        const SimTime air = airtime_of(devices[i], airtime[i], airtime_fopts[i], popped[i]++);
         Tx t;
         t.start = ev.time;
-        t.end = ev.time + airtime[i];
+        t.end = ev.time + air;
         t.device = i;
         t.sf = devices[i].spreading_factor;
         t.rssi_dbm = rssi[i];
-        max_airtime = std::max(max_airtime, airtime[i]);
-        per_device[i].airtime_ns += static_cast<std::uint64_t>(airtime[i]);
-        totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+        max_airtime = std::max(max_airtime, air);
+        per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
+        totals.airtime_ns += static_cast<std::uint64_t>(air);
         txs.push_back(t);
     }
 
@@ -542,6 +566,7 @@ static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_
         const EndDeviceSpec& d = devices[i];
         const SimStatus ds = validate_device(d);
         if (ds != SimStatus::Ok) return ds;
+        if (d.link_check_every != 0) return SimStatus::InvalidInput;  // passerelle unique seulement
 
         lora::RadioConfig rc;
         rc.spreading_factor = d.spreading_factor;

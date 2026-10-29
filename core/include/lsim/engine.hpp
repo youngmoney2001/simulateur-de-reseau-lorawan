@@ -85,6 +85,10 @@ struct EndDeviceSpec {
     // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
     double duty_cycle = 1.0;
     DownlinkPlan downlink;
+    // Commande MAC LinkCheckReq (1 octet en FOpts) dans chaque uplink de rang k multiple de N
+    // (rang 1-based ; 0 = désactivé). Les octets s'ajoutent à la trame : temps d'antenne plus long
+    // pour ces émissions. Passerelle unique seulement (refusé en multi-passerelles).
+    std::uint32_t link_check_every = 0;
 };
 
 // Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.

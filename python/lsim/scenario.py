@@ -251,12 +251,18 @@ class MacModel(_Strict):
       est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;
     - `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les
       downlinks émis (pas de downlink ajouté pour elle).
-    Les FOpts allongent le temps d'antenne des downlinks. Les uplinks ne sont pas encore allongés
-    dans le moteur natif : ce coût reste à compter (voir docs/MAC_PLAN.md). Refusé avec plusieurs
-    passerelles ou un mesh (pas de modèle MAC pour ces topologies).
+    Les FOpts allongent le temps d'antenne des uplinks (moteur natif, 1 octet pour LinkCheckReq)
+    et des downlinks. Refusé avec plusieurs passerelles ou un mesh.
+
+    Marge de LinkCheckAns (indicative, pas la marge SNR normative) :
+        M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)
+    où S_ref est la sensibilité SX1276 utilisée par le simulateur pour décider de la perte : M
+    mesure la marge au-dessus du seuil de réception, en dB. `link_margin_installation_db` est une
+    marge d'installation soustraite (0 par défaut), comme dans l'ADR.
     """
     link_check_every: int = Field(0, ge=0, le=1000)
     device_status_every: int = Field(0, ge=0, le=1000)
+    link_margin_installation_db: int = Field(0, ge=0, le=60)
 
 
 class ScenarioModel(_Strict):
@@ -403,6 +409,7 @@ class Scenario:
         Déterministe : l'ordre des groupes et des dispositifs est fixé par le fichier.
         """
         rng = random.Random(self.model.seed)
+        link_check = self.model.mac.link_check_every if self.model.mac is not None else 0
         devices: list[EndDevice] = []
         group_of: list[str] = []
         index_in_group: list[int] = []
@@ -416,7 +423,7 @@ class Scenario:
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
-                    duty_cycle=g.effective_duty_cycle))
+                    duty_cycle=g.effective_duty_cycle, link_check_every=link_check))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

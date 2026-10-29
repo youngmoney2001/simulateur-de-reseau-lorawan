@@ -40,10 +40,15 @@ class MacSchedule:
 
     link_check_every: int = 0  # LinkCheckReq, émise par le dispositif (uplink)
     device_status_every: int = 0  # DevStatusReq, émise par le serveur (descente)
+    link_margin_installation_db: int = 0  # marge d'installation soustraite de la marge rapportée
 
     def __post_init__(self) -> None:
         _check_period("link_check_every", self.link_check_every)
         _check_period("device_status_every", self.device_status_every)
+        if (isinstance(self.link_margin_installation_db, bool)
+                or not isinstance(self.link_margin_installation_db, int)
+                or not 0 <= self.link_margin_installation_db <= 60):
+            raise ValueError("link_margin_installation_db doit être un entier entre 0 et 60")
 
     @property
     def enabled(self) -> bool:

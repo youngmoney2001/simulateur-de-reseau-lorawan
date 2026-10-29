@@ -247,6 +247,7 @@ class _CEndDevice(ctypes.Structure):
         ("period_ns", ctypes.c_int64),
         ("messages", ctypes.c_uint32),
         ("duty_cycle", ctypes.c_double),
+        ("link_check_every", ctypes.c_uint32),
     ]
 
 

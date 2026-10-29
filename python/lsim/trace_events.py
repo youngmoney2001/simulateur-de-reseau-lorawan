@@ -34,6 +34,7 @@ Les dates sont en nanosecondes entières, issues du moteur, sans recalcul flotta
 
 from __future__ import annotations
 
+import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -280,11 +281,14 @@ def _mac_ranks(records: Sequence[TxRecord]) -> list[int]:
     return ranks
 
 
-def _link_margin_db(r: TxRecord) -> int:
-    """Marge de liaison rapportée par LinkCheckAns (hypothèse : RSSI montant - sensibilité du
-    débit montant, sur 125 kHz ; bornée à 0..254)."""
-    margin = r.rssi_dbm - receiver_sensitivity_dbm(r.spreading_factor, 125_000)
-    return max(0, min(254, int(margin)))
+def _link_margin_db(r: TxRecord, installation_db: int) -> int:
+    """Marge rapportée par LinkCheckAns : RSSI montant - sensibilité de réception (SX1276, 125 kHz,
+    SF de l'émission) - marge d'installation, en dB entiers par défaut, bornée à 0..254.
+    Indicative : c'est la marge au-dessus du seuil de perte du simulateur, pas la marge SNR
+    normative."""
+    margin = math.floor(r.rssi_dbm - receiver_sensitivity_dbm(r.spreading_factor, 125_000)
+                        - installation_db)
+    return max(0, min(254, margin))
 
 
 def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
@@ -330,7 +334,7 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             accepted[d] += 1
             wants_answer = mac is not None and LinkCheckReq() in uplink_requests(mac, ranks[i])
             if wants_answer:
-                margin = _link_margin_db(r)
+                margin = _link_margin_db(r, mac.link_margin_installation_db)
             queued = options.downlink_every > 0 and accepted[d] % options.downlink_every == 0
             if queued:
                 kind = "downlink"
@@ -491,7 +495,8 @@ def _schedule_of(scenario: Scenario) -> Optional[MacSchedule]:
     if m is None or (m.link_check_every == 0 and m.device_status_every == 0):
         return None
     return MacSchedule(link_check_every=m.link_check_every,
-                       device_status_every=m.device_status_every)
+                       device_status_every=m.device_status_every,
+                       link_margin_installation_db=m.link_margin_installation_db)
 
 
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:

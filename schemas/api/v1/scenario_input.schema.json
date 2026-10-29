@@ -306,7 +306,7 @@
     },
     "MacModel": {
       "additionalProperties": false,
-      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 (passerelle unique) :\n- `link_check_every` : LinkCheckReq en FOpts de l'uplink de rang multiple de N ; reçue, elle\n  est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;\n- `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les\n  downlinks émis (pas de downlink ajouté pour elle).\nLes FOpts allongent le temps d'antenne des downlinks. Les uplinks ne sont pas encore allongés\ndans le moteur natif : ce coût reste à compter (voir docs/MAC_PLAN.md). Refusé avec plusieurs\npasserelles ou un mesh (pas de modèle MAC pour ces topologies).",
+      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 (passerelle unique) :\n- `link_check_every` : LinkCheckReq en FOpts de l'uplink de rang multiple de N ; reçue, elle\n  est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;\n- `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les\n  downlinks émis (pas de downlink ajouté pour elle).\nLes FOpts allongent le temps d'antenne des uplinks (moteur natif, 1 octet pour LinkCheckReq)\net des downlinks. Refusé avec plusieurs passerelles ou un mesh.\n\nMarge de LinkCheckAns (indicative, pas la marge SNR normative) :\n    M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)\noù S_ref est la sensibilité SX1276 utilisée par le simulateur pour décider de la perte : M\nmesure la marge au-dessus du seuil de réception, en dB. `link_margin_installation_db` est une\nmarge d'installation soustraite (0 par défaut), comme dans l'ADR.",
       "properties": {
         "device_status_every": {
           "default": 0,
@@ -320,6 +320,13 @@
           "maximum": 1000,
           "minimum": 0,
           "title": "Link Check Every",
+          "type": "integer"
+        },
+        "link_margin_installation_db": {
+          "default": 0,
+          "maximum": 60,
+          "minimum": 0,
+          "title": "Link Margin Installation Db",
           "type": "integer"
         }
       },

@@ -104,6 +104,7 @@ class EndDevice:
     messages: int = 1
     duty_cycle: float = 1.0  # rapport cyclique maximal, ]0, 1] ; 1 = sans limite
     downlink: Optional[DownlinkRequests] = None  # requêtes de downlink (None = aucune)
+    link_check_every: int = 0  # LinkCheckReq (FOpts) au rang multiple de N ; 0 = sans MAC
 
     def __post_init__(self) -> None:
         if not 0.0 < self.duty_cycle <= 1.0:
@@ -121,6 +122,10 @@ class EndDevice:
             raise ValueError("period_ns doit être strictement positif")
         if self.messages < 1:
             raise ValueError("messages doit être au moins 1")
+        if not 0 <= self.link_check_every <= 1000:
+            raise ValueError("link_check_every doit être compris entre 0 et 1000")
+        if self.link_check_every and self.payload_bytes > 254:
+            raise ValueError("LinkCheckReq (1 octet de FOpts) exige une charge d'au plus 254 octets")
 
 
 @dataclass(frozen=True)
@@ -340,6 +345,7 @@ def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
         c.period_ns = d.period_ns
         c.messages = d.messages
         c.duty_cycle = d.duty_cycle
+        c.link_check_every = d.link_check_every
     return c_devs
 
 
