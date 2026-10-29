@@ -246,9 +246,14 @@ class EnergyModel(_Strict):
 class MacModel(_Strict):
     """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
 
-    Phase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période
-    d'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :
-    le bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.
+    Phase 1 (passerelle unique) :
+    - `link_check_every` : LinkCheckReq en FOpts de l'uplink de rang multiple de N ; reçue, elle
+      est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;
+    - `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les
+      downlinks émis (pas de downlink ajouté pour elle).
+    Les FOpts allongent le temps d'antenne des downlinks. Les uplinks ne sont pas encore allongés
+    dans le moteur natif : ce coût reste à compter (voir docs/MAC_PLAN.md). Refusé avec plusieurs
+    passerelles ou un mesh (pas de modèle MAC pour ces topologies).
     """
     link_check_every: int = Field(0, ge=0, le=1000)
     device_status_every: int = Field(0, ge=0, le=1000)
@@ -272,6 +277,10 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every):
+            if self.gateways is not None or self.mesh is not None:
+                raise ValueError("commandes MAC : passerelle unique uniquement "
+                                 "(pas de « gateways » ni de mesh)")
         if self.gateways is None:
             if self.mesh is not None:
                 raise ValueError("mesh exige la liste « gateways » (plusieurs passerelles)")

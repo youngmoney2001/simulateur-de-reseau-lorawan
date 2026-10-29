@@ -45,6 +45,9 @@ from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
 from lsim.mesh import MESH_ENVELOPE_DOWN_BYTES, MESH_ENVELOPE_UP_BYTES
+from lsim import mac as lsim_mac
+from lsim.mac import DevStatusReq, LinkCheckAns, LinkCheckReq
+from lsim.mac_plan import MacSchedule, downlink_requests, uplink_requests
 from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
@@ -156,6 +159,8 @@ class _Job:
     rx1_hz: int
     received: bool        # réception par le dispositif (réciprocité)
     device_missed: bool   # le dispositif émet pendant sa fenêtre RX1
+    fopts: bytes = b""    # commandes MAC en FOpts du downlink (LinkCheckAns, DevStatusReq)
+    link_margin: int = 0  # marge rapportée par LinkCheckAns (dB, si présente)
 
 
 def _dev(i: int) -> str:
@@ -262,9 +267,35 @@ def _joined_times(jobs: Sequence[_Job], starts: Sequence[Optional[int]]) -> dict
     return out
 
 
+_MAC_NAME = {LinkCheckReq: "LinkCheckReq", DevStatusReq: "DevStatusReq"}
+
+
+def _mac_ranks(records: Sequence[TxRecord]) -> list[int]:
+    """Rang 1-based de chaque émission parmi les émissions de son dispositif (ordre de trace)."""
+    count: dict[int, int] = defaultdict(int)
+    ranks = []
+    for r in records:
+        count[r.device_index] += 1
+        ranks.append(count[r.device_index])
+    return ranks
+
+
+def _link_margin_db(r: TxRecord) -> int:
+    """Marge de liaison rapportée par LinkCheckAns (hypothèse : RSSI montant - sensibilité du
+    débit montant, sur 125 kHz ; bornée à 0..254)."""
+    margin = r.rssi_dbm - receiver_sensitivity_dbm(r.spreading_factor, 125_000)
+    return max(0, min(254, int(margin)))
+
+
 def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
-                   options: ProtocolOptions, roles: Sequence[bool]) -> list[_Job]:
-    """Une réponse attendue par uplink reçu, dans l'ordre de la trace (un seul downlink par uplink)."""
+                   options: ProtocolOptions, roles: Sequence[bool],
+                   mac: Optional[MacSchedule] = None) -> list[_Job]:
+    """Une réponse attendue par uplink reçu, dans l'ordre de la trace (un seul downlink par uplink).
+
+    Avec `mac` : un LinkCheckReq reçu est acquitté par un LinkCheckAns (downlink dédié s'il n'y
+    en a pas déjà un) ; un DevStatusReq périodique est placé dans les FOpts des downlinks émis.
+    Les FOpts allongent la trame, donc le temps d'antenne du downlink.
+    """
     if options.downlink_every < 0:
         raise ValueError("downlink_every doit être positif ou nul")
     if not 0 <= options.downlink_payload_bytes <= 242:
@@ -278,8 +309,10 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
         for a, b in zip(idxs, idxs[1:]):
             next_start[a] = records[b].start_ns
 
+    ranks = _mac_ranks(records)
     jobs: list[_Job] = []
     accepted: dict[int, int] = defaultdict(int)
+    sent: dict[int, int] = defaultdict(int)  # downlinks émis par dispositif (rang 1-based)
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
@@ -287,24 +320,34 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
         if r.outcome != TxRecord.OUTCOME_RECEIVED:
             continue
 
+        margin: Optional[int] = None
         if is_join:
             t_open = r.end_ns + JOIN_ACCEPT_DELAY1_NS
             kind, content = "join_accept", "delivered"
             airtime = _downlink_airtime_ns(radio, JOIN_ACCEPT_BYTES)
+            fopts = b""
         else:
             accepted[d] += 1
+            wants_answer = mac is not None and LinkCheckReq() in uplink_requests(mac, ranks[i])
+            if wants_answer:
+                margin = _link_margin_db(r)
             queued = options.downlink_every > 0 and accepted[d] % options.downlink_every == 0
             if queued:
                 kind = "downlink"
                 content = "data_ack" if options.confirmed_uplinks else "data"
-                airtime = _downlink_airtime_ns(
-                    radio, DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes)
+                base = DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes
             elif options.confirmed_uplinks:
                 kind, content = "ack", "ack_only"
-                airtime = _downlink_airtime_ns(radio, ACK_FRAME_BYTES)
+                base = ACK_FRAME_BYTES
+            elif wants_answer:
+                kind, content = "mac_answer", "delivered"
+                base = ACK_FRAME_BYTES
             else:
                 continue
             t_open = r.end_ns + RECEIVE_DELAY1_NS
+            fopts = _downlink_fopts(mac, sent[d] + 1, margin)
+            airtime = _downlink_airtime_ns(radio, base + len(fopts))
+            sent[d] += 1
 
         nxt = next_start.get(i)
         jobs.append(_Job(
@@ -312,8 +355,24 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             rx1_hz=radio.rx1_hz,
             received=_received_by_device(r, radio, options),
             device_missed=nxt is not None and nxt < t_open + RX1_WINDOW_NS,
+            fopts=fopts, link_margin=margin or 0,
         ))
     return jobs
+
+
+def _downlink_fopts(mac: Optional[MacSchedule], rank: int, margin: Optional[int]) -> bytes:
+    """FOpts du downlink de rang `rank` : LinkCheckAns (si `margin` n'est pas None) puis, selon la
+    période, DevStatusReq. Ordre CID croissant ; jamais tronqué (15 octets au plus)."""
+    if mac is None:
+        return b""
+    cmds: list = []
+    if margin is not None:
+        cmds.append(LinkCheckAns(margin, 1))
+    cmds.extend(downlink_requests(mac, rank))
+    fopts = b""
+    for cmd in cmds:
+        fopts = lsim_mac.append_fopts(fopts, cmd)
+    return fopts
 
 
 def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[tuple[int, int]]]:
@@ -335,7 +394,8 @@ def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[t
 
 
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
-            starts: Sequence[Optional[int]], roles: Sequence[bool]) -> tuple[ProtocolEvent, ...]:
+            starts: Sequence[Optional[int]], roles: Sequence[bool],
+            mac: Optional[MacSchedule] = None) -> tuple[ProtocolEvent, ...]:
     """Événements dans l'ordre temporel, à partir de la trace et de la planification."""
     pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
 
@@ -343,6 +403,7 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         pending.append((t, len(pending), kind, device, tuple(hops), outcome))
 
     job_of = {job.record: k for k, job in enumerate(jobs)}
+    ranks = _mac_ranks(records)
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
@@ -354,6 +415,9 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
                                  "delivered"))
         add(r.start_ns, "join_request" if is_join else "uplink", d, hops,
             _UPLINK_OUTCOME[r.outcome])
+        if mac is not None and not is_join:
+            for cmd in uplink_requests(mac, ranks[i]):
+                add(r.start_ns, "mac_request", d, hops, _MAC_NAME[type(cmd)])
 
         k = job_of.get(i)
         if k is None:
@@ -376,6 +440,14 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         else:
             down = [down_hop]
         add(start, job.kind, d, down, job.content if ok else "lost_sensitivity")
+        # Commandes MAC portées par un downlink reçu (un job `mac_answer` est déjà l'événement
+        # `mac_answer` lui-même). Un downlink perdu n'apporte ni réponse ni requête.
+        if ok and job.fopts and job.kind != "mac_answer":
+            for cmd in lsim_mac.decode_all(job.fopts, downlink=True):
+                if isinstance(cmd, LinkCheckAns):
+                    add(start, "mac_answer", d, down, "delivered")
+                elif isinstance(cmd, DevStatusReq):
+                    add(start, "mac_request", d, down, "DevStatusReq")
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")
@@ -388,16 +460,17 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
 
 
 def _plan(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], options: ProtocolOptions,
-          joined: dict[int, int]):
+          joined: dict[int, int], mac: Optional[MacSchedule] = None):
     """Une passe de planification : rôles, downlinks, émissions passerelle, jointures obtenues."""
     roles = _join_roles(records, joined, options)
-    jobs = _downlink_jobs(records, radios, options, roles)
+    jobs = _downlink_jobs(records, radios, options, roles, mac)
     starts, busy = _schedule_gateway(jobs)
     return roles, jobs, starts, busy, _joined_times(jobs, starts)
 
 
 def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
-                          options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
+                          options: ProtocolOptions,
+                          mac: Optional[MacSchedule] = None) -> tuple[ProtocolEvent, ...]:
     """Événements dérivés d'une trace déjà produite (sans nouvelle itération du moteur).
 
     Les émissions passerelle sont celles des downlinks planifiés à partir de cette trace : seul
@@ -405,11 +478,20 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
     """
     joined: dict[int, int] = {}
     for _ in range(MAX_ITERATIONS):
-        roles, jobs, starts, _busy, new_joined = _plan(records, radios, options, joined)
+        roles, jobs, starts, _busy, new_joined = _plan(records, radios, options, joined, mac)
         if new_joined == joined:
-            return _events(records, radios, jobs, starts, roles)
+            return _events(records, radios, jobs, starts, roles, mac)
         joined = new_joined
     raise RuntimeError("pas de point fixe pour les jointures (build_protocol_events)")
+
+
+def _schedule_of(scenario: Scenario) -> Optional[MacSchedule]:
+    """Calendrier MAC du scénario ; None si le bloc `mac:` est absent ou désactivé."""
+    m = scenario.model.mac
+    if m is None or (m.link_check_every == 0 and m.device_status_every == 0):
+        return None
+    return MacSchedule(link_check_every=m.link_check_every,
+                       device_status_every=m.device_status_every)
 
 
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
@@ -424,15 +506,17 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     radios = device_radios(scenario)
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
+    mac = _schedule_of(scenario)
 
     busy: list[tuple[int, int]] = []
     joined: dict[int, int] = {}
     for _ in range(MAX_ITERATIONS):
         result = simulate_uplinks_trace(devices, gateway, propagation, environment,
                                         gateway_busy=busy)
-        roles, jobs, starts, new_busy, new_joined = _plan(result.records, radios, options, joined)
+        roles, jobs, starts, new_busy, new_joined = _plan(result.records, radios, options, joined,
+                                                          mac)
         if new_busy == busy and new_joined == joined:
-            events = _events(result.records, radios, jobs, starts, roles)
+            events = _events(result.records, radios, jobs, starts, roles, mac)
             return TraceRun(
                 per_device=result.per_device,
                 totals=result.totals,

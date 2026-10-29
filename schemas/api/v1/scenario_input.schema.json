@@ -306,7 +306,7 @@
     },
     "MacModel": {
       "additionalProperties": false,
-      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période\nd'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :\nle bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.",
+      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 (passerelle unique) :\n- `link_check_every` : LinkCheckReq en FOpts de l'uplink de rang multiple de N ; reçue, elle\n  est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;\n- `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les\n  downlinks émis (pas de downlink ajouté pour elle).\nLes FOpts allongent le temps d'antenne des downlinks. Les uplinks ne sont pas encore allongés\ndans le moteur natif : ce coût reste à compter (voir docs/MAC_PLAN.md). Refusé avec plusieurs\npasserelles ou un mesh (pas de modèle MAC pour ces topologies).",
       "properties": {
         "device_status_every": {
           "default": 0,

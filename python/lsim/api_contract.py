@@ -39,6 +39,7 @@ ProblemCode = Literal[
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
     "lost_sensitivity", "lost_collision", "rx_window_missed", "mesh_hop", "mesh_downlink_hop",
+    "mac_request", "mac_answer",
 ]
 HopOutcome = Literal["delivered", "lost_sensitivity", "lost_collision", "lost_half_duplex",
                      "not_listened", "sent", "suppressed", "lost_mesh"]
