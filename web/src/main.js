@@ -23,11 +23,12 @@ window.CESIUM_BASE_URL = "/cesium/";
 const BASEMAP_CREDIT =
   "Basemap : Esri, HERE, Garmin, © OpenStreetMap contributors, et partenaires SIG";
 const viewer = new Cesium.Viewer("cesiumContainer", {
-  baseLayer: new Cesium.ImageryLayer(
-    new Cesium.ArcGisMapServerImageryProvider({
-      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
-      credit: BASEMAP_CREDIT,
-    }),
+  // Fournisseur asynchrone (fromUrl) : le constructeur direct n'initialise pas ses ressources.
+  baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+    Cesium.ArcGisMapServerImageryProvider.fromUrl(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
+      { credit: new Cesium.Credit(BASEMAP_CREDIT) },
+    ),
   ),
   baseLayerPicker: false,
   geocoder: false,
