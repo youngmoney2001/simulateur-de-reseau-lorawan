@@ -1281,6 +1281,8 @@ constexpr SimTime kLoopRx2DelayNs = 2'000'000'000;   // RECEIVE_DELAY2 (TS001 §
 constexpr SimTime kLoopRx2WindowNs = 1'000'000'000;  // durée de RX2 (égale à RX1, §3.3.4)
 // SF de RX2 par défaut en EU868 (RP002-1.0.3 : SF12, 125 kHz, DR0). RP002-1.0.5 non vérifié.
 constexpr std::uint8_t kLoopRx2Sf = 12;
+constexpr std::uint32_t kLoopAdrAckLimit = 64;   // ADR_ACK_LIMIT (RP002-1.0.5 §3.3)
+constexpr std::uint32_t kLoopAdrAckDelay = 32;   // ADR_ACK_DELAY (RP002-1.0.5 §3.3)
 constexpr std::uint32_t kLoopAckBytes = 12;         // MHDR, DevAddr, FCtrl, FCnt, MIC
 constexpr std::uint32_t kLoopDataOverheadBytes = 13;
 constexpr std::uint8_t kLoopIgnoreField = 15;       // LinkADRReq : champ « ignorer »
@@ -1323,6 +1325,7 @@ struct LoopDevice {
     std::uint8_t answer_mask = 0;  // réponses MAC à porter dans la prochaine émission
     std::uint8_t answer_ok = 0;
     bool ds_pending = false;       // DevStatusReq reçue : DevStatusAns dans la prochaine émission
+    std::uint32_t adr_cnt = 0;     // ADRACKCnt : uplinks depuis la dernière descente reçue (TS001 §4.3.1.1)
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
@@ -1525,6 +1528,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     std::vector<Tx> txs;
     std::vector<TxOutcome> outcome;
     std::vector<std::uint8_t> powers, masks, oks;
+    std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
     std::vector<std::int8_t> drs;
     std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
     std::vector<Interval> busy;         // émissions passerelle planifiées (croissantes, disjointes)
@@ -1659,6 +1663,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 }
             }
         }
+        if (adr_reqs[a] != 0 && kind == 0) kind = 3;  // F14 : ADRACKReq, descente obligatoire
         if (kind == 0 && cmds == 0) return;
         if (kind == 0) kind = 3;
         const std::uint32_t fopts = kLoopFoptsMax - budget;
@@ -1757,6 +1762,22 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                         }
                     }
                 }
+                std::uint8_t adr_req = 0;
+                if (options.adr) {
+                    // F14 (TS001 §4.3.1.1) : ADRACKCnt compte les nouveaux uplinks ; ADRACKReq dès
+                    // LIMIT ; sans descente pendant LIMIT + DELAY uplinks, puissance par défaut puis
+                    // un débit plus bas tous les DELAY uplinks, jusqu'au débit par défaut.
+                    ++ds.adr_cnt;
+                    const std::uint32_t first = kLoopAdrAckLimit + kLoopAdrAckDelay + 1;
+                    if (ds.adr_cnt >= first && (ds.adr_cnt - first) % kLoopAdrAckDelay == 0) {
+                        ds.power_index = 0;
+                        if (ds.dr > 0) {
+                            --ds.dr;
+                            ds.sf = regions[i].dr_sf[static_cast<std::size_t>(ds.dr)];
+                        }
+                    }
+                    if (ds.adr_cnt >= kLoopAdrAckLimit) adr_req = 1;
+                }
                 const std::uint32_t idx = static_cast<std::uint32_t>(txs.size());
                 Tx t;
                 t.start = ev.t;
@@ -1771,6 +1792,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 drs.push_back(ds.dr);
                 masks.push_back(static_cast<std::uint8_t>(ds.answer_mask | (ds.ds_pending ? 4U : 0U)));
                 oks.push_back(ds.answer_ok);
+                adr_reqs.push_back(adr_req);
                 ds.ds_pending = false;
                 next_tx.push_back(-1);
                 if (ds.last_tx >= 0) next_tx[static_cast<std::size_t>(ds.last_tx)] = idx;
@@ -1863,6 +1885,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
                 }
                 dl.delivered = ok;
+                if (ok) dev[dl.device].adr_cnt = 0;  // F14 : toute descente de classe A reçue
                 {
                     const std::vector<std::uint32_t>& ids = dl_items[ev.index];
                     for (const std::uint32_t id : ids) {

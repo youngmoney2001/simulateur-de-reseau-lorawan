@@ -136,6 +136,12 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
 - **S4 : mesh et multi-passerelles** : hors périmètre initial ; refusés avec commandes actives
   tant qu'ils ne sont pas portés.
 
+## F14 : backoff ADR côté dispositif
+
+Décision du propriétaire : F14 implémenté en boucle fermée, empreintes ADR historiques validées avant commit. Règle (TS001 §4.3.1.1) : ADRACKCnt par nouvel uplink ; ADRACKReq à `ADR_ACK_LIMIT` (64) ; une descente de classe A reçue remet le compteur et ADRACKReq à zéro ; sans descente pendant `LIMIT + ADR_ACK_DELAY` (96) uplinks, puissance par défaut puis débit plus bas à chaque `ADR_ACK_DELAY` (32) uplinks.
+
+Implémentation : `LoopDevice::adr_cnt` ; étape au 97e uplink puis tous les 32 ; `ADRACKReq` porté par l'émission (`adr_reqs`) et suivi d'une descente de classe A. Écarts assumés : cran de débit −1 au lieu de Table 12 (identique pour DR1–DR6 en EU868), retour aux canaux par défaut et NbTrans sans objet dans ce modèle. Tests : `test_adr_ack_backoff_without_downlink`, `test_adr_ack_counter_reset_by_downlink`.
+
 ## Risques
 - Performance : la file d'événements doit rester O(n log n) ; garder la limite 200 000 émissions.
 - Divergence Python/C++ en S0 : tests d'équivalence obligatoires avant toute suppression du code Python.

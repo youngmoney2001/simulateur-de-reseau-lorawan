@@ -269,7 +269,7 @@ struct LoopMacSlot {
 
 struct LoopOptions {
     plan::PlanOptions protocol;               // acquittements, descentes de données, puissances
-    bool adr = false;                         // LinkADRReq
+    bool adr = false;                         // LinkADRReq ; active aussi le backoff dispositif F14 (ADRACKReq, TS001 §4.3.1.1)
     std::int32_t installation_margin_tenth_db = 0;  // marge d'installation de l'ADR (dixièmes de dB)
     bool duty_cycle = false;                  // DutyCycleReq, une fois, au premier uplink reçu
     std::uint8_t duty_cycle_exponent = 0;     // 0..15 : rapport cyclique 1 / 2^k
@@ -486,7 +486,7 @@ struct MultiDownlink {
     std::uint32_t gateway = 0;
     bool data = false;          // false : ACK seul ; true : charge
     bool join = false;          // true : join-accept (charge de 17 octets)
-    SimTime t_open_ns = 0;      // ouverture de la fenêtre chez le dispositif : RX1 = fin + 1 s ; RX2 = fin + 2 s (boucle fermée)
+    SimTime t_open_ns = 0;      // ouverture de la fenêtre chez le dispositif : RX1 = fin + 1 s ; RX2 = fin + 2 s (boucle fermée). Départ strict à t_open (A6, TS001 §3.3.5) : aucun décalage intra-fenêtre
     SimTime start_ns = -1;
     SimTime end_ns = -1;
     DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;

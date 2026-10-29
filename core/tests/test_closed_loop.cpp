@@ -661,6 +661,62 @@ void test_mac_no_retransmission_of_lost_answers() {
 
 }  // namespace
 
+void test_adr_ack_backoff_without_downlink() {
+    // F14 (TS001 §4.3.1.1, RP002-1.0.5 §3.3) : aucune descente ne parvient au dispositif (sensibilité
+    // réelle dégradée de 200 dB). ADRACKCnt atteint 64 : ADRACKReq. Sans descente pendant
+    // LIMIT + DELAY = 96 uplinks, le débit baisse d'un cran au 97e uplink (puissance par défaut), puis
+    // tous les DELAY = 32 uplinks : SF8 au rang 96, SF9 au rang 128, SF10 au rang 160.
+    const EndDeviceSpec d[] = {dev(10.0, 7, 0, 60 * kS, 170)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.protocol.device_rx_offset_db = 200.0;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{170});
+    if (res.uplinks.size() != 170) return;
+    CHECK_EQ(res.uplinks[95].spreading_factor, std::uint8_t{7});
+    CHECK_EQ(res.uplinks[96].spreading_factor, std::uint8_t{8});
+    CHECK_EQ(res.uplinks[127].spreading_factor, std::uint8_t{8});
+    CHECK_EQ(res.uplinks[128].spreading_factor, std::uint8_t{9});
+    CHECK_EQ(res.uplinks[160].spreading_factor, std::uint8_t{10});
+    // ADRACKReq à partir du 64e uplink : une descente forcée est émise, perdue ici.
+    CHECK_TRUE(res.downlinks.size() > 0);
+    for (const LoopDownlink& dl : res.downlinks) CHECK_TRUE(!dl.delivered);
+}
+
+void test_adr_ack_counter_reset_by_downlink() {
+    // F14 : des descentes reçues (ADRACKReq honoré à chaque 64 uplinks) remettent ADRACKCnt à 0 :
+    // aucun backoff, donc le débit ne remonte jamais au cours des 170 uplinks, dispositif proche
+    // partant de SF12 (l'ADR seul fait descendre le débit).
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 170)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{170});
+    if (res.uplinks.size() != 170) return;
+    for (std::size_t k = 1; k < res.uplinks.size(); ++k) {
+        CHECK_TRUE(res.uplinks[k].spreading_factor <= res.uplinks[k - 1].spreading_factor);
+    }
+    bool delivered_without_commands = false;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if (dl.delivered && dl.commands == 0) delivered_without_commands = true;
+    }
+    CHECK_TRUE(delivered_without_commands);  // descente forcée par ADRACKReq, reçue
+}
+
 void run_closed_loop_tests() {
     test_mac_queue_lifecycle_under_mixed_load();
     test_mac_queue_fairness_bounded_wait();
@@ -674,6 +730,8 @@ void run_closed_loop_tests() {
     test_next_uplink_waits_for_rx2_end();
     test_rx2_fallback_when_gateway_busy();
     test_no_shift_inside_busy_windows();
+    test_adr_ack_backoff_without_downlink();
+    test_adr_ack_counter_reset_by_downlink();
     test_mac_reservations_and_answers();
     test_mac_queue_defers_expires_and_conserves();
     test_mac_queue_zero_deferrals_expires_at_once();
