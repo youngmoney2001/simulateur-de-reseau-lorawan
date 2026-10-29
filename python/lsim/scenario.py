@@ -31,6 +31,8 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
+from lsim.gateway_sensitivity import (CATALOG, MODEL_ID, SF5_REGION, AbsoluteSensitivity,
+                                     SensitivityError)
 from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
                                    rx_sensitivity_offset_db)
 
@@ -45,6 +47,44 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SensitivityPoint(_Strict):
+    """Un seuil absolu publié (dBm) pour une bande et un SF."""
+
+    bandwidth_hz: Literal[125000, 250000, 500000] = 125000
+    sf: int = Field(ge=5, le=12)
+    dbm: float = Field(ge=-160.0, le=-60.0)
+
+
+class SensitivityModel(_Strict):
+    """Sensibilité absolue de la passerelle (`sensibilite-par-sf-v2`), jamais déduite du relatif.
+
+    Soit `profile` (nom du catalogue `lsim.gateway_sensitivity.CATALOG`), soit `points` explicites
+    avec `source` et `conditions`. Une paire SF/bande absente est refusée à la validation.
+    """
+
+    model: Literal["sensibilite-par-sf-v2"]
+    profile: Optional[str] = Field(None, min_length=1, max_length=64)
+    source: Optional[str] = Field(None, min_length=1, max_length=500)
+    conditions: Optional[str] = Field(None, min_length=1, max_length=500)
+    points: Optional[list[SensitivityPoint]] = Field(None, min_length=1, max_length=24)
+
+    def absolute(self) -> AbsoluteSensitivity:
+        if (self.profile is None) == (self.points is None):
+            raise ValueError("sensibilité : exactement un de « profile » ou « points »")
+        if self.profile is not None:
+            if self.profile not in CATALOG:
+                raise ValueError(f"profil de sensibilité inconnu : {self.profile!r}")
+            return CATALOG[self.profile]
+        if self.source is None or self.conditions is None:
+            raise ValueError("points explicites : « source » et « conditions » requises")
+        try:
+            return AbsoluteSensitivity(
+                points=tuple((p.bandwidth_hz, p.sf, p.dbm) for p in self.points),
+                source=self.source, conditions=self.conditions)
+        except SensitivityError as exc:
+            raise ValueError(str(exc)) from None
+
+
 class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
@@ -53,6 +93,8 @@ class GatewayModel(_Strict):
     name: Optional[str] = Field(None, min_length=1, max_length=64)
     profile: Optional[str] = Field(None, min_length=1, max_length=64)
     mesh: bool = False
+    # Sensibilité absolue (modèle sensibilite-par-sf-v2). Absent = modèle relatif, hash inchangé.
+    sensitivity: Optional[SensitivityModel] = None
 
 
 class MeshModel(_Strict):
@@ -110,7 +152,7 @@ class GroupModel(_Strict):
     name: str = Field(min_length=1, max_length=64)
     count: Optional[int] = Field(default=None, ge=1, le=MAX_DEVICES)
     placement: Placement
-    spreading_factor: int = Field(7, ge=7, le=12)
+    spreading_factor: int = Field(7, ge=5, le=12)
     payload_bytes: int = Field(10, ge=0, le=255)
     tx_power_dbm: float = 14.0
     period_s: float = Field(600.0, gt=0)
@@ -288,8 +330,43 @@ class ScenarioModel(_Strict):
     mac: Optional[MacModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
+    def _sensitivity_rules(self) -> None:
+        """Sensibilité absolue et SF5/SF6 : refus explicites, aucun repli silencieux."""
+        for g in self.groups:
+            if g.spreading_factor == 6:
+                raise ValueError(f"groupe {g.name!r} : SF6 non modélisé (en-tête implicite seulement)")
+        sf5 = [g.name for g in self.groups if g.spreading_factor == 5]
+        gws = [self.gateway, *(self.gateways or [])]
+        if all(g.sensitivity is None for g in gws):
+            if sf5:
+                raise ValueError(f"groupe {sf5[0]!r} : SF5 exige le modèle {MODEL_ID} "
+                                 "(bloc « sensitivity » de la passerelle)")
+            return
+        if self.gateways is not None or self.mesh is not None:
+            raise ValueError(f"{MODEL_ID} : passerelle unique uniquement "
+                             "(pas de « gateways » ni de mesh)")
+        gw = self.gateway
+        if gw.profile is not None:
+            raise ValueError(f"{MODEL_ID} et profil de passerelle {gw.profile!r} incompatibles : "
+                             "le seuil absolu remplace le décalage relatif, sans conversion")
+        sens = gw.sensitivity.absolute()
+        for g in self.groups:
+            if g.spreading_factor == 5 and g.region != SF5_REGION:
+                raise ValueError(f"groupe {g.name!r} : SF5 (DR13) réservé à la région {SF5_REGION}")
+            if g.region not in (None, SF5_REGION):
+                raise ValueError(f"groupe {g.name!r} : région {g.region!r} hors de {MODEL_ID} "
+                                 f"({SF5_REGION} seulement)")
+            try:
+                sens.lookup(g.spreading_factor, 125_000)
+            except SensitivityError as exc:
+                raise ValueError(f"groupe {g.name!r} : {exc}") from None
+        if self.mac is not None and sf5:
+            raise ValueError(f"groupe {sf5[0]!r} : SF5 avec bloc « mac » refusé "
+                             "(sensibilité du terminal NV)")
+
     @model_validator(mode="after")
     def _limits(self) -> "ScenarioModel":
+        self._sensitivity_rules()
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
@@ -396,7 +473,7 @@ class Scenario:
             dumped.pop("mesh", None)
         gw_dumps = ([dumped["gateway"]] if model.gateways is None else dumped.get("gateways", []))
         for gw_dump in gw_dumps:
-            for key in ("name", "profile"):
+            for key in ("name", "profile", "sensitivity"):
                 if gw_dump.get(key) is None:
                     gw_dump.pop(key, None)
             if not gw_dump.get("mesh"):
@@ -460,7 +537,8 @@ class Scenario:
 
     def gateway(self) -> Gateway:
         g = self.model.gateway
-        return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
+        return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                       absolute_sensitivity=None if g.sensitivity is None else g.sensitivity.absolute())
 
     def gateway_models(self) -> list[GatewayModel]:
         """Toutes les passerelles, dans l'ordre du fichier (une seule si « gateway »)."""

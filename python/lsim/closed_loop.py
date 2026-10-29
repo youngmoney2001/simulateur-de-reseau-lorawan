@@ -19,11 +19,13 @@ from lsim._native import (
     _CEndDevice,
     _CEnvironment,
     _CGateway,
+    _CGatewayV2,
     _CInterval,
     _CPropagation,
     _CSimStats,
 )
 from lsim.downlink_plan import _CPlanDevice, _CPlanOptions
+from lsim.gateway_sensitivity import MODEL_ID
 from lsim.lora import StatusError
 from lsim.simulator import (
     MAX_END_DEVICES,
@@ -107,6 +109,17 @@ LIB.lsim_simulate_closed_loop_v2.restype = ctypes.c_int32
 LIB.lsim_simulate_closed_loop_v2.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CPlanDevice),
     ctypes.POINTER(_CLoopRegion), ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation),
+    ctypes.POINTER(_CEnvironment), ctypes.POINTER(_CLoopOptions),
+    ctypes.POINTER(_CLoopMac), ctypes.c_size_t, ctypes.POINTER(_CDeviceStats),
+    ctypes.POINTER(_CSimStats), ctypes.POINTER(_CLoopUplink), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CLoopDownlink), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CMacCounters),
+]
+LIB.lsim_simulate_closed_loop_gw2.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_gw2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CPlanDevice),
+    ctypes.POINTER(_CLoopRegion), ctypes.POINTER(_CGatewayV2), ctypes.POINTER(_CPropagation),
     ctypes.POINTER(_CEnvironment), ctypes.POINTER(_CLoopOptions),
     ctypes.POINTER(_CLoopMac), ctypes.c_size_t, ctypes.POINTER(_CDeviceStats),
     ctypes.POINTER(_CSimStats), ctypes.POINTER(_CLoopUplink), ctypes.c_size_t,
@@ -271,7 +284,11 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
         c_mac[k].flags = m.flags
 
     c_devs = _c_end_devices(devices)
-    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    absolute = getattr(gateway, "absolute_sensitivity", None)
+    if absolute is not None and abi != 2:
+        raise ValueError(f"{MODEL_ID} : ABI v2 requise (abi=2)")
+    c_gw = (absolute.to_c(gateway) if absolute is not None
+            else _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi))
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
@@ -331,7 +348,9 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
             c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
             c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy))
     elif abi == 2:
-        status = LIB.lsim_simulate_closed_loop_v2(
+        loop_fn = (LIB.lsim_simulate_closed_loop_gw2 if absolute is not None
+                   else LIB.lsim_simulate_closed_loop_v2)
+        status = loop_fn(
             c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
             ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
             c_mac if mac else None, len(mac), c_stats if n else None, ctypes.byref(c_tot),

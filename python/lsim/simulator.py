@@ -35,6 +35,8 @@ from lsim._native import (
     _CPropagation,
 )
 from lsim.environment import Environment
+from lsim.gateway_sensitivity import (MODEL_ID, AbsoluteSensitivity,
+                                     refuse_absolute)
 from lsim.lora import StatusError
 
 MAX_END_DEVICES = 10_000
@@ -112,8 +114,9 @@ class EndDevice:
         for name in ("x_m", "y_m", "tx_power_dbm"):
             if not math.isfinite(getattr(self, name)):
                 raise ValueError(f"{name} doit être un nombre fini")
-        if not 7 <= self.spreading_factor <= 12:
-            raise ValueError("spreading_factor doit être compris entre 7 et 12")
+        # SF5 (DR13) accepté ici ; le cœur refuse explicitement SF5 sans sensibilité absolue.
+        if not 5 <= self.spreading_factor <= 12:
+            raise ValueError("spreading_factor doit être compris entre 5 et 12")
         if not 0 <= self.payload_bytes <= 255:
             raise ValueError("payload_bytes doit être compris entre 0 et 255")
         if self.start_offset_ns < 0:
@@ -130,6 +133,8 @@ class Gateway:
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
     rx_sensitivity_offset_db: float = 0.0   # 0 sans profil ; voir gateway_profiles.rx_sensitivity_offset_db
+    # Sensibilité absolue (modèle sensibilite-par-sf-v2, ABI v2) ; None = modèle relatif (ABI v1).
+    absolute_sensitivity: Optional[AbsoluteSensitivity] = None
 
 
 @dataclass(frozen=True)
@@ -275,6 +280,7 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
     `max_path_loss_db`. Le calcul et sa borne de travail sont dans le cœur natif.
     Le shadowing n'est pas appliqué à la couverture (portée médiane déterministe).
     """
+    refuse_absolute(gateway, "coverage_radii")
     if not 1 <= azimuths <= 720:
         raise ValueError("azimuths doit être compris entre 1 et 720")
     if not math.isfinite(step_m) or step_m < 1.0:
@@ -381,7 +387,9 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     n = len(devices)
     c_devs = _c_end_devices(devices)
-    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    absolute = getattr(gateway, "absolute_sensitivity", None)
+    c_gw = (absolute.to_c(gateway) if absolute is not None
+            else _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi))
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
@@ -400,7 +408,9 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     count = ctypes.c_size_t(0)
     records = (_CTxRecord * capacity)() if capacity else None
-    status = LIB.lsim_simulate_uplinks_trace_v2(
+    trace_fn = (LIB.lsim_simulate_uplinks_trace_gw2 if absolute is not None
+                else LIB.lsim_simulate_uplinks_trace_v2)
+    status = trace_fn(
         c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
         c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
         c_busy, len(gateway_busy), c_res, len(reservations))
@@ -500,6 +510,8 @@ def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gate
     `gateway_busy` : pour chaque passerelle, ses périodes d'émission [début, fin) en ns (liste de
     même longueur que `gateways`). `with_trace` : renvoie une entrée par émission.
     """
+    for _g in gateways:
+        refuse_absolute(_g, "simulate_uplinks_multi")
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     if not 1 <= len(gateways) <= MAX_GATEWAYS:
@@ -621,6 +633,8 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     des émissions (dispositifs dans l'ordre, puis k) ; -1 aucune contrainte ; `DL_READY_NEVER`
     descente jamais acheminée. Longueur : nombre total d'émissions.
     """
+    for _g in gateways:
+        refuse_absolute(_g, "simulate_multi_downlinks")
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     if not 1 <= len(gateways) <= MAX_GATEWAYS:
@@ -701,6 +715,11 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
     `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
     plat et sans obstacle (résultat identique au modèle log-distance seul).
     """
+    if getattr(gateway, "absolute_sensitivity", None) is not None:
+        # Sensibilité absolue : même moteur, par la trace ABI v2 ; résultats identiques en compteurs.
+        traced = simulate_uplinks_trace(devices, gateway, propagation, environment)
+        return SimulationResult(per_device=traced.per_device, totals=traced.totals,
+                                gateway=traced.gateway)
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     n = len(devices)

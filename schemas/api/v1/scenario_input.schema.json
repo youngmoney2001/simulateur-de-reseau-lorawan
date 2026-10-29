@@ -165,6 +165,17 @@
           "default": null,
           "title": "Profile"
         },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensitivityModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "x_m": {
           "default": 0.0,
           "title": "X M",
@@ -267,7 +278,7 @@
         "spreading_factor": {
           "default": 7,
           "maximum": 12,
-          "minimum": 7,
+          "minimum": 5,
           "title": "Spreading Factor",
           "type": "integer"
         },
@@ -572,6 +583,115 @@
       "title": "PropagationModel",
       "type": "object"
     },
+    "SensitivityModel": {
+      "additionalProperties": false,
+      "description": "Sensibilité absolue de la passerelle (`sensibilite-par-sf-v2`), jamais déduite du relatif.\n\nSoit `profile` (nom du catalogue `lsim.gateway_sensitivity.CATALOG`), soit `points` explicites\navec `source` et `conditions`. Une paire SF/bande absente est refusée à la validation.",
+      "properties": {
+        "conditions": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conditions"
+        },
+        "model": {
+          "const": "sensibilite-par-sf-v2",
+          "title": "Model",
+          "type": "string"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SensitivityPoint"
+              },
+              "maxItems": 24,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Points"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SensitivityModel",
+      "type": "object"
+    },
+    "SensitivityPoint": {
+      "additionalProperties": false,
+      "description": "Un seuil absolu publié (dBm) pour une bande et un SF.",
+      "properties": {
+        "bandwidth_hz": {
+          "default": 125000,
+          "enum": [
+            125000,
+            250000,
+            500000
+          ],
+          "title": "Bandwidth Hz",
+          "type": "integer"
+        },
+        "dbm": {
+          "maximum": -60.0,
+          "minimum": -160.0,
+          "title": "Dbm",
+          "type": "number"
+        },
+        "sf": {
+          "maximum": 12,
+          "minimum": 5,
+          "title": "Sf",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sf",
+        "dbm"
+      ],
+      "title": "SensitivityPoint",
+      "type": "object"
+    },
     "TerrainModel": {
       "additionalProperties": false,
       "properties": {
@@ -627,6 +747,7 @@
         "mesh": false,
         "name": null,
         "profile": null,
+        "sensitivity": null,
         "x_m": 0.0,
         "y_m": 0.0
       }

@@ -259,6 +259,17 @@ class _CGateway(ctypes.Structure):
     ]
 
 
+class _CGatewayV2(ctypes.Structure):
+    """`lsim_gateway_v2` : passerelle + sensibilité absolue (modèle `sensibilite-par-sf-v2`)."""
+
+    _fields_ = [
+        ("base", _CGateway),
+        ("sensitivity_model", ctypes.c_uint32),
+        ("present", ctypes.c_uint32),
+        ("sensitivity_dbm", (ctypes.c_double * 8) * 3),
+    ]
+
+
 class _CPropagation(ctypes.Structure):
     _fields_ = [
         ("frequency_hz", ctypes.c_double),
@@ -577,6 +588,14 @@ LIB.lsim_simulate_uplinks_trace.argtypes = [
 LIB.lsim_simulate_uplinks_trace_v2.restype = ctypes.c_int32
 LIB.lsim_simulate_uplinks_trace_v2.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_trace_gw2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_gw2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2),
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),

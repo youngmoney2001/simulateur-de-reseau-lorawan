@@ -10,12 +10,14 @@ from __future__ import annotations
 import ctypes
 from typing import Sequence
 
+from lsim.gateway_sensitivity import MODEL_ID, SensitivityError
 from lsim._native import (
     LIB,
     _CDeviceStats,
     _CEndDevice,
     _CEnvironment,
     _CGateway,
+    _CGatewayV2,
     _CInterval,
     _CPropagation,
     _CSimStats,
@@ -97,6 +99,15 @@ LIB.lsim_simulate_uplinks_causal_v1.argtypes = [
     ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
     ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
 ]
+LIB.lsim_simulate_uplinks_causal_gw2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_causal_gw2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+]
 
 
 def simulate_causal(devices, gateway, propagation, environment, radios, options):
@@ -111,11 +122,18 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options)
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     if len(radios) != n:
         raise ValueError("un paramètre radio par dispositif")
+    for r in radios:
+        # Descente vers un débit hors 7..12 (SF5, DR13) : sensibilité du dispositif NV, refus explicite.
+        if not 7 <= r.rx1_sf <= 12:
+            raise SensitivityError(f"descente vers RX1 SF{r.rx1_sf} refusée : sensibilité du "
+                                   "dispositif NV (SF5 : uplink seulement)")
     capacity = sum(d.messages for d in devices)
     if capacity > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     c_devs = _c_end_devices(devices)
-    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    absolute = getattr(gateway, "absolute_sensitivity", None)
+    c_gw = (absolute.to_c(gateway) if absolute is not None
+            else _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi))
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
@@ -144,7 +162,9 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options)
     count = ctypes.c_size_t(0)
     n_busy = ctypes.c_size_t(0)
     busy = (_CInterval * cap_busy)()
-    status = LIB.lsim_simulate_uplinks_causal_v1(
+    causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2 if absolute is not None
+                 else LIB.lsim_simulate_uplinks_causal_v1)
+    status = causal_fn(
         c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
         c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
         c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy))

@@ -728,6 +728,16 @@ int32_t lsim_simulate_uplinks_trace_gw2(const lsim_end_device* devices, size_t d
     return trace_v2_impl(devices, device_count, &gateway->base, prop, env, per_device, totals, records, record_capacity, record_count, gateway_busy, gateway_busy_count, reservations, reservation_count, &absolute);
 }
 
+int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
+                                        const lsim_gateway* gateway, const lsim_propagation* prop,
+                                        const lsim_environment* env, lsim_device_stats* per_device,
+                                        lsim_sim_stats* totals, lsim_tx_record* records,
+                                        size_t record_capacity, size_t* record_count,
+                                        const lsim_plan_device* radios,
+                                        const lsim_plan_options* options,
+                                        lsim_interval* busy_out, size_t busy_capacity,
+                                        size_t* busy_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute);
+
 int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t device_count,
                                         const lsim_gateway* gateway, const lsim_propagation* prop,
                                         const lsim_environment* env, lsim_device_stats* per_device,
@@ -737,6 +747,35 @@ int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t d
                                         const lsim_plan_options* options,
                                         lsim_interval* busy_out, size_t busy_capacity,
                                         size_t* busy_count) {
+    return causal_v1_impl(devices, device_count, gateway, prop, env, per_device, totals, records, record_capacity, record_count, radios, options, busy_out, busy_capacity, busy_count, nullptr);
+}
+
+int32_t lsim_simulate_uplinks_causal_gw2(const lsim_end_device* devices, size_t device_count,
+                                        const lsim_gateway_v2* gateway, const lsim_propagation* prop,
+                                        const lsim_environment* env, lsim_device_stats* per_device,
+                                        lsim_sim_stats* totals, lsim_tx_record* records,
+                                        size_t record_capacity, size_t* record_count,
+                                        const lsim_plan_device* radios,
+                                        const lsim_plan_options* options,
+                                        lsim_interval* busy_out, size_t busy_capacity,
+                                        size_t* busy_count) {
+    if (gateway == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    if (gateway->sensitivity_model > LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    const lsim::sim::GatewayAbsoluteSensitivity absolute = to_absolute(gateway);
+    return causal_v1_impl(devices, device_count, &gateway->base, prop, env, per_device, totals, records, record_capacity, record_count, radios, options, busy_out, busy_capacity, busy_count, &absolute);
+}
+
+int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
+                                        const lsim_gateway* gateway, const lsim_propagation* prop,
+                                        const lsim_environment* env, lsim_device_stats* per_device,
+                                        lsim_sim_stats* totals, lsim_tx_record* records,
+                                        size_t record_capacity, size_t* record_count,
+                                        const lsim_plan_device* radios,
+                                        const lsim_plan_options* options,
+                                        lsim_interval* busy_out, size_t busy_capacity,
+                                        size_t* busy_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
         busy_count == nullptr || options == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr))) {
@@ -783,7 +822,7 @@ int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t d
 
         std::vector<lsim::sim::TxRecord> trace;
         const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
-                                           totals, &trace, nullptr, nullptr, &causal);
+                                           totals, &trace, nullptr, nullptr, &causal, absolute);
         if (st != 0) {
             return st;
         }

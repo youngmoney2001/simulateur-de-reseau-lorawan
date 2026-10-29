@@ -142,7 +142,7 @@ class DeviceRowOut(_Strict):
     index_in_group: int = Field(ge=0)
     x_m: float
     y_m: float
-    spreading_factor: int = Field(ge=7, le=12)
+    spreading_factor: int = Field(ge=5, le=12)
     sent: int = Field(ge=0)
     received: int = Field(ge=0)
     lost_sensitivity: int = Field(ge=0)

@@ -1237,6 +1237,20 @@ LSIM_API int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices,
                                                  lsim_interval* busy_out, size_t busy_capacity,
                                                  size_t* busy_count);
 
+/* Variante passerelle v2 (sensibilité absolue) du chemin causal : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway_v2* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count);
+
 /* Variante passerelle v2 (sensibilité absolue) : mêmes sorties et statuts. */
 LSIM_API int32_t lsim_simulate_uplinks_trace_gw2(const lsim_end_device* devices,
                                                 size_t device_count,
