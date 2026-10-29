@@ -49,6 +49,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "Sans exercice : `nodes` donne la topologie (vide = aucun équipement). Avec un exercice, la\ntopologie de départ vient de l'exercice et `nodes` doit rester vide. Le CLI n'existe que pour\n`relay` et `border` (§4).",
   "properties": {
     "exercise_id": {
       "anyOf": [

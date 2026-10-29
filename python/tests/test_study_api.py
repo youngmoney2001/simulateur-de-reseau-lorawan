@@ -153,20 +153,58 @@ def multi_run(api):
     return created["run_id"], summary
 
 
-def test_binding_links_gateway_equipments_to_their_counters(api, multi_run):
-    run_id, summary = multi_run
+def _link(api, sid, run_id, links, token=None):
+    return api.call("POST", f"/api/v1/sessions/{sid}/simulation",
+                    {"run_id": run_id, "links": links}, token=token or api.alice)
+
+
+FRONT = {"node_id": "frontiere", "gateway": "frontiere"}
+RELAY = {"node_id": "relais-1", "gateway": "relais-1"}
+
+
+def test_binding_links_only_the_explicit_associations(api, multi_run):
+    run_id, _ = multi_run
     sid = _session(api)
-    status, body = api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": run_id})
+    status, body = _link(api, sid, run_id, [FRONT, RELAY])
     assert status == 200
     bound = SimulationBound.model_validate(body)
-    assert bound.linked == ["frontiere", "relais-1"]      # le capteur n'a pas de CLI ni de passerelle
+    assert bound.linked == ["frontiere", "relais-1"]
     assert bound.unlinked == ["capteur-1"]
+
+
+def test_a_name_match_without_an_explicit_link_links_nothing(api, multi_run):
+    run_id, _ = multi_run
+    sid = _session(api)
+    _, body = _link(api, sid, run_id, [FRONT])        # relais-1 porte le nom d'une passerelle
+    assert body["linked"] == ["frontiere"] and "relais-1" in body["unlinked"]
+    _, body = _link(api, sid, run_id, [])              # sans association : tout est délié
+    assert body["linked"] == []
+
+
+def test_invalid_links_are_refused_and_change_nothing(api, multi_run):
+    run_id, _ = multi_run
+    sid = _session(api)
+    _link(api, sid, run_id, [FRONT])
+    cases = [
+        [FRONT, {"node_id": "relais-1", "gateway": "inconnue"}],        # passerelle absente
+        [FRONT, {"node_id": "absent", "gateway": "relais-1"}],          # équipement inconnu
+        [FRONT, {"node_id": "capteur-1", "gateway": "relais-1"}],       # sans passerelle
+        [FRONT, {"node_id": "relais-1", "gateway": "frontiere"}],       # passerelle deux fois
+        [FRONT, {"node_id": "frontiere", "gateway": "relais-1"}],       # équipement deux fois
+    ]
+    for links in cases:
+        status, body = _link(api, sid, run_id, links)
+        assert status == 422 and body["field"] == "links", links
+    # La liaison valide d'avant les refus est intacte : aucune liaison partielle, aucune perte.
+    _run_lines(api, sid, "frontiere", ["en"])
+    _, body = _cli(api, sid, "frontiere", "show lorawan counters")
+    assert "received" in body["output"]
 
 
 def test_show_counters_reads_the_real_run_report(api, multi_run):
     run_id, summary = multi_run
     sid = _session(api)
-    api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": run_id})
+    _link(api, sid, run_id, [FRONT])
     report = {g["name"]: g for g in summary["gateways"]}["frontiere"]
     _run_lines(api, sid, "frontiere", ["en"])
     _, body = _cli(api, sid, "frontiere", "show lorawan counters")
@@ -178,7 +216,7 @@ def test_show_counters_reads_the_real_run_report(api, multi_run):
 def test_show_mesh_counters_without_mesh_says_no_result(api, multi_run):
     run_id, _ = multi_run
     sid = _session(api)
-    api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": run_id})
+    _link(api, sid, run_id, [FRONT])
     _run_lines(api, sid, "frontiere", ["en"])
     _, body = _cli(api, sid, "frontiere", "show mesh counters")
     assert "Aucun résultat" in body["output"]
@@ -191,23 +229,24 @@ def test_counters_are_absent_before_binding(api):
     assert "Aucun résultat" in body["output"]
 
 
-def test_single_gateway_run_links_no_equipment(api):
+def test_single_gateway_run_has_no_gateway_name_to_link(api):
     d = _scenario(count=20, messages=2)
     status, created = api.call("POST", "/api/v1/runs", {"scenario": d})
     assert status == 202
     assert _wait_done(api, created["run_id"])["state"] == "done"
     sid = _session(api)
-    _, body = api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": created["run_id"]})
+    _, body = _link(api, sid, created["run_id"], [])
     assert body["linked"] == [] and body["unlinked"] == ["frontiere", "relais-1", "capteur-1"]
+    status, body = _link(api, sid, created["run_id"], [FRONT])
+    assert status == 422 and body["field"] == "links"
 
 
 def test_binding_an_unknown_or_foreign_run_is_not_found(api, multi_run):
     run_id, _ = multi_run
     sid = _session(api)
-    status, _ = api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": "absent-run-01"})
+    status, _ = _link(api, sid, "absent-run-01", [])
     assert status == 404
-    status, _ = api.call("POST", f"/api/v1/sessions/{sid}/simulation", {"run_id": run_id},
-                         token=api.bob)
+    status, _ = _link(api, sid, run_id, [], token=api.bob)
     assert status == 404
 
 
@@ -255,3 +294,56 @@ def test_idle_sessions_expire_and_are_unknown_afterwards():
     with pytest.raises(study_session.StudyError) as exc:
         svc.topology("alice", sid)
     assert exc.value.status == 404
+
+
+def _race(attempts, call):
+    """Lance `attempts` appels simultanés (barrière) ; `call(i)` reçoit l'indice de tentative."""
+    import threading
+    barrier = threading.Barrier(attempts)
+    outcomes = []
+    lock = threading.Lock()
+
+    def worker(i):
+        barrier.wait()
+        try:
+            call(i)
+            status = "ok"
+        except study_session.StudyError as exc:
+            status = exc.status
+        with lock:
+            outcomes.append(status)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(attempts)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return outcomes
+
+
+def test_concurrent_creates_never_exceed_the_per_owner_cap():
+    from lsim.study_contract import SessionCreate
+    svc = StudyService()
+    outcomes = _race(3 * study_session.MAX_SESSIONS_PER_OWNER,
+                     lambda _i: svc.create("alice", SessionCreate()))
+    assert outcomes.count("ok") == study_session.MAX_SESSIONS_PER_OWNER
+    assert outcomes.count(429) == 2 * study_session.MAX_SESSIONS_PER_OWNER
+
+
+def test_concurrent_creates_never_exceed_the_total_cap(monkeypatch):
+    from lsim.study_contract import SessionCreate
+    monkeypatch.setattr(study_session, "MAX_SESSIONS_TOTAL", 5)
+    svc = StudyService()
+    outcomes = _race(12, lambda i: svc.create(f"owner{i}", SessionCreate()))
+    assert outcomes.count("ok") == 5
+
+
+def test_empty_session_creation_is_allowed_and_nodes_are_per_session(api):
+    status, first = api.call("POST", "/api/v1/sessions", {})
+    assert status == 201
+    status, second = api.call("POST", "/api/v1/sessions", {"nodes": NODES})
+    assert status == 201
+    _, topo = api.call("GET", f"/api/v1/sessions/{first['session_id']}/topology")
+    assert topo["nodes"] == []
+    _, topo = api.call("GET", f"/api/v1/sessions/{second['session_id']}/topology")
+    assert len(topo["nodes"]) == 3

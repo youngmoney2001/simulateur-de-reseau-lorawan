@@ -54,7 +54,8 @@ from lsim.api_contract import (
     ValidateResponse, list_regions,
 )
 from lsim.energy_report import device_energies_protocol
-from lsim.study_contract import CliRequest, SessionCreate, SimulationBind
+from lsim import study_exercises
+from lsim.study_contract import CliRequest, SessionCreate, SimulationBind, SubmitRequest
 from lsim.study_session import StudyError, StudyService
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
@@ -842,6 +843,15 @@ class _Handler(BaseHTTPRequestHandler):
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))
             return 201, created.model_dump(exclude_none=True)
+
+        if method == "GET" and rest == "exercises":
+            return 200, study_exercises.listing().model_dump()
+        m_submit = re.fullmatch(r"exercises/([^/]+)/submit", rest)
+        if m_submit is not None and method == "POST":
+            req = self._parse_body(SubmitRequest)
+            exercise_id = m_submit.group(1)
+            result = self._study(lambda: study.submit(owner, exercise_id, req.session_id))
+            return 200, result.model_dump()
 
         m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation)", rest)
         if m is not None:

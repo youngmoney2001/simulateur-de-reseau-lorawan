@@ -3,10 +3,19 @@
 ## 0.1.0 (non publiée)
 
 
+### Panneau d'étude : exercices notés et liaison explicite (servis)
+- `GET /api/v1/exercises` (catalogue sans critères ni solution) et `POST /api/v1/exercises/{id}/submit` (le client n'envoie que `session_id`; le serveur note l'état qu'il détient).
+- Trois exercices : EU868, relais à deux sauts, US915 sous-bande 2 avec réception. Aucun indice servi (`hints_available: 0`).
+- `POST /sessions` : `exercise_id` acceptée (topologie de l'exercice, `nodes` vide). `nodes` vide autorisé.
+- **Changement** : la liaison à un run ne se fait plus par nom. `POST /sessions/{id}/simulation` reçoit `links: [{node_id, gateway}]` ; toute association invalide annule la requête entière.
+- Limites de sessions appliquées sous verrou, testées en concurrence.
+- Schémas `study-draft` régénérés (`study_simulation_bind`, `study_session_create`). Schémas `v1` inchangés.
+- Tests : `test_study_exercises.py` (14), `test_study_api.py` (27). Suite Python : 1431 passés, 1 ignoré.
+
 ### Panneau d'étude : sessions, CLI et liaison aux résultats (servis)
 - Routes : `POST /api/v1/sessions`, `GET /api/v1/sessions/{id}/topology`, `POST /api/v1/sessions/{id}/cli`, `POST /api/v1/sessions/{id}/simulation`. Propriétaire filtré (404 pour un autre compte), bornes et expiration en mémoire.
 - `show lorawan counters` et `show mesh counters` affichent les compteurs réels de la passerelle de même nom dans le run lié. Les `show` non alimentés par le moteur (voisins, routes, appareils) sont retirés de la grammaire.
-- Exercices : **non servis** (catalogue, soumission, barème). `exercise_id` est refusé en 422.
+- Exercices : servis depuis (voir l'entrée « exercices notés » ci-dessus).
 - Tests : `python/tests/test_study_api.py` (20). Suite Python : 1412 passés, 1 ignoré.
 
 ### CLI d'équipement du panneau d'étude (phase 4, brouillon)

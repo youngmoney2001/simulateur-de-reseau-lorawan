@@ -1,9 +1,12 @@
-"""Service des sessions du panneau d'étude (`docs/STUDY_PANEL_SPEC.md` §7).
+"""Service des sessions du panneau d'étude (`docs/STUDY_PANEL_SPEC.md` §6-7).
 
-Une session regroupe des équipements (un état CLI par équipement) et peut être liée à une
-simulation terminée. Les sessions sont en mémoire : elles disparaissent au redémarrage, sont bornées
-en nombre et expirent après inactivité. Tout accès est filtré par propriétaire ; un identifiant
-d'un autre compte renvoie « inconnue » (404), jamais « interdite ».
+Une session regroupe des équipements (un état CLI par équipement), peut être liée à un exercice et
+à une simulation terminée. Les sessions sont en mémoire : elles disparaissent au redémarrage, sont
+bornées en nombre et expirent après inactivité. Tout accès est filtré par propriétaire ; un
+identifiant d'un autre compte renvoie « inconnue » (404), jamais « interdite ».
+
+Les équipements appartiennent à leur session : aucun n'est partagé entre comptes.
+Les limites sont vérifiées et appliquées sous le même verrou : pas de dépassement en concurrence.
 
 Le service ne connaît pas le serveur HTTP : `api_server` traduit `StudyError` en réponse.
 """
@@ -16,10 +19,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from lsim import study_cli
+from lsim import study_cli, study_exercises
 from lsim.study_contract import (
-    CliError, CliRequest, CliResponse, NodeState, SessionCreate, SessionOut, SessionTopology,
-    SimulationBind, SimulationBound,
+    CliError, CliRequest, CliResponse, CriterionResult, NodeState, SessionCreate, SessionOut,
+    SessionTopology, SimulationBind, SimulationBound, SubmitResult,
 )
 
 SESSION_TTL_S = 4 * 3600
@@ -38,10 +41,11 @@ class StudyError(Exception):
 @dataclass
 class _Study:
     owner: str
-    created: float
     last_used: float
+    exercise_id: Optional[str] = None
     nodes: dict = field(default_factory=dict)       # id -> Node
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
+    reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
     run_id: Optional[str] = None
 
 
@@ -66,13 +70,20 @@ class StudyService:
         st.last_used = self._clock()
         return st
 
-    # Opérations ---------------------------------------------------------------------------------
+    # Sessions -----------------------------------------------------------------------------------
 
     def create(self, owner: str, req: SessionCreate) -> SessionOut:
+        nodes = list(req.nodes)
         if req.exercise_id is not None:
-            raise StudyError(422, "validation_error",
-                             "aucun exercice disponible dans cette version", "exercise_id")
-        ids = [n.id for n in req.nodes]
+            exercise = study_exercises.get(req.exercise_id)
+            if exercise is None:
+                raise StudyError(422, "validation_error", "exercice inconnu", "exercise_id")
+            if nodes:
+                raise StudyError(422, "validation_error",
+                                 "la topologie vient de l'exercice : nodes doit être vide",
+                                 "nodes")
+            nodes = list(exercise.start_nodes)
+        ids = [n.id for n in nodes]
         if len(set(ids)) != len(ids):
             raise StudyError(422, "validation_error", "identifiants d'équipements en double",
                              "nodes")
@@ -84,12 +95,11 @@ class StudyService:
             if len(self._sessions) >= MAX_SESSIONS_TOTAL:
                 raise StudyError(429, "limit_exceeded", "capacité des sessions atteinte")
             sid = secrets.token_urlsafe(16)
-            now = self._clock()
             self._sessions[sid] = _Study(
-                owner=owner, created=now, last_used=now,
-                nodes={n.id: n for n in req.nodes},
-                cli={n.id: study_cli.new_session(n.id) for n in req.nodes})
-        return SessionOut(session_id=sid)
+                owner=owner, last_used=self._clock(), exercise_id=req.exercise_id,
+                nodes={n.id: n for n in nodes},
+                cli={n.id: study_cli.new_session(n.id) for n in nodes})
+        return SessionOut(session_id=sid, exercise_id=req.exercise_id)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -128,20 +138,68 @@ class StudyService:
         return CliResponse(node_id=node.id, mode=result.mode, prompt=result.prompt,
                            output=output, error=error)
 
+    # Liaison à une simulation -------------------------------------------------------------------
+
     def bind_run(self, owner: str, sid: str, req: SimulationBind, summary: dict) -> SimulationBound:
-        """Lie le résumé d'un run terminé. `summary` vient de `RunService.summary` (propriétaire
-        vérifié) ; un run mono-passerelle ne lie aucun équipement faute de nom de passerelle."""
-        reports = {g["name"]: g for g in summary.get("gateways") or []}
+        """Lie le résumé d'un run terminé selon les associations explicites de la requête.
+
+        Tout est validé avant la moindre modification : une association invalide ne laisse aucun
+        équipement à moitié lié. `summary` vient de `RunService.summary` (propriétaire vérifié).
+        """
+        gateways = {g["name"]: g for g in summary.get("gateways") or []}
+        seen_nodes: set[str] = set()
+        seen_gateways: set[str] = set()
         with self._lock:
             st = self._get_locked(owner, sid)
-            linked, unlinked = [], []
-            for node in st.nodes.values():
-                cli = st.cli[node.id]
-                if node.kind in CLI_NODE_KINDS and node.id in reports:
-                    cli.simulation = study_cli.counters_text(reports[node.id])
-                    linked.append(node.id)
-                else:
+            for link in req.links:
+                node = st.nodes.get(link.node_id)
+                if node is None:
+                    raise StudyError(422, "validation_error",
+                                     f"équipement inconnu : {link.node_id}", "links")
+                if node.kind not in CLI_NODE_KINDS:
+                    raise StudyError(422, "validation_error",
+                                     f"équipement sans passerelle : {link.node_id}", "links")
+                if link.gateway not in gateways:
+                    raise StudyError(422, "validation_error",
+                                     f"passerelle absente du run : {link.gateway}", "links")
+                if link.node_id in seen_nodes or link.gateway in seen_gateways:
+                    raise StudyError(422, "validation_error",
+                                     "équipement ou passerelle associé deux fois", "links")
+                seen_nodes.add(link.node_id)
+                seen_gateways.add(link.gateway)
+            st.reports = {}
+            linked = []
+            for link in req.links:
+                report = gateways[link.gateway]
+                st.reports[link.node_id] = dict(report)
+                st.cli[link.node_id].simulation = study_cli.counters_text(report)
+                linked.append(link.node_id)
+            for node_id, cli in st.cli.items():
+                if node_id not in seen_nodes:
                     cli.simulation = None
-                    unlinked.append(node.id)
             st.run_id = req.run_id
+            unlinked = [n for n in st.nodes if n not in seen_nodes]
         return SimulationBound(session_id=sid, run_id=req.run_id, linked=linked, unlinked=unlinked)
+
+    # Exercices ----------------------------------------------------------------------------------
+
+    def submit(self, owner: str, exercise_id: str, sid: str) -> SubmitResult:
+        """Note la session pour l'exercice. Seul l'état détenu par le serveur est évalué."""
+        exercise = study_exercises.get(exercise_id)
+        if exercise is None:
+            raise StudyError(404, "not_found", "exercice inconnu")
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            if st.exercise_id != exercise_id:
+                raise StudyError(422, "validation_error",
+                                 "session non liée à cet exercice", "session_id")
+            state = study_exercises.State(
+                configs={nid: cli.config.copy() for nid, cli in st.cli.items()},
+                reports={nid: dict(r) for nid, r in st.reports.items()})
+        graded = study_exercises.grade(exercise, state)
+        criteria = [CriterionResult(id=c.id, label=c.label, passed=ok,
+                                    points=c.points if ok else 0, max_points=c.points)
+                    for c, ok in graded]
+        score = sum(c.points for c in criteria)       # indices : aucun, donc pas de pénalité
+        return SubmitResult(exercise_id=exercise_id, score=max(0, score),
+                            max_score=exercise.max_points, hints_used=0, criteria=criteria)

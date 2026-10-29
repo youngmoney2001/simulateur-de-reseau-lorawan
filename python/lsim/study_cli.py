@@ -394,7 +394,7 @@ def _from_simulation(key: str) -> Callable:
     def run(sess: Session, args: list) -> str:
         if sess.simulation is None or key not in sess.simulation:
             return ("% Aucun résultat pour cet équipement : liez une simulation terminée à la "
-                    "session (équipement de même nom qu'une passerelle du run).")
+                    "session, en associant cet équipement à une passerelle du run.")
         return str(sess.simulation[key])
 
     return run

@@ -161,23 +161,40 @@ Formes des données : `python/lsim/study_contract.py`, schémas dans `schemas/ap
 - Score : somme des critères réussis, moins les indices (borné à 0).
 - Clés : seule la valeur `"******"` est exprimable en sortie.
 
-**Servi (`python/lsim/study_session.py`, routes dans `api_server`)** : création de session,
-topologie, CLI, liaison à une simulation terminée. Décisions prises à l'implémentation :
+**Servi (`python/lsim/study_session.py`, `study_exercises.py`, routes dans `api_server`)** :
+création de session, topologie, CLI, liaison à une simulation terminée, catalogue et soumission
+d'exercices. Décisions prises à l'implémentation :
 
-- Sessions **en mémoire** : perdues au redémarrage (choix de l'auteur à confirmer). Expiration après
-  4 h sans activité ; 8 sessions par compte, 256 au total (429 `limit_exceeded` au-delà).
-- Un équipement (`relay` ou `border`) reçoit les compteurs de la passerelle **de même nom** dans le
-  run lié. Les capteurs et serveurs n'ont pas de CLI (422) et ne sont pas liés.
-- `show lorawan counters` et `show mesh counters` lisent le résumé du run (`GatewayReportOut`).
-  Les autres `show` simulés (voisins mesh, routes, appareils) ne sont **pas** dans la grammaire
-  tant que le moteur ne les expose pas : une commande inconnue donne une erreur d'entrée.
-- `exercise_id` est refusé (422) : aucun catalogue d'exercices n'existe encore.
+- Sessions **en mémoire** : perdues au redémarrage. Expiration après 4 h **d'inactivité** (chaque
+  accès prolonge la vie). 8 sessions par compte, 256 au total ; ces deux limites sont appliquées
+  sous le même verrou que la création (test de concurrence). 429 `limit_exceeded` au-delà.
+- Identifiant d'équipement : motif `^[a-z][a-z0-9-]{0,31}$` (chaîne stable choisie par
+  l'étudiant ou l'exercice). Il sert aussi de nom d'hôte CLI, d'où l'absence de `_`.
+- `nodes` : liste vide autorisée (topologie vide). Doublons refusés (422), pas dédupliqués en
+  silence. Avec un `exercise_id`, la topologie vient de l'exercice et `nodes` doit être vide.
+- Les équipements appartiennent à leur session : aucun n'est partagé, donc pas de contrôle de droits
+  par équipement à faire.
+- **Liaison explicite** : `POST /sessions/{id}/simulation` reçoit `links: [{node_id, gateway}]`.
+  Le run ne porte que des noms de passerelle (uniques), sans identifiant stable : ajouter un
+  identifiant au scénario modifierait le schéma `v1`, ce qui n'est pas fait. Un nom ne lie donc
+  rien par lui-même. Chaque association est validée avant toute modification ; une erreur ne lie
+  rien partiellement. Équipements et passerelles ne sont associés qu'une fois.
+- `show lorawan counters` et `show mesh counters` lisent les compteurs de la passerelle associée
+  (`GatewayReportOut`). Les `show` non alimentés par le moteur ne sont pas dans la grammaire.
 - Ligne de commande : une seule ligne (422 sinon). `exit` au niveau utilisateur redémarre la
   console en mode utilisateur (message dans la sortie).
 
-Restent ouverts : catalogue et soumission d'exercices (routes `exercises`, barème, indices) ;
-route de demande d'indice (les indices sont comptés dans la note, mais aucune route ne les
-révèle) ; barème d'un indice (points retirés) ; journalisation des tentatives (sans secrets).
+**Exercices** (`study_exercises.py`, catalogue côté serveur) : trois exercices (EU868, relais à deux
+sauts, US915 sous-bande 2 avec réception). Le catalogue public ne donne que l'énoncé, le total de
+points et `hints_available: 0`. Barème : critères de configuration (région, sous-bande, serveur,
+mode mesh, sauts) et un critère de simulation (au moins une trame reçue, sur un run lié). La note
+est la somme des critères réussis ; aucun indice n'est servi, donc aucune pénalité. Le client
+n'envoie que `session_id` (un champ `score` ou `criteria` est refusé en 422). Une session ne se note
+que pour son propre exercice.
+
+Restent ouverts : critères de connectivité et de latence (absents du moteur exposé) ; route de
+demande d'indice et barème d'un indice ; journalisation des tentatives (sans secrets) ; mise
+en cache ou persistance des sessions.
 
 | Méthode | Chemin | Rôle |
 |---|---|---|

@@ -43,8 +43,11 @@ class Node(_Strict):
 
 
 class SessionCreate(_Strict):
+    """Sans exercice : `nodes` donne la topologie (vide = aucun équipement). Avec un exercice, la
+    topologie de départ vient de l'exercice et `nodes` doit rester vide. Le CLI n'existe que pour
+    `relay` et `border` (§4)."""
+
     exercise_id: Optional[str] = Field(default=None, pattern=EXERCISE_PATTERN)
-    # Équipements de la topologie. Le CLI n'existe que pour `relay` et `border` (§4).
     nodes: list[Node] = Field(default_factory=list, max_length=MAX_NODES)
 
 
@@ -81,11 +84,19 @@ class NodeState(_Strict):
     keys: Optional[Literal["******"]] = None
 
 
+class GatewayLink(_Strict):
+    """Association explicite : un équipement de la session et une passerelle du run (par nom,
+    unique dans le scénario). Un équipement ou une passerelle n'apparaît qu'une fois."""
+
+    node_id: str = Field(pattern=ID_PATTERN)
+    gateway: str = Field(min_length=1, max_length=64)
+
+
 class SimulationBind(_Strict):
-    """Liaison d'une simulation terminée à la session. Un équipement reçoit les compteurs de la
-    passerelle de même nom dans le run ; les autres n'en reçoivent pas."""
+    """Liaison d'une simulation terminée à la session. Sans association, rien n'est lié."""
 
     run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    links: list[GatewayLink] = Field(default_factory=list, max_length=MAX_NODES)
 
 
 class SimulationBound(_Strict):

@@ -1,7 +1,40 @@
 {
+  "$defs": {
+    "GatewayLink": {
+      "additionalProperties": false,
+      "description": "Association explicite : un équipement de la session et une passerelle du run (par nom,\nunique dans le scénario). Un équipement ou une passerelle n'apparaît qu'une fois.",
+      "properties": {
+        "gateway": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Gateway",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "title": "Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "gateway"
+      ],
+      "title": "GatewayLink",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
-  "description": "Liaison d'une simulation terminée à la session. Un équipement reçoit les compteurs de la\npasserelle de même nom dans le run ; les autres n'en reçoivent pas.",
+  "description": "Liaison d'une simulation terminée à la session. Sans association, rien n'est lié.",
   "properties": {
+    "links": {
+      "items": {
+        "$ref": "#/$defs/GatewayLink"
+      },
+      "maxItems": 64,
+      "title": "Links",
+      "type": "array"
+    },
     "run_id": {
       "pattern": "^[A-Za-z0-9_-]{8,64}$",
       "title": "Run Id",
