@@ -803,3 +803,93 @@ int32_t lsim_decode_join_accept(const uint8_t* in, size_t len, const uint8_t nwk
 }
 
 }  // extern "C"
+
+// ------------------------------------------- Plusieurs passerelles (uplinks)
+
+int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t device_count,
+                                    const lsim_gateway* gateways, size_t gateway_count,
+                                    const lsim_propagation* prop, const lsim_environment* env,
+                                    lsim_device_stats* per_device, lsim_network_stats* totals,
+                                    lsim_gateway_rx_stats* per_gateway) {
+    if (gateways == nullptr || prop == nullptr || totals == nullptr || per_gateway == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    if (gateway_count == 0 || gateway_count > lsim::sim::kMaxGateways) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    try {
+        std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
+        for (size_t i = 0; i < device_count; ++i) {
+            const lsim_end_device& d = devices[i];
+            lsim::sim::EndDeviceSpec& s = specs[i];
+            s.position.x_m = d.x_m;
+            s.position.y_m = d.y_m;
+            s.spreading_factor = d.spreading_factor;
+            s.payload_bytes = d.payload_bytes;
+            s.tx_power_dbm = d.tx_power_dbm;
+            s.start_offset_ns = d.start_offset_ns;
+            s.period_ns = d.period_ns;
+            s.messages = d.messages;
+            s.duty_cycle = d.duty_cycle;
+        }
+        std::vector<lsim::sim::GatewaySpec> gws(gateway_count);
+        for (size_t g = 0; g < gateway_count; ++g) {
+            gws[g].position.x_m = gateways[g].x_m;
+            gws[g].position.y_m = gateways[g].y_m;
+            gws[g].antenna_gain_dbi = gateways[g].antenna_gain_dbi;
+        }
+        lsim::sim::PropagationSpec p;
+        p.frequency_hz = prop->frequency_hz;
+        p.reference_distance_m = prop->reference_distance_m;
+        p.exponent = prop->exponent;
+        p.capture_threshold_db = prop->capture_threshold_db;
+        p.shadowing_sigma_db = prop->shadowing_sigma_db;
+        p.shadowing_seed = prop->shadowing_seed;
+
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        if (env != nullptr) {
+            const int32_t built = build_environment(env, grid, obstacles, e);
+            if (built != 0) {
+                return built;
+            }
+        }
+
+        std::vector<lsim::sim::DeviceStats> stats(device_count);
+        std::vector<lsim::sim::GatewayRxStats> gstats(gateway_count);
+        lsim::sim::NetworkStats tot;
+        const auto st = lsim::sim::simulate_uplinks_multi(
+            specs.data(), device_count, gws.data(), gateway_count, p, stats.data(), tot,
+            gstats.data(), env != nullptr ? &e : nullptr, nullptr);
+        if (st != lsim::sim::SimStatus::Ok) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
+        }
+        totals->sent = tot.sent;
+        totals->received = tot.received;
+        totals->duplicates = tot.duplicates;
+        totals->lost_sensitivity = tot.lost_sensitivity;
+        totals->lost_collision = tot.lost_collision;
+        totals->airtime_ns = tot.airtime_ns;
+        for (size_t g = 0; g < gateway_count; ++g) {
+            per_gateway[g].received = gstats[g].received;
+            per_gateway[g].lost_sensitivity = gstats[g].lost_sensitivity;
+            per_gateway[g].lost_collision = gstats[g].lost_collision;
+        }
+        for (size_t i = 0; i < device_count; ++i) {
+            per_device[i].sent = stats[i].sent;
+            per_device[i].received = stats[i].received;
+            per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
+            per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].lost_gateway_busy = 0;
+            per_device[i].airtime_ns = stats[i].airtime_ns;
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}

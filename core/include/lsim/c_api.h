@@ -396,6 +396,35 @@ LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, siz
                                              const lsim_interval* gateway_busy,
                                              size_t gateway_busy_count);
 
+/* ------------------------------------------- Plusieurs passerelles (uplinks)
+ * Chaque passerelle reçoit les mêmes émissions ; le serveur déduplique (une livraison par
+ * trame). Voir lsim/engine.hpp. Pas de downlink ni de demi-duplex par passerelle ici.
+ * gateways : gateway_count entrées, 1..64. env NULL = terrain plat. per_gateway : gateway_count
+ * entrées. Statut 0, ou LSIM_STATUS_SIM_BASE + code du moteur (InvalidInput si gateway_count
+ * est hors bornes). */
+typedef struct lsim_network_stats {
+    uint64_t sent;
+    uint64_t received;          /* trames livrées au serveur, une fois par trame */
+    uint64_t duplicates;        /* copies décodées en plus de la première */
+    uint64_t lost_sensitivity;  /* aucune passerelle au-dessus de la sensibilité */
+    uint64_t lost_collision;    /* collisionnée à toutes les passerelles qui l'entendent */
+    uint64_t airtime_ns;
+} lsim_network_stats;
+
+typedef struct lsim_gateway_rx_stats {
+    uint64_t received;          /* trames décodées par cette passerelle */
+    uint64_t lost_sensitivity;
+    uint64_t lost_collision;
+} lsim_gateway_rx_stats;
+
+LSIM_API int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t device_count,
+                                             const lsim_gateway* gateways, size_t gateway_count,
+                                             const lsim_propagation* prop,
+                                             const lsim_environment* env,
+                                             lsim_device_stats* per_device,
+                                             lsim_network_stats* totals,
+                                             lsim_gateway_rx_stats* per_gateway);
+
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).
  * device_class : 0 A, 1 B, 2 C. Latence = début de la première fenêtre utilisable moins

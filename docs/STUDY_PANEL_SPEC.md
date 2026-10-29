@@ -165,7 +165,7 @@ implémenter, voir `docs/API_CONTRACT.md`). Les tentatives sont journalisées sa
 ## 8. Phasage proposé
 
 1. Spécification validée et ajout au contrat.
-2. Moteur multi-passerelles avec déduplication, tests C++ et Python.
+2. Moteur multi-passerelles avec déduplication, tests C++ et Python. **Premier incrément fait** : réception par passerelle et déduplication (`simulate_uplinks_multi`). Restent : downlinks et demi-duplex par passerelle, intégration dans `run` et dans le contrat.
 3. Backhaul maillé radio (saut, collisions, duty cycle) et routage statique.
 4. CLI d'un équipement (une passerelle), tests de la grammaire et des erreurs.
 5. Topologie multi-équipements et simulation pas à pas.

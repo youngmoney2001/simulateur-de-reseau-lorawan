@@ -206,7 +206,47 @@ void test_join_roundtrip_and_vectors() {
 
 }  // namespace
 
+void test_multi_gateway_c_api() {
+    lsim_end_device d{};
+    d.x_m = 20000.0;
+    d.spreading_factor = 7;
+    d.payload_bytes = 10;
+    d.tx_power_dbm = 14.0;
+    d.period_ns = 600000000000LL;
+    d.messages = 1;
+    d.duty_cycle = 1.0;
+    lsim_gateway g[2] = {{0.0, 0.0, 0.0}, {20000.0, 100.0, 0.0}};
+    lsim_propagation prop{};
+    prop.frequency_hz = 868.1e6;
+    prop.reference_distance_m = 1.0;
+    prop.exponent = 2.7;
+    prop.capture_threshold_db = 6.0;
+    lsim_device_stats per_device[1];
+    lsim_network_stats tot{};
+    lsim_gateway_rx_stats per_gw[2]{};
+
+    // Une passerelle : hors de portée.
+    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 1, &prop, nullptr, per_device, &tot, per_gw),
+             0);
+    CHECK_EQ(tot.received, uint64_t{0});
+    CHECK_EQ(tot.lost_sensitivity, uint64_t{1});
+
+    // Deux passerelles : la seconde reçoit.
+    CHECK_EQ(lsim_simulate_uplinks_multi(&d, 1, g, 2, &prop, nullptr, per_device, &tot, per_gw),
+             0);
+    CHECK_EQ(tot.received, uint64_t{1});
+    CHECK_EQ(per_gw[1].received, uint64_t{1});
+    CHECK_EQ(per_gw[0].lost_sensitivity, uint64_t{1});
+
+    // Bornes : 0 passerelle et 65 passerelles refusées par statut, sans appel au moteur.
+    CHECK_TRUE(lsim_simulate_uplinks_multi(&d, 1, g, 0, &prop, nullptr, per_device, &tot, per_gw) !=
+               0);
+    CHECK_TRUE(lsim_simulate_uplinks_multi(&d, 1, g, 65, &prop, nullptr, per_device, &tot,
+                                           per_gw) != 0);
+}
+
 void run_c_api_tests() {
+    test_multi_gateway_c_api();
     test_derive_matches_cpp_vectors();
     test_null_pointers_refused();
     test_seal_open_roundtrip_and_tamper();

@@ -324,6 +324,25 @@ class _CInterval(ctypes.Structure):
     ]
 
 
+class _CNetworkStats(ctypes.Structure):
+    _fields_ = [
+        ("sent", ctypes.c_uint64),
+        ("received", ctypes.c_uint64),
+        ("duplicates", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("airtime_ns", ctypes.c_uint64),
+    ]
+
+
+class _CGatewayRxStats(ctypes.Structure):
+    _fields_ = [
+        ("received", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+    ]
+
+
 class _CTxRecord(ctypes.Structure):
     _fields_ = [
         ("device_index", ctypes.c_uint32),
@@ -497,6 +516,12 @@ LIB.lsim_simulate_uplinks_trace.argtypes = [
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CInterval), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_multi.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats),
+    ctypes.POINTER(_CGatewayRxStats)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
