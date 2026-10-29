@@ -16,6 +16,7 @@ from lsim.simulator import (
     simulate_uplinks,
     simulate_uplinks_trace,
 )
+from lsim.radio import receiver_sensitivity_dbm
 from lsim.trace_events import (
     JOIN_ACCEPT_DELAY1_NS,
     RECEIVE_DELAY1_NS,
@@ -154,7 +155,7 @@ def test_rx1_delivered_when_device_is_silent():
     assert len(ack) == 1
     assert ack[0].t_ns == end0 + RECEIVE_DELAY1_NS
     assert ack[0].hops[0].to_id == "dev:0"
-    assert ack[0].hops[0].outcome == "sent"
+    assert ack[0].hops[0].outcome == "delivered"  # RSSI descendant au-dessus de la sensibilité
 
 
 def test_lost_uplink_gets_no_downlink():
@@ -180,3 +181,47 @@ def test_protocol_options_bounds_and_unknown_fields():
         ProtocolOptionsIn(downlink_every=10_001)
     with pytest.raises(ValidationError):
         ProtocolOptionsIn(ack=True)  # champ inconnu refusé
+
+
+def _ack_event(rssi_up: float, **opts):
+    records = [_rec(0, 0, 41_216_000, TxRecord.OUTCOME_RECEIVED)]
+    records[0] = TxRecord(0, 0, 41_216_000, 7, rssi_up, TxRecord.OUTCOME_RECEIVED)
+    events = build_protocol_events(records, [RADIO],
+                                   ProtocolOptions(confirmed_uplinks=True, **opts))
+    return next(e for e in events if e.kind in ("ack", "downlink", "join_accept"))
+
+
+def test_downlink_lost_below_device_sensitivity():
+    # Réciprocité : RSSI descendant = RSSI montant - 14 + 14 + 0 = RSSI montant (SF7, 125 kHz).
+    sens = receiver_sensitivity_dbm(7, 125_000)
+    lost = _ack_event(sens - 1.0)
+    assert lost.outcome == "lost_sensitivity"
+    assert lost.hops[-1].outcome == "lost_sensitivity"
+    ok = _ack_event(sens + 1.0)
+    assert ok.outcome == "ack_only"
+    assert ok.hops[-1].outcome == "delivered"
+
+
+def test_gateway_power_changes_downlink_reception():
+    sens = receiver_sensitivity_dbm(7, 125_000)
+    weak = _ack_event(sens - 3.0)  # 14 dBm : perdu
+    assert weak.outcome == "lost_sensitivity"
+    strong = _ack_event(sens - 3.0, gateway_tx_power_dbm=20.0)  # +6 dB : reçu
+    assert strong.outcome == "ack_only"
+    antenna = _ack_event(sens - 3.0, device_antenna_gain_dbi=5.0)  # +5 dBi : reçu
+    assert antenna.outcome == "ack_only"
+    antenna_lo = _ack_event(sens - 3.0, device_antenna_gain_dbi=-5.0)  # -5 dBi : perdu
+    assert antenna_lo.outcome == "lost_sensitivity"
+
+
+def test_downlink_outcomes_partition_scenario(quartier):
+    run = build_trace(quartier, ProtocolOptions(join=True, confirmed_uplinks=True,
+                                                downlink_every=5))
+    received = sum(1 for r in run.records if r.outcome == TxRecord.OUTCOME_RECEIVED)
+    down = [e for e in run.events if e.kind in ("ack", "downlink", "join_accept")]
+    delivered = [e for e in down if e.hops[-1].outcome == "delivered"]
+    lost = [e for e in down if e.hops[-1].outcome == "lost_sensitivity"]
+    assert len(delivered) + len(lost) == len(down)
+    assert len(down) == received  # un downlink par uplink accepté (join compris)
+    assert all(e.outcome == "lost_sensitivity" for e in lost)
+    assert all(e.outcome != "lost_sensitivity" for e in delivered)

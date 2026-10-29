@@ -482,12 +482,26 @@
           "title": "Confirmed Uplinks",
           "type": "boolean"
         },
+        "device_antenna_gain_dbi": {
+          "default": 0.0,
+          "maximum": 10.0,
+          "minimum": -10.0,
+          "title": "Device Antenna Gain Dbi",
+          "type": "number"
+        },
         "downlink_every": {
           "default": 0,
           "maximum": 10000,
           "minimum": 0,
           "title": "Downlink Every",
           "type": "integer"
+        },
+        "gateway_tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 27.0,
+          "minimum": -10.0,
+          "title": "Gateway Tx Power Dbm",
+          "type": "number"
         },
         "join": {
           "default": false,
@@ -543,7 +557,9 @@
       "$ref": "#/$defs/ProtocolOptionsIn",
       "default": {
         "confirmed_uplinks": false,
+        "device_antenna_gain_dbi": 0.0,
         "downlink_every": 0,
+        "gateway_tx_power_dbm": 14.0,
         "join": false
       }
     },

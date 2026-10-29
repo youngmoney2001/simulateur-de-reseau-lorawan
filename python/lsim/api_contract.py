@@ -80,6 +80,8 @@ class ProtocolOptionsIn(_Strict):
     join: bool = False                 # première émission de chaque dispositif = join-request
     confirmed_uplinks: bool = False    # uplinks de données confirmés (ACK attendu)
     downlink_every: int = Field(0, ge=0, le=10_000)  # 0 : aucune charge ; N : une par N uplinks
+    gateway_tx_power_dbm: float = Field(14.0, ge=-10.0, le=27.0)  # downlink, réciprocité
+    device_antenna_gain_dbi: float = Field(0.0, ge=-10.0, le=10.0)
 
 
 class RunCreate(_Strict):

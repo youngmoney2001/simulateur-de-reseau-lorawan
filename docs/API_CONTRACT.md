@@ -74,11 +74,17 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
     file (`downlink_every`), sinon `ack` si l'uplink est confirmé ;
   - demi-duplex : si le dispositif émet encore pendant sa fenêtre RX1, l'événement est
     `rx_window_missed` (issue `not_listened`), sans retransmission.
-- Limites assumées : la réception des downlinks par le dispositif n'est pas simulée (saut
-  `sent`) ; le backhaul passerelle → serveur est sans perte (`delivered`) ; le duplex de la
-  passerelle n'est pas modélisé. Une seule passerelle.
-- Options applicatives dans `RunCreate.protocol` : `join`, `confirmed_uplinks`, `downlink_every`
-  (par défaut : aucune, donc seuls uplinks et pertes).
+- Réception des downlinks par le dispositif : hypothèse de réciprocité. RSSI descendant =
+  RSSI montant − P_dispositif + P_passerelle + G_dispositif ; reçu si ≥ sensibilité du débit RX1
+  du plan. Valeurs par défaut : P_passerelle 14 dBm, G_dispositif 0 dBi (`RunCreate.protocol`).
+  Perte : événement dont l'issue est `lost_sensitivity`, saut `lost_sensitivity`.
+- Limites assumées : le backhaul passerelle → serveur et le join-accept transmis par le serveur
+  sont sans perte (`delivered`) ; le duplex de la passerelle n'est pas modélisé ; les downlinks ne
+  se brouillent pas entre eux ; sensibilité du récepteur de référence (SX1276). Une seule
+  passerelle.
+- Options applicatives dans `RunCreate.protocol` : `join`, `confirmed_uplinks`, `downlink_every`,
+  `gateway_tx_power_dbm`, `device_antenna_gain_dbi` (par défaut : aucune charge ; seuls uplinks,
+  pertes et ACK/join-accept sont produits quand les options correspondantes sont activées).
 
 Tant que la route `events` n'existe pas, l'animation n'est pas disponible côté navigateur ; les
 totaux (`summary`, `devices`) le sont.

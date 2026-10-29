@@ -10,23 +10,31 @@ en dérive les événements de la couche protocole, avec les temporisations de l
   (`downlink_every`), sinon ACK seul si l'uplink est confirmé.
 
 Règles de modélisation (volontairement explicites) :
-- la passerelle est supposée émettre à chaque fenêtre ; son propre duplex n'est pas modélisé ;
 - le dispositif est en demi-duplex : s'il émet à nouveau pendant sa fenêtre RX1, la fenêtre est
   manquée (événement `rx_window_missed`, pas de retransmission) ;
-- la réception des downlinks par le dispositif n'est pas simulée : ces sauts ont l'issue
-  `sent` ; le backhaul passerelle -> serveur est sans perte (issue `delivered`).
+- réception du downlink par le dispositif : hypothèse de réciprocité. Le lien descendant suit le
+  même chemin que le montant (même perte, même shadowing). Le RSSI reçu par le dispositif vaut
+  donc RSSI_montant - P_dispositif + P_passerelle + G_dispositif (le gain d'antenne passerelle
+  s'annule). Réception si ce RSSI atteint la sensibilité du débit RX1 (plan régional). Valeurs
+  par défaut : P_passerelle = 14 dBm, G_dispositif = 0 dBi (`ProtocolOptions`) ;
+- la passerelle ne refuse pas l'émission (duplex non modélisé) ; les downlinks ne se brouillent
+  pas entre eux ; la sensibilité est celle du récepteur de référence (SX1276, `lsim.radio`) ;
+- le backhaul passerelle -> serveur est sans perte (issue `delivered`) ; le join-accept est
+  transmis par le serveur à la passerelle sans perte (issue `delivered`).
 
 Les dates sont en nanosecondes entières, issues du moteur, sans recalcul flottant.
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
+from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
@@ -63,15 +71,20 @@ class ProtocolOptions:
     join: bool = False              # première émission de chaque dispositif = join-request
     confirmed_uplinks: bool = False  # uplinks de données confirmés (ACK attendu)
     downlink_every: int = 0         # 0 : aucune charge en file ; N : une charge par N uplinks acceptés
+    gateway_tx_power_dbm: float = 14.0    # puissance d'émission de la passerelle (downlink)
+    device_antenna_gain_dbi: float = 0.0  # gain d'antenne du dispositif (réception downlink)
 
 
 @dataclass(frozen=True)
 class DeviceRadio:
-    """Paramètres radio d'un dispositif pour les sauts : fréquence, DR montant, RX1."""
+    """Paramètres radio d'un dispositif : fréquence, DR montant, RX1 et puissance d'émission."""
 
     freq_hz: int
     dr: Optional[int]        # None si aucun plan régional
     rx1_hz: int              # fréquence de la fenêtre RX1 (égale à freq_hz sans plan)
+    tx_power_dbm: float = 14.0
+    rx1_sf: int = 7          # SF du débit RX1 (récepteur du dispositif)
+    rx1_bw_hz: int = 125_000
 
 
 @dataclass(frozen=True)
@@ -109,19 +122,27 @@ def _dev(i: int) -> str:
     return f"dev:{i}"
 
 
-def _radio(plan: Optional[Plan], freq_hz: int, sf: int) -> DeviceRadio:
+_DATR = re.compile(r"^SF(\d+)BW(\d+)$")
+
+
+def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> DeviceRadio:
     if plan is None:
-        return DeviceRadio(freq_hz=freq_hz, dr=None, rx1_hz=freq_hz)
+        return DeviceRadio(freq_hz=freq_hz, dr=None, rx1_hz=freq_hz, tx_power_dbm=tx_power_dbm,
+                           rx1_sf=sf, rx1_bw_hz=125_000)
     dr = next((i for i, (s, bw, _) in enumerate(plan.dr_table()) if s == sf and bw == 125), None)
-    rx1_hz = freq_hz
+    rx1_hz, rx1_sf, rx1_bw_hz = freq_hz, sf, 125_000
     if dr is not None:
         try:
             ch = plan.channel_index(freq_hz / 1_000_000)
-            rx1_mhz, _ = plan.rx1(dr, ch)
+            rx1_mhz, rx1_datr = plan.rx1(dr, ch)
             rx1_hz = round(rx1_mhz * 1_000_000)
+            m = _DATR.match(rx1_datr)
+            if m is not None:
+                rx1_sf, rx1_bw_hz = int(m.group(1)), int(m.group(2)) * 1000
         except ValueError:
             rx1_hz = freq_hz
-    return DeviceRadio(freq_hz=freq_hz, dr=dr, rx1_hz=rx1_hz)
+    return DeviceRadio(freq_hz=freq_hz, dr=dr, rx1_hz=rx1_hz, tx_power_dbm=tx_power_dbm,
+                       rx1_sf=rx1_sf, rx1_bw_hz=rx1_bw_hz)
 
 
 def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
@@ -137,8 +158,15 @@ def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
                 plan = get_plan(g.region)
             except ValueError:
                 plan = None
-        radios.append(_radio(plan, g.channel_freq_hz, g.spreading_factor))
+        radios.append(_radio(plan, g.channel_freq_hz, g.spreading_factor, g.tx_power_dbm))
     return tuple(radios)
+
+
+def _downlink_received(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions) -> bool:
+    """Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev (gain passerelle annulé)."""
+    rssi_dl = (r.rssi_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
+               + options.device_antenna_gain_dbi)
+    return rssi_dl >= receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz)
 
 
 def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
@@ -185,7 +213,7 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
         # Fenêtre de réception du downlink : RX1 après l'uplink (1 s) ou après le join (5 s).
         if is_join:
             t_open = r.end_ns + JOIN_ACCEPT_DELAY1_NS
-            kind, outcome = "join_accept", "sent"
+            kind, outcome = "join_accept", "delivered"
         else:
             accepted[d] += 1
             queued = options.downlink_every > 0 and accepted[d] % options.downlink_every == 0
@@ -205,12 +233,14 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
             add(t_open, "rx_window_missed", d, [missed], "device_transmitting")
             continue
 
+        ok = _downlink_received(r, radio, options)
+        down_hop = HopEvent("gw:0", _dev(d), t_open, radio.rx1_hz, None, None,
+                            "delivered" if ok else "lost_sensitivity")
         if is_join:
-            down = [HopEvent("ns", "gw:0", t_open, radio.rx1_hz, None, None, "sent"),
-                    HopEvent("gw:0", _dev(d), t_open, radio.rx1_hz, None, None, "sent")]
+            down = [HopEvent("ns", "gw:0", t_open, radio.rx1_hz, None, None, "delivered"), down_hop]
         else:
-            down = [HopEvent("gw:0", _dev(d), t_open, radio.rx1_hz, None, None, "sent")]
-        add(t_open, kind, d, down, outcome)
+            down = [down_hop]
+        add(t_open, kind, d, down, outcome if ok else "lost_sensitivity")
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")

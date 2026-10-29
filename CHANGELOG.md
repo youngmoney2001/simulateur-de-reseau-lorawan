@@ -5,6 +5,7 @@
 ### Contrat d'API et traces
 - Trace par transmission exportée par le cœur natif (`lsim_simulate_uplinks_trace`) : début, fin, SF, RSSI, issue. Mêmes compteurs que l'appel sans trace ; borne 200 000 émissions (statut 309).
 - Événements du protocole dérivés de la trace (`lsim.trace_events`) : join-request / join-accept (fin + 5 s), ACK et downlink (fin + 1 s, un par uplink accepté), `rx_window_missed` en demi-duplex. Même `t_ns` que le moteur ; options `join`, `confirmed_uplinks`, `downlink_every`.
+- Réception du downlink par le dispositif (réciprocité, puissance passerelle 14 dBm par défaut, sensibilité RX1 du plan) : une perte donne l'issue `lost_sensitivity`.
 - Contrat v1 : `docs/API_CONTRACT.md`, schémas `schemas/api/v1/`. Authentification par jeton décrite (SHA-256 au repos, 401 `unauthorized`).
 
 ### Radio et régions
