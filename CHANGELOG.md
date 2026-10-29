@@ -34,7 +34,7 @@
 - Codec Semtech UDP (GWMP v2) et serveur UDP : join-accept livré à la passerelle en PULL_RESP (fenêtre JOIN_ACCEPT_DELAY1 = 5 s), routes et traitements bornés.
 - Commande `lsim serve` (`--transport udp` par défaut) ; Basic Station : `--transport basicstation`, WebSocket (RFC 6455, sans dépendance), TLS 1.2+ optionnel.
 - Trames de données : compteur 32 bits, rejeu refusé, MIC avec TxDr/TxCh, ACK downlink en RX1 à +1 s, retransmission confirmée ré-acquittée, file de downlinks (`lsim downlink`), session créée avec la jointure.
-- Plan RU864 (`--region RU864`, `python/lsim/ru864.py`) : canaux 868,9 / 869,1 MHz, DR0-DR5, RX1 même canal et même débit, RX2 869,1 MHz DR0. DR6 non retenu.
+- Plan RU864 (`--region RU864`, `python/lsim/ru864.py`) : canaux 868,9 / 869,1 MHz, DR0-DR6, RX1 même canal et même débit, RX2 869,1 MHz DR0, charges N EU868.
 - Plan IN865 (`--region IN865`, `python/lsim/in865.py`) : canaux 865,0625 / 865,4025 / 865,985 MHz, DR0-DR5, RX1 même canal et même débit, RX2 866,550 MHz DR2. Charges N prudentes.
 - Plan KR920 (`--region KR920`, `python/lsim/kr920.py`) : canaux 922,1 / 922,3 / 922,5 MHz, DR0-DR5, RX1 même canal et même débit, RX2 921,9 MHz DR0. Charges N prudentes (tableau 62 de RP002-1.0.2 non lu).
 - Plan AS923 (`--region AS923`, `python/lsim/as923.py`) : canaux 923,2 et 923,4 MHz, DR0-DR6, RX1 même canal et même débit, RX2 923,2 MHz DR2, charges N 51/115/222. DR7 (FSK) et DownLinkDwellTime non gérés.

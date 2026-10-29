@@ -23,24 +23,25 @@ def test_default_channels_868_9_and_869_1():
 
 @pytest.mark.parametrize("datr, dr", [
     ("SF12BW125", 0), ("SF11BW125", 1), ("SF10BW125", 2),
-    ("SF9BW125", 3), ("SF8BW125", 4), ("SF7BW125", 5),
+    ("SF9BW125", 3), ("SF8BW125", 4), ("SF7BW125", 5), ("SF7BW250", 6),
 ])
 def test_uplink_and_downlink_data_rates(datr, dr):
     assert RU864.data_rate_index(datr) == dr
     assert RU864.dr_datr(dr) == datr
 
 
-def test_dr6_not_retained():
+def test_dr7_fsk_not_managed():
     with pytest.raises(ValueError):
-        RU864.dr_datr(6)
+        RU864.dr_datr(7)
     with pytest.raises(ValueError):
-        RU864.data_rate_index("SF7BW250")
+        RU864.data_rate_index("FSK")
 
 
 @pytest.mark.parametrize("tx_dr, tx_ch, freq, rx1_datr", [
     (0, 0, 868.9, "SF12BW125"),   # même canal, RX1DROffset 0
     (3, 1, 869.1, "SF9BW125"),
     (5, 0, 868.9, "SF7BW125"),
+    (6, 1, 869.1, "SF7BW250"),
 ])
 def test_rx1_same_channel_same_data_rate(tx_dr, tx_ch, freq, rx1_datr):
     assert RU864.rx1(tx_dr, tx_ch) == (freq, rx1_datr)
@@ -52,7 +53,7 @@ def test_rx2_default_is_869_1_dr0():
 
 
 def test_max_payload_without_fopts_n():
-    assert [RU864.max_frm_payload(dr) for dr in range(6)] == [51, 51, 51, 115, 222, 222]
+    assert [RU864.max_frm_payload(dr) for dr in range(7)] == [51, 51, 51, 115, 222, 222, 222]
     assert RU864.queue_payload_max == 51
 
 
