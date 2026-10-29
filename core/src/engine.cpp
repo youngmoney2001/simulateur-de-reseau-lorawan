@@ -1322,7 +1322,16 @@ struct LoopDevice {
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
+// Commande ponctuelle en file (LinkCheckAns, DeviceTimeAns, DevStatusReq) : une réponse ou une
+// requête n'est pas retransmise, elle attend seulement une descente où elle tient (FIFO).
+struct LoopQueued {
+    std::uint8_t cmd = 0;        // kLoopCmdLinkCheck, kLoopCmdDeviceTime ou kLoopCmdDevStatus
+    std::uint8_t bytes = 0;      // taille en FOpts
+    std::uint8_t deferrals = 0;  // reports subis
+};
+
 struct LoopServer {
+    std::vector<LoopQueued> queue;   // commandes ponctuelles en attente, dans l'ordre d'arrivée
     std::vector<std::int32_t> snr;   // dixièmes de dB, 20 au plus
     std::uint8_t dr = 0;
     std::uint8_t power_index = 0;
@@ -1524,6 +1533,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     };
 
     // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
+    LoopMacQueueStats qs;
     const auto on_received = [&](std::size_t a) -> void {
         const Tx& ta = txs[a];
         const std::uint32_t d = ta.device;
@@ -1582,26 +1592,51 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         } else if (options.protocol.confirmed_uplinks) {
             kind = 1;
         }
+        // Commandes à état (LinkADR, DutyCycle) : toujours offertes tant qu'elles ne sont pas
+        // acquittées. Elles passent en premier, dans le budget de 15 octets de FOpts.
         std::uint8_t cmds = 0;
-        if (sv.adr_pending) cmds |= kLoopCmdLinkAdr;
-        if (options.duty_cycle && sv.duty_state == 1) cmds |= kLoopCmdDutyCycle;
-        // Commandes MAC du calendrier, pour l'uplink reçu (rang 1-based).
+        std::uint32_t budget = kLoopFoptsMax;
+        if (sv.adr_pending) {
+            cmds |= kLoopCmdLinkAdr;
+            budget -= 5;
+        }
+        if (options.duty_cycle && sv.duty_state == 1) {
+            cmds |= kLoopCmdDutyCycle;
+            budget -= 2;
+        }
+        // Commandes ponctuelles du calendrier pour cet uplink (rang 1-based), mises en file.
         const std::uint8_t mf = mac_flags[mac_off[d] + ta.rank - 1];
-        if ((mf & kLoopMacLinkCheck) != 0) cmds |= kLoopCmdLinkCheck;
-        if ((mf & kLoopMacDeviceTime) != 0) cmds |= kLoopCmdDeviceTime;
-        if ((mf & kLoopMacDevStatus) != 0) cmds |= kLoopCmdDevStatus;
+        const auto enqueue = [&sv, &qs](std::uint8_t cmd, std::uint8_t bytes) {
+            sv.queue.push_back(LoopQueued{cmd, bytes, 0});
+            ++qs.enqueued;
+        };
+        if ((mf & kLoopMacLinkCheck) != 0) enqueue(kLoopCmdLinkCheck, 3);
+        if ((mf & kLoopMacDeviceTime) != 0) enqueue(kLoopCmdDeviceTime, 6);
+        if ((mf & kLoopMacDevStatus) != 0) enqueue(kLoopCmdDevStatus, 1);
+        // FIFO : une commande qui tient part dans cette descente ; sinon elle est reportée, et
+        // expire après `mac_max_deferrals` reports. Rien ne se tronque.
+        std::uint8_t carried = 0;
+        for (auto it = sv.queue.begin(); it != sv.queue.end();) {
+            if (it->bytes <= budget) {
+                budget -= it->bytes;
+                cmds |= it->cmd;
+                ++carried;
+                ++qs.dispatched;
+                it = sv.queue.erase(it);
+            } else {
+                ++qs.deferred;
+                ++it->deferrals;
+                if (it->deferrals > options.mac_max_deferrals) {
+                    ++qs.expired;
+                    it = sv.queue.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
         if (kind == 0 && cmds == 0) return;
         if (kind == 0) kind = 3;
-
-        const std::uint32_t fopts = (((cmds & kLoopCmdLinkAdr) != 0) ? 5U : 0U) +
-                                    (((cmds & kLoopCmdDutyCycle) != 0) ? 2U : 0U) +
-                                    (((cmds & kLoopCmdLinkCheck) != 0) ? 3U : 0U) +
-                                    (((cmds & kLoopCmdDeviceTime) != 0) ? 6U : 0U) +
-                                    (((cmds & kLoopCmdDevStatus) != 0) ? 1U : 0U);
-        if (fopts > 15) {  // FOpts ne se tronque pas : refus explicite plutôt qu'un débordement
-            status = SimStatus::InvalidInput;
-            return;
-        }
+        const std::uint32_t fopts = kLoopFoptsMax - budget;
         const std::uint32_t base = kind == 2 ? kLoopDataOverheadBytes + options.protocol.downlink_payload_bytes
                                              : kLoopAckBytes;
         plan::DeviceRadio rad = radios[d];
@@ -1624,6 +1659,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         dl.device = d;
         dl.kind = kind;
         dl.commands = cmds;
+        dl.queued = carried;
         dl.t_open = t_open;
         dl.start_ns = scheduled ? start : -1;
         dl.air_ns = air;
@@ -1780,6 +1816,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
                 }
                 dl.delivered = ok;
+                if (!ok) qs.dispatch_lost += dl.queued;
                 if (ok && (dl.commands & kLoopCmdDevStatus) != 0) {
                     dev[dl.device].ds_pending = true;  // DevStatusAns portée par l'uplink suivant
                 }
@@ -1826,6 +1863,8 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         }
     }
     if (status != SimStatus::Ok) return status;
+    for (const LoopServer& sv : srv) qs.pending_at_end += sv.queue.size();
+    out.mac = qs;
 
     // Sorties : émissions, occupation passerelle, métriques passerelle (comme `simulate_uplinks`).
     out.uplinks.reserve(txs.size());

@@ -695,7 +695,8 @@ int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
                          lsim_loop_uplink* uplinks, size_t uplink_capacity,
                          size_t* uplink_count, lsim_loop_downlink* downlinks,
                          size_t downlink_capacity, size_t* downlink_count,
-                         lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+                         lsim_interval* busy, size_t busy_capacity, size_t* busy_count,
+                         lsim_loop_mac_counters* mac_counters) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || options == nullptr ||
         uplink_count == nullptr || downlink_count == nullptr || busy_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) ||
@@ -826,6 +827,14 @@ int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
             per_device[i].lost_collision = stats[i].lost_collision;
             per_device[i].airtime_ns = stats[i].airtime_ns;
             per_device[i].lost_gateway_busy = stats[i].lost_gateway_busy;
+        }
+        if (mac_counters != nullptr) {
+            mac_counters->enqueued = res.mac.enqueued;
+            mac_counters->dispatched = res.mac.dispatched;
+            mac_counters->dispatch_lost = res.mac.dispatch_lost;
+            mac_counters->deferred = res.mac.deferred;
+            mac_counters->expired = res.mac.expired;
+            mac_counters->pending_at_end = res.mac.pending_at_end;
         }
         *totals = lsim_sim_stats{};
         totals->sent = tot.sent;
@@ -1516,7 +1525,7 @@ int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t devi
     return closed_loop_impl(devices, device_count, radios, regions, gateway, prop, env, options,
                             nullptr, 0, per_device, totals, uplinks, uplink_capacity, uplink_count,
                             downlinks, downlink_capacity, downlink_count, busy, busy_capacity,
-                            busy_count);
+                            busy_count, nullptr);
 }
 
 int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, size_t device_count,
@@ -1528,11 +1537,12 @@ int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, size_t devi
                                      lsim_loop_uplink* uplinks, size_t uplink_capacity,
                                      size_t* uplink_count, lsim_loop_downlink* downlinks,
                                      size_t downlink_capacity, size_t* downlink_count,
-                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count,
+                                     lsim_loop_mac_counters* mac_counters) {
     return closed_loop_impl(devices, device_count, radios, regions, gateway, prop, env, options,
                             mac, mac_count, per_device, totals, uplinks, uplink_capacity,
                             uplink_count, downlinks, downlink_capacity, downlink_count, busy,
-                            busy_capacity, busy_count);
+                            busy_capacity, busy_count, mac_counters);
 }
 
 }  // extern "C"

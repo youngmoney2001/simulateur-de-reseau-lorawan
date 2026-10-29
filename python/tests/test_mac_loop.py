@@ -162,3 +162,40 @@ def test_reservations_closed_loop_matches_legacy_path():
     # Les octets réservés allongent l'airtime par rapport au même scénario sans MAC.
     plain = build_trace(_scenario(""), ProtocolOptions())
     assert legacy.totals.airtime_ns > plain.totals.airtime_ns
+
+
+def test_byte_accounting_separates_reserved_sent_and_confirmed():
+    from lsim.closed_loop import MacByteAccounting
+
+    sc = _scenario("mac:\n  link_adr: true\n  duty_cycle_exponent: 3\n  link_check_every: 5\n"
+                   "  device_status_every: 4\n  device_time_every: 7\n")
+    tr = build_trace(sc, ProtocolOptions())
+    acc = tr.mac_bytes
+    assert isinstance(acc, MacByteAccounting)
+    # Calendrier : LinkCheckReq 240 + DeviceTimeReq 160 (1 octet chacun) + DevStatusAns 280 × 3.
+    assert acc.reserved_ds_bytes == 280 * 3
+    assert acc.reserved_bytes == 240 + 160 + 280 * 3
+    # Émis : une DevStatusAns par requête livrée (268), toutes dans des uplinks reçus ici.
+    assert acc.confirmed_ds_answers == 268
+    assert acc.sent_ds_bytes == 268 * 3
+    assert acc.unused_reserved_ds_bytes == acc.reserved_ds_bytes - acc.sent_ds_bytes == 12 * 3
+    # Une réservation n'est jamais une émission : ce qui part ne dépasse pas la somme des
+    # réponses et requêtes réellement présentes (LinkADRAns 2, DutyCycleAns 1, requêtes certaines).
+    assert acc.sent_bytes == 38 * 2 + 40 * 1 + 240 + 160 + acc.sent_ds_bytes
+    assert acc.sent_ds_bytes <= acc.reserved_ds_bytes
+
+
+def test_queue_defers_and_expires_when_foptions_overflow():
+    # Aucune descente reçue : LinkADR et DutyCycle restent en attente, et chaque uplink offre
+    # LinkCheck, DeviceTime et DevStatus : au-delà de 15 octets, la file reporte puis expire.
+    sc = _scenario("mac:\n  link_adr: true\n  duty_cycle_exponent: 2\n  link_check_every: 1\n"
+                   "  device_status_every: 1\n  device_time_every: 1\n")
+    tr = build_trace(sc, ProtocolOptions(device_rx_offset_db=200.0))
+    q = tr.mac_queue
+    assert q.deferred > 0
+    assert q.expired > 0
+    assert q.enqueued == q.dispatched + q.expired + q.pending_at_end
+    assert q.dispatch_lost <= q.dispatched
+    assert tr.totals.sent == sum(d.messages for d in sc.deploy()[0])
+    # Les commandes de la file ne sont pas transmises deux fois : aucune descente n'est reçue ici.
+    assert not any(e.kind == "mac_answer" and e.outcome == "delivered" for e in tr.events)

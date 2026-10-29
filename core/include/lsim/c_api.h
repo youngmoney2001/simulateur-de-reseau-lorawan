@@ -1103,6 +1103,16 @@ typedef struct lsim_loop_mac {
     uint8_t flags;
 } lsim_loop_mac;
 
+/* Compteurs de la file MAC (v2). Invariant : enqueued = dispatched + expired + pending_at_end. */
+typedef struct lsim_loop_mac_counters {
+    uint64_t enqueued;
+    uint64_t dispatched;
+    uint64_t dispatch_lost;          /* parmi les dispatched, descentes non reçues */
+    uint64_t deferred;               /* reports : une commande non tenue dans les FOpts d'un uplink */
+    uint64_t expired;
+    uint64_t pending_at_end;
+} lsim_loop_mac_counters;
+
 typedef struct lsim_loop_uplink {
     uint32_t device_index;
     int64_t start_ns;
@@ -1163,7 +1173,8 @@ LSIM_API int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, si
                                               lsim_loop_downlink* downlinks,
                                               size_t downlink_capacity, size_t* downlink_count,
                                               lsim_interval* busy, size_t busy_capacity,
-                                              size_t* busy_count);
+                                              size_t* busy_count,
+                                              lsim_loop_mac_counters* mac_counters);
 
 /* ------------------------------------------- Boucle fermée causale (v1, S1)
  * Passerelle unique, sans commande MAC ni jointure. Les descentes sont planifiées au fil de

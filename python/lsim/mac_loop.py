@@ -22,7 +22,10 @@ import math
 from typing import Any, Optional, Sequence
 
 from lsim import mac_plan
-from lsim.closed_loop import MAC_DEVICE_STATUS, MAC_DEVICE_TIME, MAC_LINK_CHECK, LoopOptions, LoopRegion, MacSlot
+from lsim.closed_loop import (
+    ANSWER_DEVICE_STATUS, MAC_DEVICE_STATUS, MAC_DEVICE_TIME, MAC_LINK_CHECK, LoopOptions,
+    LoopRegion, MacByteAccounting, MacSlot,
+)
 from lsim.mac import DeviceTimeReq, LinkCheckReq
 from lsim.mac_plan import MacSchedule
 from lsim.plan import get_plan
@@ -129,6 +132,51 @@ def _group_region(g, link_adr: bool) -> LoopRegion:
     return LoopRegion(dr_sf=tuple(dr_sf), max_dr=max_dr, max_tx_power_index=max_index,
                       power_step_tenth_db=round(step_db * 10),
                       max_eirp_dbm=max_eirp, duty_limit=tuple(duty))
+
+
+# Tailles des réponses portées par un uplink (identiques à `answer_octets` du moteur).
+LINK_ADR_ANS_BYTES = 2
+DUTY_CYCLE_ANS_BYTES = 1
+
+
+def mac_byte_accounting(schedule: Optional[MacSchedule], devices: Sequence,
+                        uplinks: Sequence) -> MacByteAccounting:
+    """Comptabilité des octets MAC d'une boucle fermée (voir `MacByteAccounting`).
+
+    `uplinks` : `LoopOutcome.uplinks`, dans l'ordre temporel (rang = ordre par dispositif).
+    """
+    if schedule is None:
+        return MacByteAccounting(0, 0, 0, 0, 0, 0)
+    reserved = 0
+    reserved_ds = 0
+    for d in devices:
+        for rank in range(1, d.messages + 1):
+            reserved += mac_plan.reserved_extra_bytes(schedule, rank)
+            if rank >= 2 and mac_plan.device_status_request_due(schedule, rank - 1):
+                reserved_ds += mac_plan.DEVICE_STATUS_ANS_BYTES
+    sent = 0
+    sent_ds = 0
+    confirmed = 0
+    rank_of: dict[int, int] = {}
+    for u in uplinks:
+        rank = rank_of.get(u.device, 0) + 1
+        rank_of[u.device] = rank
+        if u.answer_mask & 1:
+            sent += LINK_ADR_ANS_BYTES
+        if u.answer_mask & 2:
+            sent += DUTY_CYCLE_ANS_BYTES
+        for cmd in mac_plan.uplink_requests(schedule, rank):
+            sent += (mac_plan.LINK_CHECK_REQ_BYTES if isinstance(cmd, LinkCheckReq)
+                     else mac_plan.DEVICE_TIME_REQ_BYTES)
+        if u.answer_mask & ANSWER_DEVICE_STATUS:
+            sent += mac_plan.DEVICE_STATUS_ANS_BYTES
+            sent_ds += mac_plan.DEVICE_STATUS_ANS_BYTES
+            if u.outcome == "received":
+                confirmed += 1
+    return MacByteAccounting(
+        reserved_bytes=reserved, reserved_ds_bytes=reserved_ds, sent_bytes=sent,
+        sent_ds_bytes=sent_ds, unused_reserved_ds_bytes=reserved_ds - sent_ds,
+        confirmed_ds_answers=confirmed)
 
 
 def loop_regions(scenario, group_of: Sequence[str]) -> list[LoopRegion]:

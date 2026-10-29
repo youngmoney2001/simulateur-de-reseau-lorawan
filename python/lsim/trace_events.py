@@ -38,13 +38,16 @@ import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
 from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
+
+if TYPE_CHECKING:  # annotations seulement : évite le cycle avec closed_loop / downlink_plan
+    from lsim.closed_loop import MacByteAccounting, MacQueueCounters
 from lsim.mesh import MESH_ENVELOPE_DOWN_BYTES, MESH_ENVELOPE_UP_BYTES
 from lsim import mac as lsim_mac
 from lsim.mac import DevStatusReq, DeviceTimeAns, DeviceTimeReq, LinkCheckAns, LinkCheckReq
@@ -146,6 +149,9 @@ class TraceRun:
     records: tuple[TxRecord, ...]
     events: tuple[ProtocolEvent, ...]
     gateway_tx: tuple[tuple[int, int], ...]  # émissions de la passerelle [début, fin) (ns)
+    # Boucle fermée seulement (None sur le chemin historique) :
+    mac_queue: Optional[MacQueueCounters] = None  # file MAC (commandes ponctuelles)
+    mac_bytes: Optional[MacByteAccounting] = None  # octets réservés / émis / confirmés
 
 
 @dataclass(frozen=True)
@@ -628,7 +634,9 @@ def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propa
                              options: ProtocolOptions) -> TraceRun:
     """Boucle fermée S2/S3 : une exécution, uplinks, réservations MAC et descentes du moteur natif."""
     from lsim.closed_loop import OUTCOME_CODES, simulate_closed_loop
-    from lsim.mac_loop import check_closed_loop, loop_options, loop_regions, mac_slots
+    from lsim.mac_loop import (
+        check_closed_loop, loop_options, loop_regions, mac_byte_accounting, mac_slots,
+    )
     check_closed_loop(scenario, options)
     schedule = _schedule_of(scenario)
     out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
@@ -640,7 +648,8 @@ def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propa
         for u in out.uplinks)
     events = _closed_loop_events(out, radios, options, schedule)
     return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
-                    events=events, gateway_tx=out.busy)
+                    events=events, gateway_tx=out.busy, mac_queue=out.mac_queue,
+                    mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks))
 
 
 def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOptions,

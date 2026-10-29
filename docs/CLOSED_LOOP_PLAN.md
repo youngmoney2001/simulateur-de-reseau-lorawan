@@ -110,11 +110,12 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
     demande livrée (`dev.ds_pending`) pour la porter dans l'uplink suivant (bit 2 de `answer_mask`),
     confirmée seulement si cet uplink est reçu. Règles de conservation : l'octet DevStatusAns est réservé
     dans l'airtime dès que la requête est planifiée, même si elle est perdue (réservation conservatrice,
-    comme `mac_plan`) ; seule la confirmation dépend de la réception. Les FOpts ne se tronquent pas : une
-    descente dont les commandes dépassent 15 octets (par exemple LinkADR 5 + DutyCycle 2 + LinkCheck 3 +
-    DeviceTime 6 + DevStatus 1) est refusée explicitement (`InvalidInput`) ; une file d'attente des
-    commandes reste à faire.
-  - Preuves : `core/tests/test_closed_loop.cpp` (`test_mac_reservations_and_answers`) ; `python/tests/test_mac_loop.py`
+    comme `mac_plan`) ; seule la confirmation dépend de la réception. Les FOpts ne se tronquent jamais : voir « File MAC » ci-dessous.
+  - File MAC (faite) : les commandes à état (LinkADR, DutyCycle) passent en premier, dans un budget de 15 octets de FOpts ; elles restent offertes tant qu'elles ne sont pas acquittées. Les commandes ponctuelles (LinkCheckAns 3 octets, DeviceTimeAns 6, DevStatusReq 1) entrent en file FIFO à leur uplink ; une commande qui tient part dans la descente, une autre est reportée (`deferred`) et expire après `mac_max_deferrals` reports (défaut 3, `expired`). Une réponse ou requête ponctuelle n'est pas retransmise : si sa descente n'est pas reçue, elle est perdue (`dispatch_lost`). Pas de priorité entre commandes ponctuelles au-delà de l'ordre d'arrivée ; le regroupement est implicite (plusieurs commandes compatibles tiennent dans une même descente).
+  - États d'une commande ponctuelle : en attente (dans la file) ; transmise (placée dans une descente : `dispatched`), livraison confirmée ou non (`dispatch_lost` si la descente n'est pas reçue) ; terminée (réponse portée ou requête livrée) ; expirée (`expired`). Invariant testé : `enqueued = dispatched + expired + pending_at_end`.
+  - Comptabilité des octets (option A, décision du propriétaire) : `MacByteAccounting` distingue les octets réservés par le calendrier (airtime), les octets présents dans les uplinks émis (`sent_bytes`, y compris les DevStatusAns émises), et les réponses confirmées (`confirmed_ds_answers`, DevStatusAns dans un uplink reçu). La réservation DevStatusAns n'est jamais comptée comme une émission ; la réservation non utilisée est `unused_reserved_ds_bytes`. Les résultats (airtime, collisions, descentes) ne changent pas : les compteurs sont additifs. Exposition : `TraceRun.mac_queue` et `TraceRun.mac_bytes` (Python) ; `lsim_loop_mac_counters` (API C v2). Non exposé dans les réponses de l'API HTTP : cela demande un changement de schéma, à faire après validation.
+  - Option B (réservation DevStatusAns seulement si la requête est livrée) : à faire après la file, avec validation explicite des traces et des empreintes concernées.
+  - Preuves : `core/tests/test_closed_loop.cpp` (`test_mac_reservations_and_answers`, `test_mac_queue_*`) ; `python/tests/test_mac_loop.py` (`test_byte_accounting_*`, `test_queue_defers_*`)
     (`test_reservations_closed_loop_matches_legacy_path` : sans ADR ni DutyCycle, la boucle fermée reproduit
     le chemin historique, en airtime, descentes et événements). Le chemin historique reste la référence de
     ce périmètre ; ses empreintes sont inchangées.

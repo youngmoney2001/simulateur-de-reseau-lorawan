@@ -9,7 +9,8 @@
 - **Duty cycle** : limite réglementaire par index (sous-bande à la PIRE de l'index, combinée au duty cycle du groupe) ; DutyCycleReq ne fait que la réduire. Repos après une émission = airtime de l'émission terminée × (1/D − 1).
 - **Refusé explicitement** : jointure, passerelles multiples, mesh.
 - **Réservations MAC dans la boucle fermée** : LinkCheckReq, DeviceTimeReq et DevStatusAns réservent leurs octets dans le temps d'antenne ; LinkCheckAns, DeviceTimeAns et DevStatusReq sont portés par la descente de l'uplink concerné. DevStatusAns est confirmée à la réception de l'uplink suivant. Nouvelle API `lsim_simulate_closed_loop_v2` (la v1 est conservée). Sans ADR ni DutyCycle, la boucle fermée reproduit le chemin historique (test de parité).
-- Limite : une descente dont les commandes dépassent 15 octets de FOpts est refusée explicitement (pas encore de file d'attente).
+- **File MAC** : les FOpts ne dépassent jamais 15 octets. LinkADR et DutyCycle passent en premier ; LinkCheckAns, DeviceTimeAns et DevStatusReq attendent dans une file FIFO et sont reportées (puis expirent après 3 reports) si elles ne tiennent pas. Compteurs `enqueued`, `dispatched`, `dispatch_lost`, `deferred`, `expired`, `pending_at_end` (API C v2 et `TraceRun.mac_queue`).
+- **Octets MAC** : `TraceRun.mac_bytes` sépare octets réservés, octets émis et réponses DevStatus confirmées. Les résultats de simulation ne changent pas.
 - Tests : `core/tests/test_closed_loop.cpp`, `python/tests/test_mac_loop.py`. Documentation : `docs/CLOSED_LOOP_PLAN.md`.
 
 ### Commandes MAC : phase 1, étape 1

@@ -332,6 +332,75 @@ void test_mac_reservations_and_answers() {
              static_cast<int>(SimStatus::InvalidInput));
 }
 
+// File MAC : les commandes à état (LinkADR 5, DutyCycle 2) restent en attente quand aucune
+// descente n'est reçue ; avec LinkCheck (3), DeviceTime (6) et DevStatus (1) à chaque uplink, le
+// total dépasse 15 octets. Les commandes en trop sont reportées puis expirent ; rien ne se tronque.
+void test_mac_queue_defers_expires_and_conserves() {
+    const std::uint32_t messages = 60;
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, messages)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    std::vector<LoopMacSlot> slots;
+    for (std::uint32_t r = 1; r <= messages; ++r) {
+        slots.push_back(LoopMacSlot{0, r, 0, static_cast<std::uint8_t>(kLoopMacLinkCheck |
+                                                                       kLoopMacDeviceTime |
+                                                                       kLoopMacDevStatus)});
+    }
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 2;
+    opt.protocol.device_rx_offset_db = 200.0;  // aucune descente reçue : ADR et DutyCycle restent en attente
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    const LoopMacQueueStats& q = res.mac;
+    CHECK_TRUE(q.deferred > 0);            // la file a dû reporter (17 octets à offrir)
+    CHECK_TRUE(q.expired > 0);             // au-delà de 3 reports, une commande expire
+    CHECK_EQ(q.enqueued, q.dispatched + q.expired + q.pending_at_end);
+    CHECK_TRUE(q.dispatch_lost > 0);       // descentes non reçues portant des commandes de la file
+    CHECK_TRUE(q.dispatch_lost <= q.dispatched);
+    for (const LoopDownlink& dl : res.downlinks) {
+        CHECK_TRUE(!dl.delivered);         // le décalage de RX1 rend chaque descente non reçue
+    }
+}
+
+// Expiration immédiate : sans report autorisé, toute commande qui ne tient pas expire au premier
+// report. Les reports et les expirations coïncident.
+void test_mac_queue_zero_deferrals_expires_at_once() {
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 60)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    std::vector<LoopMacSlot> slots;
+    for (std::uint32_t r = 1; r <= 60; ++r) {
+        slots.push_back(LoopMacSlot{0, r, 0, static_cast<std::uint8_t>(kLoopMacLinkCheck |
+                                                                       kLoopMacDeviceTime |
+                                                                       kLoopMacDevStatus)});
+    }
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 2;
+    opt.protocol.device_rx_offset_db = 200.0;
+    opt.mac_max_deferrals = 0;
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_TRUE(res.mac.deferred > 0);
+    CHECK_EQ(res.mac.expired, res.mac.deferred);
+    CHECK_EQ(res.mac.enqueued, res.mac.dispatched + res.mac.expired + res.mac.pending_at_end);
+}
+
 }  // namespace
 
 void run_closed_loop_tests() {
@@ -343,4 +412,6 @@ void run_closed_loop_tests() {
     test_duty_cycle_spacing_after_apply();
     test_retry_after_device_missed_rx1();
     test_mac_reservations_and_answers();
+    test_mac_queue_defers_expires_and_conserves();
+    test_mac_queue_zero_deferrals_expires_at_once();
 }

@@ -67,6 +67,12 @@ class _CLoopMac(ctypes.Structure):
                 ("extra_bytes", ctypes.c_uint8), ("flags", ctypes.c_uint8)]
 
 
+class _CMacCounters(ctypes.Structure):
+    _fields_ = [("enqueued", ctypes.c_uint64), ("dispatched", ctypes.c_uint64),
+                ("dispatch_lost", ctypes.c_uint64), ("deferred", ctypes.c_uint64),
+                ("expired", ctypes.c_uint64), ("pending_at_end", ctypes.c_uint64)]
+
+
 class _CLoopUplink(ctypes.Structure):
     _fields_ = [("device_index", ctypes.c_uint32), ("start_ns", ctypes.c_int64),
                 ("end_ns", ctypes.c_int64), ("spreading_factor", ctypes.c_uint8),
@@ -92,7 +98,7 @@ LIB.lsim_simulate_closed_loop_v2.argtypes = [
     ctypes.POINTER(_CSimStats), ctypes.POINTER(_CLoopUplink), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CLoopDownlink), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CInterval), ctypes.c_size_t,
-    ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CMacCounters),
 ]
 
 
@@ -171,6 +177,43 @@ class LoopDownlink:
 
 
 @dataclass(frozen=True)
+class MacQueueCounters:
+    """Compteurs de la file MAC (commandes ponctuelles). enqueued = dispatched + expired +
+    pending_at_end. `dispatch_lost` : parmi les dispatched, descentes non reçues (pas de nouvel essai).
+    `deferred` : reports, une par uplink reçu où la commande ne tient pas dans les FOpts."""
+
+    enqueued: int
+    dispatched: int
+    dispatch_lost: int
+    deferred: int
+    expired: int
+    pending_at_end: int
+
+
+@dataclass(frozen=True)
+class MacByteAccounting:
+    """Octets MAC : réservés, émis, confirmés (trois notions distinctes).
+
+    - reserved_bytes : octets réservés par le calendrier dans l'airtime, toutes émissions.
+    - reserved_ds_bytes : part DevStatusAns de cette réservation (une par requête planifiée).
+    - sent_bytes : octets MAC présents dans les uplinks émis (réponses ADR/DutyCycle portées,
+      LinkCheckReq et DeviceTimeReq certaines, DevStatusAns émises), reçus ou non.
+    - sent_ds_bytes : octets DevStatusAns émis (uplinks portant la réponse).
+    - unused_reserved_ds_bytes : réservation DevStatusAns non utilisée (reserved_ds - sent_ds).
+    - confirmed_ds_answers : DevStatusAns dans des uplinks reçus (seules réponses confirmées).
+    Une réservation n'est jamais comptée comme une émission : seuls les octets présents
+    dans un uplink émis entrent dans `sent_bytes`.
+    """
+
+    reserved_bytes: int
+    reserved_ds_bytes: int
+    sent_bytes: int
+    sent_ds_bytes: int
+    unused_reserved_ds_bytes: int
+    confirmed_ds_answers: int
+
+
+@dataclass(frozen=True)
 class LoopOutcome:
     per_device: tuple[Counters, ...]
     totals: Counters
@@ -178,6 +221,7 @@ class LoopOutcome:
     uplinks: tuple[LoopUplink, ...]
     downlinks: tuple[LoopDownlink, ...]
     busy: tuple[tuple[int, int], ...]
+    mac_queue: MacQueueCounters
 
 
 _OUTCOMES = {0: "lost_sensitivity", 1: "lost_collision", 2: "received", 3: "lost_gateway_busy"}
@@ -261,11 +305,12 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
     n_ups = ctypes.c_size_t(0)
     n_dls = ctypes.c_size_t(0)
     n_busy = ctypes.c_size_t(0)
+    c_mq = _CMacCounters()
     status = LIB.lsim_simulate_closed_loop_v2(
         c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
         ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
         c_mac if mac else None, len(mac), c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
-        c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy))
+        c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy), ctypes.byref(c_mq))
     del keep
     if status != 0:
         raise StatusError(status)
@@ -287,4 +332,6 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
                      bool(d.delivered), d.req_dr, d.req_power_index)
         for d in c_dls[:n_dls.value])
     busy = tuple((c_busy[k].start_ns, c_busy[k].end_ns) for k in range(n_busy.value))
-    return LoopOutcome(per, tot, load, ups, dls, busy)
+    mq = MacQueueCounters(c_mq.enqueued, c_mq.dispatched, c_mq.dispatch_lost, c_mq.deferred,
+                          c_mq.expired, c_mq.pending_at_end)
+    return LoopOutcome(per, tot, load, ups, dls, busy, mq)

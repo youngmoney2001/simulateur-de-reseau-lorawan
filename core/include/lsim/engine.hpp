@@ -257,6 +257,8 @@ inline constexpr std::uint8_t kLoopMacLinkCheck = 1;   // LinkCheckAns dans la d
 inline constexpr std::uint8_t kLoopMacDeviceTime = 2;  // DeviceTimeAns dans la descente de cet uplink
 inline constexpr std::uint8_t kLoopMacDevStatus = 4;   // DevStatusReq dans la descente de cet uplink
 inline constexpr std::uint8_t kLoopMacAll = 7;
+inline constexpr std::uint8_t kLoopMacMaxDeferrals = 3;  // défaut de LoopOptions::mac_max_deferrals
+inline constexpr std::uint32_t kLoopFoptsMax = 15;       // taille maximale des FOpts
 
 struct LoopMacSlot {
     std::uint32_t device = 0;
@@ -274,6 +276,21 @@ struct LoopOptions {
     // Réservations MAC (LinkCheck, DeviceTime, DevStatus) : au plus une entrée par émission.
     const LoopMacSlot* mac = nullptr;
     std::size_t mac_count = 0;
+    // File MAC : nombre de reports (uplinks reçus où la commande ne tient pas dans les FOpts)
+    // au-delà duquel la commande expire.
+    std::uint8_t mac_max_deferrals = kLoopMacMaxDeferrals;
+};
+
+// Compteurs de la file MAC. Invariant : enqueued = dispatched + expired + pending_at_end.
+// `dispatched` : commandes placées dans une descente (livrée ou non) ; `dispatch_lost` : parmi
+// elles, celles dont la descente n'a pas été reçue (pas de nouvel essai pour ces réponses).
+struct LoopMacQueueStats {
+    std::uint64_t enqueued = 0;
+    std::uint64_t dispatched = 0;
+    std::uint64_t dispatch_lost = 0;
+    std::uint64_t deferred = 0;      // reports (une commande reportée à chaque uplink où elle ne tient pas)
+    std::uint64_t expired = 0;
+    std::uint64_t pending_at_end = 0;
 };
 
 // Uplink : une entrée par émission, dans l'ordre temporel des débuts.
@@ -302,6 +319,7 @@ struct LoopDownlink {
     std::uint32_t device = 0;
     std::uint8_t kind = 3;                    // 1 ACK, 2 donnée, 3 MAC seul
     std::uint8_t commands = 0;                // kLoopCmd* (FOpts et réponses MAC)
+    std::uint8_t queued = 0;                  // commandes de la file portées (pour `dispatch_lost`)
     SimTime t_open = 0;
     SimTime start_ns = -1;                    // -1 : pas de créneau passerelle dans la RX1
     SimTime air_ns = 0;
@@ -315,6 +333,7 @@ struct LoopResult {
     std::vector<LoopUplink> uplinks;
     std::vector<LoopDownlink> downlinks;
     std::vector<Interval> gateway_busy;       // émissions passerelle planifiées (ordre croissant)
+    LoopMacQueueStats mac;                    // file MAC (commandes ponctuelles)
 };
 
 // `radios` : un paramètre radio par dispositif (le SF RX1 suit le SF montant courant).
