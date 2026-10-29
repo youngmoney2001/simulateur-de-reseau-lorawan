@@ -9,9 +9,10 @@ RX1 : même canal que l'émission ; débit = max(0, DR montant − RX1DROffset) 
 downlink RX1 data rate mapping », RP002-1.0.2). Ce serveur fixe RX1DROffset à 0 : débit RX1 = débit
 montant. RX2 par défaut : 923,2 MHz / DR2 (DLSettings).
 
-Charge applicative sans FOpts (N) : M − 8, avec M = 59, 59, 59, 123, 230, 230, 230 pour DR0 à DR6
-(RP002-1.0.2 §2.7.6, tableau 53, « repeater compatible »). Les valeurs M sont aussi celles des
-tableaux publics de débit (59 / 123 / 230).
+Charge applicative sans FOpts (N) : 51, 51, 51, 115, 222, 222, 222 pour DR0 à DR6 (valeurs
+prudentes : N = M − 8 avec M = 59, 59, 59, 123, 230, 230, 230). Le tableau 53 de RP002-1.0.2
+(§2.7.6) n'a pas pu être lu dans cet environnement ; pour DR4 à DR6, une variante non compatible
+répéteur donne N = 242 : la valeur retenue reste donc inférieure ou égale à la limite réelle.
 
 Non modélisé : DownLinkDwellTime = 1 (400 ms) qui relève le débit minimal à DR2 et réduit le
 mapping RX1 ; les limites par pays (ARIB pour le Japon, voir `lsim.regions`) ; les canaux
