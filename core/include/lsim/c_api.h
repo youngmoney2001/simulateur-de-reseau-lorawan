@@ -1005,6 +1005,70 @@ LSIM_API int32_t lsim_mesh_forward_routed_log(const lsim_mesh_radio* radio, size
                                               lsim_mesh_hop* hops, size_t hop_capacity,
                                               size_t* hop_count);
 
+/* ------------------------------------------- Planification des descentes (v1, S0)
+ * Passerelle unique, sans jointure ni commande MAC. Même logique que la trace Python
+ * (`lsim.trace_events`) pour ce cas. Entrées : émissions montantes (ordre de trace) et paramètres
+ * radio par dispositif. Sorties : événements (ordre temporel stable) et occupation passerelle.
+ * Codes d'issue : voir lsim/downlink_plan.hpp (Outcome, EventKind, HopDir). */
+#define LSIM_STATUS_PLAN_BASE 950
+
+typedef struct lsim_plan_uplink {
+    uint32_t device_index;
+    int64_t start_ns;
+    int64_t end_ns;
+    uint8_t spreading_factor;
+    uint8_t outcome;             /* 0 sensibilité, 1 collision, 2 reçue, 3 passerelle occupée */
+    double rssi_dbm;
+} lsim_plan_uplink;
+
+typedef struct lsim_plan_device {
+    int64_t freq_hz;
+    int32_t dr;                  /* -1 : aucun débit de plan */
+    int64_t rx1_hz;
+    double tx_power_dbm;
+    uint8_t rx1_sf;
+    uint32_t rx1_bw_hz;          /* 125000, 250000 ou 500000 */
+} lsim_plan_device;
+
+typedef struct lsim_plan_options {
+    uint8_t confirmed_uplinks;
+    uint32_t downlink_every;
+    uint32_t downlink_payload_bytes;   /* 0..242 */
+    double gateway_tx_power_dbm;
+    double device_antenna_gain_dbi;
+    double device_rx_offset_db;
+} lsim_plan_options;
+
+typedef struct lsim_plan_hop {
+    uint8_t dir;                 /* 0 dispositif->passerelle, 1 passerelle->réseau, 2 passerelle->dispositif */
+    uint8_t outcome;             /* code Outcome */
+    uint8_t has_rssi;
+    int64_t t_ns;
+    int64_t freq_hz;
+    int32_t dr;
+    double rssi_dbm;
+} lsim_plan_hop;
+
+typedef struct lsim_plan_event {
+    int64_t t_ns;
+    uint32_t device_index;
+    uint8_t kind;                /* 0 uplink, 1 ack, 2 downlink, 3 rx_window_missed */
+    uint8_t outcome;
+    uint8_t hop_count;           /* 0..2 */
+    lsim_plan_hop hops[2];
+} lsim_plan_event;
+
+/* Planifie les descentes. Les tableaux de sortie ont une capacité ; si elle est insuffisante,
+ * *event_count / *busy_count donnent la taille requise et le statut est
+ * LSIM_STATUS_PLAN_BASE + 4 (TraceBufferTooSmall). */
+LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_count,
+                                        const lsim_plan_device* devices, size_t device_count,
+                                        const lsim_plan_options* options,
+                                        lsim_plan_event* events, size_t event_capacity,
+                                        size_t* event_count,
+                                        lsim_interval* busy, size_t busy_capacity,
+                                        size_t* busy_count);
+
 #ifdef __cplusplus
 }
 #endif

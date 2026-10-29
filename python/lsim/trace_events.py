@@ -555,6 +555,36 @@ def mac_reservations(scenario: Scenario, devices) -> tuple[tuple[int, int, int],
     return tuple(out)
 
 
+def _native_plan_applies(options: ProtocolOptions, mac: Optional[MacSchedule]) -> bool:
+    """Planification des descentes en natif (S0) : passerelle unique, sans jointure ni commande MAC.
+
+    Ces cas sont couverts par la parité avec la version Python (`tests/test_downlink_plan_parity.py`).
+    Les autres restent sur la version Python.
+    """
+    return not options.join and mac is None
+
+
+def _build_trace_native(devices, radios, gateway, propagation, environment, reservations,
+                        options: ProtocolOptions) -> TraceRun:
+    """Point fixe identique à la version Python, la planification des descentes étant native."""
+    from lsim.downlink_plan import plan_native
+    busy: list[tuple[int, int]] = []
+    for _ in range(MAX_ITERATIONS):
+        result = simulate_uplinks_trace(devices, gateway, propagation, environment,
+                                        gateway_busy=busy, reservations=reservations)
+        events, new_busy = plan_native(result.records, radios, options)
+        if list(new_busy) == busy:
+            if len(events) > MAX_EVENTS:
+                raise ValueError(f"trop d'événements ({len(events)} ; limite {MAX_EVENTS})")
+            return TraceRun(per_device=result.per_device, totals=result.totals,
+                            gateway=result.gateway, records=result.records, events=events,
+                            gateway_tx=tuple(busy))
+        busy = list(new_busy)
+    raise RuntimeError(
+        f"pas de point fixe entre trames montantes et émissions passerelle "
+        f"après {MAX_ITERATIONS} itérations")
+
+
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
     """Déploie le scénario et calcule la trace cohérente avec les émissions de la passerelle.
 
@@ -569,6 +599,10 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
     mac = _schedule_of(scenario)
     reservations = mac_reservations(scenario, devices)
+
+    if _native_plan_applies(options, mac):
+        return _build_trace_native(devices, radios, gateway, propagation, environment, reservations,
+                                   options)
 
     busy: list[tuple[int, int]] = []
     joined: dict[int, int] = {}

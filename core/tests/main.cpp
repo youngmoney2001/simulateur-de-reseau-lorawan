@@ -21,6 +21,7 @@ void run_rekey_tests();
 void run_session_tests();
 void run_class_b_tests();
 void run_downlink_tests();
+void run_downlink_plan_tests();
 void run_materials_tests();
 void run_energy_tests();
 void run_mesh_tests();
@@ -46,6 +47,7 @@ int main() {
     run_session_tests();
     run_class_b_tests();
     run_downlink_tests();
+    run_downlink_plan_tests();
     std::printf("%d/%d vérifications réussies\n", lsim::test::checks() - lsim::test::failures(),
                 lsim::test::checks());
     return lsim::test::failures() == 0 ? 0 : 1;

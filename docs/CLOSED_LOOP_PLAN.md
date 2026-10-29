@@ -18,7 +18,18 @@ Les scénarios **sans bloc `mac:`** doivent garder leurs résultats octet pour o
 modèle de descente qui les modifie doit être explicitement validé avant le merge.
 
 ## Étapes
-- **S0 : référence C++ des descentes** : porter `_downlink_jobs`, `_schedule_gateway` et
+- **S0 : référence C++ des descentes : fait pour le périmètre « passerelle unique, sans jointure ni MAC »**.
+  Code : `core/src/downlink_plan.cpp` (`lsim::plan`), API `lsim_plan_downlinks_v1` (`c_api_plan.cpp`, statuts
+  950+), pont `python/lsim/downlink_plan.py`. `build_trace` l'utilise pour ce périmètre (point fixe conservé).
+  Preuves : tests C++ (`test_downlink_plan.cpp`) ; parité avec l'oracle Python sur 60 scénarios aléatoires,
+  scénarios denses (RX1 manquées), traces converged (occupation passerelle, uplinks perdus) et descentes perdues
+  (`test_downlink_plan_parity.py`) ; empreintes sans MAC identiques à la base.
+  Non porté (reste Python) : jointure, commandes MAC, mesh, multi-passerelles.
+  Constat : 2 scénarios denses sur 40 n'atteignent pas le point fixe de `build_trace` (limite actuelle, à
+  résoudre par S1).
+  Décision de modèle conservée de Python : la passerelle réserve son émission même si le dispositif émet pendant
+  RX1 (`device_missed` n'affecte que les événements).
+- (Détail initial, à titre de référence) porter `_downlink_jobs`, `_schedule_gateway` et
   `_events` (`python/lsim/trace_events.py`) vers le moteur, sans commande MAC. Critère : sorties
   identiques à Python sur `examples/` et sur les scénarios de test (avec et sans descentes,
   classes A/B/C, mesh exclu au départ).
