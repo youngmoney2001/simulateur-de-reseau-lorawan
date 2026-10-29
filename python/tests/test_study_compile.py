@@ -138,3 +138,20 @@ def test_the_unmodelled_settings_are_always_reported():
     out = compile_session([node("frontiere", "border"), SENSOR],
                           configs(frontiere=cfg("EU868")), seed=0)
     assert any("non modélisés" in note and "Ethernet" in note for note in out.notes)
+
+
+def test_compiled_notes_state_software_reserve_and_radio_limit():
+    """Notes de compilation : relais provisoire signalé ; sensibilité non prise en compte, dite explicitement."""
+    nodes = [node("frontiere", "border"), node("relais-1", "relay", x=1200), SENSOR]
+    out = compile_session(nodes, configs(
+        frontiere=cfg("EU868", mesh={"bandwidth_khz": "812"}),
+        **{"relais-1": cfg("EU868", mesh={"bandwidth_khz": "812"})}), seed=0)
+    text = " | ".join(out.notes)
+    assert "rak5146-rak5148" in text and "à valider" in text
+    assert "sensibilité des récepteurs" in text and "non calculé" in text
+
+
+def test_no_software_reserve_without_relay():
+    out = compile_session([node("passerelle", "border"), SENSOR], configs(passerelle=cfg("EU868")), seed=0)
+    assert not any("compatibilité logicielle" in n for n in out.notes)
+    assert any("sensibilité des récepteurs" in n for n in out.notes)

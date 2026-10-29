@@ -70,3 +70,14 @@ def test_mesh_only_module_has_no_sub_ghz_access():
     p = get_profile("rak5148")
     assert can_relay(p)
     assert p.access_bands == ("ISM2400",)
+
+
+def test_software_status_is_separate_from_radio_fidelity():
+    """Le profil composite est provisoire (compatibilité logicielle à valider) ; le RAK5148 seul est validé
+    côté catalogue, sans que cela dise rien de la sensibilité : celle-ci n'entre dans aucun calcul."""
+    from lsim.gateway_profiles import software_status
+    composite = get_profile("rak5146-rak5148")
+    assert composite.software_validated is False
+    assert software_status(composite) == "à valider"
+    assert any("NE PAS" in n or "n'est PAS utilisée" in n for n in composite.notes)
+    assert software_status(get_profile("rak5148")) == "validé"

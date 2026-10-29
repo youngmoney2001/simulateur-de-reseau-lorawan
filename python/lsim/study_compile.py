@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lsim.channel_mask import sub_band_channels
+from lsim.gateway_profiles import get_profile, software_status
 from lsim.plan import get_plan
 from lsim.study_cli import SUB_BAND_REGIONS, GatewayConfig
 from lsim.study_contract import Node, SensorSettings
@@ -35,7 +36,8 @@ DEFAULT_REGION = "EU868"
 DEFAULT_SUB_BAND = 1
 MESH_PROFILE = "rak5146-rak5148"  # relais : accès sous-GHz + lien mesh 2,4 GHz (gateway_profiles)
 MESH_DEFAULTS = {"spreading_factor": 9, "bandwidth_khz": 203, "max_hops": 8}   # défauts de MeshModel
-NOT_MODELLED = ("puissance d'émission des passerelles", "fréquence réglée sur les passerelles",
+NOT_MODELLED = ("puissance d'émission des passerelles d'accès", "sensibilité des récepteurs (budget de liaison "
+                "non calculé : les profils ne la font pas intervenir)", "fréquence réglée sur les passerelles",
                 "interface Ethernet", "serveur réseau (le LNS est implicite derrière la frontière)")
 
 
@@ -180,6 +182,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
     }
     if mesh_block is not None:
         scenario["mesh"] = mesh_block
+    if mesh_nodes:
+        prof = get_profile(MESH_PROFILE)
+        if not prof.software_validated:
+            notes.append(f"relais : profil {MESH_PROFILE} ({software_status(prof)}) : compatibilité "
+                         "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
     notes.append("non modélisés (ignorés) : " + ", ".join(NOT_MODELLED))
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
     return Compiled(body={"scenario": scenario, "protocol": {}}, links=links, notes=notes)

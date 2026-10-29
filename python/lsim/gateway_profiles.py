@@ -26,6 +26,8 @@ class GatewayProfile:
     # Hôte : porteur de modules, sans radio LoRa propre publiée. Un hôte ne peut pas être
     # utilisé comme passerelle radio : il faut un module dans ses emplacements.
     is_host: bool = False
+    # Compatibilité logicielle validée (essai réel ou confirmation constructeur). False : provisoire.
+    software_validated: bool = True
     notes: tuple[str, ...] = field(default=())
 
 
@@ -84,12 +86,16 @@ CATALOG: tuple[GatewayProfile, ...] = (
         rx_sensitivity_min_dbm=-139.0,  # RAK5146, accès : -139 dBm à SF12 / 125 kHz (fiche)
         tx_power_max_dbm=27.0,          # RAK5146 : Tx jusqu'à 27 dBm (fiche)
         mesh_bands=("ISM2400",),        # RAK5148 : lien relais 2,4 GHz
+        software_validated=False,       # provisoire : essai ChirpStack Gateway OS ou confirmation RAK requis
         notes=(
             "Hôte à deux concentrateurs : le RAK5146 reçoit les capteurs sous-GHz, le RAK5148 "
             "porte le lien mesh 2,4 GHz (page produit RAK, ChirpStack Gateway OS).",
-            "Compatibilité confirmée par la page produit RAK ; la compatibilité de chaque version "
-            "logicielle reste à valider par le constructeur.",
-            "Sensibilité d'accès : RAK5146. Sensibilité du lien mesh : table du RAK5148 (lsim.mesh).",
+            "Compatibilité logicielle À VALIDER : configuration matérielle documentée par RAK, "
+            "mais pas le fonctionnement de chaque version logicielle. Essai requis : détection "
+            "simultanée des deux concentrateurs, accès EU868 et backhaul mesh 2,4 GHz, relais de "
+            "trames entre les deux radios, comportement après redémarrage et perte du lien mesh.",
+            "Fidélité radio : la sensibilité publiée (RAK5146, -139 dBm) n'est PAS utilisée par le "
+            "moteur ; seule la puissance d'émission (27 dBm) l'est, pour les relais.",
             "Un relais RAK5148 seul ne reçoit pas les capteurs sous-GHz : la règle de scénario le refuse.",
         ),
     ),
@@ -121,6 +127,11 @@ def get_profile(key: str) -> GatewayProfile:
         if p.key == key:
             return p
     raise KeyError(f"passerelle inconnue : {key!r}")
+
+
+def software_status(profile: GatewayProfile) -> str:
+    """« validé » ou « à valider » : état de la compatibilité logicielle, distinct de la fidélité radio."""
+    return "validé" if profile.software_validated else "à valider"
 
 
 def can_relay(profile: GatewayProfile) -> bool:
