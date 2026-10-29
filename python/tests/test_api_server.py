@@ -212,6 +212,16 @@ def _mesh_scenario(count=40):
     return d
 
 
+def test_mesh_run_with_energy_profile_completes_and_reports_energy(api):
+    d = _mesh_scenario(count=40)
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d, "energy_profile": "rak4631"})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, devices = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    assert all(x.get("energy_per_message_j") is not None for x in devices["items"])
+
+
 def test_mesh_run_reports_totals_and_per_device_losses(api):
     # L'exemple du dépôt, SF12 sur le mesh : des trames décodées sont perdues sur le relais.
     import yaml
