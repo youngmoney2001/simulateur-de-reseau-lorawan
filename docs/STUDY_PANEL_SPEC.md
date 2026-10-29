@@ -251,7 +251,7 @@ Restent ouverts :
 4. CLI d'un équipement (une passerelle), tests de la grammaire et des erreurs.
 5. Topologie multi-équipements et simulation pas à pas.
 6. Exercices notés et vérification côté serveur.
-7. Interface graphique (éditeur de topologie, animation des trames, journal par saut).
+7. Interface graphique (éditeur de topologie, animation des trames, journal par saut). **Faits** : éditeur de topologie, console, résultats, sessions, exercices ; animation des trames sur le plan et journal par saut cliquable (`web/src/studio/animation.js`, `player.js` ; lecture, vitesses ×1 à ×300, curseur de temps). Le déplacement visuel dure 1 s simulée, puis le trait reste 4 s. Restent : horloge de référence partagée avec la CLI, animation par saut pour les événements de classe B/C, et la vérification visuelle en navigateur réel au-delà du test e2e (couche présente et trames dessinées).
 
 ## 9. Hors périmètre initial
 

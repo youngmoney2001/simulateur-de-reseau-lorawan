@@ -7,6 +7,8 @@ import {
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent } from "./results.js";
+import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
+import { createPlayer } from "./player.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -178,6 +180,7 @@ function renderPlan() {
     g.addEventListener("pointerdown", (ev) => startDrag(ev, n.id));
     svg.append(g);
   }
+  player.refresh();   // le rendu du plan supprime la couche d'animation : on la remet
 }
 
 function svgPoint(ev) {
@@ -377,7 +380,30 @@ $("add-form").addEventListener("submit", async (ev) => {
 });
 
 // --- Simulation ----------------------------------------------------------------------------
+const player = createPlayer({
+  svg: $("plan"),
+  panel: $("player"),
+  positionOf: (id) => {
+    const node = state.topo?.nodes?.find((n) => n.id === id);
+    return node && state.bounds ? toScreen(node, state.bounds, W, H) : null;
+  },
+});
+
+// Charge les événements et la table dispositif -> capteur du run, puis prépare le lecteur.
+async function loadAnimation(runId) {
+  try {
+    const events = await collectPages((cursor) => state.client.eventsPage(runId, cursor));
+    const rows = await collectPages((cursor) => state.client.devicesPage(runId, cursor));
+    const groups = deviceGroupsFromRows(rows);
+    player.load({ events, segs: segmentsFromEvents(events, groups), groups });
+  } catch (err) {
+    player.clear();
+    $("sim-status").textContent += ` Animation indisponible : ${err.message}`;
+  }
+}
+
 function renderSimulationIdle() {
+  player.clear();
   $("sim-status").textContent = "";
   clear($("sim-notes"));
   $("sim-results").hidden = true;
@@ -405,6 +431,7 @@ $("sim-form").addEventListener("submit", async (ev) => {
     const summary = await guard(() => state.client.summary(started.run_id));
     if (!summary) return;
     renderResults(summary, started.links.map((l) => l.gateway));
+    await loadAnimation(started.run_id);
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
   } finally {
     state.busy = false;

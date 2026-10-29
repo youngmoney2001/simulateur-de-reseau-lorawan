@@ -57,5 +57,9 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),
     summary: (runId) => request("GET", `/api/v1/runs/${enc(runId)}/summary`),
+    eventsPage: (runId, cursor = 0, limit = 500) =>
+      request("GET", `/api/v1/runs/${enc(runId)}/events?cursor=${cursor}&limit=${limit}`),
+    devicesPage: (runId, cursor = 0, limit = 500) =>
+      request("GET", `/api/v1/runs/${enc(runId)}/devices?cursor=${cursor}&limit=${limit}`),
   };
 }

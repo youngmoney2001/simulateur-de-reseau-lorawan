@@ -2,6 +2,14 @@
 
 ## 0.1.0 (non publiée)
 
+### Animation des trames (studio)
+- **Lecteur** sous le panneau de simulation : lecture et pause, vitesses ×1 à ×300, curseur de temps, instant courant en secondes simulées.
+- **Plan animé** : chaque saut apparaît comme une trame qui se déplace de sa source vers sa destination pendant 1 s simulée, puis reste visible 4 s. Couleur : vert (livré), rouge (perdu), gris (autre). Une remise au réseau est un anneau autour de la passerelle.
+- **Journal par saut** : une ligne par événement (temps, source, type, résultat), dépliable sur ses sauts ; un clic place l'horloge sur l'événement.
+- **Source des données** : `GET /api/v1/runs/{id}/events` et `GET /api/v1/runs/{id}/devices` (pages de 500). Le mapping `dev:<index>` vers le capteur vient de la page des dispositifs (groupe = identifiant du capteur) ; `gw:<nom>` désigne directement la passerelle.
+- **Limite** : au-delà de 20 000 événements, l'animation n'est pas chargée (message dans l'état de simulation). Les résultats restent affichés.
+- **Tests** : `web/tests/animation.test.mjs` (logique pure) et l'étape « animation » du test e2e (horloge qui avance, au moins une trame dessinée).
+
 
 ### Studio web (`web/studio.html`) et verrou de base
 - **Interface** : page `web/studio.html` (Vite, à côté de la carte de résultats `index.html`, inchangée). Plan éditable (ajout, glisser-déposer, retrait), console CLI par équipement (historique aux flèches, erreur au caret), réglages capteur avec validation côté studio et serveur, simulation avec résultats par passerelle (compteurs, latence p95, relais mesh), exercices (énoncé, indices avec pénalité, notation, journal), sessions multiples (liste, nouvelle session, suppression).

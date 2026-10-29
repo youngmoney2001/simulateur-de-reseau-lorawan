@@ -72,6 +72,18 @@
         </table>
       </div>
 
+      <div class="panel player" id="player" hidden>
+        <h2>Animation des trames</h2>
+        <div class="row">
+          <button type="button" id="play-toggle">Lecture</button>
+          <label>Vitesse <select id="play-speed"></select></label>
+          <span id="play-time" class="muted"></span>
+        </div>
+        <input id="play-clock" type="range" min="0" max="1000" value="0" aria-label="Instant de la simulation" />
+        <p id="play-note" class="muted"></p>
+        <ol id="journal" class="journal"></ol>
+      </div>
+
       <div class="panel exercise">
         <h2>Exercice</h2>
         <p id="ex-title" class="strong"></p>

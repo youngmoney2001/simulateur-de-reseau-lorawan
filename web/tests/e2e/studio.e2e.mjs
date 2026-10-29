@@ -168,6 +168,33 @@ try {
     if (!rows.some((r) => r.includes("frontiere-nord") || r.includes("gw-nord"))) throw new Error(rows.join(" | "));
   });
 
+  await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {
+    await page.waitForFunction(() => !document.getElementById("player").hidden, { timeout: 60_000 });
+    await page.waitForFunction(() => document.querySelectorAll("#journal > li").length >= 1);
+    const before = await page.$eval("#play-time", (n) => n.textContent);
+    await page.evaluate(() => document.getElementById("play-speed").value = "300");
+    await page.evaluate(() => document.getElementById("play-speed").dispatchEvent(new Event("change")));
+    await page.click("#play-toggle");
+    await new Promise((r) => setTimeout(r, 800));
+    await page.click("#play-toggle");
+    const after = await page.$eval("#play-time", (n) => n.textContent);
+    if (before === after) throw new Error(`horloge figée : ${before}`);
+    // Le plan porte une couche d'animation (trames ou anneaux) dès qu'un événement est actif.
+    // Parcours de l'horloge : au moins une trame (ou un anneau) doit être dessinée sur le plan.
+    const drawn = await page.evaluate(() => {
+      const slider = document.getElementById("play-clock");
+      let max = 0;
+      for (let v = 0; v <= 1000; v += 20) {
+        slider.value = String(v);
+        slider.dispatchEvent(new Event("input"));
+        const n = document.querySelectorAll("#anim-layer > *").length;
+        if (n > max) max = n;
+      }
+      return max;
+    });
+    if (drawn < 1) throw new Error("aucune trame dessinée sur le plan pendant la simulation");
+  });
+
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {
     await page.select("#exercise-start", "eu868-passerelle");
     await page.click("#start-exercise");
