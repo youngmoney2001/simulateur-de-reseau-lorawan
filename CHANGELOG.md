@@ -2,6 +2,11 @@
 
 ## 0.1.0 (non publiée)
 
+### Commandes MAC : phase 1, étape 1
+- Bloc `mac:` du scénario (`link_check_every`, `device_status_every`, bornes 0 à 1000 ; 0 = désactivé). Inclus dans l'empreinte SHA-256 ; absent = empreinte inchangée. Schémas `scenario_input`, `run_create` et `validate_request` régénérés.
+- **Sans effet sur le calcul pour l'instant** : le moteur n'émet pas encore les commandes. Plan complet : `docs/MAC_PLAN.md`.
+- Tests : `python/tests/test_scenario_mac.py`.
+
 ### Animation des trames (studio)
 - **Lecteur** sous le panneau de simulation : lecture et pause, vitesses ×1 à ×300, curseur de temps, instant courant en secondes simulées.
 - **Plan animé** : chaque saut apparaît comme une trame qui se déplace de sa source vers sa destination pendant 1 s simulée, puis reste visible 4 s. Couleur : vert (livré), rouge (perdu), gris (autre). Une remise au réseau est un anneau autour de la passerelle.
