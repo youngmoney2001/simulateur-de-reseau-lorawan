@@ -597,12 +597,25 @@ def test_without_catalog_every_terrain_id_is_unknown(api):
     assert status == 200 and body == {"items": []}
 
 
-def test_join_is_refused_in_multi_gateway(api):
-    d = _scenario()
+def test_join_is_accepted_in_multi_gateway_and_appears_in_the_trace(api):
+    d = _scenario(count=60, messages=4)
     d.pop("gateway")
-    d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0}]
-    status, body = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": {"join": True}})
-    assert status == 422 and body["field"] == "protocol.join"
+    d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+                     {"name": "b", "x_m": 2500, "y_m": 0, "antenna_gain_dbi": 2.15}]
+    status, created = api.call("POST", "/api/v1/runs", {
+        "scenario": d, "protocol": {"join": True, "confirmed_uplinks": True, "downlink_every": 1}})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    RunSummary.model_validate(summary)
+    kinds = set()
+    cursor = 0
+    while cursor is not None:
+        _, page = api.call("GET", f"/api/v1/runs/{rid}/events?limit=500&cursor={cursor}")
+        kinds |= {e["kind"] for e in page["items"]}
+        cursor = page["next_cursor"]
+    assert {"join_request", "join_accept"} <= kinds
 
 
 def test_runs_survive_a_restart_and_interrupted_ones_fail(tmp_path):

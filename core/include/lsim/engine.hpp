@@ -252,6 +252,7 @@ struct MultiTx {
     std::int32_t best_gateway = -1;     // meilleure passerelle parmi les décodeurs (-1 : aucune)
     double best_rssi_dbm = 0.0;         // RSSI à cette passerelle (ou RSSI max si aucune)
     TxOutcome outcome = TxOutcome::LostSensitivity;  // Received si receivers > 0
+    bool join_request = false;          // première trame non jointe : join-request (rule.join)
 };
 
 // `per_gateway` doit contenir `gateway_count` entrées. `trace` optionnel (trié par début). `gateway_busy` optionnel : une liste d'émissions passerelle par passerelle
@@ -285,6 +286,9 @@ struct MultiDownlinkRule {
     double gateway_tx_power_dbm = 14.0;     // puissance d'émission passerelle (downlink)
     double device_antenna_gain_dbi = 0.0;   // gain d'antenne du dispositif (réception)
     double device_rx_offset_db = 0.0;       // écart de sensibilité du récepteur réel (dB)
+    bool join = false;                      // join : une join-request décodée reçoit un join-accept
+                                            // (à fin + 5 s, 17 octets) ; les uplinks sont des données
+                                            // tant que le join-accept n'est pas délivré
 };
 
 enum class DownlinkOutcome : std::uint8_t {
@@ -299,6 +303,7 @@ struct MultiDownlink {
     std::uint32_t device = 0;
     std::uint32_t gateway = 0;
     bool data = false;          // false : ACK seul ; true : charge
+    bool join = false;          // true : join-accept (charge de 17 octets)
     SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif
     SimTime start_ns = -1;
     SimTime end_ns = -1;

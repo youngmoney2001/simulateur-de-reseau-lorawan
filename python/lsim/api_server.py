@@ -11,8 +11,7 @@ construction, et le serveur vérifie la somme des compteurs par dispositif avant
 
 Périmètre : mono et multi-passerelles, environnement à obstacles et relief. Relief : identifiant
 `terrain_id` résolu dans le catalogue serveur (`--terrain-catalog`, fichiers `<id>.csv`) ; le client
-ne fournit jamais de chemin. Refusés explicitement (`validation_error`) : mesh, join en
-multi-passerelles.
+ne fournit jamais de chemin. Refusé explicitement (`validation_error`) : mesh (trace par saut non construite).
 
 L'énergie suit la trace : airtime des descendantes reçues par dispositif (mono et multi).
 
@@ -347,10 +346,6 @@ def _check_request(req: RunCreate) -> None:
     if model.mesh is not None:
         raise ApiError(422, "validation_error",
                        "mesh : non exposé par l'API v1 (voir docs/API_CONTRACT.md)")
-    multi = model.gateways is not None
-    if multi and req.protocol.join:
-        raise ApiError(422, "validation_error",
-                       "protocole.join : non modélisé en multi-passerelles", "protocol.join")
 
 
 class TerrainCatalog:

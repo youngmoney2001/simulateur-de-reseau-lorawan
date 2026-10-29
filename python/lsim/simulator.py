@@ -457,6 +457,7 @@ class MultiTxRecord:
     best_rssi_dbm: float
     outcome: int
     decoded_mask: int = 0  # bit g : la passerelle g a décodé la trame (g < 64)
+    join_request: bool = False  # join-request d'un dispositif non jointé (rule.join)
 
 
 @dataclass(frozen=True)
@@ -560,12 +561,13 @@ class DownlinkRule:
     gateway_tx_power_dbm: float = 14.0
     device_antenna_gain_dbi: float = 0.0
     device_rx_offset_db: float = 0.0
+    join: bool = False  # join-request décodée -> join-accept (17 octets, fin + 5 s)
 
 
 @dataclass(frozen=True)
 class DownlinkRecord:
     """Downlink planifié. outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors RX1,
-    3 dispositif en émission. start_ns/end_ns = -1 si non émis."""
+    3 dispositif en émission. start_ns/end_ns = -1 si non émis. join : join-accept."""
 
     device_index: int
     gateway_index: int
@@ -574,6 +576,7 @@ class DownlinkRecord:
     start_ns: int
     end_ns: int
     outcome: int
+    join: bool = False
 
 
 @dataclass(frozen=True)
@@ -614,7 +617,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
     c_rule = _CDownlinkRule(1 if rule.ack_uplinks else 0, rule.every, rule.payload_bytes,
                             rule.gateway_tx_power_dbm, rule.device_antenna_gain_dbi,
-                            rule.device_rx_offset_db)
+                            rule.device_rx_offset_db, 1 if rule.join else 0)
     c_stats = (_CDeviceStats * n)()
     c_tot = _CNetworkStats()
     c_gw_stats = (_CGatewayRxStats * g_count)()
@@ -647,11 +650,12 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     per_gw = tuple(_gateway_rx(s) for s in c_gw_stats)
     trace = tuple(
         MultiTxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.receivers,
-                      r.best_gateway, r.best_rssi_dbm, r.outcome)
+                      r.best_gateway, r.best_rssi_dbm, r.outcome, r.decoded_mask,
+                      bool(r.join_request))
         for r in c_records[:c_record_count.value])
     dls = tuple(
         DownlinkRecord(r.device_index, r.gateway_index, bool(r.data), r.t_open_ns, r.start_ns,
-                       r.end_ns, r.outcome)
+                       r.end_ns, r.outcome, bool(r.join))
         for r in c_dls[:c_dl_count.value])
     return MultiDownlinkResult(per_device=per, network=network, per_gateway=per_gw,
                                trace=trace, downlinks=dls)

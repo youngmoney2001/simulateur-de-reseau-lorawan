@@ -452,6 +452,7 @@ typedef struct lsim_multi_tx_record {
     double   best_rssi_dbm;
     uint8_t  outcome;
     uint64_t decoded_mask;   /* bit g : passerelle g a décodé (g < 64) */
+    uint8_t  join_request;   /* 1 : join-request (rule.join, dispositif non jointé) */
 } lsim_multi_tx_record;
 
 /* busy : NULL = aucune émission passerelle. Sinon, périodes [start, end) de toutes les passerelles
@@ -481,6 +482,7 @@ typedef struct lsim_downlink_rule {
     double   gateway_tx_power_dbm;
     double   device_antenna_gain_dbi;
     double   device_rx_offset_db;
+    uint8_t  join;                    /* 0 ou 1 : join-accept après une join-request décodée */
 } lsim_downlink_rule;
 
 /* outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors fenêtre RX1, 3 dispositif en émission.
@@ -493,6 +495,7 @@ typedef struct lsim_downlink_record {
     int64_t  start_ns;
     int64_t  end_ns;
     uint8_t  outcome;
+    uint8_t  join;                    /* 1 : join-accept (17 octets) */
 } lsim_downlink_record;
 
 LSIM_API int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,

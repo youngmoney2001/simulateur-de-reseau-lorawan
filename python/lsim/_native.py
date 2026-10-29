@@ -357,6 +357,7 @@ class _CDownlinkRule(ctypes.Structure):
         ("gateway_tx_power_dbm", ctypes.c_double),
         ("device_antenna_gain_dbi", ctypes.c_double),
         ("device_rx_offset_db", ctypes.c_double),
+        ("join", ctypes.c_uint8),
     ]
 
 
@@ -369,6 +370,7 @@ class _CDownlinkRecord(ctypes.Structure):
         ("start_ns", ctypes.c_int64),
         ("end_ns", ctypes.c_int64),
         ("outcome", ctypes.c_uint8),
+        ("join", ctypes.c_uint8),
     ]
 
 
@@ -383,6 +385,7 @@ class _CMultiTxRecord(ctypes.Structure):
         ("best_rssi_dbm", ctypes.c_double),
         ("outcome", ctypes.c_uint8),
         ("decoded_mask", ctypes.c_uint64),
+        ("join_request", ctypes.c_uint8),
     ]
 
 

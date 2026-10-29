@@ -420,12 +420,15 @@ def _finite_or_none(x: float) -> Optional[float]:
 def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
     """Trace des passerelles multiples (déduplication serveur, downlinks par la meilleure passerelle).
 
-    Limites : le join n'est pas modélisé (refusé ici) ; le mesh n'est pas couvert (refusé en amont).
-    Les totaux, les compteurs par dispositif et la charge par passerelle viennent du même appel
-    natif (`simulate_multi_downlinks`) que les événements : ils concordent par construction.
+    Join (`options.join`) : une trame montante est une join-request tant que le dispositif n'est pas
+    jointé ; la join-request décodée reçoit un join-accept à fin + 5 s par la meilleure passerelle, et
+    le dispositif est jointé si ce join-accept lui parvient. Une join-request perdue est répétée à
+    l'émission suivante. Ce n'est pas la règle du mono (première émission seulement) : voir docs.
+
+    Le mesh n'est pas couvert (refusé en amont). Les totaux, les compteurs par dispositif et la charge
+    par passerelle viennent du même appel natif (`simulate_multi_downlinks`) que les événements : ils
+    concordent par construction.
     """
-    if options.join:
-        raise ValueError("join : non modélisé en multi-passerelles")
     devices, _group_of, _indices = scenario.deploy()
     if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
@@ -437,7 +440,8 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                         payload_bytes=options.downlink_payload_bytes,
                         gateway_tx_power_dbm=options.gateway_tx_power_dbm,
                         device_antenna_gain_dbi=options.device_antenna_gain_dbi,
-                        device_rx_offset_db=options.device_rx_offset_db)
+                        device_rx_offset_db=options.device_rx_offset_db,
+                        join=options.join)
     result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
                                       scenario.environment)
     pending: list[tuple[int, int, str, int, int, tuple[HopEvent, ...], str]] = []
@@ -454,13 +458,17 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                          _finite_or_none(r.best_rssi_dbm), _MULTI_HOP_OUTCOME[r.outcome])]
         if r.outcome == 2 and best >= 0:
             hops.append(HopEvent(to_id, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
-        add(r.start_ns, "uplink", d, max(best, 0), hops, _MULTI_UPLINK_OUTCOME[r.outcome])
+        kind = "join_request" if r.join_request else "uplink"
+        add(r.start_ns, kind, d, max(best, 0), hops, _MULTI_UPLINK_OUTCOME[r.outcome])
 
     for dl in result.downlinks:
         d, g = dl.device_index, dl.gateway_index
         radio = radios[d]
         gw_id = f"gw:{names[g]}"
-        kind = "downlink" if dl.data else "ack"
+        if dl.join:
+            kind = "join_accept"
+        else:
+            kind = "downlink" if dl.data else "ack"
         if dl.outcome in (2, 3):
             hop = HopEvent(gw_id, _dev(d), dl.t_open_ns, radio.rx1_hz, None, None, "not_listened")
             add(dl.t_open_ns, "rx_window_missed", d, g, [hop], _MULTI_DOWNLINK_OUTCOME[dl.outcome])
@@ -470,10 +478,21 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
         hop = HopEvent(gw_id, _dev(d), start, radio.rx1_hz, None, None,
                        "delivered" if ok else "lost_sensitivity")
         if ok:
-            outcome = "data" if dl.data else "ack_only"
+            if dl.join:
+                outcome = "delivered"
+            elif dl.data:
+                # Même libellé que le mono : une charge sur uplink confirmé porte aussi l'ACK.
+                outcome = "data_ack" if options.confirmed_uplinks else "data"
+            else:
+                outcome = "ack_only"
         else:
             outcome = "lost_sensitivity"
-        add(start, kind, d, g, [hop], outcome)
+        if dl.join:
+            # Même forme que le mono : le join-accept passe d'abord par le serveur (sans perte).
+            hops = [HopEvent("ns", gw_id, start, radio.rx1_hz, None, None, "delivered"), hop]
+        else:
+            hops = [hop]
+        add(start, kind, d, g, hops, outcome)
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")

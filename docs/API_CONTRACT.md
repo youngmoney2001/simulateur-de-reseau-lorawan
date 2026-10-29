@@ -92,6 +92,14 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   issue `gateway_busy`). Pendant ses émissions, elle ne reçoit pas : un uplink qui les chevauche
   est perdu (`lost_gateway_busy`, comptée dans `Totals.lost_gateway_busy`). Uplinks et downlinks
   dépendent les uns des autres : le calcul itère jusqu'à un point fixe, sinon il échoue.
+- Join en multi-passerelles : une trame est une join-request tant que son dispositif n'a pas reçu
+  son join-accept. Une join-request décodée reçoit un join-accept à fin + 5 s, par la meilleure
+  passerelle (17 octets, sans CFList), en RX1. Le dispositif est jointé à la réception du join-accept ;
+  une join-request perdue (ou un join-accept perdu) est répétée à l'émission suivante. Les
+  descendantes d'une passerelle ne se chevauchent jamais, quel que soit leur ordre de création.
+  **Écart avec le mono** : en mono, seule la première émission est une join-request (une join-request
+  perdue n'est jamais répétée). Le multi suit le comportement du dispositif réel ; le mono est à
+  aligner plus tard. À débit égal, sans contention, les deux traces sont identiques (test).
 - Limites assumées : le backhaul passerelle → serveur et le join-accept transmis par le serveur
   sont sans perte (`delivered`) ; sensibilité du récepteur de référence (SX1276) plus
   `device_rx_offset_db` ; une seule passerelle.
@@ -116,8 +124,8 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   jamais de chemin. Le relief est lu une fois puis gardé en mémoire. Son empreinte entre dans
   `scenario_sha256` (même scénario, autre relief : autre identifiant). `GET /terrains` liste le catalogue.
   Sans `--terrain-catalog`, le catalogue est vide. Un identifiant inconnu ou invalide : 422 sur `terrain_id`.
-- Refusés explicitement (`validation_error`, jamais calculés à tort) : **mesh** (trace par saut non
-  construite) ; **join** en multi-passerelles (le calcul natif multi ne planifie pas le join-accept).
+- Refusé explicitement (`validation_error`, jamais calculé à tort) : **mesh** (trace par saut non
+  construite).
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
   dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel
   et a ajouté `gateways` : c'est une rupture de la règle d'additivité, acceptée pour permettre le multi.
@@ -197,8 +205,7 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 1. Données MNT réelles : à vérifier avant tout usage d'étude (les exemples sont synthétiques).
 2. ~~Exposer `events`~~ : fait (pagination par `seq`).
 3. ~~Implémenter le serveur~~ : fait (v1). ~~Relief (catalogue)~~ : fait. ~~Énergie avec protocole ou
-   multi~~ : fait. Reste : mesh (trace par saut, à concevoir) ; join en multi-passerelles (planification du
-   join-accept dans le calcul natif multi).
+   multi~~ : fait. ~~Join en multi-passerelles~~ : fait. Reste : mesh (trace par saut, à concevoir).
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)

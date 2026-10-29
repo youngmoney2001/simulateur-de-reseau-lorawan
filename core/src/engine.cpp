@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <map>
 
 #include "lsim/class_b.hpp"
 #include "lsim/environment.hpp"
@@ -802,16 +804,41 @@ SimStatus downlink_airtime(std::uint8_t sf, std::uint32_t payload_bytes, SimTime
     return SimStatus::Ok;
 }
 
-// Vrai si [start, end) chevauche une période de la liste triée et disjointe.
-bool intersects(const std::vector<Interval>& v, SimTime start, SimTime end) {
-    auto it = std::lower_bound(v.begin(), v.end(), start,
-                               [](const Interval& b, SimTime s) { return b.end <= s; });
-    return it != v.end() && it->start < end;
+// Périodes d'émission d'une passerelle : début -> fin, disjointes. Un join-accept est placé plus
+// tard dans le temps qu'un downlink de données créé après lui : une liste ordonnée par début
+// permet d'insérer et de chercher un créneau libre sans supposer que les débuts croissent.
+using BusyMap = std::map<SimTime, SimTime>;
+
+// Vrai si [start, end) chevauche une période.
+bool map_intersects(const BusyMap& m, SimTime start, SimTime end) {
+    auto it = m.lower_bound(start);
+    if (it != m.begin()) {
+        auto prev = std::prev(it);
+        if (prev->second > start) return true;
+    }
+    return it != m.end() && it->first < end;
+}
+
+// Premier instant >= t où [s, s + air) ne chevauche aucune période.
+SimTime first_free(const BusyMap& m, SimTime t, SimTime air) {
+    SimTime s = t;
+    auto it = m.upper_bound(s);
+    if (it != m.begin()) {
+        auto prev = std::prev(it);
+        if (prev->second > s) s = prev->second;
+    }
+    while (it != m.end() && it->first < s + air) {
+        s = it->second;
+        ++it;
+    }
+    return s;
 }
 
 constexpr std::uint32_t kAckFrameBytes = 12;      // MHDR, DevAddr, FCtrl, FCnt, MIC
 constexpr std::uint32_t kDataFrameOverhead = 13;  // ACK + FPort
 constexpr SimTime kRx1DelayNs = 1'000'000'000;
+constexpr SimTime kJoinAcceptDelayNs = 5'000'000'000;  // JOIN_ACCEPT_DELAY1 (RP002 §2.3)
+constexpr std::uint32_t kJoinAcceptBytes = 17;         // join-accept sans CFList
 constexpr SimTime kRx1WindowNs = 1'000'000'000;
 
 }  // namespace
@@ -936,11 +963,46 @@ SimStatus simulate_uplinks_multi_downlinks(
     std::stable_sort(by_end.begin(), by_end.end(), [&txs](std::size_t x, std::size_t y) {
         return txs[x].end < txs[y].end;
     });
-    std::vector<std::vector<Interval>> busy(G);
-    std::vector<SimTime> busy_until(G, 0);
+    std::vector<BusyMap> busy(G);
     std::vector<std::uint32_t> accepted(device_count, 0);
+    // Instant de réception du join-accept (fin de sa transmission) ; kNever tant que non reçu.
+    constexpr SimTime kNever = std::numeric_limits<SimTime>::max();
+    std::vector<SimTime> joined_at(device_count, kNever);
     std::vector<MultiTx> out(T);
     std::vector<MultiDownlink> dls;
+
+    // Place un downlink de `a` (RX1 à dl.t_open_ns) sur sa passerelle, ou le marque perdu.
+    // Première place libre à partir de t_open : un join-accept (ouverture tardive) ne retarde
+    // pas un downlink de données dont l'ouverture est plus tôt.
+    auto place = [&](MultiDownlink& dl, std::size_t a, std::uint32_t payload,
+                     double rssi_up) -> SimStatus {
+        const Tx& ta = txs[a];
+        SimTime air = 0;
+        if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
+        if (next_start[a] >= 0 && next_start[a] < dl.t_open_ns + kRx1WindowNs) {
+            dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX1
+            return SimStatus::Ok;
+        }
+        const std::size_t g = dl.gateway;
+        const SimTime start = first_free(busy[g], dl.t_open_ns, air);
+        if (start - dl.t_open_ns >= kRx1WindowNs) {
+            dl.outcome = DownlinkOutcome::GatewayBusy;  // la passerelle ne peut plus émettre à temps
+            return SimStatus::Ok;
+        }
+        dl.start_ns = start;
+        dl.end_ns = start + air;
+        busy[g][start] = start + air;
+        // Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev.
+        double s = 0.0;
+        if (lora::receiver_sensitivity_dbm(ta.sf, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
+            return SimStatus::InvalidInput;
+        }
+        const double rssi_dl = rssi_up - devices[ta.device].tx_power_dbm +
+                               rule.gateway_tx_power_dbm + rule.device_antenna_gain_dbi;
+        dl.outcome = rssi_dl >= s + rule.device_rx_offset_db ? DownlinkOutcome::Delivered
+                                                             : DownlinkOutcome::LostSensitivity;
+        return SimStatus::Ok;
+    };
 
     for (std::size_t a : by_end) {
         const Tx& ta = txs[a];
@@ -961,7 +1023,7 @@ SimStatus simulate_uplinks_multi_downlinks(
                 ++gs.lost_sensitivity;
                 continue;
             }
-            if (intersects(busy[g], ta.start, ta.end)) {
+            if (map_intersects(busy[g], ta.start, ta.end)) {
                 ++gs.lost_gateway_busy;
                 any_busy = true;
                 continue;
@@ -1006,46 +1068,40 @@ SimStatus simulate_uplinks_multi_downlinks(
             ++st.lost_sensitivity;
             ++totals.lost_sensitivity;
         }
+        // Une trame démarrée avant la réception du join-accept est une join-request.
+        m.join_request = rule.join && !(joined_at[d] != kNever && ta.start >= joined_at[d]);
         out[a] = m;
 
         if (receivers == 0) continue;
+        const std::uint32_t gw = static_cast<std::uint32_t>(m.best_gateway);
+
+        if (m.join_request) {
+            // Join-request décodée : join-accept à fin + 5 s par la meilleure passerelle.
+            // Le dispositif est jointé seulement si le join-accept lui parvient.
+            MultiDownlink dl;
+            dl.device = d;
+            dl.gateway = gw;
+            dl.join = true;
+            dl.t_open_ns = ta.end + kJoinAcceptDelayNs;
+            if (place(dl, a, kJoinAcceptBytes, m.best_rssi_dbm) != SimStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            if (dl.outcome == DownlinkOutcome::Delivered) joined_at[d] = dl.end_ns;
+            dls.push_back(dl);
+            continue;
+        }
+
         ++accepted[d];
         const bool queued = rule.every > 0 && accepted[d] % rule.every == 0;
         if (!queued && !rule.ack_uplinks) continue;
 
         MultiDownlink dl;
         dl.device = d;
-        dl.gateway = static_cast<std::uint32_t>(m.best_gateway);
+        dl.gateway = gw;
         dl.data = queued;
         dl.t_open_ns = ta.end + kRx1DelayNs;
-        SimTime air = 0;
         const std::uint32_t payload = queued ? kDataFrameOverhead + rule.payload_bytes : kAckFrameBytes;
-        if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
-
-        if (next_start[a] >= 0 && next_start[a] < dl.t_open_ns + kRx1WindowNs) {
-            dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX1
-        } else {
-            const std::size_t g = dl.gateway;
-            const SimTime start = std::max(dl.t_open_ns, busy_until[g]);
-            if (start - dl.t_open_ns >= kRx1WindowNs) {
-                dl.outcome = DownlinkOutcome::GatewayBusy;  // la passerelle ne peut plus émettre à temps
-            } else {
-                dl.start_ns = start;
-                dl.end_ns = start + air;
-                busy[g].push_back(Interval{start, start + air});
-                busy_until[g] = start + air;
-                // Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev.
-                double s = 0.0;
-                if (lora::receiver_sensitivity_dbm(ta.sf, lora::Bandwidth::Bw125kHz, s) !=
-                    lora::Status::Ok) {
-                    return SimStatus::InvalidInput;
-                }
-                const double rssi_dl = m.best_rssi_dbm - devices[d].tx_power_dbm +
-                                       rule.gateway_tx_power_dbm + rule.device_antenna_gain_dbi;
-                dl.outcome = rssi_dl >= s + rule.device_rx_offset_db ? DownlinkOutcome::Delivered
-                                                                     : DownlinkOutcome::LostSensitivity;
-            }
-        }
+        if (place(dl, a, payload, m.best_rssi_dbm) != SimStatus::Ok) return SimStatus::InvalidInput;
         dls.push_back(dl);
     }
 
