@@ -51,8 +51,8 @@ SimStatus validate_device(const EndDeviceSpec& d) {
     if (!finite(d.position.x_m) || !finite(d.position.y_m) || !finite(d.tx_power_dbm)) {
         return SimStatus::InvalidInput;
     }
-    if (d.spreading_factor < 7 || d.spreading_factor > 12) {
-        return SimStatus::InvalidInput;
+    if (d.spreading_factor < 5 || d.spreading_factor > 12 || d.spreading_factor == 6) {
+        return SimStatus::InvalidInput;  // SF6 : en-tête implicite seulement, modèle non fourni
     }
     if (d.payload_bytes > 255) {
         return SimStatus::InvalidInput;
@@ -84,12 +84,40 @@ SimStatus validate_device(const EndDeviceSpec& d) {
     return SimStatus::Ok;
 }
 
+// Seuil absolu d'une paire SF/bande documentée dans le profil ; sinon InvalidInput.
+SimStatus absolute_gateway_dbm(const GatewayAbsoluteSensitivity& a, std::uint8_t sf,
+                               lora::Bandwidth bw, double& out) {
+    std::size_t b = 0;
+    switch (bw) {
+        case lora::Bandwidth::Bw125kHz: b = 0; break;
+        case lora::Bandwidth::Bw250kHz: b = 1; break;
+        case lora::Bandwidth::Bw500kHz: b = 2; break;
+        default: return SimStatus::InvalidInput;
+    }
+    if (sf < 5 || sf > 12) return SimStatus::InvalidInput;
+    const std::uint32_t bit = static_cast<std::uint32_t>(b * 8 + (sf - 5));
+    if (((a.present >> bit) & 1U) == 0U) return SimStatus::InvalidInput;
+    out = a.dbm[b][sf - 5];
+    return SimStatus::Ok;
+}
+
 SimStatus validate_inputs(const GatewaySpec& g, const PropagationSpec& p) {
     if (!finite(g.position.x_m) || !finite(g.position.y_m) || !finite(g.antenna_gain_dbi)) {
         return SimStatus::InvalidInput;
     }
     if (!finite(g.rx_sensitivity_offset_db) || std::fabs(g.rx_sensitivity_offset_db) > 20.0) {
         return SimStatus::InvalidInput;
+    }
+    if (g.absolute.enabled) {
+        if (g.rx_sensitivity_offset_db != 0.0) return SimStatus::InvalidInput;  // pas de conversion
+        if ((g.absolute.present >> 24U) != 0U) return SimStatus::InvalidInput;   // 3 x 8 bits
+        for (std::size_t b = 0; b < 3; ++b) {
+            for (std::size_t k = 0; k < 8; ++k) {
+                if (((g.absolute.present >> (b * 8 + k)) & 1U) == 0U) continue;
+                const double v = g.absolute.dbm[b][k];
+                if (!finite(v) || v < -160.0 || v > -60.0) return SimStatus::InvalidInput;
+            }
+        }
     }
     if (!finite(p.frequency_hz) || p.frequency_hz <= 0.0) return SimStatus::InvalidInput;
     if (!finite(p.reference_distance_m) || p.reference_distance_m <= 0.0) return SimStatus::InvalidInput;
@@ -273,7 +301,13 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - path_loss - shadow;
 
         double s = 0.0;
-        if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) != lora::Status::Ok) {
+        if (gateway.absolute.enabled) {
+            if (absolute_gateway_dbm(gateway.absolute, d.spreading_factor, rc.bandwidth, s) !=
+                SimStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+        } else if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) !=
+                   lora::Status::Ok) {
             return SimStatus::InvalidInput;
         }
         sensitivity[i] = s;
@@ -706,6 +740,10 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
                                  const env::Environment* environment, std::vector<MultiTx>* trace,
                                  const std::vector<std::vector<Interval>>* gateway_busy) {
     totals = NetworkStats{};
+    // Modèle absolu non supporté en multi-passerelle (refus explicite, pas de déduction).
+    for (std::size_t g = 0; g < gateway_count; ++g) {
+        if (gateways[g].absolute.enabled) return SimStatus::InvalidInput;
+    }
     if (trace != nullptr) trace->clear();
     // Émissions passerelle par passerelle : bornes, tri et fusion, comme en mono-passerelle.
     std::vector<std::vector<Interval>> busy(gateway_count);
@@ -1466,11 +1504,21 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     }
     // Sensibilité par SF (125 kHz), et borne du temps d'antenne (recherche arrière).
     double sensitivity_by_sf[13] = {};
-    for (std::uint8_t sf = 7; sf <= 12; ++sf) {
-        if (lora::receiver_sensitivity_dbm(sf, lora::Bandwidth::Bw125kHz, sensitivity_by_sf[sf]) !=
-            lora::Status::Ok) {
-            return SimStatus::InvalidInput;
+    bool sf_documented[13] = {};
+    for (std::uint8_t sf = 5; sf <= 12; ++sf) {
+        if (gateway.absolute.enabled) {
+            sf_documented[sf] = absolute_gateway_dbm(gateway.absolute, sf, lora::Bandwidth::Bw125kHz,
+                                                     sensitivity_by_sf[sf]) == SimStatus::Ok;
+        } else if (sf >= 7) {
+            if (lora::receiver_sensitivity_dbm(sf, lora::Bandwidth::Bw125kHz, sensitivity_by_sf[sf]) !=
+                lora::Status::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            sf_documented[sf] = true;
         }
+    }
+    for (std::size_t k = 0; k < device_count; ++k) {
+        if (!sf_documented[devices[k].spreading_factor]) return SimStatus::InvalidInput;
     }
     SimTime max_airtime = 0;
     if (!uplink_airtime(12, 255, max_airtime)) return SimStatus::InvalidInput;

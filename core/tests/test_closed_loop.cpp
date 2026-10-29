@@ -717,6 +717,83 @@ void test_adr_ack_counter_reset_by_downlink() {
     CHECK_TRUE(delivered_without_commands);  // descente forcée par ADRACKReq, reçue
 }
 
+// Sensibilité absolue de passerelle (sensibilite-par-sf-v2). Un seul dispositif SF5 proche,
+// sans commande ni confirmation : seule la sensibilité de la passerelle décide.
+SimStatus run_absolute_sf5(double threshold_dbm, bool with_table, std::uint32_t present,
+                           double offset_db, LoopResult& res, DeviceStats* st_out = nullptr) {
+    // 3 km : RSSI vers −110 dBm, dans la plage des seuils validés.
+    const EndDeviceSpec d[] = {dev(3000.0, 5, 0, 60 * kS, 3)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopOptions opt;
+    GatewaySpec gw;
+    gw.rx_sensitivity_offset_db = offset_db;
+    if (with_table) {
+        gw.absolute.enabled = true;
+        gw.absolute.present = present;
+        gw.absolute.dbm[0][0] = threshold_dbm;  // 125 kHz, SF5
+    }
+    const SimStatus status = simulate_closed_loop(d, 1, rv, regions, gw, PropagationSpec{}, nullptr,
+                                                  opt, st, tot, res);
+    if (st_out != nullptr) *st_out = st[0];
+    return status;
+}
+
+void test_absolute_gateway_sf5_threshold() {
+    // Seuil absolu −150 dBm : le signal proche passe ; seuil −20 dBm : tout est perdu.
+    LoopResult ok;
+    DeviceStats st_ok;
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(-150.0, true, 1U, 0.0, ok, &st_ok)), 0);
+    CHECK_EQ(ok.uplinks.size(), std::size_t{3});
+    CHECK_EQ(st_ok.lost_sensitivity, std::uint64_t{0});
+    // Seuil juste au-dessus du RSSI mesuré (dans la plage validée −160..−60 dBm) : perte.
+    if (ok.uplinks.empty()) return;
+    const double rssi = ok.uplinks[0].rssi_dbm;
+    const double above = rssi + 5.0;
+    CHECK_TRUE(above <= -60.0);
+    LoopResult ko;
+    DeviceStats st_ko;
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(above, true, 1U, 0.0, ko, &st_ko)), 0);
+    CHECK_EQ(st_ko.lost_sensitivity, std::uint64_t{3});
+}
+
+void test_absolute_gateway_refusals() {
+    LoopResult res;
+    // Paire SF5/125 kHz absente du profil : refus, pas de repli sur la table SX1276.
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(-150.0, true, 0U, 0.0, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+    // Décalage non nul avec un modèle absolu : refus (pas de conversion implicite).
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(-150.0, true, 1U, 3.0, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+    // ABI v1 (sans table) : SF5 reste refusé par la référence SX1276.
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(0.0, false, 0U, 0.0, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+    // Valeur hors plage : refus.
+    CHECK_EQ(static_cast<int>(run_absolute_sf5(-200.0, true, 1U, 0.0, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+}
+
+void test_absolute_gateway_no_sf5_downlink() {
+    // Descente SF5 vers le dispositif : sensibilité du terminal NV, refus explicite.
+    const EndDeviceSpec d[] = {dev(10.0, 5, 0, 60 * kS, 2)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.protocol.confirmed_uplinks = true;  // chaque uplink appelle une descente
+    GatewaySpec gw;
+    gw.absolute.enabled = true;
+    gw.absolute.present = 1U;
+    gw.absolute.dbm[0][0] = -150.0;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, gw, PropagationSpec{}, nullptr,
+                                                   opt, st, tot, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+}
+
 void run_closed_loop_tests() {
     test_mac_queue_lifecycle_under_mixed_load();
     test_mac_queue_fairness_bounded_wait();
@@ -732,6 +809,9 @@ void run_closed_loop_tests() {
     test_no_shift_inside_busy_windows();
     test_adr_ack_backoff_without_downlink();
     test_adr_ack_counter_reset_by_downlink();
+    test_absolute_gateway_sf5_threshold();
+    test_absolute_gateway_refusals();
+    test_absolute_gateway_no_sf5_downlink();
     test_mac_reservations_and_answers();
     test_mac_queue_defers_expires_and_conserves();
     test_mac_queue_zero_deferrals_expires_at_once();

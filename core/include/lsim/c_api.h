@@ -334,6 +334,23 @@ typedef struct lsim_gateway {
     double rx_sensitivity_offset_db; /* décalage du seuil montant (dB), |.| <= 20 ; 0 = sans profil */
 } lsim_gateway;
 
+/* Passerelle v2 : sensibilité absolue (modèle `sensibilite-par-sf-v2`).
+ * sensitivity_model : LSIM_SENSITIVITY_MODEL_NONE (0) = base seule (comme v1) ;
+ *                     LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2 (1) = seuils absolus en dBm.
+ * present : bit (bande * 8 + sf - 5) à 1 si la paire est documentée ; bande 0/1/2 = 125/250/500 kHz,
+ *           sf 5..12. Une paire absente est refusée (aucun repli).
+ * Avec le modèle 1, base.rx_sensitivity_offset_db doit valoir 0 (pas de conversion implicite).
+ * Multi-passerelle : le modèle 1 est refusé. */
+#define LSIM_SENSITIVITY_MODEL_NONE 0u
+#define LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2 1u
+
+typedef struct lsim_gateway_v2 {
+    lsim_gateway base;
+    uint32_t sensitivity_model;
+    uint32_t present;
+    double sensitivity_dbm[3][8];
+} lsim_gateway_v2;
+
 typedef struct lsim_propagation {
     double frequency_hz;
     double reference_distance_m;
@@ -1219,6 +1236,39 @@ LSIM_API int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices,
                                                  const lsim_plan_options* options,
                                                  lsim_interval* busy_out, size_t busy_capacity,
                                                  size_t* busy_count);
+
+/* Variante passerelle v2 (sensibilité absolue) : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_trace_gw2(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway_v2* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count);
+
+/* Variante passerelle v2 (sensibilité absolue) : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_closed_loop_gw2(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway_v2* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              const lsim_loop_mac* mac, size_t mac_count,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count,
+                                              lsim_loop_mac_counters* mac_counters);
 
 #ifdef __cplusplus
 }

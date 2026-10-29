@@ -102,12 +102,24 @@ struct MacReservation {
     std::uint32_t extra_bytes = 0;  // 1..15 (FOpts)
 };
 
+// Sensibilité absolue de passerelle (modèle `sensibilite-par-sf-v2`) : seuils publiés, en dBm.
+// Indices : bande 0 = 125 kHz, 1 = 250 kHz, 2 = 500 kHz ; SF 5..12 à l'indice sf - 5.
+// `present` : bit (bande * 8 + sf - 5) à 1 si la paire est documentée. Une paire absente est
+// refusée (aucune déduction). Modèle absolu : pas de décalage, pas de conversion implicite.
+struct GatewayAbsoluteSensitivity {
+    bool enabled = false;
+    std::uint32_t present = 0;
+    double dbm[3][8] = {};
+};
+
 struct GatewaySpec {
     Position position;
     double antenna_gain_dbi = 0.0;
     // Décalage du seuil de réception montant de cette passerelle (dB) : seuil = sensibilité de
     // l'équipement + décalage. Négatif = passerelle plus sensible. 0 = modèle sans profil.
     double rx_sensitivity_offset_db = 0.0;
+    // Sensibilité absolue (remplace la référence SX1276 et le décalage quand `enabled`).
+    GatewayAbsoluteSensitivity absolute;
 };
 
 struct PropagationSpec {

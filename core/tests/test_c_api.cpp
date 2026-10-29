@@ -291,6 +291,61 @@ void test_multi_gateway_c_api() {
                                            per_gw, nullptr, nullptr, nullptr, 0, nullptr) != 0);
 }
 
+void test_gateway_v2_absolute_abi() {
+    // ABI v1 et v2 modèle 0 : mêmes sorties. Modèle 1 : seuil absolu SF5 documenté, refus sinon.
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
+    lsim_end_device d7[1] = {{10.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1, 1.0}};
+    lsim_end_device d5[1] = {{10.0, 0.0, 5, 10, 14.0, 0, 600000000000LL, 1, 1.0}};
+    lsim_device_stats per[1]{};
+    lsim_sim_stats tot{};
+    lsim_tx_record rec1[4]{};
+    lsim_tx_record rec2[4]{};
+    size_t n1 = 0;
+    size_t n2 = 0;
+    const lsim_gateway g1{0.0, 0.0, 0.0, 0.0};
+    lsim_gateway_v2 g2{};
+    g2.base = g1;
+    g2.sensitivity_model = LSIM_SENSITIVITY_MODEL_NONE;
+
+    // Modèle 0 et SF7 : identique à la v1 (statut, nombre d'enregistrements, RSSI).
+    const int32_t s1 = lsim_simulate_uplinks_trace_v2(d7, 1, &g1, &p, nullptr, per, &tot, rec1, 4, &n1,
+                                                      nullptr, 0, nullptr, 0);
+    const int32_t s2 = lsim_simulate_uplinks_trace_gw2(d7, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                                       nullptr, 0, nullptr, 0);
+    CHECK_EQ(s1, 0);
+    CHECK_EQ(s2, 0);
+    CHECK_EQ(n1, n2);
+    CHECK_TRUE(n1 == 1 && rec1[0].rssi_dbm == rec2[0].rssi_dbm && rec1[0].outcome == rec2[0].outcome);
+
+    // Modèle 0 et SF5 : refusé, comme en v1 (référence SX1276 sans SF5).
+    CHECK_TRUE(lsim_simulate_uplinks_trace_v2(d5, 1, &g1, &p, nullptr, per, &tot, rec1, 4, &n1,
+                                              nullptr, 0, nullptr, 0) != 0);
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+
+    // Modèle 1 : SF5/125 kHz documenté à −150 dBm : accepté.
+    g2.sensitivity_model = LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2;
+    g2.present = 1U;
+    g2.sensitivity_dbm[0][0] = -150.0;
+    CHECK_EQ(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                             nullptr, 0, nullptr, 0), 0);
+    CHECK_EQ(n2, size_t{1});
+    CHECK_EQ(tot.received, uint64_t{1});
+
+    // Modèle 1 : paire absente (SF7 non documenté) : refus, pas de repli.
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d7, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+    // Modèle 1 avec décalage non nul : refus.
+    g2.base.rx_sensitivity_offset_db = 2.0;
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+    g2.base.rx_sensitivity_offset_db = 0.0;
+    // Modèle inconnu : refus.
+    g2.sensitivity_model = 7U;
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+}
+
 void run_c_api_tests() {
     test_multi_gateway_c_api();
     test_derive_matches_cpp_vectors();
@@ -301,4 +356,5 @@ void run_c_api_tests() {
     test_simulate_totals();
     test_simulate_with_environment();
     test_join_roundtrip_and_vectors();
+    test_gateway_v2_absolute_abi();
 }
