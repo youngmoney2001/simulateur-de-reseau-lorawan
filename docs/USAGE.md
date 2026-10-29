@@ -222,15 +222,37 @@ qu'elle relaie.
   RAK5148). Sans `mesh`, la passerelle a un backhaul IP direct vers le LNS.
 - `mesh` (bloc de scénario) : `border` (nom de la passerelle frontière, `mesh: true`),
   `spreading_factor` (5 à 12), `bandwidth_khz` (203, 406, 812 ou 1625), `coding_rate`,
-  `payload_bytes`, `capture_db`, `max_hops` (1 à 8, 8 par défaut).
+  `max_hops` (1 à 8, 8 par défaut), `capture_db`, `suppress_duplicates` (vrai par défaut),
+  `relay_backoff_airtimes` (0 à 64, 4 par défaut), `frame_size` (`device` par défaut).
+  - `frame_size: device` : une trame relayée fait sa taille PHY LoRaWAN (13 o + charge du
+    dispositif) plus l'enveloppe mesh de 14 o en montant (ChirpStack Gateway Mesh).
+  - `frame_size: fixed` : toutes les trames font `payload_bytes` (défaut 32 o, hypothèse
+    d'avant la correction ; à utiliser pour comparer).
+
+Suppression des doublons : un relais ne transmet une trame qu'une fois. Il renonce à sa copie
+s'il entend un autre relais transmettre la même trame avant son propre départ. Chaque relais
+attend, avant de transmettre, un délai déterministe dans `[0, relay_backoff_airtimes × T_air)` :
+sans attente, deux relais qui reçoivent la même trame au même instant partent ensemble et ne
+s'entendent pas.
 
 Une trame décodée par un relais suit le mesh saut par saut jusqu'à la frontière. Une trame est
-remise au LNS si au moins une copie y arrive ; `lsim run` affiche le bilan (remises directes,
-remises après saut mesh, copies perdues par raison). Les relais réémettent toutes les copies
-qu'ils décodent : le canal mesh peut saturer (voir CHANGELOG).
+remise au LNS si au moins une copie y arrive. Obstacles et relief sont pris en compte sur les
+liens entre passerelles (calcul natif, antennes à hauteur passerelle).
 
-Limites : le mesh ignore obstacles et relief, les downlinks sur le mesh ne sont pas modélisés, et
-les exports GeoJSON refusent les scénarios multi-passerelles.
+`lsim run` affiche le bilan : remises directes et après saut mesh, émissions mesh, copies
+supprimées, sauts perdus (collisions, demi-duplex), copies sans route, et la descente. La
+descente est une borne optimiste : la réponse part de la frontière dès réception, redescend le
+chemin inverse (un temps d'antenne mesh par saut) et le relais l'émet en RX1 (+1 s) ou RX2
+(+2 s). Ni collision ni file d'attente sur le retour ne sont comptées.
+
+Par passerelle, la charge de réception (trames audibles, occupation, simultanéité) est remontée
+dans le rapport et dans les métadonnées Parquet (`lsim.gateways`).
+
+GeoJSON multi-passerelles : une passerelle, un point et une couverture par groupe ; la couverture
+tient compte du relief et des obstacles.
+
+Limites : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision ;
+le défaut de bande mesh (203 kHz, SF12) reste à confirmer (voir CHANGELOG).
 
 Exemple : `examples/mesh_relais_quartier.yaml`.
 

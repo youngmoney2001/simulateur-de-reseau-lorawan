@@ -467,6 +467,51 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
 
 // ------------------------------------------------- simulate_uplinks_multi
 
+// Charge de réception par passerelle, sur les trames audibles (RSSI >= sensibilité) :
+// union des intervalles, pic de simultanéité. Balayage d'événements, fins avant débuts.
+static void fill_gateway_load(const std::vector<Tx>& txs, const std::vector<double>& rssi,
+                              const std::vector<double>& sensitivity, std::size_t G,
+                              GatewayRxStats* per_gateway) {
+    if (txs.empty()) return;
+    SimTime first = txs.front().start;
+    SimTime last_end = txs.front().end;
+    for (const Tx& t : txs) {
+        first = std::min(first, t.start);
+        last_end = std::max(last_end, t.end);
+    }
+    std::vector<std::pair<SimTime, int>> events;
+    for (std::size_t g = 0; g < G; ++g) {
+        events.clear();
+        std::uint64_t audible = 0;
+        for (const Tx& t : txs) {
+            if (rssi[t.device * G + g] < sensitivity[t.device]) continue;
+            events.emplace_back(t.start, +1);
+            events.emplace_back(t.end, -1);
+            ++audible;
+        }
+        std::sort(events.begin(), events.end());  // à égalité de temps, la fin (-1) passe avant
+        SimTime busy = 0;
+        SimTime run_start = 0;
+        std::int64_t depth = 0;
+        std::int64_t peak = 0;
+        for (const auto& ev : events) {
+            if (ev.second > 0) {
+                if (depth == 0) run_start = ev.first;
+                ++depth;
+                peak = std::max(peak, depth);
+            } else {
+                --depth;
+                if (depth == 0) busy += ev.first - run_start;
+            }
+        }
+        GatewayRxStats& gs = per_gateway[g];
+        gs.audible_frames = audible;
+        gs.busy_ns = static_cast<std::uint64_t>(busy);
+        gs.peak_concurrent = static_cast<std::uint64_t>(peak);
+        gs.observation_ns = last_end - first;
+    }
+}
+
 // Préparation commune aux fonctions multi-passerelles : airtime, sensibilité et RSSI par
 // dispositif et passerelle (rssi[i * G + g]). Le shadowing est tiré une fois par dispositif.
 static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_count,
@@ -650,6 +695,7 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
         if (a.start != b.start) return a.start < b.start;
         return a.device < b.device;
     });
+    fill_gateway_load(txs, rssi, sensitivity, G, per_gateway);
 
     if (trace != nullptr) trace->reserve(txs.size());
     for (std::size_t a = 0; a < txs.size(); ++a) {
@@ -843,6 +889,7 @@ SimStatus simulate_uplinks_multi_downlinks(
         if (a.start != b.start) return a.start < b.start;
         return a.device < b.device;
     });
+    fill_gateway_load(txs, rssi, sensitivity, G, per_gateway);
     const std::size_t T = txs.size();
     std::vector<std::int64_t> next_start(T, -1);
     {

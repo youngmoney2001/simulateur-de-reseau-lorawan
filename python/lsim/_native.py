@@ -342,6 +342,10 @@ class _CGatewayRxStats(ctypes.Structure):
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
         ("lost_gateway_busy", ctypes.c_uint64),
+        ("audible_frames", ctypes.c_uint64),
+        ("busy_ns", ctypes.c_uint64),
+        ("peak_concurrent", ctypes.c_uint64),
+        ("observation_ns", ctypes.c_int64),
     ]
 
 
@@ -569,6 +573,11 @@ LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
     ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
+LIB.lsim_env_path_loss_matrix.argtypes = [
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
@@ -715,6 +724,7 @@ class _CMeshFrame(ctypes.Structure):
         ("frame_id", ctypes.c_uint64),
         ("rx_node", ctypes.c_uint32),
         ("t_ns", ctypes.c_int64),
+        ("payload_bytes", ctypes.c_uint32),
     ]
 
 
@@ -724,7 +734,17 @@ class _CMeshDelivery(ctypes.Structure):
         ("delivered", ctypes.c_uint8),
         ("loss", ctypes.c_uint8),
         ("hops", ctypes.c_uint8),
+        ("copy_state", ctypes.c_uint8),
         ("latency_ns", ctypes.c_int64),
+    ]
+
+
+class _CMeshSummary(ctypes.Structure):
+    _fields_ = [
+        ("transmissions", ctypes.c_uint64),
+        ("suppressed", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("lost_half_duplex", ctypes.c_uint64),
     ]
 
 
@@ -738,6 +758,7 @@ LIB.lsim_mesh_routes.argtypes = [
     ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int32)]
 LIB.lsim_mesh_forward.restype = ctypes.c_int32
 LIB.lsim_mesh_forward.argtypes = [
-    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, ctypes.POINTER(ctypes.c_double),
-    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32,
-    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery)]
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32, ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary)]

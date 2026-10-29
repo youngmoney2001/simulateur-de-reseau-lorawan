@@ -450,6 +450,15 @@
           "title": "Coding Rate",
           "type": "integer"
         },
+        "frame_size": {
+          "default": "device",
+          "enum": [
+            "device",
+            "fixed"
+          ],
+          "title": "Frame Size",
+          "type": "string"
+        },
         "max_hops": {
           "default": 8,
           "maximum": 8,
@@ -464,12 +473,24 @@
           "title": "Payload Bytes",
           "type": "integer"
         },
+        "relay_backoff_airtimes": {
+          "default": 4,
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Relay Backoff Airtimes",
+          "type": "integer"
+        },
         "spreading_factor": {
           "default": 12,
           "maximum": 12,
           "minimum": 5,
           "title": "Spreading Factor",
           "type": "integer"
+        },
+        "suppress_duplicates": {
+          "default": true,
+          "title": "Suppress Duplicates",
+          "type": "boolean"
         }
       },
       "required": [

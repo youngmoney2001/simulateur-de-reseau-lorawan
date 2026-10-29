@@ -6,6 +6,7 @@ assembler, calculer le taux de livraison (PDR) et les écrire.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -15,9 +16,28 @@ from lsim.energy_report import device_energies
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.gateway_profiles import get_profile
-from lsim.mesh import MeshFrame, MeshNode, MeshRadio, build_mesh, forward_frames
+from lsim.mesh import (
+    DOWNLINK_ACK_PHY_BYTES,
+    MESH_ENVELOPE_DOWN_BYTES,
+    MESH_ENVELOPE_UP_BYTES,
+    MeshFrame,
+    MeshNode,
+    MeshRadio,
+    build_mesh,
+    downlink_window,
+    forward_frames,
+    lorawan_phy_bytes,
+    time_on_air_ns,
+)
 from lsim.radio import LogDistanceModel
-from lsim.simulator import Counters, GatewayLoad, simulate_uplinks, simulate_uplinks_multi
+from lsim.simulator import (
+    Counters,
+    GatewayLoad,
+    GatewayRxCounters,
+    environment_path_loss_matrix,
+    simulate_uplinks,
+    simulate_uplinks_multi,
+)
 
 
 @dataclass(frozen=True)
@@ -50,8 +70,16 @@ class MeshSummary:
     delivered: int       # trames remises au LNS
     direct: int          # remises sans relais (passerelle à backhaul IP, ou frontière)
     via_mesh: int        # remises après au moins un saut mesh
-    copies_on_mesh: int  # copies confiées au mesh (une par relais qui a décodé)
-    losses: tuple[tuple[str, int], ...]  # raisons des copies perdues sur le mesh, triées
+    copies_on_mesh: int  # copies confiées au mesh (une par relais qui a décodé l'accès)
+    transmissions: int   # émissions mesh effectives (chaque saut compte une fois)
+    suppressed: int      # copies abandonnées : un doublon avait déjà été relayé
+    no_route: int        # copies sans route vers la frontière
+    hop_losses: tuple[tuple[str, int], ...]  # sauts perdus par raison : collision, half_duplex
+    # Descente (acquittement possible pour chaque trame remise), fenêtre atteignable :
+    dl_rx1: int = 0      # réponse dans RX1 (+1 s)
+    dl_rx2: int = 0      # réponse dans RX2 (+2 s) seulement
+    dl_missed: int = 0   # aucune fenêtre : la descente arrive après RX2
+    dl_mesh_airtime_ns: int = 0  # temps d'antenne mesh d'un saut de descente (lien mesh)
 
     @property
     def lost(self) -> int:
@@ -68,6 +96,10 @@ class RunResult:
     gateway: Optional[GatewayLoad]   # None en multi-passerelles (charge par passerelle : à venir)
     energy_profile: Optional[str] = None  # nom CLI du profil énergie, ou None
     mesh: Optional[MeshSummary] = None    # présent si un backhaul mesh est déclaré
+    # Multi-passerelles : une entrée par passerelle (même ordre que le fichier), charge de
+    # réception sur les trames audibles. Vide en mono-passerelle.
+    gateway_names: tuple[str, ...] = ()
+    gateway_loads: tuple[GatewayRxCounters, ...] = ()
 
     @property
     def pdr(self) -> Optional[float]:
@@ -141,7 +173,9 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
         rows = _rows(devices, groups, indices, energies, result.per_device, None)
         return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,
                          seed=scenario.model.seed, rows=rows, totals=totals, gateway=None,
-                         energy_profile=energy_profile)
+                         energy_profile=energy_profile,
+                         gateway_names=_gateway_names(gw_models),
+                         gateway_loads=tuple(result.per_gateway))
 
     nodes, gw_index = [], {}
     for k, g in enumerate(gw_models):
@@ -155,13 +189,24 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
     radio = MeshRadio(spreading_factor=mesh_cfg.spreading_factor,
                       bandwidth_khz=mesh_cfg.bandwidth_khz, coding_rate=mesh_cfg.coding_rate,
                       payload_bytes=mesh_cfg.payload_bytes, capture_db=mesh_cfg.capture_db)
-    # Le mesh vit à 2,4 GHz avec le même exposant que l'accès ; obstacles et relief ignorés.
-    mesh_model = LogDistanceModel(frequency_hz=2_400_000_000.0,
-                                  exponent=scenario.propagation().exponent)
+    fixed_size = mesh_cfg.payload_bytes if mesh_cfg.frame_size == "fixed" else None
+    # Le mesh vit à 2,4 GHz, même exposant que l'accès, sans shadowing. Avec environnement,
+    # la perte entre passerelles (relief et obstacles, antennes à hauteur passerelle) est
+    # calculée par le natif ; sans environnement, log-distance seul.
+    mesh_prop = dataclasses.replace(scenario.propagation(), frequency_hz=2_400_000_000.0,
+                                    shadowing_sigma_db=0.0)
+    path_matrix = None
+    if scenario.environment is not None:
+        path_matrix = environment_path_loss_matrix(
+            [(g.x_m, g.y_m) for g in gw_models], mesh_prop, scenario.environment)
+    mesh_model = LogDistanceModel(frequency_hz=mesh_prop.frequency_hz,
+                                  exponent=mesh_prop.exponent)
     graph = build_mesh(nodes, mesh_cfg.border, radio, path_loss=mesh_model,
-                       max_hops=mesh_cfg.max_hops)
+                       max_hops=mesh_cfg.max_hops, path_loss_db=path_matrix)
 
     # Une copie par passerelle décodeuse. Passerelle sans mesh : backhaul IP, remise directe.
+    # Relais : une émission par trame si la suppression est active (identifiant de trame),
+    # après une attente déterministe de `relay_backoff_airtimes` temps d'antenne.
     trace = result.trace
     frames: list[MeshFrame] = []
     direct_frame: set[int] = set()
@@ -175,16 +220,22 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
                 continue
             if model.mesh and model.name != mesh_cfg.border:
                 # Un relais confie sa copie au mesh ; la frontière, elle, la remet directement.
+                size = fixed_size if fixed_size is not None else (
+                    lorawan_phy_bytes(devices[rec.device_index].payload_bytes)
+                    + MESH_ENVELOPE_UP_BYTES)
                 frames.append(MeshFrame(frame_id=rec_index, rx_gateway_id=model.name,
-                                        t_ns=rec.end_ns))
+                                        t_ns=rec.end_ns, payload_bytes=size))
             else:
                 direct_frame.add(rec_index)
-    mesh_result = forward_frames(frames, graph, radio)
+    backoff_ns = mesh_cfg.relay_backoff_airtimes * radio.airtime_ns
+    mesh_result = forward_frames(frames, graph, radio,
+                                 suppress_duplicates=mesh_cfg.suppress_duplicates,
+                                 backoff_window_ns=backoff_ns)
 
     # « Direct » : remise sans saut mesh (passerelle à backhaul IP, ou frontière elle-même).
     delivered_frames: set[int] = set(direct_frame)
     via_mesh_frames: set[int] = set()
-    losses: dict[str, int] = {}
+    no_route = 0
     for d in mesh_result.deliveries:
         if d.delivered:
             delivered_frames.add(d.frame_id)
@@ -192,9 +243,24 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
                 direct_frame.add(d.frame_id)
             else:
                 via_mesh_frames.add(d.frame_id)
-        else:
-            losses[d.loss] = losses.get(d.loss, 0) + 1
+        elif d.copy_state == "no_route":
+            no_route += 1
     via_mesh_frames -= direct_frame
+    # Descente : une réponse par trame remise. Le natif donne le même saut et la même
+    # latence pour toutes les copies d'une trame ; une trame décodée par la frontière
+    # elle-même a 0 saut.
+    # Descente : acquittement seul sur le lien mesh (taille PHY 12 o + enveloppe 15 o).
+    mesh_air = time_on_air_ns(mesh_cfg.spreading_factor, mesh_cfg.bandwidth_khz * 1000,
+                              DOWNLINK_ACK_PHY_BYTES + MESH_ENVELOPE_DOWN_BYTES,
+                              mesh_cfg.coding_rate)
+    best_by_frame = {d.frame_id: d for d in mesh_result.deliveries if d.delivered}
+    dl_counts = {"rx1": 0, "rx2": 0, "missed": 0}
+    for frame_id in delivered_frames:
+        if frame_id in direct_frame or frame_id not in best_by_frame:
+            hops, latency = 0, 0
+        else:
+            hops, latency = best_by_frame[frame_id].hops, best_by_frame[frame_id].latency_ns or 0
+        dl_counts[downlink_window(latency, hops, mesh_air)] += 1
     delivered_by_device = [0] * len(devices)
     for rec_index in delivered_frames:
         delivered_by_device[trace[rec_index].device_index] += 1
@@ -208,12 +274,30 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
         direct=len(direct_frame),
         via_mesh=len(via_mesh_frames),
         copies_on_mesh=len(frames),
-        losses=tuple(sorted(losses.items())),
+        transmissions=mesh_result.transmissions,
+        suppressed=mesh_result.suppressed,
+        no_route=no_route,
+        hop_losses=tuple(
+            (reason, n) for reason, n in (
+                ("collision", mesh_result.lost_collision),
+                ("half_duplex", mesh_result.lost_half_duplex),
+            ) if n
+        ),
+        dl_rx1=dl_counts["rx1"],
+        dl_rx2=dl_counts["rx2"],
+        dl_missed=dl_counts["missed"],
+        dl_mesh_airtime_ns=mesh_air,
     )
     rows = _rows(devices, groups, indices, energies, result.per_device, delivered_by_device)
     return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,
                      seed=scenario.model.seed, rows=rows, totals=totals, gateway=None,
-                     energy_profile=energy_profile, mesh=summary)
+                     energy_profile=energy_profile, mesh=summary,
+                     gateway_names=_gateway_names(gw_models),
+                     gateway_loads=tuple(result.per_gateway))
+
+
+def _gateway_names(gw_models) -> tuple[str, ...]:
+    return tuple(g.name or f"passerelle-{k + 1}" for k, g in enumerate(gw_models))
 
 
 def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
@@ -256,10 +340,26 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         metadata[b"lsim.gateway_busy_ns"] = str(run.gateway.busy_ns).encode("ascii")
         metadata[b"lsim.gateway_peak_concurrent"] = str(run.gateway.peak_concurrent).encode("ascii")
         metadata[b"lsim.gateway_utilization"] = repr(run.gateway.utilization).encode("ascii")
+    if run.gateway_loads:
+        import json
+
+        per_gw = [
+            {"name": name, "audible_frames": g.audible_frames, "busy_ns": g.busy_ns,
+             "peak_concurrent": g.peak_concurrent, "utilization": g.utilization,
+             "received": g.received, "lost_collision": g.lost_collision,
+             "lost_gateway_busy": g.lost_gateway_busy}
+            for name, g in zip(run.gateway_names, run.gateway_loads)
+        ]
+        metadata[b"lsim.gateways"] = json.dumps(per_gw, ensure_ascii=False).encode("utf-8")
     if run.mesh is not None:
         metadata[b"lsim.mesh_frames"] = str(run.mesh.frames).encode("ascii")
         metadata[b"lsim.mesh_delivered"] = str(run.mesh.delivered).encode("ascii")
         metadata[b"lsim.mesh_via_mesh"] = str(run.mesh.via_mesh).encode("ascii")
+        metadata[b"lsim.mesh_transmissions"] = str(run.mesh.transmissions).encode("ascii")
+        metadata[b"lsim.mesh_suppressed"] = str(run.mesh.suppressed).encode("ascii")
+        metadata[b"lsim.mesh_dl_rx1"] = str(run.mesh.dl_rx1).encode("ascii")
+        metadata[b"lsim.mesh_dl_rx2"] = str(run.mesh.dl_rx2).encode("ascii")
+        metadata[b"lsim.mesh_dl_missed"] = str(run.mesh.dl_missed).encode("ascii")
     if run.energy_profile is not None:
         metadata[b"lsim.energy_profile"] = run.energy_profile.encode("ascii")
     table = table.replace_schema_metadata(metadata)

@@ -13,11 +13,11 @@ import base64
 import math
 import sys
 from array import array
-from typing import Any
+from typing import Any, Optional
 
 from lsim.export import RunResult
 from lsim.radio import LinkBudget, LogDistanceModel, receiver_sensitivity_dbm
-from lsim.scenario import Scenario
+from lsim.scenario import GatewayModel, Scenario
 from lsim.simulator import Gateway, coverage_radii
 
 EARTH_RADIUS_M = 6_371_000.0
@@ -42,14 +42,16 @@ COVERAGE_STEP_M = 25.0
 DEM_FORMAT = "lsim-dem-v1"
 
 
-def _mapl_db(scenario: Scenario, spreading_factor: int, tx_power_dbm: float) -> float:
-    gw = scenario.model.gateway
+def _mapl_db(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
+             gateway: Optional[GatewayModel] = None) -> float:
+    gw = gateway if gateway is not None else scenario.model.gateway
     sensitivity = receiver_sensitivity_dbm(spreading_factor, 125_000)
     budget = LinkBudget(tx_power_dbm=tx_power_dbm, rx_antenna_gain_dbi=gw.antenna_gain_dbi)
     return budget.max_allowable_path_loss_db(sensitivity)
 
 
-def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float) -> float:
+def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
+                      gateway: Optional[GatewayModel] = None) -> float:
     """Portée (m) pour un SF et une puissance donnés, via le bilan de liaison natif.
 
     Log-distance seul, sans relief ni obstacle : c'est une borne haute de la portée réelle.
@@ -58,21 +60,23 @@ def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: f
     model = LogDistanceModel(frequency_hz=p.frequency_hz,
                              reference_distance_m=p.reference_distance_m,
                              exponent=p.exponent)
-    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm))
+    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway))
 
 
 def coverage_ring(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
-                  origin_lat: float, origin_lon: float) -> tuple[list[list[float]], str, float]:
-    """Anneau de couverture (lon/lat) et modèle utilisé.
+                  origin_lat: float, origin_lon: float,
+                  gateway: Optional[GatewayModel] = None) -> tuple[list[list[float]], str, float]:
+    """Anneau de couverture (lon/lat) et modèle utilisé, pour une passerelle.
 
+    `gateway` : passerelle concernée (défaut : « gateway » du scénario).
     Avec environnement : portée réelle par azimut (relief et obstacles, calcul natif).
     Sans environnement : cercle log-distance, identique au calcul précédent.
     Retourne (anneau fermé, nom du modèle, portée maximale en m).
     """
-    gw = scenario.model.gateway
+    gw = gateway if gateway is not None else scenario.model.gateway
     env = scenario.environment
     if env is None:
-        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm)
+        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw)
         ring = []
         for k in range(_CIRCLE_VERTICES + 1):
             a = 2.0 * math.pi * k / _CIRCLE_VERTICES
@@ -82,7 +86,7 @@ def coverage_ring(scenario: Scenario, spreading_factor: int, tx_power_dbm: float
 
     radii = coverage_radii(
         Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
-        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm), env,
+        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm, gw), env,
         COVERAGE_STEP_M, COVERAGE_AZIMUTHS)
     ring = []
     for k, r in enumerate(radii):
@@ -124,32 +128,37 @@ def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) ->
 def to_geojson(run: RunResult, scenario: Scenario, origin_lat: float, origin_lon: float) -> dict[str, Any]:
     """Construit une FeatureCollection : passerelle, couvertures par groupe, dispositifs."""
     _validate_origin(origin_lat, origin_lon)
-    if scenario.is_multi_gateway:
-        raise ValueError("export GeoJSON : une seule passerelle pour l'instant (scénario multi-passerelles refusé)")
     features: list[dict[str, Any]] = []
-    gw = scenario.model.gateway
+    gateways = scenario.gateway_models()
+    multi = scenario.is_multi_gateway
     env = scenario.environment
-    features.append({
-        "type": "Feature",
-        "geometry": {"type": "Point", "coordinates": list(_to_lonlat(gw.x_m, gw.y_m, origin_lat, origin_lon))},
-        "properties": {"kind": "gateway", "name": "passerelle",
-                       "height_m": env.gateway_height_m if env is not None else None},
-    })
-
-    for group in scenario.model.groups:
-        ring, model_name, radius = coverage_ring(
-            scenario, group.spreading_factor, group.tx_power_dbm, origin_lat, origin_lon)
-        # `model` : "environment" = portée réelle (relief, obstacles) ; "log_distance" = cercle
-        # sans environnement. `range_m` est la portée maximale sur les azimuts.
+    for k, gw in enumerate(gateways):
         features.append({
             "type": "Feature",
-            "geometry": {"type": "Polygon", "coordinates": [ring]},
-            "properties": {"kind": "coverage", "group": group.name,
-                           "spreading_factor": group.spreading_factor,
-                           "tx_power_dbm": group.tx_power_dbm,
-                           "range_m": round(radius, 1),
-                           "model": model_name},
+            "geometry": {"type": "Point", "coordinates": list(_to_lonlat(gw.x_m, gw.y_m, origin_lat, origin_lon))},
+            "properties": {"kind": "gateway",
+                           "name": (gw.name or f"passerelle-{k + 1}") if multi else "passerelle",
+                           "mesh": bool(gw.mesh) if multi else False,
+                           "height_m": env.gateway_height_m if env is not None else None},
         })
+
+    # Une couverture par passerelle et par groupe. `model` : "environment" = portée réelle
+    # (relief, obstacles) ; "log_distance" = cercle sans environnement. `range_m` est la
+    # portée maximale sur les azimuts.
+    for k, gw in enumerate(gateways):
+        gw_name = (gw.name or f"passerelle-{k + 1}") if multi else "passerelle"
+        for group in scenario.model.groups:
+            ring, model_name, radius = coverage_ring(
+                scenario, group.spreading_factor, group.tx_power_dbm, origin_lat, origin_lon, gw)
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+                "properties": {"kind": "coverage", "group": group.name, "gateway": gw_name,
+                               "spreading_factor": group.spreading_factor,
+                               "tx_power_dbm": group.tx_power_dbm,
+                               "range_m": round(radius, 1),
+                               "model": model_name},
+            })
 
     if env is not None:
         for i, o in enumerate(env.obstacles):

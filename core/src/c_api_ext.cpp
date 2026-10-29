@@ -676,6 +676,49 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
     }
 }
 
+int32_t lsim_env_path_loss_matrix(const lsim_propagation* prop, const lsim_environment* env,
+                                  size_t n, const double* x_m, const double* y_m,
+                                  double* out_db) {
+    if (prop == nullptr || env == nullptr || x_m == nullptr || y_m == nullptr || out_db == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    if (n == 0 || n > 64) {
+        return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(lsim::env::EnvStatus::InvalidInput);
+    }
+    try {
+        lsim::radio::LogDistanceModel model;
+        model.frequency_hz = prop->frequency_hz;
+        model.reference_distance_m = prop->reference_distance_m;
+        model.exponent = prop->exponent;
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        const int32_t built = build_environment(env, grid, obstacles, e);
+        if (built != 0) {
+            return built;
+        }
+        const std::uint64_t checks = static_cast<std::uint64_t>(n) * n * e.obstacle_count;
+        if (checks > lsim::env::kMaxObstacleChecks) {
+            return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(lsim::env::EnvStatus::WorkLimit);
+        }
+        for (size_t i = 0; i < n; ++i) {
+            out_db[i * n + i] = 0.0;
+            for (size_t j = 0; j < n; ++j) {
+                if (i == j) continue;
+                lsim::env::PathLoss pl;
+                const auto st = lsim::env::path_loss_db(model, x_m[i], y_m[i], x_m[j], y_m[j], e, pl);
+                if (st != lsim::env::EnvStatus::Ok) {
+                    return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(st);
+                }
+                out_db[i * n + j] = pl.total_db;
+            }
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                             double max_path_loss_db, const lsim_environment* env,
                             double step_m, size_t azimuths, double* radii_out) {
@@ -916,6 +959,10 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
             per_gateway[g].lost_sensitivity = gstats[g].lost_sensitivity;
             per_gateway[g].lost_collision = gstats[g].lost_collision;
             per_gateway[g].lost_gateway_busy = gstats[g].lost_gateway_busy;
+            per_gateway[g].audible_frames = gstats[g].audible_frames;
+            per_gateway[g].busy_ns = gstats[g].busy_ns;
+            per_gateway[g].peak_concurrent = gstats[g].peak_concurrent;
+            per_gateway[g].observation_ns = gstats[g].observation_ns;
         }
         for (size_t i = 0; i < device_count; ++i) {
             per_device[i].sent = stats[i].sent;
@@ -1052,6 +1099,10 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             per_gateway[g].lost_sensitivity = gstats[g].lost_sensitivity;
             per_gateway[g].lost_collision = gstats[g].lost_collision;
             per_gateway[g].lost_gateway_busy = gstats[g].lost_gateway_busy;
+            per_gateway[g].audible_frames = gstats[g].audible_frames;
+            per_gateway[g].busy_ns = gstats[g].busy_ns;
+            per_gateway[g].peak_concurrent = gstats[g].peak_concurrent;
+            per_gateway[g].observation_ns = gstats[g].observation_ns;
         }
         for (size_t i = 0; i < device_count; ++i) {
             per_device[i].sent = stats[i].sent;

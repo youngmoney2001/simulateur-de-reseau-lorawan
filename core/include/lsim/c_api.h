@@ -419,6 +419,10 @@ typedef struct lsim_gateway_rx_stats {
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
     uint64_t lost_gateway_busy; /* passerelle en émission pendant la trame */
+    uint64_t audible_frames;    /* trames au-dessus de la sensibilité à cette passerelle */
+    uint64_t busy_ns;           /* union de leurs intervalles */
+    uint64_t peak_concurrent;   /* simultanéité maximale */
+    int64_t  observation_ns;    /* fin de la dernière émission - début de la première */
 } lsim_gateway_rx_stats;
 
 /* Trace par émission, multi-passerelles. outcome : 0 sous la sensibilité partout, 1 collision,
@@ -529,6 +533,15 @@ LSIM_API int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices,
 LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                                      double max_path_loss_db, const lsim_environment* env,
                                      double step_m, size_t azimuths, double* radii_out);
+
+/* Perte de propagation totale (dB) entre toutes les paires de points (relief et obstacles
+ * inclus). out_db[i*n+j] : émetteur i, récepteur j ; diagonale 0. 1 <= n <= 64 et
+ * n*n*obstacles <= borne de travail (statut 506). Hauteurs : celles de `env` (émetteur =
+ * device_height_m, récepteur = gateway_height_m). */
+LSIM_API int32_t lsim_env_path_loss_matrix(const lsim_propagation* prop,
+                                           const lsim_environment* env, size_t n,
+                                           const double* x_m, const double* y_m,
+                                           double* out_db);
 
 
 /* ------------------------------------------------- Commandes MAC 1.1 */
@@ -874,15 +887,24 @@ typedef struct lsim_mesh_frame {
     uint64_t frame_id;
     uint32_t rx_node;            /* indice de la passerelle qui a reçu la trame */
     int64_t  t_ns;               /* fin de réception sur l'accès */
+    uint32_t payload_bytes;      /* taille relayée (trame LoRaWAN + enveloppe), 0..255 */
 } lsim_mesh_frame;
 
 typedef struct lsim_mesh_delivery {
     uint64_t frame_id;
     uint8_t  delivered;          /* 0 ou 1 */
-    uint8_t  loss;               /* 0 livré, 1 no_route, 2 half_duplex, 3 collision */
-    uint8_t  hops;               /* sauts tentés */
+    uint8_t  loss;               /* 0 livré, 1 no_route, 2 half_duplex, 3 collision, 4 suppressed */
+    uint8_t  hops;               /* sauts de la copie livrée en premier, 0 si non livré */
+    uint8_t  copy_state;         /* 0 relayée, 1 supprimée, 2 frontière, 3 sans route */
     int64_t  latency_ns;         /* -1 si non livré */
 } lsim_mesh_delivery;
+
+typedef struct lsim_mesh_summary {
+    uint64_t transmissions;      /* émissions mesh effectives */
+    uint64_t suppressed;         /* copies abandonnées (doublon entendu avant départ) */
+    uint64_t lost_collision;     /* sauts perdus par collision */
+    uint64_t lost_half_duplex;   /* sauts perdus : récepteur en émission */
+} lsim_mesh_summary;
 
 LSIM_API int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out);
 LSIM_API int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out);
@@ -890,9 +912,11 @@ LSIM_API int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_coun
                                   const uint8_t* capable, const double* rssi_dbm,
                                   uint32_t border, uint32_t max_hops, int32_t* next);
 LSIM_API int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
-                                   const double* rssi_dbm, const int32_t* next,
-                                   uint32_t border, const lsim_mesh_frame* frames,
-                                   size_t frame_count, lsim_mesh_delivery* out);
+                                   const uint8_t* capable, const double* rssi_dbm,
+                                   const int32_t* next, uint32_t border, int suppress,
+                                   int64_t backoff_window_ns,
+                                   const lsim_mesh_frame* frames, size_t frame_count,
+                                   lsim_mesh_delivery* out, lsim_mesh_summary* summary);
 
 #ifdef __cplusplus
 }

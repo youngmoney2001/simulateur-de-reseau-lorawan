@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <queue>
+#include <unordered_map>
 #include <utility>
 
 namespace lsim::mesh {
@@ -56,21 +57,53 @@ std::int64_t round_half_even(std::int64_t num, std::int64_t den) {
     return q;
 }
 
-// Liste d'intervalles d'émission d'un nœud : non chevauchants, triés (un émetteur
-// ne peut pas émettre deux fois à la fois, et sa file est FIFO).
 struct TxSpan {
     std::int64_t start;
     std::int64_t end;
 };
 
-struct Hop {
-    std::size_t frame_index;   // indice dans le tableau d'entrée
-    std::uint8_t index;        // numéro du saut, 0 = premier
-    std::uint32_t sender;
-    std::uint32_t receiver;
-    std::int64_t start;
-    std::int64_t end;
-    double rssi;
+enum class RelayState : std::uint8_t { Pending = 1, Forwarded = 2, Suppressed = 3 };
+
+// Une émission mesh (une copie qui saute d'un relais vers le suivant).
+struct Tx {
+    std::uint32_t sender = 0;
+    std::uint64_t frame_id = 0;
+    std::size_t copy = 0;           // copie d'origine (indice dans le tableau d'entrée)
+    std::uint8_t index = 0;         // numéro du saut, 0 = premier
+    std::int64_t ready = 0;         // instant où la copie est disponible au relais
+    std::int64_t start = 0;
+    std::int64_t end = 0;
+    std::vector<std::size_t> rx;    // réceptions créées par cette émission
+};
+
+// Une réception : `receiver` entend `tx`. `intended` : c'est le saut prévu.
+struct Rx {
+    std::size_t tx = 0;
+    std::uint32_t receiver = 0;
+    std::int64_t start = 0;
+    std::int64_t end = 0;
+    double rssi = 0.0;
+    bool intended = false;
+};
+
+struct FrameInfo {
+    std::int64_t t_first = 0;       // première réception à l'accès
+    bool delivered = false;
+    std::int64_t best_end = 0;      // fin de la première copie livrée
+    std::uint8_t best_hops = 0;
+    std::uint8_t loss = 0;          // pire perte de copie (priorité : collision > demi-duplex > route)
+};
+
+enum class Kind : std::uint8_t { Access = 0, Start = 1, End = 2 };
+
+struct Event {
+    std::int64_t t;
+    std::uint64_t seq;
+    Kind kind;
+    std::size_t id;                 // copie (Access) ou émission (Start, End)
+    bool operator>(const Event& o) const {
+        return t != o.t ? t > o.t : seq > o.seq;
+    }
 };
 
 }  // namespace
@@ -136,122 +169,266 @@ Status routes(const Radio& radio, std::size_t n, const std::uint8_t* capable,
     return Status::Ok;
 }
 
-Status forward(const Radio& radio, std::size_t n, const double* rssi,
-               const std::int32_t* next, std::uint32_t border,
-               const Frame* frames, std::size_t frame_count, Delivery* out) {
-    if (rssi == nullptr || next == nullptr || (frame_count > 0 && (frames == nullptr || out == nullptr))) {
+// Délai d'attente déterministe dans [0, window) pour (relais, trame) : SplitMix64.
+std::int64_t backoff_ns(std::uint32_t relay, std::uint64_t frame_id, std::int64_t window) {
+    if (window <= 0) return 0;
+    std::uint64_t z = frame_id * 0x9E3779B97F4A7C15ULL + (static_cast<std::uint64_t>(relay) + 1) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z ^= z >> 31;
+    return static_cast<std::int64_t>(z % static_cast<std::uint64_t>(window));
+}
+
+Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
+               const double* rssi, const std::int32_t* next, std::uint32_t border,
+               bool suppress, std::int64_t backoff_window_ns, const Frame* frames,
+               std::size_t frame_count, Delivery* out, Summary* summary) {
+    if (capable == nullptr || rssi == nullptr || next == nullptr || summary == nullptr ||
+        (frame_count > 0 && (frames == nullptr || out == nullptr))) {
         return Status::InvalidInput;
     }
+    if (backoff_window_ns < 0) return Status::InvalidInput;
     if (n == 0 || n > kMaxNodes) return Status::TooManyNodes;
     if (frame_count > kMaxFrames) return Status::TooManyFrames;
     if (border >= n) return Status::UnknownBorder;
+    if (capable[border] == 0) return Status::BorderNotCapable;
     if (validate_radio(radio) != Status::Ok) return Status::InvalidRadio;
-    std::int64_t airtime = 0;
-    airtime_ns(radio, airtime);
+    std::int32_t sens_i = 0;
+    if (sensitivity_dbm(radio, sens_i) != Status::Ok) return Status::InvalidRadio;
+    const double sens = static_cast<double>(sens_i);
+    // Temps d'antenne par taille de trame (chaque Frame porte la sienne).
+    std::vector<std::int64_t> air_by_size(256, -1);
+    std::vector<std::int64_t> frame_air(frame_count, 0);
+    std::int64_t max_air = 0;
+    for (std::size_t k = 0; k < frame_count; ++k) {
+        const std::uint32_t size = frames[k].payload_bytes;
+        if (size > 255) return Status::InvalidRadio;
+        if (air_by_size[size] < 0) {
+            Radio r = radio;
+            r.payload_bytes = size;
+            std::int64_t a = 0;
+            if (airtime_ns(r, a) != Status::Ok) return Status::InvalidRadio;
+            air_by_size[size] = a;
+        }
+        frame_air[k] = air_by_size[size];
+        max_air = std::max(max_air, frame_air[k]);
+    }
     const double capture = radio.capture_db;
 
-    std::vector<Delivery> results(frame_count);
-    std::vector<Hop> hops;
-    std::vector<std::vector<TxSpan>> tx(n);                       // émissions par nœud
-    std::vector<std::multimap<std::int64_t, std::size_t>> rx(n);  // réceptions par début -> hop
+    *summary = Summary{};
+    std::vector<Tx> txs;
+    std::vector<Rx> rxs;
+    std::vector<std::vector<TxSpan>> spans(n);                          // émissions committées par nœud
+    std::vector<std::multimap<std::int64_t, std::size_t>> rx_at(n);     // réceptions par début
     std::vector<std::int64_t> busy_until(n, 0);
+    std::unordered_map<std::uint64_t, FrameInfo> frame_info;
+    // État par (relais, trame). Clé : identifiant de trame et relais.
+    std::map<std::pair<std::uint32_t, std::uint64_t>, RelayState> relay_state;
 
-    using Event = std::pair<std::int64_t, std::size_t>;           // (fin, indice du saut)
     std::priority_queue<Event, std::vector<Event>, std::greater<>> heap;
-
-    auto transmit = [&](std::size_t frame_index, std::uint8_t index, std::uint32_t sender,
-                        std::uint32_t receiver, std::int64_t ready) {
-        const std::int64_t start = std::max(ready, busy_until[sender]);
-        const std::int64_t end = start + airtime;
-        busy_until[sender] = end;
-        tx[sender].push_back(TxSpan{start, end});
-        const std::size_t id = hops.size();
-        hops.push_back(Hop{frame_index, index, sender, receiver, start, end,
-                           rssi[static_cast<std::size_t>(sender) * n + receiver]});
-        rx[receiver].emplace(start, id);
-        heap.emplace(end, id);
+    std::uint64_t seq = 0;
+    auto push = [&](std::int64_t t, Kind kind, std::size_t id) {
+        heap.push(Event{t, seq++, kind, id});
     };
 
-    // Trames traitées par ordre de date (puis identifiant), comme côté Python.
-    std::vector<std::size_t> order(frame_count);
-    for (std::size_t k = 0; k < frame_count; ++k) order[k] = k;
-    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-        if (frames[a].t_ns != frames[b].t_ns) return frames[a].t_ns < frames[b].t_ns;
-        return frames[a].frame_id < frames[b].frame_id;
-    });
-
-    for (const std::size_t k : order) {
-        const Frame& f = frames[k];
-        Delivery& d = results[k];
-        d.frame_id = f.frame_id;
-        if (f.rx_node >= n) return Status::UnknownNode;
-        if (f.rx_node == border) {
-            d.delivered = 1;
-            d.loss = static_cast<std::uint8_t>(Loss::Delivered);
-            d.latency_ns = 0;
-            continue;
+    // Premier passage : première réception à l'accès de chaque trame.
+    for (std::size_t k = 0; k < frame_count; ++k) {
+        if (frames[k].rx_node >= n) return Status::UnknownNode;
+        auto [it, inserted] = frame_info.try_emplace(frames[k].frame_id);
+        if (inserted || frames[k].t_ns < it->second.t_first) {
+            it->second.t_first = frames[k].t_ns;
         }
-        if (next[f.rx_node] < 0) {
-            d.loss = static_cast<std::uint8_t>(Loss::NoRoute);
-            continue;
-        }
-        transmit(k, 0, f.rx_node, static_cast<std::uint32_t>(next[f.rx_node]), f.t_ns);
+        push(frames[k].t_ns, Kind::Access, k);
     }
 
-    while (!heap.empty()) {
-        const std::size_t id = heap.top().second;
-        heap.pop();
-        const Hop h = hops[id];
-        const std::uint32_t r = h.receiver;
-        Delivery& d = results[h.frame_index];
-        d.hops = static_cast<std::uint8_t>(h.index + 1);
+    auto note_loss = [&](std::uint64_t frame_id, std::uint8_t reason) {
+        FrameInfo& fi = frame_info[frame_id];
+        if (reason > fi.loss) fi.loss = reason;
+    };
+    auto deliver = [&](std::uint64_t frame_id, std::int64_t t_end, std::uint8_t hops) {
+        FrameInfo& fi = frame_info[frame_id];
+        if (!fi.delivered || t_end < fi.best_end) {
+            fi.delivered = true;
+            fi.best_end = t_end;
+            fi.best_hops = hops;
+        }
+    };
 
-        // Demi-duplex : le récepteur émettait pendant une partie de la trame.
-        // Les intervalles d'un nœud sont triés et disjoints : recherche dichotomique.
-        const auto& spans = tx[r];
-        auto it = std::lower_bound(spans.begin(), spans.end(), h.start,
-                                   [](const TxSpan& s, std::int64_t t) { return s.end <= t; });
-        const bool half_duplex = it != spans.end() && it->start < h.end;
-        if (half_duplex) {
-            d.loss = static_cast<std::uint8_t>(Loss::HalfDuplex);
+    // Relais d'une copie : elle devient disponible au nœud `r` à l'instant `t`.
+    auto obtain = [&](std::uint32_t r, std::uint64_t frame_id, std::size_t copy,
+                      std::uint8_t index, std::int64_t t) {
+        if (next[r] < 0) {
+            note_loss(frame_id, static_cast<std::uint8_t>(Loss::NoRoute));
+            return;
+        }
+        if (suppress) {
+            const auto key = std::make_pair(r, frame_id);
+            if (relay_state.count(key) != 0) {        // déjà pris en charge : copie superflue
+                ++summary->suppressed;
+                return;
+            }
+            relay_state[key] = RelayState::Pending;
+        }
+        Tx tx;
+        tx.sender = r;
+        tx.frame_id = frame_id;
+        tx.copy = copy;
+        tx.index = index;
+        tx.ready = t;
+        txs.push_back(std::move(tx));
+        push(t + backoff_ns(r, frame_id, backoff_window_ns), Kind::Start, txs.size() - 1);
+    };
+
+    std::size_t rx_total = 0;
+    while (!heap.empty()) {
+        const Event ev = heap.top();
+        heap.pop();
+
+        if (ev.kind == Kind::Access) {
+            const Frame& f = frames[ev.id];
+            if (f.rx_node == border) {
+                deliver(f.frame_id, f.t_ns, 0);
+            } else {
+                obtain(f.rx_node, f.frame_id, ev.id, 0, f.t_ns);
+            }
             continue;
         }
 
-        // Collision : un autre saut audible au récepteur chevauche ce saut et n'est
-        // pas plus faible de `capture` dB. Seuls les débuts dans (start - airtime, end)
-        // peuvent chevaucher, la durée d'émission étant uniforme.
-        bool collided = false;
-        const auto& recv = rx[r];
-        for (auto jt = recv.upper_bound(h.start - airtime); jt != recv.end() && jt->first < h.end; ++jt) {
-            if (jt->second == id) continue;
-            const Hop& other = hops[jt->second];
-            if (!(other.start < h.end && h.start < other.end)) continue;
-            if (h.rssi < other.rssi + capture) {
-                collided = true;
-                break;
+        if (ev.kind == Kind::Start) {
+            Tx& tx = txs[ev.id];
+            const std::uint32_t s = tx.sender;
+            if (suppress) {
+                const auto st = relay_state[{s, tx.frame_id}];
+                if (st != RelayState::Pending) {
+                    ++summary->suppressed;  // copie en file, supprimée par un doublon entendu
+                    continue;
+                }
+            }
+            if (busy_until[s] > ev.t) {
+                push(busy_until[s], Kind::Start, ev.id);  // FIFO : attendre la fin de l'émission
+                continue;
+            }
+            tx.start = ev.t;
+            tx.end = ev.t + frame_air[tx.copy];
+            busy_until[s] = tx.end;
+            spans[s].push_back(TxSpan{tx.start, tx.end});
+            if (suppress) relay_state[{s, tx.frame_id}] = RelayState::Forwarded;
+            ++summary->transmissions;
+
+            const std::uint32_t intended = static_cast<std::uint32_t>(next[s]);
+            for (std::uint32_t r = 0; r < n; ++r) {
+                if (r == s || capable[r] == 0) continue;
+                if (rssi[static_cast<std::size_t>(s) * n + r] < sens) continue;
+                if (++rx_total > kMaxReceptions) return Status::TooManyReceptions;
+                Rx q;
+                q.tx = ev.id;
+                q.receiver = r;
+                q.start = tx.start;
+                q.end = tx.end;
+                q.rssi = rssi[static_cast<std::size_t>(s) * n + r];
+                q.intended = (r == intended);
+                rxs.push_back(q);
+                const std::size_t rid = rxs.size() - 1;
+                rx_at[r].emplace(q.start, rid);
+                tx.rx.push_back(rid);
+            }
+            push(tx.end, Kind::End, ev.id);
+            continue;
+        }
+
+        // Kind::End : évaluation de chaque réception de l'émission. Les champs sont copiés :
+        // `obtain` ajoute des émissions et peut réallouer `txs`.
+        const std::vector<std::size_t> tx_rx = txs[ev.id].rx;
+        const std::uint64_t tx_frame = txs[ev.id].frame_id;
+        const std::size_t tx_copy = txs[ev.id].copy;
+        const std::uint8_t tx_index = txs[ev.id].index;
+        for (const std::size_t rid : tx_rx) {
+            const Rx q = rxs[rid];
+            const std::uint32_t r = q.receiver;
+            bool half_duplex = false;
+            const auto& sp = spans[r];
+            auto it = std::lower_bound(sp.begin(), sp.end(), q.start,
+                                       [](const TxSpan& x, std::int64_t t) { return x.end <= t; });
+            if (it != sp.end() && it->start < q.end) half_duplex = true;
+
+            bool collided = false;
+            if (!half_duplex) {
+                const auto& at = rx_at[r];
+                for (auto jt = at.upper_bound(q.start - max_air); jt != at.end() && jt->first < q.end; ++jt) {
+                    if (jt->second == rid) continue;
+                    const Rx& other = rxs[jt->second];
+                    if (!(other.start < q.end && q.start < other.end)) continue;
+                    if (q.rssi < other.rssi + capture) {
+                        collided = true;
+                        break;
+                    }
+                }
+            }
+
+            if (half_duplex || collided) {
+                if (q.intended) {
+                    if (half_duplex) {
+                        ++summary->lost_half_duplex;
+                        note_loss(tx_frame, static_cast<std::uint8_t>(Loss::HalfDuplex));
+                    } else {
+                        ++summary->lost_collision;
+                        note_loss(tx_frame, static_cast<std::uint8_t>(Loss::Collision));
+                    }
+                }
+                continue;
+            }
+
+            if (q.intended) {
+                if (r == border) {
+                    deliver(tx_frame, q.end, static_cast<std::uint8_t>(tx_index + 1));
+                } else {
+                    obtain(r, tx_frame, tx_copy, static_cast<std::uint8_t>(tx_index + 1), q.end);
+                }
+            } else if (suppress) {
+                // Un relais entend une transmission qui n'est pas la sienne : si sa propre
+                // copie n'est pas encore partie, elle est superflue.
+                const auto key = std::make_pair(r, tx_frame);
+                auto st = relay_state.find(key);
+                if (st == relay_state.end()) {
+                    relay_state[key] = RelayState::Suppressed;
+                } else if (st->second == RelayState::Pending) {
+                    st->second = RelayState::Suppressed;
+                }
             }
         }
-        if (collided) {
-            d.loss = static_cast<std::uint8_t>(Loss::Collision);
-            continue;
-        }
-
-        if (r == border) {
-            d.delivered = 1;
-            d.loss = static_cast<std::uint8_t>(Loss::Delivered);
-            d.latency_ns = h.end - frames[h.frame_index].t_ns;
-            continue;
-        }
-        const std::int32_t nxt = next[r];
-        if (nxt < 0) {
-            d.loss = static_cast<std::uint8_t>(Loss::NoRoute);
-            continue;
-        }
-        transmit(h.frame_index, static_cast<std::uint8_t>(h.index + 1), r,
-                 static_cast<std::uint32_t>(nxt), h.end);
     }
 
-    for (std::size_t k = 0; k < frame_count; ++k) out[k] = results[k];
+    // Sorties : une entrée par copie, avec l'issue de la trame.
+    for (std::size_t k = 0; k < frame_count; ++k) {
+        const Frame& f = frames[k];
+        const FrameInfo& fi = frame_info[f.frame_id];
+        Delivery& d = out[k];
+        d.frame_id = f.frame_id;
+        d.delivered = fi.delivered ? 1 : 0;
+        if (fi.delivered) {
+            d.loss = static_cast<std::uint8_t>(Loss::Delivered);
+            d.hops = fi.best_hops;
+            d.latency_ns = fi.best_end - fi.t_first;
+        } else {
+            d.loss = fi.loss != 0 ? fi.loss : static_cast<std::uint8_t>(Loss::Suppressed);
+            d.hops = 0;
+            d.latency_ns = -1;
+        }
+        CopyState cs;
+        if (f.rx_node == border) {
+            cs = CopyState::Border;
+        } else if (next[f.rx_node] < 0) {
+            cs = CopyState::NoRoute;
+        } else if (suppress) {
+            const auto it = relay_state.find({f.rx_node, f.frame_id});
+            cs = (it != relay_state.end() && it->second == RelayState::Suppressed)
+                     ? CopyState::Suppressed
+                     : CopyState::Forwarded;
+        } else {
+            cs = CopyState::Forwarded;
+        }
+        d.copy_state = static_cast<std::uint8_t>(cs);
+    }
     return Status::Ok;
 }
 

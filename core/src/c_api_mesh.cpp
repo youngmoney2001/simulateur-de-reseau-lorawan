@@ -61,28 +61,37 @@ int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_count,
 }
 
 int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
-                          const double* rssi_dbm, const int32_t* next, uint32_t border,
-                          const lsim_mesh_frame* frames, size_t frame_count,
-                          lsim_mesh_delivery* out) {
-    if (radio == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
+                          const uint8_t* capable, const double* rssi_dbm,
+                          const int32_t* next, uint32_t border, int suppress,
+                          int64_t backoff_window_ns, const lsim_mesh_frame* frames, size_t frame_count,
+                          lsim_mesh_delivery* out, lsim_mesh_summary* summary) {
+    if (radio == nullptr || summary == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
     try {
         std::vector<lsim::mesh::Frame> in(frame_count);
         for (size_t k = 0; k < frame_count; ++k) {
             in[k].frame_id = frames[k].frame_id;
             in[k].rx_node = frames[k].rx_node;
             in[k].t_ns = frames[k].t_ns;
+            in[k].payload_bytes = frames[k].payload_bytes;
         }
         std::vector<lsim::mesh::Delivery> res(frame_count);
-        const auto st = lsim::mesh::forward(to_radio(radio), node_count, rssi_dbm, next, border,
-                                            in.data(), frame_count, res.data());
+        lsim::mesh::Summary sum;
+        const auto st = lsim::mesh::forward(to_radio(radio), node_count, capable, rssi_dbm, next,
+                                            border, suppress != 0, backoff_window_ns, in.data(),
+                                            frame_count, res.data(), &sum);
         if (st != lsim::mesh::Status::Ok) return status_code(st);
         for (size_t k = 0; k < frame_count; ++k) {
             out[k].frame_id = res[k].frame_id;
             out[k].delivered = res[k].delivered;
             out[k].loss = res[k].loss;
             out[k].hops = res[k].hops;
+            out[k].copy_state = res[k].copy_state;
             out[k].latency_ns = res[k].latency_ns;
         }
+        summary->transmissions = sum.transmissions;
+        summary->suppressed = sum.suppressed;
+        summary->lost_collision = sum.lost_collision;
+        summary->lost_half_duplex = sum.lost_half_duplex;
         return 0;
     } catch (...) {
         return LSIM_STATUS_INTERNAL;

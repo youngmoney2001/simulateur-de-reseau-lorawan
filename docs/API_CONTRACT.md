@@ -154,3 +154,16 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 3. Implémenter le serveur (`python/lsim/api_server.py`) selon ce contrat, avec tests de
    contrat (chaque réponse validée par son schéma).
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
+
+## Relais mesh et passerelles multiples (scénario)
+
+Ajouts additifs au schéma `scenario_input` (aucune clé existante retirée ou modifiée) :
+
+- `gateways` : liste de passerelles nommées (`name`, `profile`, `mesh`), alternative à `gateway`.
+- `mesh` : bloc de backhaul (`border`, `spreading_factor`, `bandwidth_khz`, `coding_rate`,
+  `max_hops`, `capture_db`, `suppress_duplicates`, `relay_backoff_airtimes`, `frame_size`,
+  `payload_bytes`).
+
+Les schémas `run_create`, `validate_request` et `scenario_input` sont régénérés depuis la racine
+du dépôt (`PYTHONPATH=python python -m lsim.api_contract`). Détail du comportement : `docs/USAGE.md`
+section 5sexies.

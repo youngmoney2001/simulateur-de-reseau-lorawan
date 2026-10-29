@@ -234,6 +234,11 @@ struct GatewayRxStats {
     std::uint64_t lost_sensitivity = 0;
     std::uint64_t lost_collision = 0;
     std::uint64_t lost_gateway_busy = 0;  // passerelle en émission pendant la trame
+    // Charge de réception : trames audibles (RSSI >= sensibilité) à cette passerelle.
+    std::uint64_t audible_frames = 0;
+    std::uint64_t busy_ns = 0;            // union des intervalles de ces trames
+    std::uint64_t peak_concurrent = 0;    // trames audibles simultanées au maximum
+    std::int64_t observation_ns = 0;      // fin de la dernière émission - début de la première
 };
 
 // Issue réseau d'une émission. `receivers` = nombre de passerelles qui l'ont décodée.

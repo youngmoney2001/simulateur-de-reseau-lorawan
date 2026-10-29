@@ -50,6 +50,12 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
             ("Charge passerelle : pic de trames simultanées", g.peak_concurrent),
             ("Charge passerelle : taux d'occupation", round(g.utilization, 6)),
         ]
+    for name, g in zip(result.gateway_names, result.gateway_loads):
+        rows += [
+            (f"Passerelle {name} : trames audibles", g.audible_frames),
+            (f"Passerelle {name} : taux d'occupation", round(g.utilization, 6)),
+            (f"Passerelle {name} : pic de trames simultanées", g.peak_concurrent),
+        ]
     if result.mesh is not None:
         m = result.mesh
         rows += [
@@ -58,7 +64,13 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
             ("Mesh : remises sans saut mesh", m.direct),
             ("Mesh : remises après saut mesh", m.via_mesh),
             ("Mesh : copies confiées au mesh", m.copies_on_mesh),
-        ] + [(f"Mesh : copies perdues ({reason})", n) for reason, n in m.losses]
+            ("Mesh : émissions mesh", m.transmissions),
+            ("Mesh : copies supprimées (doublon)", m.suppressed),
+            ("Mesh : copies sans route", m.no_route),
+            ("Mesh : descente dans RX1", m.dl_rx1),
+            ("Mesh : descente dans RX2 seulement", m.dl_rx2),
+            ("Mesh : descente hors fenêtres", m.dl_missed),
+        ] + [(f"Mesh : sauts perdus ({reason})", n) for reason, n in m.hop_losses]
     if result.energy_profile is not None:
         rows.append((_ENERGY_SUMMARY_LABEL, profile_name(result.energy_profile)))
     return rows

@@ -134,3 +134,84 @@ def test_mesh_profile_is_documented_relay():
     assert can_relay(p)
     assert p.rx_sensitivity_min_dbm == -132.0
     assert get_profile("rak7249").mesh_bands == ()
+
+
+def test_overhearing_relay_suppresses_its_duplicate():
+    # Frontière en (0,0), relais R1 en (800,0) et R2 en (400,400) : R2 entend R1 vers la
+    # frontière, puis reçoit sa propre copie après la fin de l'émission de R1.
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0),
+             MeshNode("r2", 400.0, 400.0)]
+    graph = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    air = RADIO.airtime_ns
+    frames = [MeshFrame(7, "r1", 0), MeshFrame(7, "r2", air + air // 2)]
+    result = forward_frames(frames, graph, RADIO)
+    assert result.transmissions == 1
+    assert result.suppressed == 1
+    assert result.lost_collision == 0
+    assert result.delivered == 1
+    states = sorted(d.copy_state for d in result.deliveries)
+    assert states == ["forwarded", "suppressed"] or states == ["suppressed", "forwarded"]
+
+
+def test_without_suppression_both_copies_are_relayed():
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0),
+             MeshNode("r2", 400.0, 400.0)]
+    graph = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    air = RADIO.airtime_ns
+    frames = [MeshFrame(7, "r1", 0), MeshFrame(7, "r2", air + air // 2)]
+    result = forward_frames(frames, graph, RADIO, suppress_duplicates=False)
+    assert result.transmissions == 2
+    assert result.suppressed == 0
+    assert result.delivered == 1
+
+
+def test_obstacle_on_mesh_link_removes_route_when_native_loss_is_used():
+    # Même géométrie que le test précédent, exposant 4 : sans obstacle, le relais à 800 m
+    # atteint la frontière. Un mur de 60 dB entre les deux supprime la route.
+    from lsim.environment import Environment, Obstacle
+    from lsim.simulator import Propagation, environment_path_loss_matrix
+
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0)]
+    plain = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    assert plain.route("r1") == ("border",)
+
+    wall = Obstacle(x_min_m=300.0, y_min_m=-200.0, x_max_m=500.0, y_max_m=200.0,
+                    height_m=40.0, attenuation_db=60.0)
+    env = Environment(obstacles=(wall,))
+    prop = Propagation(frequency_hz=2.4e9, exponent=4.0)
+    matrix = environment_path_loss_matrix([(0.0, 0.0), (800.0, 0.0)], prop, env)
+    assert matrix[0 * 2 + 1] >= STEEP.path_loss_db(800.0) + 60.0 - 1e-6  # mur traversé
+    walled = build_mesh(nodes, border_id="border", radio=RADIO, path_loss_db=matrix)
+    assert walled.route("r1") is None
+
+
+def test_lorawan_phy_size_matches_spec_layout():
+    from lsim.mesh import MESH_ENVELOPE_UP_BYTES, lorawan_phy_bytes
+
+    assert lorawan_phy_bytes(0) == 12        # MHDR + FHDR + MIC, sans FPort ni charge
+    assert lorawan_phy_bytes(20) == 33       # + FPort 1 + charge 20
+    assert MESH_ENVELOPE_UP_BYTES == 14      # enveloppe mesh en montant
+    with pytest.raises(ValueError):
+        lorawan_phy_bytes(243)
+
+
+def test_frame_size_changes_airtime_of_relayed_frame():
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0)]
+    graph = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    short = forward_frames([MeshFrame(1, "r1", 0, payload_bytes=10)], graph, RADIO).deliveries[0]
+    long = forward_frames([MeshFrame(1, "r1", 0, payload_bytes=47)], graph, RADIO).deliveries[0]
+    assert short.latency_ns == time_on_air_ns(12, 203_000, 10)
+    assert long.latency_ns == time_on_air_ns(12, 203_000, 47)
+    assert long.latency_ns > short.latency_ns
+
+
+def test_downlink_window_thresholds():
+    from lsim.mesh import downlink_window
+
+    air = 1_000_000_000  # 1 s par saut
+    assert downlink_window(0, 0, air) == "rx1"          # frontière elle-même
+    assert downlink_window(0, 1, 900_000_000) == "rx1"  # 0,9 s : RX1
+    assert downlink_window(0, 1, air) == "rx1"          # 1,0 s pile : début de RX1 inclus
+    assert downlink_window(0, 1, air + 1) == "rx2"      # au-delà de RX1 : RX2
+    assert downlink_window(1_000_000_000, 1, air) == "rx2"     # aller-retour 2 s pile : RX2
+    assert downlink_window(1_000_000_001, 1, air) == "missed"  # aller-retour > 2 s

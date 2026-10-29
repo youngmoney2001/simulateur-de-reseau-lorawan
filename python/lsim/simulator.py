@@ -8,6 +8,7 @@ capture) est entièrement dans le cœur C++. Les limites (10 000 dispositifs,
 from __future__ import annotations
 
 import ctypes
+import dataclasses
 import math
 from dataclasses import dataclass
 from enum import IntEnum
@@ -201,6 +202,12 @@ class SimulationResult:
     downlink_totals: DownlinkCounters = DownlinkCounters()
 
 
+def _gateway_rx(s) -> GatewayRxCounters:
+    return GatewayRxCounters(s.received, s.lost_sensitivity, s.lost_collision,
+                             s.lost_gateway_busy, s.audible_frames, s.busy_ns,
+                             s.peak_concurrent, s.observation_ns)
+
+
 def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
     """Traduit l'environnement en structure C. Retourne aussi les tampons à garder vivants."""
     keep: list[object] = []
@@ -230,6 +237,31 @@ def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
         c_env.obstacles = ctypes.cast(c_obs, ctypes.POINTER(_CObstacle))
         c_env.obstacle_count = len(env.obstacles)
     return c_env, keep
+
+
+def environment_path_loss_matrix(positions: Sequence[tuple[float, float]],
+                                 propagation: Propagation,
+                                 environment: Environment) -> tuple[float, ...]:
+    """Pertes de propagation totales (dB) entre toutes les paires de points, relief et obstacles.
+
+    Résultat à plat : `out[i * n + j]`, émetteur i, récepteur j ; diagonale 0. Les deux
+    extrémités sont à la hauteur passerelle (cas du mesh entre passerelles). Pas de shadowing.
+    """
+    n = len(positions)
+    if not 1 <= n <= 64:
+        raise ValueError("entre 1 et 64 points")
+    env = dataclasses.replace(environment, device_height_m=environment.gateway_height_m)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db, 0.0, 0)
+    xs = (ctypes.c_double * n)(*[float(p[0]) for p in positions])
+    ys = (ctypes.c_double * n)(*[float(p[1]) for p in positions])
+    c_env, keep = _c_environment(env)
+    out = (ctypes.c_double * (n * n))()
+    status = LIB.lsim_env_path_loss_matrix(ctypes.byref(c_prop), ctypes.byref(c_env), n, xs, ys, out)
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    return tuple(out)
 
 
 def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db: float,
@@ -392,12 +424,24 @@ class NetworkCounters:
 
 @dataclass(frozen=True)
 class GatewayRxCounters:
-    """Trames décodées ou perdues à une passerelle donnée."""
+    """Trames décodées ou perdues à une passerelle donnée, et sa charge de réception.
+
+    La charge porte sur les trames audibles (RSSI >= sensibilité) : union des intervalles
+    (`busy_ns`), simultanéité maximale (`peak_concurrent`), sur la fenêtre d'observation.
+    """
 
     received: int
     lost_sensitivity: int
     lost_collision: int
     lost_gateway_busy: int
+    audible_frames: int = 0
+    busy_ns: int = 0
+    peak_concurrent: int = 0
+    observation_ns: int = 0
+
+    @property
+    def utilization(self) -> float:
+        return self.busy_ns / self.observation_ns if self.observation_ns > 0 else 0.0
 
 
 @dataclass(frozen=True)
@@ -496,9 +540,7 @@ def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gate
     network = NetworkCounters(c_tot.sent, c_tot.received, c_tot.duplicates,
                               c_tot.lost_sensitivity, c_tot.lost_collision,
                               c_tot.lost_gateway_busy, c_tot.airtime_ns)
-    per_gw = tuple(GatewayRxCounters(s.received, s.lost_sensitivity, s.lost_collision,
-                                     s.lost_gateway_busy)
-                   for s in c_gw_stats)
+    per_gw = tuple(_gateway_rx(s) for s in c_gw_stats)
     trace: tuple[MultiTxRecord, ...] = ()
     if with_trace:
         trace = tuple(
@@ -602,9 +644,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     network = NetworkCounters(c_tot.sent, c_tot.received, c_tot.duplicates,
                               c_tot.lost_sensitivity, c_tot.lost_collision,
                               c_tot.lost_gateway_busy, c_tot.airtime_ns)
-    per_gw = tuple(GatewayRxCounters(s.received, s.lost_sensitivity, s.lost_collision,
-                                     s.lost_gateway_busy)
-                   for s in c_gw_stats)
+    per_gw = tuple(_gateway_rx(s) for s in c_gw_stats)
     trace = tuple(
         MultiTxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.receivers,
                       r.best_gateway, r.best_rssi_dbm, r.outcome)

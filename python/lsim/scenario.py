@@ -61,9 +61,19 @@ class MeshModel(_Strict):
     spreading_factor: int = Field(12, ge=5, le=12)
     bandwidth_khz: Literal[203, 406, 812, 1625] = 203
     coding_rate: int = Field(1, ge=1, le=4)
-    payload_bytes: int = Field(32, ge=0, le=255)
+    # Taille relayée. « device » : trame LoRaWAN réelle du dispositif + enveloppe mesh
+    # (14 o en montant). « fixed » : `payload_bytes` pour toutes les trames (hypothèse).
+    frame_size: Literal["device", "fixed"] = "device"
+    payload_bytes: int = Field(32, ge=0, le=255)  # utilisé seulement si frame_size = fixed
     capture_db: float = Field(6.0, ge=0.0, le=30.0)
     max_hops: int = Field(8, ge=1, le=8)
+    # Suppression des doublons par identifiant de trame (défaut). `false` : chaque copie
+    # reçue par un relais est relayée, pour comparer.
+    suppress_duplicates: bool = True
+    # Attente de chaque relais avant de transmettre une copie, en temps d'antenne mesh
+    # (déterministe par relais et trame). 0 : pas d'attente, donc pas de suppression
+    # entre relais qui reçoivent la même trame au même instant.
+    relay_backoff_airtimes: int = Field(4, ge=0, le=64)
 
 
 class PropagationModel(_Strict):

@@ -95,14 +95,16 @@ def test_mesh_run_invariants_on_example_scaled_down(tmp_path):
     run = run_scenario(load_scenario(path))
     m = run.mesh
     assert m is not None
+    # Remises : sans saut, ou après saut ; une trame n'est comptée qu'une fois.
     assert m.delivered == m.direct + m.via_mesh
     assert m.delivered <= m.frames <= run.totals.sent
     assert run.totals.received == m.delivered
     assert sum(r.received for r in run.rows) == m.delivered
-    lost_copies = sum(n for _, n in m.losses)
-    assert lost_copies <= m.copies_on_mesh
-    # Chaque trame « via mesh » a au moins une copie remise.
-    assert m.copies_on_mesh - lost_copies >= m.via_mesh
+    # Une copie confiée au mesh finit relayée, supprimée ou sans route (au plus une issue).
+    assert m.suppressed + m.no_route <= m.copies_on_mesh
+    # Chaque saut effectif est une émission ; un saut perdu en est une.
+    assert sum(n for _, n in m.hop_losses) <= m.transmissions
+    assert m.transmissions >= m.via_mesh
     assert run.gateway is None
 
 
@@ -110,6 +112,7 @@ def test_border_only_mesh_delivers_every_decoded_frame():
     d = _base([BORDER, {"name": "ip", "x_m": 500, "y_m": 0}], mesh={"border": "frontiere"})
     run = run_scenario(_scenario(d))
     assert run.mesh.copies_on_mesh == 0
+    assert run.mesh.transmissions == 0
     assert run.mesh.delivered == run.mesh.frames
     assert run.mesh.via_mesh == 0
 
@@ -120,7 +123,9 @@ def test_relay_out_of_range_of_border_loses_copies_as_no_route():
     run = run_scenario(_scenario(d))
     assert run.mesh.frames > 0
     assert run.mesh.delivered == 0
-    assert dict(run.mesh.losses) == {"no_route": run.mesh.copies_on_mesh}
+    assert run.mesh.no_route == run.mesh.copies_on_mesh
+    assert run.mesh.hop_losses == ()
+    assert run.mesh.transmissions == 0
 
 
 def test_no_mesh_multi_gateway_matches_network_dedup():
@@ -129,3 +134,83 @@ def test_no_mesh_multi_gateway_matches_network_dedup():
     assert run.mesh is None
     assert run.gateway is None
     assert run.totals.received == sum(r.received for r in run.rows)
+
+
+def test_geojson_multi_gateway_has_one_coverage_per_gateway(tmp_path):
+    from lsim.geo import to_geojson
+
+    s = load_scenario(EXAMPLE)
+    doc = to_geojson(run_scenario(s), s, 4.0511, 9.7679)
+    gateways = [f for f in doc["features"] if f["properties"].get("kind") == "gateway"]
+    names = [f["properties"]["name"] for f in gateways]
+    assert names == ["frontiere", "relais-1", "relais-2", "ip-ouest"]
+    assert [f["properties"]["mesh"] for f in gateways] == [True, True, True, False]
+    cov = [f["properties"] for f in doc["features"] if f["properties"].get("kind") == "coverage"]
+    assert {p["gateway"] for p in cov} == set(names)
+    assert len(cov) == len(names) * len(s.model.groups)
+
+
+def test_geojson_single_gateway_keeps_legacy_name():
+    from lsim.geo import to_geojson
+
+    d = _base([{"name": "gw", "x_m": 0, "y_m": 0}])
+    d.pop("gateways")
+    d["gateway"] = {"x_m": 0, "y_m": 0}
+    s = _scenario(d)
+    doc = to_geojson(run_scenario(s), s, 4.0511, 9.7679)
+    gw = [f["properties"] for f in doc["features"] if f["properties"].get("kind") == "gateway"]
+    assert [g["name"] for g in gw] == ["passerelle"]
+
+
+def test_wall_on_relay_path_removes_mesh_delivery(tmp_path):
+    # Dispositifs autour du relais (800 m) ; le mur est entre la frontière et le relais,
+    # donc il coupe le lien mesh sans couper l'accès des dispositifs au relais.
+    def scenario_dict():
+        d = _base([BORDER, {"name": "relais", "x_m": 800, "y_m": 0, "profile": "rak5148",
+                            "mesh": True}],
+                  mesh={"border": "frontiere"}, radius=100)
+        d["groups"][0]["placement"]["center_x_m"] = 800
+        return d
+
+    open_run = run_scenario(_scenario(scenario_dict()))
+    walled = scenario_dict()
+    walled["environment"] = {
+        "gateway_height_m": 15, "device_height_m": 1.5,
+        "obstacles": [{"x_min_m": 300, "y_min_m": -300, "x_max_m": 500, "y_max_m": 300,
+                       "height_m": 30, "attenuation_db": 60}],
+    }
+    import yaml
+
+    path = tmp_path / "walled.yaml"
+    path.write_text(yaml.safe_dump(walled, allow_unicode=True), encoding="utf-8")
+    closed_run = run_scenario(load_scenario(path))
+    # Ouvert : le relais a une route et relaie. Mur : aucune route, copies perdues sans route.
+    assert open_run.mesh.copies_on_mesh > 0
+    assert open_run.mesh.no_route == 0
+    assert open_run.mesh.transmissions > 0
+    assert closed_run.mesh.copies_on_mesh > 0
+    assert closed_run.mesh.no_route == closed_run.mesh.copies_on_mesh
+    assert closed_run.mesh.transmissions == 0
+
+
+def test_downlink_windows_partition_delivered_frames():
+    s = load_scenario(EXAMPLE)
+    m = run_scenario(s).mesh
+    assert m.dl_rx1 + m.dl_rx2 + m.dl_missed == m.delivered
+    assert m.dl_mesh_airtime_ns > 0
+
+
+def test_frame_size_fixed_is_available_for_comparison(tmp_path):
+    text = EXAMPLE.read_text(encoding="utf-8").replace("count: 300", "count: 40")
+    text = text.replace("  payload_bytes: 32\n", "  frame_size: fixed\n  payload_bytes: 32\n")
+    path = tmp_path / "fixed.yaml"
+    path.write_text(text, encoding="utf-8")
+    run = run_scenario(load_scenario(path))
+    assert run.mesh is not None and run.mesh.copies_on_mesh > 0
+
+
+def test_frame_size_defaults_to_device_payload():
+    from lsim.scenario import MeshModel
+
+    assert MeshModel(border="x").frame_size == "device"
+    assert MeshModel(border="x").payload_bytes == 32
