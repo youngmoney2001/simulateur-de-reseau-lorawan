@@ -27,6 +27,7 @@ struct Tx {
     std::uint32_t device = 0;
     std::uint8_t sf = 7;
     double rssi_dbm = 0.0;
+    std::uint32_t msg = 0;  // indice de l'émission : dispositifs dans l'ordre, puis k (multi)
 };
 
 bool overlap(const Tx& a, const Tx& b) {
@@ -848,7 +849,7 @@ SimStatus simulate_uplinks_multi_downlinks(
     std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
     DeviceStats* per_device, NetworkStats& totals, GatewayRxStats* per_gateway,
     const env::Environment* environment, std::vector<MultiTx>* trace,
-    std::vector<MultiDownlink>* downlinks) {
+    std::vector<MultiDownlink>* downlinks, const SimTime* dl_ready_ns) {
     totals = NetworkStats{};
     if (trace != nullptr) trace->clear();
     if (downlinks != nullptr) downlinks->clear();
@@ -883,6 +884,7 @@ SimStatus simulate_uplinks_multi_downlinks(
     std::vector<Tx> txs;
     txs.reserve(static_cast<std::size_t>(total_tx));
     SimTime max_airtime = 0;
+    std::size_t msg_base = 0;
     for (std::size_t i = 0; i < device_count; ++i) {
         const EndDeviceSpec& d = devices[i];
         const double off_factor = (1.0 - d.duty_cycle) / d.duty_cycle;
@@ -903,6 +905,7 @@ SimStatus simulate_uplinks_multi_downlinks(
             tx.end = t + airtime[i];
             tx.device = static_cast<std::uint32_t>(i);
             tx.sf = d.spreading_factor;
+            tx.msg = static_cast<std::uint32_t>(msg_base + k);
             txs.push_back(tx);
             prev_end = tx.end;
             ++per_device[i].sent;
@@ -911,6 +914,7 @@ SimStatus simulate_uplinks_multi_downlinks(
             totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
             max_airtime = std::max(max_airtime, airtime[i]);
         }
+        msg_base += d.messages;
     }
     std::stable_sort(txs.begin(), txs.end(), [](const Tx& a, const Tx& b) {
         if (a.start != b.start) return a.start < b.start;
@@ -979,12 +983,18 @@ SimStatus simulate_uplinks_multi_downlinks(
         const Tx& ta = txs[a];
         SimTime air = 0;
         if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
+        // Départ au plus tôt : arrivée de la descente à la passerelle (retour mesh). Absent : t_open.
+        const SimTime ready = dl_ready_ns != nullptr ? dl_ready_ns[ta.msg] : -1;
+        if (ready == kDownlinkNever) {
+            dl.outcome = DownlinkOutcome::GatewayBusy;  // jamais acheminée (perdue sur le mesh)
+            return SimStatus::Ok;
+        }
         if (next_start[a] >= 0 && next_start[a] < dl.t_open_ns + kRx1WindowNs) {
             dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX1
             return SimStatus::Ok;
         }
         const std::size_t g = dl.gateway;
-        const SimTime start = first_free(busy[g], dl.t_open_ns, air);
+        const SimTime start = first_free(busy[g], std::max(dl.t_open_ns, ready), air);
         if (start - dl.t_open_ns >= kRx1WindowNs) {
             dl.outcome = DownlinkOutcome::GatewayBusy;  // la passerelle ne peut plus émettre à temps
             return SimStatus::Ok;

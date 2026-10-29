@@ -509,7 +509,10 @@ LSIM_API int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, 
                                                 lsim_multi_tx_record* records,
                                                 size_t record_capacity, size_t* record_count,
                                                 lsim_downlink_record* downlinks,
-                                                size_t downlink_capacity, size_t* downlink_count);
+                                                size_t downlink_capacity, size_t* downlink_count,
+                                                const int64_t* dl_ready_ns, size_t ready_count);
+/* dl_ready_ns (NULL : aucun) : départ au plus tôt de la descente de chaque émission (ordre :
+   dispositifs puis k), -1 aucune contrainte, INT64_MAX jamais ; ready_count = somme des messages. */
 
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).

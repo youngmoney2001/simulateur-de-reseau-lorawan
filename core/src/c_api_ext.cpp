@@ -1038,7 +1038,8 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
                                        lsim_gateway_rx_stats* per_gateway,
                                        lsim_multi_tx_record* records, size_t record_capacity,
                                        size_t* record_count, lsim_downlink_record* downlinks,
-                                       size_t downlink_capacity, size_t* downlink_count) {
+                                       size_t downlink_capacity, size_t* downlink_count,
+                                       const int64_t* dl_ready_ns, size_t ready_count) {
     if (gateways == nullptr || prop == nullptr || rule == nullptr || totals == nullptr ||
         per_gateway == nullptr || record_count == nullptr || downlink_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
@@ -1105,9 +1106,14 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
         lsim::sim::NetworkStats tot;
         std::vector<lsim::sim::MultiTx> trace;
         std::vector<lsim::sim::MultiDownlink> dls;
+        size_t total_messages = 0;
+        for (const auto& s : specs) total_messages += s.messages;
+        if (dl_ready_ns != nullptr && ready_count != total_messages) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+        }
         const auto st = lsim::sim::simulate_uplinks_multi_downlinks(
             specs.data(), device_count, gws.data(), gateway_count, p, r, stats.data(), tot,
-            gstats.data(), env != nullptr ? &e : nullptr, &trace, &dls);
+            gstats.data(), env != nullptr ? &e : nullptr, &trace, &dls, dl_ready_ns);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }

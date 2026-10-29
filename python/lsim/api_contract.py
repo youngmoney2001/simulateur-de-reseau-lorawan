@@ -38,10 +38,10 @@ ProblemCode = Literal[
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
-    "lost_sensitivity", "lost_collision", "rx_window_missed", "mesh_hop",
+    "lost_sensitivity", "lost_collision", "rx_window_missed", "mesh_hop", "mesh_downlink_hop",
 ]
 HopOutcome = Literal["delivered", "lost_sensitivity", "lost_collision", "lost_half_duplex",
-                     "not_listened", "sent", "suppressed"]
+                     "not_listened", "sent", "suppressed", "lost_mesh"]
 
 
 class _Strict(BaseModel):
@@ -162,6 +162,14 @@ class GatewayReportOut(_Strict):
     busy_ns: int = Field(ge=0)
     peak_concurrent: int = Field(ge=0)
     observation_ns: int = Field(ge=0)
+    # Mesh seulement (absents sinon) : émissions de la passerelle sur la bande mesh, uplinks et
+    # descentes. Les pertes sont comptées sur l'émetteur ; les passes uplink et descente ne
+    # partagent pas le temps d'antenne (voir docs/API_CONTRACT.md).
+    mesh_transmissions: Optional[int] = Field(default=None, ge=0)
+    mesh_busy_ns: Optional[int] = Field(default=None, ge=0)
+    mesh_lost_collision: Optional[int] = Field(default=None, ge=0)
+    mesh_lost_half_duplex: Optional[int] = Field(default=None, ge=0)
+    mesh_suppressed: Optional[int] = Field(default=None, ge=0)
 
 
 class RunSummary(_Strict):

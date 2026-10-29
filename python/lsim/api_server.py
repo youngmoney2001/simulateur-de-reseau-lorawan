@@ -11,7 +11,8 @@ construction, et le serveur vérifie la somme des compteurs par dispositif avant
 
 Périmètre : mono et multi-passerelles, environnement à obstacles et relief. Relief : identifiant
 `terrain_id` résolu dans le catalogue serveur (`--terrain-catalog`, fichiers `<id>.csv`) ; le client
-ne fournit jamais de chemin. Mesh : trace par saut (`mesh_hop`), uplinks seulement ; join, ACK et downlink refusés en mesh.
+ne fournit jamais de chemin. Mesh : trace par saut (`mesh_hop` montant, `mesh_downlink_hop` descendant) ; join, ACK et downlink
+acheminés sur le mesh vers les relais ; charge mesh par passerelle (`gateways`).
 
 L'énergie suit la trace : airtime des descendantes reçues par dispositif (mono et multi).
 
@@ -341,14 +342,14 @@ class _Job:
     multi: bool
 
 
-def _check_request(req: RunCreate) -> None:
-    model = req.scenario
-    if model.mesh is not None:
-        p = req.protocol
-        if p.join or p.confirmed_uplinks or p.downlink_every:
-            raise ApiError(422, "validation_error",
-                           "mesh : join, ACK et downlink non modélisés sur le mesh "
-                           "(voir docs/API_CONTRACT.md)")
+def _mesh_report_fields(load) -> dict[str, Any]:
+    """Champs mesh d'une passerelle (absents hors mesh)."""
+    if load is None:
+        return {}
+    return {"mesh_transmissions": load.transmissions, "mesh_busy_ns": load.busy_ns,
+            "mesh_lost_collision": load.lost_collision,
+            "mesh_lost_half_duplex": load.lost_half_duplex,
+            "mesh_suppressed": load.suppressed}
 
 
 class TerrainCatalog:
@@ -469,7 +470,6 @@ class RunService:
             req = RunCreate.model_validate(body)
         except ValidationError as exc:
             raise _validation_error(exc) from None
-        _check_request(req)
         scenario = _scenario_for(req.scenario, req.terrain_id, self.terrains)
         job = _Job(scenario=scenario, options=ProtocolOptions(**req.protocol.model_dump()),
                    energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
@@ -610,14 +610,16 @@ class RunService:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
             mesh_lost_total, mesh_lost_by_device = mt.lost_mesh, mt.lost_mesh_by_device
+            loads = mt.mesh_loads if mt.mesh_loads is not None else [None] * len(mt.gateway_names)
             gateway_load, gateways = None, [
                 GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
                                  lost_collision=g.lost_collision,
                                  lost_gateway_busy=g.lost_gateway_busy,
                                  audible_frames=g.audible_frames, busy_ns=g.busy_ns,
                                  peak_concurrent=g.peak_concurrent,
-                                 observation_ns=g.observation_ns).model_dump()
-                for name, g in zip(mt.gateway_names, mt.per_gateway)]
+                                 observation_ns=g.observation_ns,
+                                 **_mesh_report_fields(ml)).model_dump(exclude_none=True)
+                for name, g, ml in zip(mt.gateway_names, mt.per_gateway, loads)]
         else:
             tr = build_trace(scenario, job.options)
             totals, per_device, events = tr.totals, tr.per_device, tr.events
@@ -854,7 +856,6 @@ class _Handler(BaseHTTPRequestHandler):
                 Problem(code=err.code, message=err.message, field=err.field),
             ]).model_dump(exclude_none=True)
         try:
-            _check_request(RunCreate(scenario=req.scenario, terrain_id=req.terrain_id))
             scenario = _scenario_for(req.scenario, req.terrain_id,
                                      self.server.service.terrains)  # type: ignore[attr-defined]
         except (ApiError, ValueError) as exc:

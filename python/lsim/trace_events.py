@@ -44,7 +44,7 @@ from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
-from lsim.mesh_pass import mesh_pass
+from lsim.mesh_pass import mesh_downlink_routes, mesh_pass
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
     Counters,
@@ -442,13 +442,36 @@ _MULTI_DOWNLINK_OUTCOME = {0: "delivered", 1: "lost_sensitivity", 2: "gateway_bu
                            3: "device_transmitting"}
 
 
+# Retour mesh : bornes de la boucle à point fixe (ordonnancement des descentes ↔ trace).
+MAX_MESH_RETURN_ITERATIONS = 64
+# Départ au plus tôt d'une descente qui n'est pas acheminée (sentinelle natif : jamais).
+MESH_NEVER_NS = (1 << 63) - 1
+
+
+@dataclass(frozen=True)
+class MeshLoad:
+    """Charge mesh d'une passerelle relais : ses émissions (uplink et descente) sur la bande 2,4 GHz.
+
+    `transmissions` : sauts émis ; `busy_ns` : somme de leur durée ; `lost_collision` et
+    `lost_half_duplex` : ses émissions perdues à la réception ; `suppressed` : copies abandonnées
+    (doublon déjà relayé). Les passes uplink et descente ne partagent pas le temps d'antenne.
+    """
+
+    transmissions: int = 0
+    busy_ns: int = 0
+    lost_collision: int = 0
+    lost_half_duplex: int = 0
+    suppressed: int = 0
+
+
 @dataclass(frozen=True)
 class MultiTraceRun:
     """Trace multi-passerelles : totaux et charges issus du même calcul natif que les événements.
 
     Mesh : `totals.received` et `per_device[i].received` sont les trames remises au LNS (après
     relais) ; `lost_mesh` (et `lost_mesh_by_device`) compte les trames décodées puis perdues sur le
-    mesh. Hors mesh : `lost_mesh` et `lost_mesh_by_device` valent None.
+    mesh. Hors mesh : `lost_mesh`, `lost_mesh_by_device` et `mesh_loads` valent None. Avec mesh,
+    `mesh_loads` vaut None pour chaque passerelle sans mesh.
     """
 
     per_device: tuple[Counters, ...]
@@ -458,10 +481,121 @@ class MultiTraceRun:
     events: tuple[ProtocolEvent, ...]
     lost_mesh: Optional[int] = None
     lost_mesh_by_device: Optional[tuple[int, ...]] = None
+    mesh_loads: Optional[tuple[Optional[MeshLoad], ...]] = None  # `gateway_names` ; None sans mesh
 
 
 def _finite_or_none(x: float) -> Optional[float]:
     return float(x) if x == x and abs(x) != float("inf") else None
+
+
+def _message_index(devices, trace) -> tuple[list[int], dict[tuple[int, int], int]]:
+    """Indice d'émission (ordre du moteur : dispositifs dans l'ordre, puis k) de chaque
+    enregistrement de trace, et index (dispositif, fin) -> enregistrement."""
+    offsets, acc = [], 0
+    for d in devices:
+        offsets.append(acc)
+        acc += d.messages
+    if len(trace) != acc:
+        raise RuntimeError("trace : nombre d'émissions incohérent")
+    rank = [0] * len(devices)
+    msg_of = [0] * len(trace)
+    rec_by_end: dict[tuple[int, int], int] = {}
+    for i in sorted(range(len(trace)), key=lambda i: (trace[i].device_index, trace[i].start_ns)):
+        d = trace[i].device_index
+        msg_of[i] = offsets[d] + rank[d]
+        rank[d] += 1
+        rec_by_end[(d, trace[i].end_ns)] = i
+    return msg_of, rec_by_end
+
+
+@dataclass(frozen=True)
+class _MeshReturn:
+    ready: list                # départ au plus tôt par émission (natif : -1 ou instant ; NEVER)
+    status: dict               # descente (indice) -> "mesh" | "lost_mesh" | "uplink_lost"
+    arrival: dict              # descente (indice) -> arrivée au relais (si "mesh")
+    t_border: dict             # descente (indice) -> départ à la frontière
+    routes: dict               # descente (indice) -> MeshDownlinkRoute
+
+
+def _downlink_phy_bytes(dl, options: ProtocolOptions) -> int:
+    if dl.join:
+        return JOIN_ACCEPT_BYTES
+    if dl.data:
+        return DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes
+    return ACK_FRAME_BYTES
+
+
+def _mesh_return(scenario: Scenario, models, options: ProtocolOptions, result, mesh,
+                 msg_of: list[int], rec_by_end: dict) -> _MeshReturn:
+    """Descentes vers les relais, acheminées sur le mesh depuis la frontière.
+
+    Une descente part de la frontière à l'instant où l'uplink qui la provoque y arrive (fin si
+    décodé par la frontière ou une passerelle directe, fin + latence mesh sinon). Une descente
+    dont l'uplink n'atteint pas le LNS n'est pas émise. Les descentes vers la frontière et vers les
+    passerelles directes ne passent pas par le mesh (absentes du plan).
+    """
+    border = scenario.model.mesh.border
+    relays = {g.name for g in models if g.mesh and g.name != border}
+    best_latency: dict[int, int] = {}
+    for dv in mesh.mesh_result.deliveries:
+        if dv.delivered and dv.latency_ns is not None:
+            best_latency[dv.frame_id] = min(dv.latency_ns, best_latency.get(dv.frame_id, dv.latency_ns))
+    names = [g.name for g in models]
+    ready = [-1] * len(msg_of)
+    status: dict = {}
+    t_border: dict = {}
+    requests = []
+    msg_dl: dict = {}
+    for j, dl in enumerate(result.downlinks):
+        name = names[dl.gateway_index]
+        if name not in relays:
+            continue
+        delay = JOIN_ACCEPT_DELAY1_NS if dl.join else RECEIVE_DELAY1_NS
+        i = rec_by_end.get((dl.device_index, dl.t_open_ns - delay))
+        if i is None:
+            raise RuntimeError("retour mesh : émission d'origine introuvable")
+        msg_dl[j] = msg_of[i]
+        if i not in mesh.delivered_frames:
+            status[j] = "uplink_lost"
+            ready[msg_of[i]] = MESH_NEVER_NS
+            continue
+        t0 = result.trace[i].end_ns + (0 if i in mesh.direct_frames else best_latency.get(i, 0))
+        t_border[j] = t0
+        requests.append((j, name, t0, _downlink_phy_bytes(dl, options)))
+    routes = mesh_downlink_routes(scenario, models,
+                                  [(j, name, t0, phy) for j, name, t0, phy in requests])
+    arrival: dict = {}
+    for j, _name, _t0, _phy in requests:
+        route = routes[j]
+        if route.delivered:
+            status[j] = "mesh"
+            arrival[j] = route.arrival_ns
+            ready[msg_dl[j]] = route.arrival_ns
+        else:
+            status[j] = "lost_mesh"
+            ready[msg_dl[j]] = MESH_NEVER_NS
+    return _MeshReturn(ready=ready, status=status, arrival=arrival, t_border=t_border, routes=routes)
+
+
+def _mesh_loads(models, mesh, plan: "_MeshReturn") -> tuple[Optional[MeshLoad], ...]:
+    """Charge mesh par passerelle (émetteur = passerelle) : sauts montants et descendants.
+    None pour une passerelle sans mesh."""
+    counts = {g.name: [0, 0, 0, 0, 0] for g in models if g.mesh}  # tx, busy, coll, hd, suppr
+    hops = list(mesh.mesh_result.hops)
+    for route in plan.routes.values():
+        hops.extend(route.hops)
+    for h in hops:
+        c = counts[h.sender_id]
+        if h.outcome == "suppressed":
+            c[4] += 1
+            continue
+        c[0] += 1
+        c[1] += h.t_end_ns - h.t_start_ns
+        if h.outcome == "lost_collision":
+            c[2] += 1
+        elif h.outcome == "lost_half_duplex":
+            c[3] += 1
+    return tuple(MeshLoad(*counts[g.name]) if g.mesh else None for g in models)
 
 
 def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
@@ -474,9 +608,13 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
 
     Mesh (`scenario.model.mesh`) : la passe mesh (`mesh_pass`, la même que `run_scenario`) relaie
     chaque copie vers la frontière. Un événement `mesh_hop` par émission mesh (ou copie supprimée),
-    à l'instant d'émission. Une trame décodée mais non remise est une perte `lost_mesh` (issue
-    `lost_mesh` de la trame). Les descentes (join, ACK, downlink) ne sont pas modélisées sur le mesh :
-    elles sont refusées.
+    à l'instant d'émission. Une trame décodée mais non remise est une perte `lost_mesh`.
+    Descentes vers un relais : acheminées depuis la frontière sur le mesh (un événement
+    `mesh_downlink_hop` par saut descendant) ; elles partent au plus tôt à leur arrivée au relais.
+    Perdue sur le mesh : outcome `lost_mesh`. Arrivée après la fenêtre RX1 : `mesh_late`. Une
+    descente d'un uplink non remis au LNS n'est pas émise. Ces descentes occupent la passerelle
+    relais comme les autres. Boucle à point fixe (descentes ↔ trace), bornée par
+    `MAX_MESH_RETURN_ITERATIONS`.
 
     Les totaux, les compteurs par dispositif et la charge par passerelle viennent du même appel natif
     (`simulate_multi_downlinks`) que les événements : ils concordent par construction.
@@ -494,19 +632,30 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                         device_antenna_gain_dbi=options.device_antenna_gain_dbi,
                         device_rx_offset_db=options.device_rx_offset_db,
                         join=options.join)
-    if scenario.model.mesh is not None and (options.join or options.confirmed_uplinks
-                                            or options.downlink_every):
-        raise ValueError("mesh : join, ACK et downlink non modélisés sur le mesh")
-    result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
-                                      scenario.environment)
     mesh = None
-    delivered: frozenset = frozenset()
-    if scenario.model.mesh is not None:
-        mesh = mesh_pass(scenario, devices, models, result.trace, with_hops=True)
-        delivered = mesh.delivered_frames
-        decoded = {i for i, r in enumerate(result.trace) if r.outcome == 2}
-        if not delivered <= decoded:
-            raise RuntimeError("mesh : trame remise sans avoir été décodée (incohérent)")
+    plan: Optional[_MeshReturn] = None
+    if scenario.model.mesh is None:
+        result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
+                                          scenario.environment)
+    else:
+        total = sum(d.messages for d in devices)
+        ready: Optional[list] = [-1] * total
+        for _ in range(MAX_MESH_RETURN_ITERATIONS):
+            result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
+                                              scenario.environment, dl_ready_ns=ready)
+            msg_of, rec_by_end = _message_index(devices, result.trace)
+            mesh = mesh_pass(scenario, devices, models, result.trace, with_hops=True)
+            decoded = {i for i, r in enumerate(result.trace) if r.outcome == 2}
+            if not mesh.delivered_frames <= decoded:
+                raise RuntimeError("mesh : trame remise sans avoir été décodée (incohérent)")
+            plan = _mesh_return(scenario, models, options, result, mesh, msg_of, rec_by_end)
+            if plan.ready == ready:
+                break
+            ready = plan.ready
+        else:
+            raise RuntimeError("retour mesh : pas de point fixe après "
+                               f"{MAX_MESH_RETURN_ITERATIONS} itérations")
+    delivered: frozenset = mesh.delivered_frames if mesh is not None else frozenset()
     pending: list[tuple[int, int, str, int, int, tuple[HopEvent, ...], str]] = []
 
     def add(t: int, kind: str, device: int, gw: int, hops: list[HopEvent], outcome: str) -> None:
@@ -538,8 +687,15 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                            None, None, _MESH_HOP_OUTCOME[h.outcome])
             add(h.t_start_ns, "mesh_hop", d, idx_of[h.sender_id], [hop],
                 _MESH_HOP_OUTCOME[h.outcome])
+        for j, route in plan.routes.items():
+            dl = result.downlinks[j]
+            for h in route.hops:
+                hop = HopEvent(f"gw:{h.sender_id}", f"gw:{h.receiver_id}", h.t_start_ns,
+                               MESH_BAND_HZ, None, None, _MESH_HOP_OUTCOME[h.outcome])
+                add(h.t_start_ns, "mesh_downlink_hop", dl.device_index, idx_of[h.sender_id],
+                    [hop], _MESH_HOP_OUTCOME[h.outcome])
 
-    for dl in result.downlinks:
+    for j, dl in enumerate(result.downlinks):
         d, g = dl.device_index, dl.gateway_index
         radio = radios[d]
         gw_id = f"gw:{names[g]}"
@@ -547,9 +703,19 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
             kind = "join_accept"
         else:
             kind = "downlink" if dl.data else "ack"
+        st = plan.status.get(j) if plan is not None else None
+        if st == "uplink_lost":
+            continue  # pas d'uplink au LNS : pas de descente
+        if st == "lost_mesh":
+            t0 = plan.t_border[j]
+            hop = HopEvent("ns", gw_id, t0, radio.rx1_hz, None, None, "lost_mesh")
+            add(t0, kind, d, g, [hop], "lost_mesh")
+            continue
+        late = (st == "mesh" and dl.outcome == 2 and plan.arrival[j] > dl.t_open_ns + RECEIVE_DELAY1_NS)
         if dl.outcome in (2, 3):
             hop = HopEvent(gw_id, _dev(d), dl.t_open_ns, radio.rx1_hz, None, None, "not_listened")
-            add(dl.t_open_ns, "rx_window_missed", d, g, [hop], _MULTI_DOWNLINK_OUTCOME[dl.outcome])
+            outcome = "mesh_late" if late else _MULTI_DOWNLINK_OUTCOME[dl.outcome]
+            add(dl.t_open_ns, "rx_window_missed", d, g, [hop], outcome)
             continue
         start = dl.start_ns
         ok = dl.outcome == 0
@@ -601,7 +767,12 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
     return MultiTraceRun(per_device=tuple(per_device), totals=totals,
                          per_gateway=result.per_gateway, gateway_names=names, events=events,
                          lost_mesh=net.received - received,
-                         lost_mesh_by_device=tuple(lost_by_device))
+                         lost_mesh_by_device=tuple(lost_by_device),
+                         mesh_loads=_mesh_loads(models, mesh, plan))
+
+
+# Descentes reçues par le dispositif (ce qui consomme sa réception).
+_DELIVERED_DOWNLINK_OUTCOMES = frozenset({"delivered", "data", "data_ack", "ack_only"})
 
 
 def downlink_airtime_by_device(scenario: Scenario, events: Sequence[ProtocolEvent],
@@ -615,7 +786,8 @@ def downlink_airtime_by_device(scenario: Scenario, events: Sequence[ProtocolEven
     radios = device_radios(scenario)
     total = [0] * len(radios)
     for ev in events:
-        if ev.outcome == "lost_sensitivity" or ev.kind not in ("join_accept", "downlink", "ack"):
+        if ev.outcome not in _DELIVERED_DOWNLINK_OUTCOMES or ev.kind not in (
+                "join_accept", "downlink", "ack"):
             continue
         if ev.kind == "join_accept":
             nbytes = JOIN_ACCEPT_BYTES

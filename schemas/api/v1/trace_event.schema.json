@@ -36,7 +36,8 @@
             "lost_half_duplex",
             "not_listened",
             "sent",
-            "suppressed"
+            "suppressed",
+            "lost_mesh"
           ],
           "title": "Outcome",
           "type": "string"
@@ -106,7 +107,8 @@
         "lost_sensitivity",
         "lost_collision",
         "rx_window_missed",
-        "mesh_hop"
+        "mesh_hop",
+        "mesh_downlink_hop"
       ],
       "title": "Kind",
       "type": "string"

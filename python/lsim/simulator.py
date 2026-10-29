@@ -588,13 +588,21 @@ class MultiDownlinkResult:
     downlinks: tuple[DownlinkRecord, ...]
 
 
+DL_READY_NEVER = (1 << 63) - 1  # INT64_MAX côté natif : descente jamais acheminée
+
+
 def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Gateway],
                              propagation: Propagation, rule: DownlinkRule,
-                             environment: Optional[Environment] = None) -> MultiDownlinkResult:
+                             environment: Optional[Environment] = None,
+                             dl_ready_ns: Optional[Sequence[int]] = None) -> MultiDownlinkResult:
     """Passerelles multiples avec downlinks et demi-duplex par passerelle (calcul exact, C++).
 
     Chaque uplink décodé est acquitté ou reçoit une charge par la meilleure passerelle décodeuse.
     Chaque passerelle sérialise ses downlinks ; elle ne décode pas pendant les siens.
+
+    `dl_ready_ns` (optionnel) : départ au plus tôt de la descente de chaque émission, dans l'ordre
+    des émissions (dispositifs dans l'ordre, puis k) ; -1 aucune contrainte ; `DL_READY_NEVER`
+    descente jamais acheminée. Longueur : nombre total d'émissions.
     """
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
@@ -631,11 +639,18 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     else:
         c_env_struct, keep = _c_environment(environment)
         c_env_ref = ctypes.byref(c_env_struct)
+    if dl_ready_ns is not None and len(dl_ready_ns) != total_messages:
+        raise ValueError("dl_ready_ns : une valeur par émission")
+    if dl_ready_ns is None:
+        c_ready, ready_ptr, ready_count = None, None, 0
+    else:
+        c_ready = (ctypes.c_int64 * max(total_messages, 1))(*dl_ready_ns)
+        ready_ptr, ready_count = c_ready, total_messages
     status = LIB.lsim_simulate_uplinks_multi_dl(
         c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), ctypes.byref(c_rule),
         c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
         c_records, total_messages, ctypes.byref(c_record_count),
-        c_dls, total_messages, ctypes.byref(c_dl_count))
+        c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
     del keep
     if status != 0:
         raise StatusError(status)

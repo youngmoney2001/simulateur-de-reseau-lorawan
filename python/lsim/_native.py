@@ -575,7 +575,8 @@ LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDownlinkRule), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
     ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
-    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t]
 LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
 LIB.lsim_env_path_loss_matrix.argtypes = [
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,

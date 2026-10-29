@@ -63,6 +63,71 @@
           "title": "Lost Sensitivity",
           "type": "integer"
         },
+        "mesh_busy_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Busy Ns"
+        },
+        "mesh_lost_collision": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Lost Collision"
+        },
+        "mesh_lost_half_duplex": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Lost Half Duplex"
+        },
+        "mesh_suppressed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Suppressed"
+        },
+        "mesh_transmissions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Transmissions"
+        },
         "name": {
           "maxLength": 64,
           "title": "Name",

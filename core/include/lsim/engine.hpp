@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "lsim/downlink.hpp"
@@ -310,11 +311,18 @@ struct MultiDownlink {
     DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;
 };
 
+// `dl_ready_ns` (optionnel) : départ au plus tôt de la descente de chaque émission, indexé comme
+// les émissions (dispositifs dans l'ordre, puis k) ; -1 : aucune contrainte (ouverture RX1) ;
+// kDownlinkNever : jamais acheminée (retour mesh perdu). Une descente qui ne peut partir dans
+// sa fenêtre RX1 après ce départ est perdue (GatewayBusy). Taille : somme des `messages`.
+inline constexpr SimTime kDownlinkNever = std::numeric_limits<SimTime>::max();
+
 LSIM_API SimStatus simulate_uplinks_multi_downlinks(
     const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
     std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
     DeviceStats* per_device, NetworkStats& totals, GatewayRxStats* per_gateway,
     const env::Environment* environment = nullptr, std::vector<MultiTx>* trace = nullptr,
-    std::vector<MultiDownlink>* downlinks = nullptr);
+    std::vector<MultiDownlink>* downlinks = nullptr,
+    const SimTime* dl_ready_ns = nullptr);
 
 }  // namespace lsim::sim

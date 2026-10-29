@@ -6,7 +6,7 @@ import pytest
 
 from lsim.export import run_scenario
 from lsim.scenario import load_scenario
-from lsim.trace_events import ProtocolOptions, build_multi_trace
+from lsim.trace_events import MultiTraceRun, ProtocolOptions, build_multi_trace
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "mesh_relais_quartier.yaml"
 
@@ -91,8 +91,92 @@ def test_mesh_events_are_time_ordered(trace):
     assert times == sorted(times)
 
 
-def test_mesh_refuses_downlink_protocol_options(small):
-    for opts in (ProtocolOptions(confirmed_uplinks=True), ProtocolOptions(downlink_every=1),
-                 ProtocolOptions(join=True)):
-        with pytest.raises(ValueError, match="mesh"):
-            build_multi_trace(small, opts)
+DOWNLINK_OPTIONS = (ProtocolOptions(confirmed_uplinks=True), ProtocolOptions(downlink_every=1),
+                    ProtocolOptions(join=True))
+
+
+@pytest.mark.parametrize("opts", DOWNLINK_OPTIONS)
+def test_mesh_downlinks_are_traced_by_hop(small, opts):
+    trace = build_multi_trace(small, opts)
+    down_hops = [e for e in trace.events if e.kind == "mesh_downlink_hop"]
+    assert down_hops, "aucun saut descendant : la passe retour n'a rien acheminé"
+    assert all(h.outcome in ("delivered", "lost_collision", "lost_half_duplex", "suppressed")
+               for e in down_hops for h in e.hops)
+    # Une descente mesh-servie ne part pas avant son arrivée au relais (dernier saut descendant).
+    starts = [e for e in trace.events if e.kind in ("ack", "downlink", "join_accept")
+              and e.outcome not in ("lost_mesh", "lost_sensitivity")]
+    assert starts
+
+
+@pytest.mark.parametrize("opts", DOWNLINK_OPTIONS)
+def test_mesh_loads_match_the_hop_log(small, opts):
+    trace = build_multi_trace(small, opts)
+    assert trace.mesh_loads is not None and len(trace.mesh_loads) == len(trace.gateway_names)
+    assert trace.mesh_loads[trace.gateway_names.index("ip-ouest")] is None
+    hop_kinds = ("mesh_hop", "mesh_downlink_hop")
+    logged = [h for e in trace.events if e.kind in hop_kinds for h in e.hops]
+    loads = [m for m in trace.mesh_loads if m is not None]
+    assert len(loads) == len(trace.gateway_names) - 1  # tout sauf la passerelle IP (sans mesh)
+    tx = sum(m.transmissions for m in loads)
+    assert tx == sum(1 for h in logged if h.outcome != "suppressed")
+    assert sum(m.suppressed for m in loads) == sum(
+        1 for h in logged if h.outcome == "suppressed")
+    assert sum(m.lost_collision for m in loads) == sum(
+        1 for h in logged if h.outcome == "lost_collision")
+    assert sum(m.lost_half_duplex for m in loads) == sum(
+        1 for h in logged if h.outcome == "lost_half_duplex")
+    assert all(m.busy_ns >= 0 for m in loads)
+
+
+def test_mesh_fixed_point_is_deterministic(small):
+    a = build_multi_trace(small, ProtocolOptions(confirmed_uplinks=True, downlink_every=1))
+    b = build_multi_trace(small, ProtocolOptions(confirmed_uplinks=True, downlink_every=1))
+    assert a.events == b.events and a.mesh_loads == b.mesh_loads
+
+
+def test_mono_trace_has_no_mesh_loads():
+    """Hors mesh, la charge mesh est absente (None) : invariant de contrat."""
+    assert MultiTraceRun.__dataclass_fields__["mesh_loads"].default is None
+
+
+def test_lost_downlink_on_mesh_is_traced_and_costs_no_airtime(small, monkeypatch):
+    """Descente perdue sur le mesh : issue `lost_mesh`, hors comptage d'airtime de réception."""
+    import lsim.trace_events as te
+    from lsim.mesh_pass import MeshDownlinkRoute
+
+    real_routes = te.mesh_downlink_routes
+
+    def all_lost(scenario, models, requests):
+        out = real_routes(scenario, models, requests)
+        return {k: MeshDownlinkRoute(False, None, "collision", v.hops) for k, v in out.items()}
+
+    monkeypatch.setattr(te, "mesh_downlink_routes", all_lost)
+    opts = ProtocolOptions(confirmed_uplinks=True, downlink_every=1)
+    trace = build_multi_trace(small, opts)
+    lost = [e for e in trace.events if e.outcome == "lost_mesh" and e.kind in ("ack", "downlink")]
+    assert lost, "aucune descente perdue sur le mesh"
+    assert all(len(e.hops) == 1 and e.hops[0].from_id == "ns" for e in lost)
+    # Les sauts du trajet restent au journal : la descente a bien été émise sur le mesh.
+    assert any(e.kind == "mesh_downlink_hop" for e in trace.events)
+    kept = tuple(e for e in trace.events if e.outcome != "lost_mesh")
+    assert te.downlink_airtime_by_device(small, trace.events, opts) == \
+        te.downlink_airtime_by_device(small, kept, opts)
+
+
+def test_engine_ready_minus_one_is_identical_and_never_blocks_all(small):
+    """Moteur : départ « -1 » = aucune contrainte (résultat identique à l'absence de tableau) ;
+    `DL_READY_NEVER` = aucune descente émise (sentinelle de descente jamais acheminée)."""
+    from lsim.simulator import DL_READY_NEVER, DownlinkRule, simulate_multi_downlinks
+
+    devices, _, _ = small.deploy()
+    total = sum(d.messages for d in devices)
+    rule = DownlinkRule(ack_uplinks=True, every=1, payload_bytes=10)
+    args = (devices, small.gateways(), small.propagation(), rule, small.environment)
+    base = simulate_multi_downlinks(*args)
+    same = simulate_multi_downlinks(*args, dl_ready_ns=[-1] * total)
+    assert base.downlinks == same.downlinks and base.network == same.network
+    assert base.per_device == same.per_device
+    never = simulate_multi_downlinks(*args, dl_ready_ns=[DL_READY_NEVER] * total)
+    assert never.downlinks and all(d.start_ns == -1 for d in never.downlinks)
+    with pytest.raises(ValueError):
+        simulate_multi_downlinks(*args, dl_ready_ns=[-1] * (total - 1))

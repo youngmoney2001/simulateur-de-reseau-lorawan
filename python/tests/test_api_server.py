@@ -189,12 +189,21 @@ def test_mesh_without_profile_is_refused_by_the_scenario_rules(api):
     assert status == 422 and "mesh" in body["message"]
 
 
-def test_mesh_downlink_options_are_refused_explicitly(api):
+def test_mesh_downlink_options_are_accepted_and_reported_per_relay(api):
     d = _mesh_scenario()
     for protocol in ({"confirmed_uplinks": True}, {"downlink_every": 1}, {"join": True}):
-        status, body = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": protocol})
-        assert status == 422 and body["code"] == "validation_error", protocol
-        assert "mesh" in body["message"]
+        status, created = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": protocol})
+        assert status == 202, protocol
+        rid = created["run_id"]
+        assert _wait_done(api, rid)["state"] == "done", protocol
+        _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+        RunSummary.model_validate(summary)
+        gws = {g["name"]: g for g in summary["gateways"]}
+        # Relais et frontière : champs mesh présents ; passerelle sans mesh absente.
+        assert "mesh_transmissions" in gws["frontiere"] and "mesh_transmissions" in gws["relais"]
+        assert "mesh_transmissions" not in gws["ip"]  # passerelle sans mesh : champs absents
+        assert sum(g["mesh_transmissions"] for g in gws.values()
+                   if "mesh_transmissions" in g) > 0
 
 
 def _mesh_scenario(count=40):

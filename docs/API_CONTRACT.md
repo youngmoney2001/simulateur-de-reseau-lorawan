@@ -68,9 +68,17 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   `lost_collision`, `rx_window_missed`, `mesh_hop` (mesh seulement : une émission d'un relais vers
   son saut prévu, à l'instant d'émission ; `device_index` est le dispositif d'origine de la trame,
   `gateway_index` le relais émetteur ; `outcome` : `delivered`, `lost_collision`, `lost_half_duplex`
-  ou `suppressed` pour une copie abandonnée sans émission).
+  ou `suppressed` pour une copie abandonnée sans émission), `mesh_downlink_hop` (mesh seulement : un
+  saut descendant, de la frontière vers un relais ; `device_index` est le dispositif destinataire,
+  `gateway_index` le relais émetteur du saut ; mêmes issues que `mesh_hop`).
 - Issue `lost_mesh` d'un `uplink` (mesh seulement) : trame décodée par une passerelle, non remise au
   LNS par le mesh (aucune copie n'a atteint la frontière).
+- Issue `lost_mesh` d'une descente (`ack`, `downlink`, `join_accept`, mesh seulement) : la descente
+  n'a pas atteint le relais cible ; son unique saut `hops` va de `ns` au relais, issue `lost_mesh`.
+- Issue `mesh_late` d'une `rx_window_missed` (mesh seulement) : la descente est arrivée au relais
+  après la fin de la fenêtre RX1 du dispositif. Sans le retard mesh, la même situation donnerait
+  `gateway_busy`.
+  Une descente dont l'uplink n'a pas été remis au LNS n'est pas émise : aucun événement.
 - `hops` (au plus 8) : une entrée par saut (`from_id`, `to_id`, `t_ns`, `freq_hz`, `dr`,
   `rssi_dbm`, `outcome`). Le journal affiche ces sauts dans l'ordre.
 - Ordre : `seq` strictement croissant, `t_ns` non décroissant.
@@ -132,9 +140,16 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   au LNS par le mesh sont comptées en `lost_mesh` (totaux, par dispositif, issue `lost_mesh` d'un
   `uplink`) : `sent = received + lost_sensitivity + lost_collision + lost_gateway_busy + lost_mesh`.
   Les champs `lost_mesh` sont absents hors mesh. Les totaux égalent `run_scenario` (test de
-  concordance). Limites : uplinks seulement. `join`, `confirmed_uplinks` et `downlink_every` sont refusés
-  (`validation_error`) : les descentes ne sont pas modélisées sur le mesh. Les compteurs `gateways`
-  sont ceux du décodage à l'accès (un relais décode comme une passerelle), pas ceux du mesh.
+  concordance). Descentes : `join`, `confirmed_uplinks` et `downlink_every` sont acheminés depuis la
+  frontière vers chaque relais (route mesh à la latence réelle, 15 o d'enveloppe) ; une descente part
+  à l'arrivée de l'uplink à la frontière, et la passerelle relais la sert en RX1 (la même passerelle
+  que pour l'accès, donc même demi-duplex). Le calcul est un point fixe (descentes ↔ trace), borné à
+  8 itérations. Charge mesh : `gateways[].mesh_transmissions`, `mesh_busy_ns`,
+  `mesh_lost_collision`, `mesh_lost_half_duplex`, `mesh_suppressed`, comptés sur le relais émetteur
+  (uplink et descente additionnés). Absents hors mesh. Limites : RX2 non modélisée ; les passes
+  uplink et descente ne partagent pas le temps d'antenne mesh ; les descentes vers des relais
+  différents ne se disputent pas le mesh. Les compteurs `gateways` (reçues, collisions d'accès) sont
+  ceux du décodage à l'accès.
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
   dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel
   et a ajouté `gateways` : c'est une rupture de la règle d'additivité, acceptée pour permettre le multi.
@@ -214,8 +229,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 1. Données MNT réelles : à vérifier avant tout usage d'étude (les exemples sont synthétiques).
 2. ~~Exposer `events`~~ : fait (pagination par `seq`).
 3. ~~Implémenter le serveur~~ : fait (v1). ~~Relief (catalogue)~~ : fait. ~~Énergie avec protocole ou
-   multi~~ : fait. ~~Join en multi-passerelles~~ : fait. ~~Mesh par saut~~ : fait (uplinks ; descentes
-   sur mesh non modélisées, refusées). Reste : modéliser les descentes sur le mesh si besoin.
+   multi~~ : fait. ~~Join en multi-passerelles~~ : fait. ~~Mesh par saut~~ : fait. ~~Descentes et charge
+   par relais sur mesh~~ : faits (voir section 4 et « Relais mesh »).
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)
