@@ -86,7 +86,7 @@ Radio mesh (`interface mesh 0`, passerelles relais et frontière) :
 
 Passerelle (config globale) :
 
-- `lorawan net-id HEX6` ; `lorawan server ADDR port up-PORT down-PORT` (GWMP) ;
+- `lorawan net-id HEX6` ; `lorawan server ADDR up-port N down-port N` (GWMP ; syntaxe retenue : les ports sont nommés, la forme du gabarit « port up-PORT » était ambiguë) ;
 - `lorawan transport udp|basicstation` ; `lorawan location X Y`.
 
 Vérification (`show`) :

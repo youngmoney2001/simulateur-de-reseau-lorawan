@@ -3,6 +3,11 @@
 ## 0.1.0 (non publiée)
 
 
+### CLI d'équipement du panneau d'étude (phase 4, brouillon)
+- `python/lsim/study_cli.py` : grammaire IOS côté serveur (modes utilisateur, privilégié, configuration, interface), abréviations par préfixe, marqueur `^` à la colonne fautive, `?` et Tabulation, `show running-config` n'affichant que les paramètres positionnés (aucun secret n'existe encore ; masquage par construction, `******`).
+- Commandes de vérification (`show mesh neighbors`, `show lorawan counters`, etc.) répondent « aucune simulation » tant qu'aucun résultat n'existe.
+- Syntaxe `lorawan server ADDR up-port N down-port N` retenue (spec §4.2). Tests : `python/tests/test_study_cli.py` (19). Aucune route servie.
+
 ### Restes de la liste mesh : validate, export, tests de service
 - `POST /api/v1/scenarios/validate` accepte un `protocol` optionnel (additif) : la règle de trame mesh y est appliquée comme à la création (problème `validation_error` avec le champ). Schéma `validate_request` régénéré.
 - Export mesh : `MeshSummary.lost_mesh` (trames décodées à l'accès puis perdues sur le mesh). Avant, le total exporté ne s'équilibrait pas (sur `lossy`, 9 trames manquantes) ; désormais sent = received + pertes accès + lost_mesh, égal à la trace. Ajouté au rapport et à la CLI.
