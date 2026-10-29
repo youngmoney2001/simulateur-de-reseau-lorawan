@@ -36,7 +36,7 @@ et compare les octets obtenus aux fichiers publiés.
 |---|---|---|---|
 | GET | `/api/v1/regions` | Plans régionaux (lecture seule) : canaux, débits, RX2, charges N | `RegionList` |
 | GET | `/api/v1/terrains` | Reliefs du catalogue serveur : identifiant et empreinte SHA-256 | `TerrainList` |
-| POST | `/api/v1/scenarios/validate` | Valide un scénario (et `terrain_id` optionnel) sans lancer de calcul | `ValidateResponse` (`valid`, `scenario_sha256`, `problems`) |
+| POST | `/api/v1/scenarios/validate` | Valide un scénario (et `terrain_id` optionnel, `protocol` optionnel pour les règles de trame mesh) sans lancer de calcul | `ValidateResponse` (`valid`, `scenario_sha256`, `problems`) |
 | POST | `/api/v1/runs` | Crée un run (file d'attente), options `protocol`, `energy_profile` et `terrain_id` incluses | 202 + `RunStatus` (`state: queued`) |
 | GET | `/api/v1/runs/{run_id}` | État, avancement, erreur éventuelle | `RunStatus` |
 | GET | `/api/v1/runs/{run_id}/summary` | Totaux, PDR, charge passerelle (run terminé) | `RunSummary`, 409 tant que non terminé |

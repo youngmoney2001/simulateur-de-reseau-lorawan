@@ -64,6 +64,9 @@ class MeshSummary:
     dl_rx2: int = 0      # réponse dans RX2 (+2 s) seulement
     dl_missed: int = 0   # aucune fenêtre : la descente arrive après RX2
     dl_mesh_airtime_ns: int = 0  # temps d'antenne mesh d'un saut de descente (lien mesh)
+    # Décodées à l'accès mais jamais remises au LNS (perdues sur le mesh). Bilan :
+    # sent = received + lost_sensitivity + lost_collision + lost_gateway_busy + lost_mesh.
+    lost_mesh: int = 0
 
     @property
     def lost(self) -> int:
@@ -186,6 +189,7 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
         dl_rx2=mp.dl_counts["rx2"],
         dl_missed=mp.dl_counts["missed"],
         dl_mesh_airtime_ns=mp.mesh_air_ns,
+        lost_mesh=mp.seen_frames - len(d_frames),
     )
     rows = _rows(devices, groups, indices, energies, result.per_device, list(mp.delivered_by_device))
     return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,

@@ -3,6 +3,12 @@
 ## 0.1.0 (non publiée)
 
 
+### Restes de la liste mesh : validate, export, tests de service
+- `POST /api/v1/scenarios/validate` accepte un `protocol` optionnel (additif) : la règle de trame mesh y est appliquée comme à la création (problème `validation_error` avec le champ). Schéma `validate_request` régénéré.
+- Export mesh : `MeshSummary.lost_mesh` (trames décodées à l'accès puis perdues sur le mesh). Avant, le total exporté ne s'équilibrait pas (sur `lossy`, 9 trames manquantes) ; désormais sent = received + pertes accès + lost_mesh, égal à la trace. Ajouté au rapport et à la CLI.
+- TLS : le test vérifie qu'un client sans confiance dans le certificat échoue et qu'un client en clair n'obtient jamais de 200. Redémarrage : déjà testé (runs terminés relus, runs en file marqués `failed`).
+- Étape 3 (`web/`) : non commencée à ce stade (voir la discussion de périmètre).
+
 ### Limites mesh et RX2 corrigées
 - RX2 modélisée (repli) : une descente qui ne peut partir en RX1 (passerelle occupée au-delà de la fenêtre RX1) tente RX2, ouverte 1 s après RX1 (fin + 2 s ; join : +6 s), fenêtre de 1 s, même passerelle, SF `rx2_sf` du plan régional (12 en EU868). `rx2_sf = 0` désactive le repli. Une émission du dispositif pendant RX2 la rend perdue, et la sensibilité reste finale. Fréquence RX2 non modélisée (le repli garde la fréquence RX1).
 - **Changement de résultats par défaut** : des descentes autrefois `GatewayBusy` sont désormais servies en RX2 (`DownlinkRecord.rx_window = 2`, départ entre t_open + 1 s et t_open + 2 s). Champs ajoutés en fin de struct : `lsim_downlink_rule.rx2_sf`, `lsim_downlink_record.rx_window`. La trace API v1 ne porte pas `rx_window` : l'instant de départ le révèle.

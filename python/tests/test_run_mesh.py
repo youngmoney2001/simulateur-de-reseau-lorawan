@@ -288,3 +288,25 @@ def test_shadowing_is_inert_when_border_hears_every_frame():
     for m in outs:
         assert m.via_mesh == 0 and m.direct == m.frames
     assert outs[0].delivered == outs[1].delivered
+
+
+def test_export_balances_with_mesh_losses_and_matches_the_trace(tmp_path):
+    """Trames décodées à l'accès puis perdues sur le mesh : comptées dans `mesh.lost_mesh`, de sorte
+    que sent = received + pertes accès + lost_mesh, et égales à la trace API."""
+    from pathlib import Path
+
+    from lsim.trace_events import ProtocolOptions, build_multi_trace
+
+    text = (Path(__file__).resolve().parents[2] / "examples" / "mesh_relais_quartier.yaml"
+            ).read_text(encoding="utf-8")
+    text = text.replace("  spreading_factor: 9\n  bandwidth_khz", "  spreading_factor: 12\n  bandwidth_khz")
+    path = tmp_path / "lossy.yaml"
+    path.write_text(text, encoding="utf-8")
+    sc = load_scenario(path)
+    run = run_scenario(sc)
+    t = run.totals
+    assert run.mesh is not None and run.mesh.lost_mesh > 0, "le scénario doit perdre des trames mesh"
+    assert t.sent == t.received + t.lost_sensitivity + t.lost_collision + t.lost_gateway_busy \
+        + run.mesh.lost_mesh
+    assert run.mesh.lost_mesh == build_multi_trace(sc, ProtocolOptions()).lost_mesh
+    assert run.mesh.frames == run.mesh.delivered + run.mesh.lost_mesh

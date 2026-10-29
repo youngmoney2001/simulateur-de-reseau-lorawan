@@ -66,11 +66,6 @@ class Problem(_Strict):
     field: Optional[str] = Field(default=None, max_length=200)
 
 
-class ValidateRequest(_Strict):
-    scenario: ApiScenario
-    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
-
-
 class ValidateResponse(_Strict):
     valid: bool
     scenario_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -87,6 +82,13 @@ class ProtocolOptionsIn(_Strict):
     gateway_tx_power_dbm: float = Field(14.0, ge=-10.0, le=27.0)  # downlink, réciprocité
     device_antenna_gain_dbi: float = Field(0.0, ge=-10.0, le=10.0)
     device_rx_offset_db: float = Field(0.0, ge=-30.0, le=40.0)  # écart du récepteur réel
+
+
+class ValidateRequest(_Strict):
+    scenario: ApiScenario
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
+    # Optionnel : sans lui, seules les règles propres au scénario sont vérifiées (charge montante).
+    protocol: Optional[ProtocolOptionsIn] = None
 
 
 class RunCreate(_Strict):

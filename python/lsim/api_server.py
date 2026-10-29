@@ -868,6 +868,13 @@ class _Handler(BaseHTTPRequestHandler):
             msg = exc.message if isinstance(exc, ApiError) else str(exc)
             return ValidateResponse(valid=False, problems=[
                 Problem(code=code, message=msg)]).model_dump(exclude_none=True)
+        if req.protocol is not None:
+            options = ProtocolOptions(**req.protocol.model_dump())
+            problem = mesh_payload_problem(scenario, options)
+            if problem is not None:
+                return ValidateResponse(valid=False, problems=[
+                    Problem(code="validation_error", message=problem[1], field=problem[0])
+                ]).model_dump(exclude_none=True)
         return ValidateResponse(valid=True, scenario_sha256=scenario.sha256).model_dump(
             exclude_none=True)
 

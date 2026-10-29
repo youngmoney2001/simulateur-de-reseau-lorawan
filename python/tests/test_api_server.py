@@ -808,11 +808,23 @@ def test_tls_serves_https_and_refuses_plain_http_clients(tmp_path):
         assert resp.status == 200
         resp.read()
         conn.close()
-        # Un client en clair ne doit obtenir aucune réponse de l'API.
+        # Un client en clair ne doit obtenir aucune réponse de l'API (ni 200 ni JSON).
         plain = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        with pytest.raises(Exception):
-            plain.request("GET", "/api/v1/health")
-            plain.getresponse().read()
+        try:
+            plain.request("GET", "/api/v1/regions", headers={"Authorization": "Bearer " + token})
+            resp = plain.getresponse()
+            body = resp.read()
+            assert resp.status != 200 and b'"items"' not in body
+        except (OSError, http.client.HTTPException):
+            pass  # le serveur ferme la connexion : c'est le comportement attendu
+        finally:
+            plain.close()
+        # Un client TLS qui ne fait pas confiance au certificat auto-signé doit échouer.
+        with pytest.raises(ssl.SSLError):
+            untrusted = http.client.HTTPSConnection(
+                "127.0.0.1", port, context=ssl.create_default_context(), timeout=10)
+            untrusted.request("GET", "/api/v1/regions")
+            untrusted.getresponse()
     finally:
         server.shutdown()
         server.server_close()
@@ -850,3 +862,24 @@ def test_mesh_uplink_payload_beyond_the_frame_is_refused_when_a_relay_forwards(a
     d["groups"][0]["payload_bytes"] = 228
     status, _ = api.call("POST", "/api/v1/runs", {"scenario": d})
     assert status == 202
+
+
+def test_validate_refuses_mesh_payloads_only_when_protocol_is_given(api):
+    """`validate` reçoit les options de protocole (optionnelles) : la règle de trame mesh y est
+    appliquée comme à la création. Sans `protocol`, seule la règle du scénario s'applique."""
+    d = _mesh_scenario()
+    status, body = api.call("POST", "/api/v1/scenarios/validate",
+                            {"scenario": d, "protocol": {"downlink_every": 1,
+                                                         "downlink_payload_bytes": 228}})
+    assert status == 200 and body["valid"] is False
+    assert body["problems"][0]["field"] == "protocol.downlink_payload_bytes"
+    status, body = api.call("POST", "/api/v1/scenarios/validate",
+                            {"scenario": d, "protocol": {"downlink_every": 1,
+                                                         "downlink_payload_bytes": 227}})
+    assert status == 200 and body["valid"] is True
+    status, body = api.call("POST", "/api/v1/scenarios/validate",
+                            {"scenario": d, "protocol": {"downlink_every": 1,
+                                                         "downlink_payload_bytes": 300}})
+    assert status == 200 and body["valid"] is False  # erreur de format : problème, pas de 422
+    status, body = api.call("POST", "/api/v1/scenarios/validate", {"scenario": d})
+    assert status == 200 and body["valid"] is True

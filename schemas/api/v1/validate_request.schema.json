@@ -628,6 +628,59 @@
       "title": "PropagationModel",
       "type": "object"
     },
+    "ProtocolOptionsIn": {
+      "additionalProperties": false,
+      "description": "Comportement applicatif des événements (hors moteur radio) : voir `lsim.trace_events`.",
+      "properties": {
+        "confirmed_uplinks": {
+          "default": false,
+          "title": "Confirmed Uplinks",
+          "type": "boolean"
+        },
+        "device_antenna_gain_dbi": {
+          "default": 0.0,
+          "maximum": 10.0,
+          "minimum": -10.0,
+          "title": "Device Antenna Gain Dbi",
+          "type": "number"
+        },
+        "device_rx_offset_db": {
+          "default": 0.0,
+          "maximum": 40.0,
+          "minimum": -30.0,
+          "title": "Device Rx Offset Db",
+          "type": "number"
+        },
+        "downlink_every": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Downlink Every",
+          "type": "integer"
+        },
+        "downlink_payload_bytes": {
+          "default": 10,
+          "maximum": 242,
+          "minimum": 0,
+          "title": "Downlink Payload Bytes",
+          "type": "integer"
+        },
+        "gateway_tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 27.0,
+          "minimum": -10.0,
+          "title": "Gateway Tx Power Dbm",
+          "type": "number"
+        },
+        "join": {
+          "default": false,
+          "title": "Join",
+          "type": "boolean"
+        }
+      },
+      "title": "ProtocolOptionsIn",
+      "type": "object"
+    },
     "TerrainModel": {
       "additionalProperties": false,
       "properties": {
@@ -653,6 +706,17 @@
   },
   "additionalProperties": false,
   "properties": {
+    "protocol": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtocolOptionsIn"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "scenario": {
       "$ref": "#/$defs/ApiScenario"
     },

@@ -131,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mesh : décodées à l'accès {m.frames}, remises au LNS {m.delivered} "
               f"(sans saut {m.direct}, après saut mesh {m.via_mesh}), "
               f"émissions mesh : {m.transmissions}, copies supprimées : {m.suppressed}, "
-              f"sauts perdus : {sum(n for _, n in m.hop_losses)}, sans route : {m.no_route}\n"
+              f"sauts perdus : {sum(n for _, n in m.hop_losses)}, sans route : {m.no_route}, "
+              f"trames perdues : {m.lost_mesh}\n"
               f"descente mesh : RX1 {m.dl_rx1}, RX2 {m.dl_rx2}, hors fenêtres {m.dl_missed} "
               f"(saut d'acquittement {m.dl_mesh_airtime_ns / 1e6:.1f} ms)")
     print(f"résultats : {args.output}")

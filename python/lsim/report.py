@@ -67,6 +67,7 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
             ("Mesh : émissions mesh", m.transmissions),
             ("Mesh : copies supprimées (doublon)", m.suppressed),
             ("Mesh : copies sans route", m.no_route),
+            ("Mesh : trames perdues sur le mesh", m.lost_mesh),
             ("Mesh : descente dans RX1", m.dl_rx1),
             ("Mesh : descente dans RX2 seulement", m.dl_rx2),
             ("Mesh : descente hors fenêtres", m.dl_missed),
