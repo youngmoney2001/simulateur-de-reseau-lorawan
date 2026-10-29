@@ -1,6 +1,6 @@
 # Boucle fermée dans le moteur : plan de refonte (MAC phase 2 : LinkADR, DutyCycle)
 
-Statut : **S0 et S1 faits ; S2 fait pour le périmètre « passerelle unique, sans jointure ni MAC » (LinkADRReq et DutyCycleReq).**
+Statut : **S0, S1 et S2 faits pour la passerelle unique, sans jointure ni autre commande MAC (LinkADRReq et DutyCycleReq), y compris le câblage du bloc `mac:` et de `build_trace`.**
 
 ## Décisions du propriétaire
 1. **Unification** : les descentes sont gérées dans le moteur natif, en une seule exécution.
@@ -71,17 +71,33 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
     RX1 (plus `device_rx_offset_db`).
   - Application : `max(t_open + 1 s, début + airtime)` pour une descente livrée. Réponse confirmée seulement si
     l'uplink qui la porte est reçu.
-  - Hypothèses (non normatives, à valider) : pas de table de puissance dans le plan (2 dB par index) ;
-    cycle de service calculé avec l'airtime de l'émission qui démarre, comme le chemin planifié existant.
+  - Puissance (corrigée) : index 0 = puissance configurée, plafonnée par la PIRE du plan ; chaque index
+    retire le pas du plan. Les index réservés par le plan sont refusés par LinkADR. Table TXPower : EU868
+    seulement (RP002-1.0.3 : PIRE +16 dBm, pas 2 dB, index 0 à 7 ; `lsim.regions.POWER_TABLES`). Un plan
+    sans table refuse LinkADR : aucune puissance n'est inventée.
+  - Duty cycle (corrigé) : limite réglementaire par index (sous-bande la plus restrictive à la PIRE de
+    l'index, combinée au duty cycle du groupe), puis `min` avec DutyCycleReq. Repos après une émission =
+    airtime de l'émission terminée × (1/D − 1). DutyCycleReq ne peut pas relever la limite réglementaire.
+  - Divergence connue : le chemin sans commande (scénarios sans `link_adr` ni `duty_cycle_exponent`, dont
+    les empreintes sont figées) garde l'ancienne convention, où le repos utilise l'airtime de l'émission
+    qui démarre. Les deux conventions ne sont pas équivalentes quand D < 1. Migrer le chemin historique
+    changerait ses résultats : à faire seulement après validation explicite.
   - API C : `lsim_simulate_closed_loop_v1` (statuts moteur 300+ et planification 950+). Pont Python :
     `python/lsim/closed_loop.py`.
   - Preuves : `core/tests/test_closed_loop.cpp` (parité sans commande avec le chemin causal, convergence
     ADR de SF12 à SF7, espacement du cycle de service après application, nouvel essai après RX1 manquée) ;
     `python/tests/test_closed_loop.py`. Invariants : empreintes `d2cb0fac…` (run) et `ed126d7f…` (trace)
     inchangées. Tests C++ et ASan/UBSan verts.
-  - Non branché : le bloc `mac:` du scénario YAML et `build_trace` n'utilisent pas encore la boucle fermée
-    (le point fixe Python reste en place pour ces chemins). Non porté : jointure, mesh, multi-passerelles,
-    autres commandes MAC (configuration radio, classes).
+  - Branchement : `lsim.mac_loop` traduit le bloc `mac:` (`link_adr`, `duty_cycle_exponent`) en paramètres
+    du moteur. `build_trace` et `run_scenario` l'utilisent dès qu'un de ces champs est actif (sinon, chemin
+    historique inchangé). Événements : `mac_request` LinkADRReq / DutyCycleReq, `mac_answer` LinkADRAns /
+    DutyCycleAns.
+  - Refusé explicitement (erreur) : jointure, passerelles multiples, mesh, combinaison avec LinkCheck,
+    DevStatus ou DeviceTime (leurs réservations ne sont pas encore portées dans la boucle fermée).
+  - Non testé : une commande LinkADR à un index réservé, donc le refus NACK par le moteur (le code est en
+    place, mais l'ADR ne demande jamais un tel index et aucune API n'injecte de commande).
+  - Point fixe : le chemin Python de `build_trace` (`_build_trace_python`) reste pour les jointures, les
+    passerelles multiples et le mesh ; la suppression du point fixe n'est donc pas encore complète.
 - **S3 : contrat** : ABI versionnée (v3 des fonctions de trace), schémas régénérés, journal web.
 - **S4 : mesh et multi-passerelles** : hors périmètre initial ; refusés avec commandes actives
   tant qu'ils ne sont pas portés.

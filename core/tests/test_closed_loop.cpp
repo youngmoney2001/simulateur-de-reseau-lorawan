@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Boucle fermée (S2) : parité sans commande avec le chemin causal, convergence ADR,
 // espacement du rapport cyclique, nouvel essai après perte pendant RX1.
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -36,7 +37,8 @@ lsim::plan::DeviceRadio radio() {
     return r;
 }
 
-// Table régionale à débits décroissants SF12..SF7 ; puissance initiale = index 0.
+// Table régionale à débits décroissants SF12..SF7 ; index de puissance 0..7 valides (pas 2 dB),
+// PIRE du plan non définie (+inf) ; limite réglementaire 1 (aucune) par défaut.
 LoopRegion region() {
     LoopRegion r;
     for (std::size_t i = 0; i < 6; ++i) {
@@ -45,7 +47,57 @@ LoopRegion region() {
     r.max_dr = 5;
     r.max_tx_power_index = 7;
     r.power_step_tenth_db = 20;
+    for (std::size_t i = 0; i <= 7; ++i) r.duty_limit[i] = 1.0;
     return r;
+}
+
+void test_plan_max_eirp_caps_index_zero() {
+    // PIRE du plan 12 dBm, puissance configurée 14 dBm : l'index 0 vaut 12 dBm (-2 dB de RSSI).
+    const EndDeviceSpec d[] = {dev(500.0, 7, 0, 60 * kS, 1)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult free_res;
+    LoopResult capped_res;
+    LoopRegion free_r[1] = {region()};
+    LoopRegion capped_r[1] = {region()};
+    capped_r[0].max_eirp_dbm = 12.0;
+    LoopOptions opt;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, free_r, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, free_res)),
+             0);
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, capped_r, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, capped_res)),
+             0);
+    CHECK_EQ(free_res.uplinks.size(), std::size_t{1});
+    CHECK_EQ(capped_res.uplinks.size(), std::size_t{1});
+    if (free_res.uplinks.size() == 1 && capped_res.uplinks.size() == 1) {
+        const double delta = free_res.uplinks[0].rssi_dbm - capped_res.uplinks[0].rssi_dbm;
+        CHECK_TRUE(std::abs(delta - 2.0) < 1e-9);
+    }
+}
+
+void test_regulatory_limit_applies_without_command() {
+    // Limite réglementaire 1 % à l'index 0, aucune commande : repos de 99 airtimes après chaque émission.
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 4 * kS, 10)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    regions[0].duty_limit[0] = 0.01;
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    int checked = 0;
+    for (std::size_t k = 0; k + 1 < res.uplinks.size(); ++k) {
+        const LoopUplink& next = res.uplinks[k + 1];
+        const SimTime air = res.uplinks[k].end_ns - res.uplinks[k].start_ns;
+        CHECK_TRUE(next.start_ns - res.uplinks[k].end_ns >= 99 * air);
+        ++checked;
+    }
+    CHECK_TRUE(checked > 3);
 }
 
 void test_no_command_parity_with_causal() {
@@ -133,13 +185,14 @@ void test_duty_cycle_spacing_after_apply() {
     }
     CHECK_TRUE(apply > 0);
     int checked = 0;
-    // Convention du moteur (identique au chemin planifié) : le début suivant est au plus tôt à
-    // fin_précédente + airtime_suivant * (1/rapport - 1), soit 15 airtimes pour 1/16.
+    // Repos après l'émission terminée : le début suivant est au plus tôt à
+    // fin_précédente + airtime_précédent * (1/rapport - 1), soit 15 airtimes pour 1/16.
     for (std::size_t k = 0; k + 1 < res.uplinks.size(); ++k) {
+        const LoopUplink& prev = res.uplinks[k];
         const LoopUplink& next = res.uplinks[k + 1];
         if (next.start_ns < apply) continue;
-        const SimTime air = next.end_ns - next.start_ns;
-        CHECK_TRUE(next.start_ns - res.uplinks[k].end_ns >= 15 * air);
+        const SimTime air_prev = prev.end_ns - prev.start_ns;
+        CHECK_TRUE(next.start_ns - prev.end_ns >= 15 * air_prev);
         ++checked;
     }
     CHECK_TRUE(checked > 10);
@@ -184,6 +237,8 @@ void test_retry_after_device_missed_rx1() {
 
 void run_closed_loop_tests() {
     test_no_command_parity_with_causal();
+    test_plan_max_eirp_caps_index_zero();
+    test_regulatory_limit_applies_without_command();
     test_adr_converges_to_sf7();
     test_duty_cycle_spacing_after_apply();
     test_retry_after_device_missed_rx1();

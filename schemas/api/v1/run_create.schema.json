@@ -444,6 +444,25 @@
           "title": "Device Time Every",
           "type": "integer"
         },
+        "duty_cycle_exponent": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duty Cycle Exponent"
+        },
+        "link_adr": {
+          "default": false,
+          "title": "Link Adr",
+          "type": "boolean"
+        },
         "link_check_every": {
           "default": 0,
           "maximum": 1000,

@@ -18,7 +18,8 @@ Annotations : `mac_request` et les `mac_answer` ajoutés à un downlink n'ont pa
 2. **ADR et temps** (en cours) :
    - Fait : DeviceTimeReq/Ans. `device_time_every` (bloc `mac:`) : DeviceTimeReq (1 octet, réservée) dans l'uplink de rang multiple de N ; DeviceTimeAns (6 octets : CID, secondes GPS, fraction 1/256 s) dans la descente qui répond, confirmée (`mac_answer`) seulement si cette descente est reçue. Ancre temporelle : époque GPS en t = 0 de la simulation (décision du propriétaire, sans champ de date au schéma).
    - Fait (passerelle unique, sans jointure) : LinkADRReq/Ans et DutyCycleReq/Ans en boucle fermée, dans le moteur, en une seule exécution (`simulate_closed_loop`, `lsim_simulate_closed_loop_v1`, `python/lsim/closed_loop.py`). Décision ADR : `adr::decide()` côté serveur. Détails, hypothèses et preuves dans `docs/CLOSED_LOOP_PLAN.md` (S2).
-   - Reste : brancher le bloc `mac:` du scénario et `build_trace` sur la boucle fermée ; LinkADR et DutyCycle avec jointure, mesh ou multi-passerelles.
+   - Fait ensuite : le bloc `mac:` (`link_adr`, `duty_cycle_exponent`) et `build_trace` / `run_scenario` passent par la boucle fermée. Politique de puissance et de duty cycle : voir `docs/CLOSED_LOOP_PLAN.md`.
+   - Reste : LinkADR et DutyCycle avec jointure, mesh ou multi-passerelles ; portage des réservations LinkCheck, DevStatus et DeviceTime dans la boucle fermée.
 3. **Configuration radio et classes** : RXParamSetup, NewChannel, RXTimingSetup, DlChannel, ADRParamSetup, PingSlot (info, channel), BeaconFreq, RejoinParamSetup, ForceRejoin, avec leurs effets sur le modèle.
 4. **Orchestration** : commandes initiées par le serveur, files de descentes, réponses différées, refus, expiration, interaction avec les classes A, B et C.
 5. **Validation et interface** : vecteurs de référence, conformité TS001-1.1.0, journal détaillé, métriques, limites documentées.

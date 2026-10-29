@@ -590,11 +590,16 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     uplinks reçus. L'itération s'arrête quand les émissions utilisées par le moteur sont celles
     que produit la trace obtenue. Pas de convergence en `MAX_ITERATIONS` : erreur explicite.
     """
-    devices, _group_of, _indices = scenario.deploy()
+    devices, group_of, _indices = scenario.deploy()
     if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     radios = device_radios(scenario)
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
+    from lsim.mac_loop import closed_loop_applies  # import local : évite un cycle
+    if closed_loop_applies(scenario):
+        # LinkADR / DutyCycle : une seule exécution native, descentes créées par le moteur.
+        return _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propagation,
+                                        environment, options)
     mac = _schedule_of(scenario)
     reservations = mac_reservations(scenario, devices)
 
@@ -603,6 +608,85 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
 
     return _build_trace_python(devices, radios, gateway, propagation, environment, reservations,
                                options, mac)
+
+
+def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propagation, environment,
+                             options: ProtocolOptions) -> TraceRun:
+    """Boucle fermée S2 : une exécution, uplinks et descentes (LinkADR, DutyCycle) du moteur natif."""
+    from lsim.closed_loop import OUTCOME_CODES, simulate_closed_loop
+    from lsim.mac_loop import check_closed_loop, loop_options, loop_regions
+    check_closed_loop(scenario, options)
+    out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
+                               loop_regions(scenario, group_of), loop_options(scenario, options))
+    records = tuple(
+        TxRecord(u.device, u.start_ns, u.end_ns, u.spreading_factor, u.rssi_dbm,
+                 OUTCOME_CODES[u.outcome])
+        for u in out.uplinks)
+    events = _closed_loop_events(out, radios, options)
+    return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
+                    events=events, gateway_tx=out.busy)
+
+
+def _closed_loop_events(out, radios: Sequence[DeviceRadio],
+                        options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
+    """Événements de la boucle fermée, au même format que `_events` (ordre temporel)."""
+    from lsim.closed_loop import OUTCOME_CODES
+    pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
+
+    def add(t: int, kind: str, device: int, hops: list[HopEvent], outcome: str) -> None:
+        pending.append((t, len(pending), kind, device, tuple(hops), outcome))
+
+    for u in out.uplinks:
+        code = OUTCOME_CODES[u.outcome]
+        radio = radios[u.device]
+        hops = [HopEvent(_dev(u.device), "gw:0", u.start_ns, radio.freq_hz, radio.dr, u.rssi_dbm,
+                         _HOP_OUTCOME[code])]
+        received = code == TxRecord.OUTCOME_RECEIVED
+        if received:
+            hops.append(HopEvent("gw:0", "ns", u.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
+        add(u.start_ns, "uplink", u.device, hops, _UPLINK_OUTCOME[code])
+        if received:
+            # Réponses portées par cet uplink : confirmées parce qu'il est reçu.
+            if u.answer_mask & 1:
+                add(u.start_ns, "mac_answer", u.device, [], "LinkADRAns")
+            if u.answer_mask & 2:
+                add(u.start_ns, "mac_answer", u.device, [], "DutyCycleAns")
+
+    for dl in out.downlinks:
+        radio = radios[dl.device]
+        dev = _dev(dl.device)
+        if dl.start_ns is None:
+            hop = HopEvent("gw:0", dev, dl.t_open_ns, radio.rx1_hz, None, None, "not_listened")
+            add(dl.t_open_ns, "rx_window_missed", dl.device, [hop], "gateway_busy")
+            continue
+        if dl.device_missed:
+            hop = HopEvent("gw:0", dev, dl.start_ns, radio.rx1_hz, None, None, "not_listened")
+            add(dl.t_open_ns, "rx_window_missed", dl.device, [hop], "device_transmitting")
+            continue
+        ok = dl.delivered
+        down_hop = HopEvent("gw:0", dev, dl.start_ns, radio.rx1_hz, None, None,
+                            "delivered" if ok else "lost_sensitivity")
+        if dl.kind == "ack":
+            kind, content = "ack", "ack_only"
+        elif dl.kind == "data":
+            kind = "downlink"
+            content = "data_ack" if options.confirmed_uplinks else "data"
+        else:
+            kind, content = "downlink", "delivered"  # downlink MAC seul
+        add(dl.start_ns, kind, dl.device, [down_hop], content if ok else "lost_sensitivity")
+        if ok:
+            if dl.commands & 1:
+                add(dl.start_ns, "mac_request", dl.device, [], "LinkADRReq")
+            if dl.commands & 2:
+                add(dl.start_ns, "mac_request", dl.device, [], "DutyCycleReq")
+
+    if len(pending) > MAX_EVENTS:
+        raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")
+    pending.sort(key=lambda e: (e[0], e[1]))
+    return tuple(
+        ProtocolEvent(seq=k, t_ns=t, kind=kind, device_index=d, gateway_index=0, hops=hops,
+                      outcome=outcome)
+        for k, (t, _order, kind, d, hops, outcome) in enumerate(pending))
 
 
 def _build_trace_python(devices, radios, gateway, propagation, environment, reservations,

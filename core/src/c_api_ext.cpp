@@ -696,7 +696,7 @@ int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t devi
     if (gateway == nullptr || prop == nullptr || totals == nullptr || options == nullptr ||
         uplink_count == nullptr || downlink_count == nullptr || busy_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) ||
-        (options->adr != 0 && device_count > 0 && regions == nullptr)) {
+        (device_count > 0 && regions == nullptr)) {
         return static_cast<int32_t>(lsim::lora::Status::NullOutput);
     }
     *uplink_count = 0;
@@ -739,11 +739,15 @@ int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t devi
             r.rx1_bw_hz = d.rx1_bw_hz;
         }
         std::vector<lsim::sim::LoopRegion> rg(device_count);
-        for (size_t i = 0; i < device_count && regions != nullptr; ++i) {
-            for (size_t k = 0; k < 16; ++k) rg[i].dr_sf[k] = regions[i].dr_sf[k];
+        for (size_t i = 0; i < device_count; ++i) {
+            for (size_t k = 0; k < 16; ++k) {
+                rg[i].dr_sf[k] = regions[i].dr_sf[k];
+                rg[i].duty_limit[k] = regions[i].duty_limit[k];
+            }
             rg[i].max_dr = regions[i].max_dr;
             rg[i].max_tx_power_index = regions[i].max_tx_power_index;
             rg[i].power_step_tenth_db = regions[i].power_step_tenth_db;
+            rg[i].max_eirp_dbm = regions[i].max_eirp_dbm;
         }
 
         lsim::sim::LoopOptions lo;

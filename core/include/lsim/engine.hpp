@@ -231,14 +231,23 @@ struct CausalDownlinks {
 //     n'a pas de créneau dans la RX1 ; elle est retentée au prochain uplink reçu.
 // Sans commande active, les résultats sont ceux de `simulate_uplinks` avec `causal`.
 
-// Paramètres régionaux d'un dispositif (table ADR). dr_sf[i] : SF du débit i, 0 = indisponible.
-// L'index de puissance 0 est la puissance initiale du dispositif ; chaque index retire
-// `power_step_tenth_db` dixièmes de dB.
+// Paramètres régionaux d'un dispositif. Lus dans tous les cas (puissance et limite réglementaire).
+//  * dr_sf[i] : SF du débit i, 0 = indisponible ; max_dr : dernier débit utilisable ;
+//  * max_tx_power_index : dernier index de puissance valide (les index 0..max sont contigus, les
+//    suivants sont réservés par le plan et refusés par LinkADR) ;
+//  * max_eirp_dbm : PIRE de l'index 0 du plan (plafond) ; +inf si le plan ne le définit pas ;
+//  * power_step_tenth_db : pas entre index (dixièmes de dB) ; la puissance de l'index i est
+//    min(tx_power_dbm, max_eirp_dbm) - i * pas ;
+//  * duty_limit[i] : limite réglementaire du duty cycle à l'index i, dans ]0, 1] (sous-bande la plus
+//    restrictive à la PIRE de cet index, et duty cycle du dispositif). DutyCycleReq ne fait que la
+//    réduire.
 struct LoopRegion {
     std::array<std::uint8_t, 16> dr_sf{};
     std::uint8_t max_dr = 0;
     std::uint8_t max_tx_power_index = 0;
     std::int32_t power_step_tenth_db = 20;
+    double max_eirp_dbm = std::numeric_limits<double>::infinity();
+    std::array<double, 16> duty_limit{};
 };
 
 struct LoopOptions {
@@ -288,7 +297,8 @@ struct LoopResult {
 };
 
 // `radios` : un paramètre radio par dispositif (le SF RX1 suit le SF montant courant).
-// `regions` : une table par dispositif. Sans ADR, les tables ne sont pas lues.
+// `regions` : un jeu de paramètres par dispositif (toujours lu). Le repos du duty cycle se calcule
+// à partir de l'airtime de l'émission terminée (convention S2, voir le plan de boucle fermée).
 SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_count,
                                const plan::DeviceRadio* radios, const LoopRegion* regions,
                                const GatewaySpec& gateway, const PropagationSpec& prop,

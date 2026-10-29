@@ -312,3 +312,37 @@ PROFILES: dict[str, RegionProfile] = {
     "RU864": RU864,
     "AS923JP": AS923JP,
 }
+
+
+# ------------------------------------------- Table de puissance TXPower (LinkADR)
+#
+# Un plan qui n'a pas de table ici ne peut pas être utilisé avec LinkADR : aucune puissance n'est
+# inventée. L'index 0 désigne la PIRE maximale du plan (pas 0 dBm), et la puissance d'un dispositif
+# est plafonnée à cette PIRE. Les index au-delà de `max_index` sont réservés par le plan : LinkADR
+# qui les demande est refusé (NACK sur la puissance).
+
+@dataclass(frozen=True)
+class PowerTable:
+    max_eirp_dbm: float   # PIRE de l'index 0 (plafond du plan)
+    step_db: float        # pas entre index consécutifs
+    max_index: int        # dernier index valide ; index 0..max_index contigus
+    source: str
+
+
+POWER_TABLES: dict[str, PowerTable] = {
+    "EU868": PowerTable(
+        max_eirp_dbm=16.0,
+        step_db=2.0,
+        max_index=7,
+        source=(
+            "LoRaWAN Regional Parameters RP002-1.0.3 (2021), table « EU863-870 TX power » : "
+            "TXPower 0 = PIRE max (+16 dBm par défaut), 1 à 7 = PIRE max − 2 dB × index ; "
+            "8 à 14 réservés. Vérifié aussi sur la fiche TTN EU863-870 (TXPower 0 à 7 : +16 à +2 dBm)."
+        ),
+    ),
+}
+
+
+def power_table(code: str) -> Optional[PowerTable]:
+    """Table TXPower du plan, ou None si le plan n'en définit pas (LinkADR refusé pour ce plan)."""
+    return POWER_TABLES.get(code)

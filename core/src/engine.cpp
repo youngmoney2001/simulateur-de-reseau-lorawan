@@ -1309,9 +1309,10 @@ struct LoopDevice {
     std::uint8_t sf = 7;
     std::int8_t dr = -1;
     std::uint8_t power_index = 0;
-    double duty = 1.0;
+    double cap = 1.0;              // plafond appliqué par DutyCycleReq (1 : aucun)
     std::uint32_t next_k = 0;      // rang de la prochaine émission
     SimTime prev_end = 0;
+    SimTime prev_air = 0;          // airtime de l'émission terminée (repos après elle)
     bool has_prev = false;
     std::int64_t last_tx = -1;     // indice de la dernière émission démarrée
     std::uint8_t answer_mask = 0;  // réponses MAC à porter dans la prochaine émission
@@ -1362,7 +1363,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     if (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) {
         return SimStatus::InvalidInput;
     }
-    if (options.adr && device_count > 0 && regions == nullptr) return SimStatus::InvalidInput;
+    if (device_count > 0 && regions == nullptr) return SimStatus::InvalidInput;
     const SimStatus gs = validate_inputs(gateway, prop);
     if (gs != SimStatus::Ok) return gs;
     const env::Environment no_environment{};
@@ -1399,13 +1400,19 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         per_device[i] = DeviceStats{};
         per_device[i].sent = d.messages;
         dev[i].sf = d.spreading_factor;
-        dev[i].duty = d.duty_cycle;
-        if (options.adr) {
+        {
             const LoopRegion& rg = regions[i];
             if (rg.max_dr > 15 || rg.max_tx_power_index > 15 || rg.power_step_tenth_db < 1 ||
-                rg.power_step_tenth_db > 100) {
+                rg.power_step_tenth_db > 100 || !(rg.max_eirp_dbm > -200.0)) {
                 return SimStatus::InvalidInput;
             }
+            for (std::uint8_t k = 0; k <= rg.max_tx_power_index; ++k) {
+                if (!(rg.duty_limit[k] > 0.0 && rg.duty_limit[k] <= 1.0)) return SimStatus::InvalidInput;
+            }
+            step_db[i] = rg.power_step_tenth_db / 10.0;
+        }
+        if (options.adr) {
+            const LoopRegion& rg = regions[i];
             int found = -1;
             for (std::uint8_t j = 0; j <= rg.max_dr; ++j) {
                 if (rg.dr_sf[j] == d.spreading_factor) {
@@ -1415,7 +1422,6 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
             }
             if (found < 0) return SimStatus::InvalidInput;  // SF du dispositif absent de la table
             dev[i].dr = static_cast<std::int8_t>(found);
-            step_db[i] = rg.power_step_tenth_db / 10.0;
             srv[i].dr = static_cast<std::uint8_t>(found);
         }
         // Gain de liaison : même calcul que `simulate_uplinks` (ordre des opérations conservé).
@@ -1450,8 +1456,10 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     SimTime max_airtime = 0;
     if (!uplink_airtime(12, 255, max_airtime)) return SimStatus::InvalidInput;
 
+    // Puissance de l'index : plafond du plan (index 0) moins le pas du plan pour chaque index.
     const auto tx_dbm = [&](std::size_t i, std::uint8_t power_index) {
-        return devices[i].tx_power_dbm - static_cast<double>(power_index) * step_db[i];
+        const double p0 = std::min(devices[i].tx_power_dbm, regions[i].max_eirp_dbm);
+        return p0 - static_cast<double>(power_index) * step_db[i];
     };
     const auto rssi_of = [&](std::size_t i, std::uint8_t power_index) {
         return tx_dbm(i, power_index) + gateway.antenna_gain_dbi - path_loss[i] - shadow[i];
@@ -1610,12 +1618,14 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     status = SimStatus::InvalidInput;
                     break;
                 }
+                // Limite du duty cycle au moment du départ : réglementaire à l'index de puissance
+                // courant, plafonnée par DutyCycleReq. Le repos suit l'airtime de l'émission terminée.
+                const double duty = std::min(regions[i].duty_limit[ds.power_index], ds.cap);
                 if (ds.has_prev) {
-                    // Rapport cyclique au moment du départ (une commande reçue l'a pu changer).
-                    const double off = (1.0 - ds.duty) / ds.duty;
+                    const double off = (1.0 - duty) / duty;
                     if (off > 0.0) {
                         const double earliest_d = static_cast<double>(ds.prev_end) +
-                                                  std::round(static_cast<double>(air) * off);
+                                                  std::round(static_cast<double>(ds.prev_air) * off);
                         if (earliest_d > kMaxHorizonNs) {
                             status = SimStatus::InvalidInput;
                             break;
@@ -1649,6 +1659,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
                 totals.airtime_ns += static_cast<std::uint64_t>(air);
                 ds.prev_end = t.end;
+                ds.prev_air = air;
                 ds.has_prev = true;
                 ++ds.next_k;
                 q.push(LoopEvent{t.end, kLoopRankEnd, seq++, LoopKind::End, 0, idx, 0});
@@ -1765,8 +1776,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                         if (pi != kLoopIgnoreField) ds.power_index = pi;
                     }
                 } else {
-                    const double cap = std::ldexp(1.0, -static_cast<int>(options.duty_cycle_exponent));
-                    ds.duty = std::min(devices[i].duty_cycle, cap);
+                    ds.cap = std::ldexp(1.0, -static_cast<int>(options.duty_cycle_exponent));
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 2U);
                 }
                 break;

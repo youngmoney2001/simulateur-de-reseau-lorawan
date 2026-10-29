@@ -1,0 +1,116 @@
+"""Bloc `mac:` → boucle fermée (LinkADRReq et DutyCycleReq) : paramètres du moteur natif.
+
+Actif seulement si le scénario demande `link_adr` ou `duty_cycle_exponent`. Sans ces champs, les
+scénarios gardent le chemin existant (résultats et empreintes inchangés).
+
+Périmètre : passerelle unique, sans jointure, sans autre commande MAC (calendrier de
+`mac_plan`). Les combinaisons hors périmètre sont refusées explicitement.
+
+Règles de puissance et de duty cycle (voir docs/CLOSED_LOOP_PLAN.md, S2) :
+- index 0 = puissance configurée, plafonnée par la PIRE du plan (`regions.POWER_TABLES`) ; chaque
+  index retire le pas du plan ; les index réservés par le plan sont refusés par LinkADR ;
+- limite réglementaire par index = sous-bande la plus restrictive à la PIRE de cet index,
+  combinée au duty cycle du groupe (`min`). DutyCycleReq ne fait que la réduire ;
+- un plan sans table TXPower n'accepte pas LinkADR (aucune puissance inventée).
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Sequence
+
+from lsim.closed_loop import LoopOptions, LoopRegion
+from lsim.plan import get_plan
+from lsim.regions import PROFILES, power_table
+
+
+def closed_loop_applies(scenario) -> bool:
+    """Vrai si le bloc `mac:` demande LinkADR ou DutyCycle (boucle fermée)."""
+    m = scenario.model.mac
+    return m is not None and (m.link_adr or m.duty_cycle_exponent is not None)
+
+
+def check_closed_loop(scenario, options: Any) -> None:
+    """Refuse explicitement les combinaisons hors périmètre de la boucle fermée (ValueError)."""
+    if getattr(options, "join", False):
+        raise ValueError("LinkADR/DutyCycle : jointure non supportée par la boucle fermée")
+    if scenario.model.gateways is not None or scenario.model.mesh is not None:
+        raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
+                         "(pas de « gateways » ni de mesh)")
+    m = scenario.model.mac
+    if m.link_check_every or m.device_status_every or m.device_time_every:
+        raise ValueError("LinkADR/DutyCycle combinés à LinkCheck, DevStatus ou DeviceTime : "
+                         "non supporté par la boucle fermée (à porter)")
+
+
+def loop_options(scenario, options: Any) -> LoopOptions:
+    m = scenario.model.mac
+    return LoopOptions(
+        confirmed_uplinks=options.confirmed_uplinks,
+        downlink_every=options.downlink_every,
+        downlink_payload_bytes=options.downlink_payload_bytes,
+        gateway_tx_power_dbm=options.gateway_tx_power_dbm,
+        device_antenna_gain_dbi=options.device_antenna_gain_dbi,
+        device_rx_offset_db=options.device_rx_offset_db,
+        adr=m.link_adr,
+        installation_margin_tenth_db=m.link_margin_installation_db * 10,
+        duty_cycle=m.duty_cycle_exponent is not None,
+        duty_cycle_exponent=m.duty_cycle_exponent or 0,
+    )
+
+
+def _group_region(g, link_adr: bool) -> LoopRegion:
+    """Paramètres régionaux d'un groupe (partagés par tous ses dispositifs)."""
+    tx = g.tx_power_dbm
+    if g.region is None:
+        if link_adr:
+            raise ValueError(f"groupe {g.name!r} : LinkADR exige un plan régional")
+        return LoopRegion(dr_sf=(0,) * 16, max_dr=0, max_tx_power_index=0,
+                          power_step_tenth_db=20, max_eirp_dbm=math.inf,
+                          duty_limit=(g.duty_cycle,) + (1.0,) * 15)
+
+    try:
+        plan = get_plan(g.region)
+    except ValueError as exc:
+        raise ValueError(f"groupe {g.name!r} : {exc}") from exc
+    dr_sf = [0] * 16
+    for i, (sf, bw_khz, _) in enumerate(plan.dr_table()[:16]):
+        if bw_khz == 125:
+            dr_sf[i] = sf
+    usable = [i for i, s in enumerate(dr_sf) if s]
+    max_dr = max(usable) if usable else 0
+    if link_adr and g.spreading_factor not in dr_sf:
+        raise ValueError(f"groupe {g.name!r} : SF {g.spreading_factor} absent des débits 125 kHz "
+                         f"du plan {g.region}")
+
+    table = power_table(g.region)
+    if link_adr and table is None:
+        raise ValueError(f"groupe {g.name!r} : plan {g.region} sans table TXPower, LinkADR refusé")
+    if table is not None and tx > table.max_eirp_dbm:
+        raise ValueError(f"groupe {g.name!r} : puissance {tx} dBm au-dessus de la PIRE du plan "
+                         f"({table.max_eirp_dbm} dBm)")
+    max_eirp = table.max_eirp_dbm if table is not None else math.inf
+    step_db = table.step_db if table is not None else 2.0
+    max_index = table.max_index if table is not None else 0
+    profile = PROFILES.get(g.region)
+    duty = [1.0] * 16
+    for i in range(max_index + 1):
+        eirp = min(tx, max_eirp) - i * step_db
+        limit = profile.duty_cycle_limit(g.channel_freq_hz, eirp) if profile is not None else None
+        duty[i] = g.duty_cycle if limit is None else min(g.duty_cycle, limit)
+    return LoopRegion(dr_sf=tuple(dr_sf), max_dr=max_dr, max_tx_power_index=max_index,
+                      power_step_tenth_db=round(step_db * 10),
+                      max_eirp_dbm=max_eirp, duty_limit=tuple(duty))
+
+
+def loop_regions(scenario, group_of: Sequence[str]) -> list[LoopRegion]:
+    """Un `LoopRegion` par dispositif, dans l'ordre de `Scenario.deploy`."""
+    link_adr = scenario.model.mac.link_adr
+    by_name = {g.name: g for g in scenario.model.groups}
+    cache: dict[str, LoopRegion] = {}
+    out = []
+    for name in group_of:
+        if name not in cache:
+            cache[name] = _group_region(by_name[name], link_adr)
+        out.append(cache[name])
+    return out

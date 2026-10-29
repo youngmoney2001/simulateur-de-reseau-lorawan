@@ -1071,8 +1071,7 @@ LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t 
 
 /* ------------------------------------------- Boucle fermée : commandes MAC LinkADR et DutyCycle (S2)
  * Passerelle unique, sans jointure ni autre commande MAC. Voir lsim/engine.hpp (LoopOptions).
- * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (une table
- * régionale par dispositif, lue seulement si adr != 0). Sorties : uplinks (ordre des débuts),
+ * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (toujours lues). Sorties : uplinks (ordre des débuts),
  * descentes créées (ordre de création) et occupation passerelle (ordre croissant). Capacités :
  * au moins le nombre total d'émissions pour uplinks ; au moins le nombre d'uplinks pour les
  * descentes et l'occupation. Statut 0, code moteur (LSIM_STATUS_SIM_BASE + n), code planification
@@ -1081,8 +1080,10 @@ LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t 
 typedef struct lsim_loop_region {
     uint8_t dr_sf[16];               /* SF du débit i ; 0 = indisponible */
     uint8_t max_dr;
-    uint8_t max_tx_power_index;      /* index 0 = puissance initiale du dispositif */
-    int32_t power_step_tenth_db;     /* 1..100 */
+    uint8_t max_tx_power_index;      /* dernier index valide (0..max contigus, au-delà réservés) */
+    int32_t power_step_tenth_db;     /* 1..100 : pas entre index (dixièmes de dB) */
+    double max_eirp_dbm;             /* PIRE de l'index 0 du plan ; +inf si non définie */
+    double duty_limit[16];           /* limite réglementaire par index, ]0, 1] pour les index valides */
 } lsim_loop_region;
 
 typedef struct lsim_loop_options {

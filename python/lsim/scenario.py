@@ -267,6 +267,12 @@ class MacModel(_Strict):
     device_status_every: int = Field(0, ge=0, le=1000)
     link_margin_installation_db: int = Field(0, ge=0, le=60)
     device_time_every: int = Field(0, ge=0, le=1000)
+    # Boucle fermée (LinkADRReq / DutyCycleReq) : passerelle unique, sans jointure, plan régional
+    # avec table TXPower (EU868 seulement, voir lsim.regions.POWER_TABLES). Décision ADR côté
+    # serveur sur les 20 dernières trames reçues ; marge = `link_margin_installation_db`.
+    # `duty_cycle_exponent` k : DutyCycleReq avec 1/2^k (None : pas de DutyCycleReq).
+    link_adr: bool = False
+    duty_cycle_exponent: Optional[int] = Field(None, ge=0, le=15)
 
 
 class ScenarioModel(_Strict):
@@ -287,6 +293,14 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.mac is not None and (self.mac.link_adr or self.mac.duty_cycle_exponent is not None):
+            if self.gateways is not None or self.mesh is not None:
+                raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
+                                 "(pas de « gateways » ni de mesh)")
+            if (self.mac.link_check_every or self.mac.device_status_every
+                    or self.mac.device_time_every):
+                raise ValueError("LinkADR/DutyCycle combinés à LinkCheck, DevStatus ou DeviceTime : "
+                                 "non supporté par la boucle fermée (à porter)")
         if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every
                                      or self.mac.device_time_every):
             if self.gateways is not None or self.mesh is not None:
@@ -370,6 +384,12 @@ class Scenario:
         # Bloc MAC absent : hash des scénarios antérieurs inchangé.
         if model.mac is None:
             dumped.pop("mac", None)
+        else:
+            # Champs de la boucle fermée à leur valeur par défaut : hash inchangé.
+            if not model.mac.link_adr:
+                dumped["mac"].pop("link_adr", None)
+            if model.mac.duty_cycle_exponent is None:
+                dumped["mac"].pop("duty_cycle_exponent", None)
         # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
         if model.gateways is None:
             dumped.pop("gateways", None)

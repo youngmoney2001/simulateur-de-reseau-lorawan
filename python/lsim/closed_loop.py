@@ -44,7 +44,8 @@ _KIND_NAMES = {KIND_ACK: "ack", KIND_DATA: "data", KIND_MAC: "mac"}
 
 class _CLoopRegion(ctypes.Structure):
     _fields_ = [("dr_sf", ctypes.c_uint8 * 16), ("max_dr", ctypes.c_uint8),
-                ("max_tx_power_index", ctypes.c_uint8), ("power_step_tenth_db", ctypes.c_int32)]
+                ("max_tx_power_index", ctypes.c_uint8), ("power_step_tenth_db", ctypes.c_int32),
+                ("max_eirp_dbm", ctypes.c_double), ("duty_limit", ctypes.c_double * 16)]
 
 
 class _CLoopOptions(ctypes.Structure):
@@ -83,12 +84,19 @@ LIB.lsim_simulate_closed_loop_v1.argtypes = [
 
 @dataclass(frozen=True)
 class LoopRegion:
-    """Table ADR d'un dispositif : `dr_sf[i]` = SF du débit i (0 = indisponible)."""
+    """Paramètres régionaux d'un dispositif (voir `LoopRegion` dans engine.hpp).
+
+    `dr_sf[i]` : SF du débit i (0 = indisponible). `max_tx_power_index` : dernier index valide.
+    `max_eirp_dbm` : PIRE de l'index 0 du plan (+inf si non définie). `duty_limit[i]` : limite
+    réglementaire du duty cycle à l'index i, dans ]0, 1].
+    """
 
     dr_sf: tuple[int, ...]
     max_dr: int
     max_tx_power_index: int = 0
     power_step_tenth_db: int = 20
+    max_eirp_dbm: float = float("inf")
+    duty_limit: tuple[float, ...] = (1.0,) * 16
 
 
 @dataclass(frozen=True)
@@ -145,6 +153,7 @@ class LoopOutcome:
 
 
 _OUTCOMES = {0: "lost_sensitivity", 1: "lost_collision", 2: "received", 3: "lost_gateway_busy"}
+OUTCOME_CODES = {v: k for k, v in _OUTCOMES.items()}
 
 
 def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, radios: Sequence,
@@ -160,8 +169,8 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     if len(radios) != n:
         raise ValueError("un paramètre radio par dispositif")
-    if options.adr and len(regions) != n:
-        raise ValueError("une table régionale par dispositif quand l'ADR est actif")
+    if len(regions) != n:
+        raise ValueError("un jeu de paramètres régionaux par dispositif")
     capacity = sum(d.messages for d in devices)
     if capacity > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
@@ -188,14 +197,16 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
         c_radios[i].rx1_bw_hz = d.rx1_bw_hz
 
     c_regions = (_CLoopRegion * max(1, n))()
-    for i, r in enumerate(regions if options.adr else ()):
-        if len(r.dr_sf) != 16:
-            raise ValueError("une table régionale a 16 débits")
-        for k, sf in enumerate(r.dr_sf):
-            c_regions[i].dr_sf[k] = sf
+    for i, r in enumerate(regions):
+        if len(r.dr_sf) != 16 or len(r.duty_limit) != 16:
+            raise ValueError("une table régionale a 16 débits et 16 index de puissance")
+        for k in range(16):
+            c_regions[i].dr_sf[k] = r.dr_sf[k]
+            c_regions[i].duty_limit[k] = r.duty_limit[k]
         c_regions[i].max_dr = r.max_dr
         c_regions[i].max_tx_power_index = r.max_tx_power_index
         c_regions[i].power_step_tenth_db = r.power_step_tenth_db
+        c_regions[i].max_eirp_dbm = r.max_eirp_dbm
 
     c_opt = _CLoopOptions()
     c_opt.protocol = _CPlanOptions(1 if options.confirmed_uplinks else 0, options.downlink_every,

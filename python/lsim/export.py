@@ -106,7 +106,26 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
         return _run_multi(scenario, devices, groups, indices, energies, energy_profile)
     # Calendrier MAC : la simulation trace porte les octets réservés dans le temps d'antenne.
     # Sans MAC, le chemin historique est inchangé.
+    from lsim.mac_loop import closed_loop_applies  # import local : évite un cycle
     from lsim.trace_events import mac_reservations  # import local : évite un cycle
+    if closed_loop_applies(scenario):
+        # LinkADR / DutyCycle : compteurs de la boucle fermée (même exécution que la trace).
+        from lsim.trace_events import build_trace
+        result = build_trace(scenario)
+        if energy_profile is not None:
+            energies = device_energies_protocol(
+                devices, [0] * len(devices), [c.sent for c in result.per_device], energy_profile,
+                [c.airtime_ns for c in result.per_device])
+        rows = _rows(devices, groups, indices, energies, result.per_device, None)
+        return RunResult(
+            scenario_name=scenario.name,
+            scenario_sha256=scenario.sha256,
+            seed=scenario.model.seed,
+            rows=rows,
+            totals=result.totals,
+            gateway=result.gateway,
+            energy_profile=energy_profile,
+        )
     reservations = mac_reservations(scenario, devices)
     if reservations:
         result = simulate_trace_result(devices, scenario, reservations)
