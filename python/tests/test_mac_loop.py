@@ -287,3 +287,15 @@ def test_abi_v1_and_v2_agree_without_mac_commands(monkeypatch):
     assert legacy.events == v2.events
     assert v2.mac_queue is not None and v2.mac_queue.enqueued == 0
     assert legacy.mac_queue is None
+
+
+@pytest.mark.parametrize("count,radius,offset", [(8, 9000, 10.0), (20, 12000, 10.0)])
+def test_answers_are_never_deferred_end_to_end(count, radius, offset):
+    """TS001 §5 : une réponse à une requête du dispositif n'est envoyée que dans les fenêtres RX qui
+    suivent la requête. Aucune réponse ne doit donc être reportée : chaque report correspond à une
+    réponse expirée au premier report (deferred = expired), et aucune n'est en attente à la fin."""
+    tr = build_trace(_load(count, radius), ProtocolOptions(device_rx_offset_db=offset))
+    q = tr.mac_queue
+    assert q.expired > 0
+    assert q.deferred == q.expired
+    assert q.pending_at_end == 0

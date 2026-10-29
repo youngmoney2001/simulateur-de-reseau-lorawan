@@ -1,0 +1,138 @@
+# Matrice de conformité LoRaWAN
+
+Cible : **LoRaWAN L2 1.0.4 (TS001-1.0.4)**, avec les paramètres régionaux **RP002-1.0.5** et les errata applicables.
+Ce document est la base de travail avant toute modification du moteur. Il ne déclare conforme que ce qui a été vérifié.
+
+## 1. Sources et état de vérification
+
+| Source | Statut dans cette itération |
+|---|---|
+| TS001-1.0.4, PDF officiel (`lora-alliance.org/wp-content/uploads/2021/11/LoRaWAN-Link-Layer-Specification-v1.0.4.pdf`) | **Lu** : §1, §2 (classes), §3 (fenêtres de réception), §4 (format de trame, FCnt, FOpts, ADR, ACK, retransmissions, chiffrement, MIC), §5 (commandes MAC, tableau 14 et 15, LinkCheck, LinkADR jusqu'à Redundancy). **Non lu** : §5.2 (fin), §5.3 à §5.9, §6 (activation), §7 (backoff), §8 à §15 (classes B et C), §16 à §18. L'outil de lecture plafonne à 30 pages ; le PDF en fait 90. Les clauses non lues sont marquées **NV** (non vérifié). |
+| Errata TS001-1.0.4 | `ERRATA_L2_1_0_4_D2D` : suppression de l'interdiction d'émettre des downlinks depuis un dispositif (D2D). **Sans effet** : le simulateur n'a pas de D2D. Errata US915/AU915 ChMaskCtrl (contradiction RP002-1.0.4) : **sans effet** tant que les plans à canaux fixes ne sont pas modélisés. |
+| RP002-1.0.5 (paramètres régionaux) | **Non vérifié.** Le document existe (publié le 8 octobre 2025), mais son texte n'est pas accessible avec les outils de cette session. Les tables du simulateur proviennent de RP002-1.0.3 (recherches antérieures). **La compatibilité 1.0.5 n'est donc pas établie.** |
+| Code du dépôt | Inspection directe des modules : `core/src/engine.cpp` (boucle fermée S2 et chemin historique), `lorawan_frame.cpp`, `session.cpp`, `secure_frame.cpp`, `crypto.cpp`, `join.cpp`, `mac_commands.cpp`, `adr.cpp`, `class_b.cpp`, `mesh.cpp`. |
+
+**Constat de cadrage.** Le moteur de simulation (boucle fermée, chemin historique) et les modules de protocole (`core/src/*.cpp`) ne sont pas la même chose. Un codec correct ne prouve pas le comportement de bout en bout. Les statuts ci-dessous indiquent donc, pour chaque règle, ce qui est vérifié **dans le moteur** (E2E) et ce qui n'est vérifié que **dans un module isolé** (codec ou état).
+
+## 2. Légende
+
+- **Type** : `Obl.` = exigence obligatoire du protocole (SHALL / SHALL NOT) ; `Fac.` = fonctionnalité facultative (MAY, ou classe non obligatoire) ; `Appr.` = approximation physique ou modèle du simulateur, hors norme.
+- **Statut** : `C` conforme (vérifié dans le moteur E2E) ; `Mod` conforme au niveau du module seul, pas du moteur ; `P` partiel ; `E` écart ; `NV` non vérifié ; `HP` hors périmètre de cette itération.
+
+## 3. Matrice
+
+### 3.1 Classe A, fenêtres RX1/RX2, planification des descentes
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| A1 | TS001 §3.3 | Obl. | Après chaque uplink, ouvrir RX1 ; ouvrir RX2 si aucune trame destinée au dispositif n'est reçue en RX1. | Boucle fermée S2 : RX1 seule. Chemin historique : repli RX2 si la passerelle ne peut pas émettre en RX1 (`engine.cpp`, ~l.1096). | E (S2) / P (historique) | S2 ne modélise pas RX2 : une descente que la passerelle ne peut pas émettre en RX1 est perdue. | `test_closed_loop.cpp` : à écrire (repli RX2 en S2). |
+| A2 | TS001 §3.3.1 | Obl. | Pas d'ouverture de RX2 si une trame valide est reçue en RX1. | Historique : repli seulement après `GatewayBusy` en RX1. S2 : sans objet (pas de RX2). | P | Dépend de A1. | à écrire avec A1 |
+| A3 | TS001 §3.3.2 | Obl. | RX1 ouverte à RECEIVE_DELAY1 = 1 s après la fin de l'uplink, durée ≥ détection du préambule. | S2 : `kLoopRxDelayNs = 1 s`, `kLoopRx1WindowNs = 1 s`. | C (valeurs par défaut) | RXTimingSetupReq (§5.7, NV) non modélisé : délai réglable 1 à 15 s. | `test_closed_loop.cpp` (délai RX1 implicite) |
+| A4 | TS001 §3.3.3 | Obl. | RX2 à RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s. | Historique : +1 s. S2 : absente. | P / E | Voir A1. | à écrire |
+| A5 | TS001 §3.3.3, RP002-1.0.5 | Obl. (valeur régionale) | Fréquence et débit RX2 par défaut de la région (EU868 : 869,525 MHz, DR0 ; à confirmer dans RP002-1.0.5). | Seul `rx2_sf` (défaut 12) existe ; fréquence RX2 non modélisée. | E | Fréquence et débit régionaux absents ; valeur RP002-1.0.5 NV. | à écrire |
+| A6 | TS001 §3.3.5 | Obl. | La passerelle commence la descente **précisément** au début de la fenêtre. | S2 : `start = max(t_open, busy_until)` : la descente peut être décalée dans RX1, sinon perdue. | E (modèle) | Le décalage intra-fenêtre n'est pas conforme ; il correspond à une approximation d'occupation de la passerelle. Corriger avec A1 (repli RX2 ou perte). | à écrire |
+| A7 | TS001 §3.3.6 | Obl. (contrainte dispositif) | Un dispositif **n'émet pas** un nouvel uplink avant d'avoir reçu une descente en RX1/RX2 de l'uplink précédent, ou avant la fin de RX2. | S2 : l'émission suit la période du scénario ; une émission pendant RX1 fait perdre la descente (`device_missed`) et le prochain uplink n'est **pas** retardé (règle utilisateur, voir §5 C1). | **E — conflit** | Le moteur autorise des émissions pendant les fenêtres RX, ce que la norme interdit au dispositif. | `test_retry_after_device_missed_rx1` (historique, à conserver) |
+| A8 | TS001 §4.1 | Obl. | MACPayload ≤ M (taille maximale par débit, RP002). Trame plus longue : rejetée silencieusement. | Présent dans `plan.py` / `uplink.py` ; couverture de test non vérifiée dans cette session. | NV | — | à vérifier |
+| A9 | TS001 §3.3.4, §5.7 | Obl. ? | RXTimingSetupReq / Ans : délai RX1 réglable. | Non modélisé (S2). | NV / E | Statut obligatoire à confirmer dans §5.7 (NV). | — |
+
+### 3.2 Format de trame, FCnt, FOpts, ACK, retransmissions, chiffrement
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| F1 | TS001 §4.2 | Obl. | MHDR : FType (3 bits), RFU, Major = 00. | `lorawan_frame.cpp` (codec). | Mod | — | `test_lorawan_frame.cpp` |
+| F2 | TS001 §4.3.1 | Obl. | FOptsLen ≤ 15 ; FOpts ≤ 15 octets. | `lorawan_frame.cpp` (`kMaxFOpts`) ; S2 : budget 15 octets. | C (S2) | — | `test_closed_loop.cpp` (budget FOpts) |
+| F3 | TS001 §4.3.2 | Obl. | FPort 0 interdit avec FOpts ; FPort absent si pas de FRMPayload. | `lorawan_frame.cpp` l.32–39. | Mod | — | `test_lorawan_frame.cpp` |
+| F4 | TS001 §4.3.2 | Obl. | FPort 1..223 applicatif ; **224 = test MAC** (TS009) ; 225..255 réservés. | `kMaxFPort = 223` : **rejette FPort 224**. | E (mineur) | Un dispositif de test TS009 ne peut pas être décodé. | à écrire : accepter 224 |
+| F5 | TS001 §4.3.1.5 | Obl. | FCnt = 16 bits de poids faible ; le serveur reconstruit les 16 bits de poids fort. | `uplink.py` reconstruit (côté réseau) ; `secure_frame.cpp` exige `fcnt16 == fcnt32 & 0xFFFF` (l'appelant fournit le compteur complet). | P | Pas d'inférence du MSB dans le module de trame sécurisée. | `test_secure_frame.cpp` (à compléter) |
+| F6 | TS001 §4.3.1.5 | Obl. | Le dispositif ignore une retransmission de descente (même FCnt). | `session.cpp` : `Replay` si `fcnt < expected`. | Mod | — | `test_session.cpp` |
+| F7 | TS001 §4.3.1.5 | Obl. | ABP : compteurs jamais remis à zéro pendant la vie du dispositif. OTAA : remise à zéro après Join-Accept. | `session.cpp` : `fcnt_up_ = 0` à l'initialisation. Remise OTAA : NV (§6). | P | — | à vérifier |
+| F8 | TS001 §5 (intro) | Obl. | **Commandes MAC en FOpts : jamais chiffrées.** Commandes en FRMPayload (FPort 0) : chiffrées avec NwkSKey. | `secure_frame.cpp` l.49–53 : **FOpts chiffrés** avec `NwkSEncKey` (mécanisme LoRaWAN **1.1**). | **E majeur** | Trames non conformes à 1.0.4 dès qu'un FOpts est présent. | à écrire : vecteur 1.0.4 (FOpts en clair) |
+| F9 | TS001 §4.4 | Obl. | MIC = CMAC(NwkSKey, B0 \| msg)[0..3] (1.0.x). | `secure_frame.cpp` : `compute_uplink_mic_11` / `compute_downlink_mic_11` (clés 1.1 `SNwkSIntKey` / `FNwkSIntKey`). `crypto.cpp` contient `compute_data_mic` (1.0.x) **non utilisé** par le module de trame. | **E majeur** | Profil de trame 1.1 seul : aucune trame 1.0.4 produite par ce module. | à écrire : vecteur MIC 1.0.4 |
+| F10 | TS001 §4.3.3 | Obl. | Chiffrement FRMPayload : AppSKey (FPort ≥ 1), NwkSKey (FPort 0). | `secure_frame.cpp` `payload_key` : port 0 → `NwkSEncKey` (1.1) ; port ≥ 1 → `AppSKey` (conforme). | P | Clé du port 0 non conforme à 1.0.4. | à écrire |
+| F11 | TS001 §4.3.1.2 | Obl. | Confirmé reçu en RX → ACK avec le prochain uplink ; le réseau n'envoie l'ACK que dans les RX de l'uplink confirmé. | S2 : descente ACK en RX1 (`kind = 1`) ; bit ACK du prochain uplink non modélisé (sans effet sur l'airtime). | P | Bit ACK non porté. | à écrire |
+| F12 | TS001 §4.3.1.3 | Obl. (dispositif) | Uplink confirmé : retransmis jusqu'à ACK, avec RETRANSMIT_TIMEOUT après RX2 ; uplink non confirmé : répété NbTrans fois tant qu'aucune descente Class A n'est reçue. | **Non modélisé** (S2 et historique : « sans retransmission », `trace_events.py`). | **E** | Confirmés et NbTrans absents du trafic simulé. Changerait airtime et collisions. | à écrire après décision C4 |
+| F13 | TS001 §4.3.1.4 | Fac. (Class A : MAY) | FPending : le dispositif peut émettre tôt. | Non modélisé. | HP | — | — |
+| F14 | TS001 §4.3.1.1 | Obl. (ADRACKReq, backoff) | ADRACKCnt ; ADRACKReq à ADR_ACK_LIMIT ; backoff du débit et de la puissance selon Table 9. | `adr.cpp` : compteur ADR_ACK côté dispositif (exposants 2^k). Séquence Table 9 : NV. S2 : ADR côté réseau seulement. | P | Backoff dispositif absent de S2. | à écrire |
+
+### 3.3 Commandes MAC
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| M1 | TS001 §5 | Obl. | Réponses dans l'**ordre** de réception ; toutes les commandes d'une trame sont répondues dans **une** trame ; troncature autorisée à la fin de la dernière commande qui tient ; toutes exécutées. | S2 : réponses dans la descente de leur uplink. Ordre : commandes à état (LinkADR, DutyCycle) avant la file, donc pas strictement l'ordre de réception. | P | Ordre des réponses. | à écrire |
+| M2 | TS001 §5 | Obl. | **Une réponse à une requête du dispositif n'est envoyée que dans les fenêtres RX qui suivent la requête** ; elle expire après ces fenêtres. | **Corrigé dans cette itération** : S2 reportait LinkCheckAns et DeviceTimeAns jusqu'à 3 uplinks (non conforme). Désormais, une réponse qui ne tient pas expire au premier report. | **C** (S2, après correction) | — | `test_closed_loop.cpp` : `check_mac_lifecycle` (réponse servie dans **sa** descente, jamais reportée) ; `test_mac_queue_fairness_bounded_wait` ; `test_answers_are_never_deferred_end_to_end` (Python) |
+| M3 | TS001 §5, Tab. 15 | Obl. | Priorité : réponses MAC et nouvelles commandes avant la charge applicative. | S2 : budget FOpts uniquement (pas de concurrence avec une charge applicative). | P | Concurrence payload / MAC non modélisée. | à écrire |
+| M4 | TS001 §5 (note) | Obl. | Commande MAC inconnue : arrêt du traitement de la séquence. | `mac_commands.cpp` renvoie `UnknownCommand` ; arrêt de la séquence : NV. | NV | — | à vérifier |
+| M5 | TS001 §5.1 | Obl. | LinkCheckReq → LinkCheckAns (Margin, GwCnt). | S2 : réponse émise ; marge indicative (`MAC_PLAN.md`). | P | Marge : **approximation** du simulateur, pas la marge SNR normative. GwCnt = 1 (une passerelle). | `test_mac_loop.py` |
+| M6 | TS001 §5.2 | Obl. | LinkADRReq avec ADR = 1 : tout ou rien. Avec ADR = 0 : acceptation **par élément** (débit, puissance, canaux). | S2 : accepté ou refusé en bloc (bits d'acquittement). Pas de réponse partielle, pas de ChMask (canaux EU868 fixes non modélisés). | P | Réponse par élément absente. | à écrire |
+| M7 | TS001 §5.2 (Table 18) | Obl. | TXPower plus haute que le maximum : ACK et puissance maximale. Plus basse que possible : NACK. | S2 : index hors table refusé ; cas « trop haut » : à vérifier. | P | — | à écrire |
+| M8 | TS001 §5.2 | Obl. | Valeur 0xF pour DataRate ou TXPower : ignorer le champ. | Codec : NV. S2 : NV. | NV | — | — |
+| M9 | TS001 §5.2 (Table 20) | Obl. | NbTrans (1..15) appliqué à la répétition des uplinks ; ChMaskCntl. | NbTrans **non appliqué** (lié à F12). | E | — | — |
+| M10 | TS001 §5.3 à §5.9 | Obl./Fac. selon commande | DutyCycle, DevStatus, RXParamSetup, NewChannel, DlChannel, RXTimingSetup, TXParamSetup, DeviceTime. | S2 : DutyCycle (oui, voir ADR/duty), DevStatus (oui), DeviceTime (oui, valeur approximative). RXParamSetup, NewChannel, DlChannel, RXTimingSetup, TXParamSetup : non modélisés. `mac_commands.cpp` : codec. | NV pour les clauses ; E si obligatoires | Statut obligatoire à confirmer (texte NV). | — |
+| M11 | TS001 §5.1, §5.2 | Obl. | LinkCheckReq et DeviceTimeReq reçus : le réseau **doit** répondre. | S2 : réponses émises (voir M2). | C (S2) | — | — |
+
+### 3.4 ADR, puissance, débits, duty cycle, régional
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| R1 | TS001 §4.3.1.1 | Obl. (dispositif) | Puissance et débit par défaut : maximum et minimum autorisés. Un dispositif OTAA suit le débit de jointure. | Boucle fermée : `plan`/`region` ; défauts à vérifier. | NV | — | à vérifier |
+| R2 | RP002-1.0.5 | Obl. (valeur régionale) | Tables de débits, puissance (index 0 = maximum EIRP, pas de 2 dB selon plan), limites réglementaires de duty cycle. | Tables EU868 de RP002-1.0.3 (puissance : 16 dBm, pas 2 dB, index 0..7). RP002-1.0.5 **NV**. | NV | Compatibilité 1.0.5 non établie. | — |
+| R3 | Réglementaire | Obl. (hors LoRaWAN) | Duty cycle réglementaire par bande et sous-bande ; `DutyCycleReq` le réduit sans jamais l'élargir. | Implémenté (`T_rest = T_air × (1/D − 1)`, limite séparée de `DutyCycleReq`). | C (S2) | — | `test_closed_loop.cpp` (divergence de convention) |
+| R4 | Appr. | — | Airtime, sensibilité, collisions, occupation passerelle. | Modèle SX1276 et `lora_phy.cpp`. | Appr. | — | — |
+
+### 3.5 Compteurs, sécurité, jointure
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| J1 | TS001 §6 | Obl. | Join-Request/Join-Accept, MIC, DevNonce non réutilisé, délais JOIN_ACCEPT (5 s et 6 s en 1.0.x : **NV**). | `join.cpp` : chemin 1.0.x (`compute_join_accept_mic_legacy`) **et** 1.1 (`JSIntKey`). Jointure refusée par la boucle fermée. | Mod (1.0.x et 1.1) / HP en E2E | Pas de test E2E ; délais NV. | `test_join.cpp` (existant) |
+| J2 | TS001 §6.2.4, §6.1 | Obl. | Dérivation de NwkSKey et AppSKey depuis AppKey (1.0.x : AppNonce, NetID, DevNonce). | `crypto.cpp` / `join.cpp` : dérivation 1.1 et 1.0.x présentes ; **NV** pour la conformité 1.0.x. | P | À vérifier avec §6 (NV). | — |
+| S1 | TS001 §4.3.3, §4.4 | Obl. | Profil 1.0.4 : MIC et chiffrement avec NwkSKey / AppSKey ; FOpts en clair. | Module de trame : **profil 1.1 uniquement** (voir F8 à F10). | **E majeur** | Décision C2. | — |
+| S2 | TS001 §4.3.1.5 | Obl. | OTAA : FCntUp et FCntDown remis à zéro après Join-Accept. | `session.cpp` (initialisation) ; reprise après jointure : NV. | P | — | — |
+
+### 3.6 Classes B et C, mesh
+
+| ID | Réf. | Type | Comportement attendu | Implémentation actuelle | Statut | Écart | Test |
+|---|---|---|---|---|---|---|---|
+| B1 | TS001 §8 à §14 | Fac. | Classe B : beacons, ping slots, MAC de classe B (0x10–0x1F). | `class_b.cpp`, `c_api_class_b.cpp` (modules). Non intégré à la boucle fermée. Texte §8–14 **NV**. | HP / NV | — | — |
+| C1 | TS001 §15 | Fac. | Classe C : écoute continue, RX2 après chaque émission. | **Absente.** | HP | — | — |
+| X1 | — | Hors standard | Mesh : **pas une fonctionnalité LoRaWAN standard**. `mesh.cpp` existe ; aucune spécification de périmètre. | Non démarré. | HP | Architecture et périmètre à définir séparément. | — |
+
+## 4. Approximations du simulateur (hors norme, à documenter)
+
+- Propagation, sensibilité (décalage `device_rx_offset_db`), collisions, occupation de la passerelle (une passerelle unique).
+- Marge de LinkCheckAns indicative, DevStatusAns (batterie et marge) approximatifs, DeviceTimeAns sans horloge GPS réelle.
+- Ordre et durée des uplinks : période, jitter de démarrage, pas de concurrence avec charge applicative.
+- Airtime : modèle SX1276 (`lora_phy.cpp`) ; l'airtime de la boucle fermée réserve les octets MAC (option A).
+
+## 5. Conflits entre résultats historiques ou choix utilisateur et la norme
+
+**C1 — Émission pendant les fenêtres RX (A7).** La règle retenue pour la boucle fermée (« une émission pendant RX1 fait perdre la descente ; la prochaine émission n'est pas retardée ») contredit TS001 §3.3.6 (le dispositif ne doit pas émettre avant la fin de ses fenêtres). Options :
+- (a) conserver le modèle et refuser les scénarios dont la période est inférieure à airtime + RX2 (validation explicite) ;
+- (b) retarder la prochaine émission après RX2 (conforme ; modifie les résultats des scénarios à période courte) ;
+- (c) conserver avec une non-conformité documentée.
+Migration proposée : (b) ou (a) pour la boucle fermée uniquement ; le chemin historique reste inchangé jusqu'à validation explicite.
+
+**C2 — Profil de protocole (F8, F9, F10, S1).** Le module de trame sécurisée implémente LoRaWAN 1.1 (MIC et chiffrement de FOpts avec des clés 1.1). La cible est 1.0.4. Options :
+- (a) profil de version explicite : 1.0.4 pour les trames et le MIC (`compute_data_mic` existant), 1.1 conservé comme profil séparé ;
+- (b) supprimer le profil 1.1 du module de trame (non recommandé sans décision).
+Recommandation : (a), avec tests de vecteurs 1.0.4.
+
+**C3 — RX2 en boucle fermée (A1, A4, A5, A6).** Nécessite la fréquence et le débit RX2 régionaux, donc l'accès à RP002-1.0.5 (NV).
+
+**C4 — Retransmissions confirmées et NbTrans (F12, M9).** Modifie l'airtime et les collisions ; à faire avec validation explicite des traces.
+
+## 6. Ordre de correction et état
+
+| Ordre demandé | Élément | État |
+|---|---|---|
+| 1. Classe A, RX1/RX2, planification | Repli RX2 en S2 (A1, A4, A5, A6) ; conflit A7 (C1) | **Non fait** : bloqué par C1 (décision) et C3 (RP002-1.0.5). |
+| 2. Commandes MAC, réponses, FOpts | Réponses MAC : pas de report (M2) | **Fait** : tests C++ et Python ; empreintes historiques inchangées. Reste : M1, M3, M6, M7, M8, M9. |
+| 3. ADR, puissance, débits, duty cycle, régional | RP002-1.0.5 (R2), backoff ADR (F14) | **Non fait** : texte RP002-1.0.5 NV. |
+| 4. Compteurs, sécurité, jointure | Profil 1.0.4 (F8, F9, F10, S1) ; FPort 224 (F4) | **Non fait** : décision C2 requise. |
+| 5. Classes B et C | Hors périmètre ; texte §8–15 NV | **Non fait**. |
+
+## 7. Tests de validation exécutés pour ce tour
+
+- `lsim_tests` (C++, dont `check_mac_lifecycle`, `test_mac_queue_fairness_bounded_wait`, `test_mac_no_retransmission_of_lost_answers`) : 654 568 vérifications, sans échec. Même résultat sous ASan/UBSan.
+- `python/tests` : 1674 réussis, 1 ignoré.
+- `scripts/mac_baseline_dump.py` : empreintes historiques `d2cb0fac…` (sorties) et `ed126d7f…` (traces) **inchangées**.
+- Vérification du pont : la bibliothèque doit être reconstruite entière (`cmake --build build`) avant les tests Python ; une cible partielle laisse l'ancien `.so` en place.

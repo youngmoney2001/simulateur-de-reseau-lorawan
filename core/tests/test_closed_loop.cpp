@@ -416,17 +416,21 @@ void check_mac_lifecycle(const LoopResult& res, std::uint32_t max_deferrals) {
     std::uint64_t n_delivered = 0, n_lost = 0, n_expired = 0, n_queued = 0, n_dispatched = 0;
     for (const LoopMacItem& it : res.mac_items) {
         sum_def += it.deferrals;
+        const bool answer = it.cmd == kLoopCmdLinkCheck || it.cmd == kLoopCmdDeviceTime;
         // Une commande est portée par une descente de même type, et une seule.
         switch (it.state) {
             case LoopMacState::Queued:
                 ++n_queued;
+                CHECK_TRUE(!answer);  // une réponse ne reste jamais en file
                 CHECK_EQ(it.downlink, std::int64_t{-1});
                 CHECK_TRUE(it.deferrals <= max_deferrals);  // jamais au-delà de la borne
                 break;
             case LoopMacState::Expired:
                 ++n_expired;
                 CHECK_EQ(it.downlink, std::int64_t{-1});
-                CHECK_EQ(static_cast<int>(it.deferrals), static_cast<int>(max_deferrals) + 1);
+                // Réponse : expire au premier report (fenêtres RX passées). Requête : après la borne.
+                CHECK_EQ(static_cast<int>(it.deferrals),
+                         answer ? 1 : static_cast<int>(max_deferrals) + 1);
                 break;
             case LoopMacState::Delivered:
             case LoopMacState::Lost: {
@@ -439,6 +443,11 @@ void check_mac_lifecycle(const LoopResult& res, std::uint32_t max_deferrals) {
                 CHECK_EQ(dl.delivered, it.state == LoopMacState::Delivered);
                 CHECK_TRUE((dl.commands & it.cmd) != 0);
                 CHECK_TRUE(it.deferrals <= max_deferrals);
+                // Réponse : servie dans la descente de son propre uplink, jamais une autre.
+                if (answer) {
+                    CHECK_EQ(static_cast<std::size_t>(dl.uplink), static_cast<std::size_t>(it.uplink));
+                    CHECK_EQ(it.deferrals, std::uint8_t{0});
+                }
                 break;
             }
             case LoopMacState::Dispatched:
@@ -498,8 +507,9 @@ void test_mac_queue_lifecycle_under_mixed_load() {
     CHECK_TRUE(res.mac.delivered > 0);      // descentes reçues
     CHECK_TRUE(res.mac.dispatch_lost > 0);  // descentes non reçues
     CHECK_TRUE(res.mac.expired > 0);        // expirations
-    CHECK_TRUE(res.mac.pending_at_end > 0); // commandes encore en file à la fin
-    CHECK_TRUE(res.mac.deferred > res.mac.expired);
+    // Réponses : expirent au premier report, donc deferred = expired ici ; seules les requêtes du
+    // réseau (DevStatusReq, 1 octet) peuvent rester en file.
+    CHECK_TRUE(res.mac.deferred >= res.mac.expired);
     std::size_t lost_carriers = 0;
     for (const LoopUplink& u : res.uplinks) lost_carriers += u.outcome != TxOutcome::Received;
     CHECK_TRUE(lost_carriers > 0);          // uplinks porteurs perdus : aucune commande créée
@@ -534,19 +544,18 @@ void test_mac_queue_fairness_bounded_wait() {
                                                    nullptr, opt, st, tot, res)),
              0);
     check_mac_lifecycle(res, opt.mac_max_deferrals);
-    // Chaque type est dispatché au moins une fois (aucun n'est exclu par les autres).
-    bool lc = false, dt = false, ds = false;
+    // Les requêtes du réseau (DevStatusReq) sont servies malgré les commandes à état.
+    bool ds = false;
     for (const LoopMacItem& it : res.mac_items) {
-        if (it.downlink < 0) continue;
-        lc = lc || it.cmd == kLoopCmdLinkCheck;
-        dt = dt || it.cmd == kLoopCmdDeviceTime;
-        ds = ds || it.cmd == kLoopCmdDevStatus;
+        if (it.downlink >= 0 && it.cmd == kLoopCmdDevStatus) ds = true;
     }
-    CHECK_TRUE(lc && dt && ds);
-    // Les commandes à état sont servies en priorité : DutyCycleReq et LinkADRReq ne sont pas
-    // dans la file et ne sont jamais expirées.
+    CHECK_TRUE(ds);
+    // Une réponse ne peut pas attendre : elle est servie dans sa descente ou expire au premier report.
+    // Sous charge avec LinkADR et DutyCycle en attente (8 octets), LinkCheckAns et DeviceTimeAns
+    // se disputent la descente : l'une des deux expire, aucune n'est reportée.
     CHECK_TRUE(res.mac.expired > 0);
     CHECK_TRUE(res.mac.dispatched > 0);
+    CHECK_EQ(res.mac.deferred >= res.mac.expired, true);
 }
 
 // Pas de retransmission : une commande perdue n'est jamais replacée dans une autre descente.

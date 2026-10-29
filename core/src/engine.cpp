@@ -1625,6 +1625,9 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                          [](const LoopQueued& x, const LoopQueued& y) { return x.deferrals > y.deferrals; });
         std::uint8_t carried = 0;
         std::vector<std::uint32_t> carried_ids;
+        const auto is_answer = [](std::uint8_t cmd) {
+            return cmd == kLoopCmdLinkCheck || cmd == kLoopCmdDeviceTime;
+        };
         for (auto it = sv.queue.begin(); it != sv.queue.end();) {
             LoopMacItem& mi = out.mac_items[it->id];
             if (it->bytes <= budget) {
@@ -1640,7 +1643,10 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 ++qs.deferred;
                 ++it->deferrals;
                 mi.deferrals = it->deferrals;
-                if (it->deferrals > options.mac_max_deferrals) {
+                // TS001 §5 : une réponse à une requête du dispositif (LinkCheckAns, DeviceTimeAns)
+                // n'est envoyée que dans les fenêtres RX qui suivent cette requête ; elle n'est
+                // jamais reportée. Une réponse qui ne tient pas dans sa descente expire aussitôt.
+                if (it->deferrals > options.mac_max_deferrals || is_answer(it->cmd)) {
                     ++qs.expired;
                     mi.state = LoopMacState::Expired;
                     it = sv.queue.erase(it);

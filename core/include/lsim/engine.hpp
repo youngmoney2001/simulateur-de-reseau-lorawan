@@ -285,7 +285,8 @@ struct LoopOptions {
 //   Queued (mise en file à un uplink reçu) -> Dispatched (placée dans la descente planifiée)
 //   Dispatched -> Delivered (la descente est reçue par le dispositif) | Lost (non reçue : pas de
 //   créneau passerelle dans RX1, émission du dispositif pendant RX1, ou RSSI insuffisant)
-//   Queued -> Expired (après `mac_max_deferrals` + 1 reports) ; Queued à la fin : pending_at_end.
+//   Queued -> Expired (après `mac_max_deferrals` + 1 reports ; une réponse, LinkCheckAns ou
+//   DeviceTimeAns, expire au premier report : TS001 §5) ; Queued à la fin : pending_at_end.
 // Une commande n'est placée dans une descente qu'une fois : aucune retransmission.
 enum class LoopMacState : std::uint8_t { Queued = 0, Dispatched = 1, Delivered = 2, Lost = 3, Expired = 4 };
 
