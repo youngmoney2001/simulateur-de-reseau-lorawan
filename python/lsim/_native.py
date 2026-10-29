@@ -750,6 +750,18 @@ class _CMeshDelivery(ctypes.Structure):
     ]
 
 
+class _CMeshHop(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("sender", ctypes.c_uint32),
+        ("receiver", ctypes.c_uint32),
+        ("t_start_ns", ctypes.c_int64),
+        ("t_end_ns", ctypes.c_int64),
+        ("outcome", ctypes.c_uint8),
+        ("hop_index", ctypes.c_uint8),
+    ]
+
+
 class _CMeshSummary(ctypes.Structure):
     _fields_ = [
         ("transmissions", ctypes.c_uint64),
@@ -770,6 +782,13 @@ LIB.lsim_mesh_routes.restype = ctypes.c_int32
 LIB.lsim_mesh_routes.argtypes = [
     ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
     ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_mesh_forward_log.restype = ctypes.c_int32
+LIB.lsim_mesh_forward_log.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32, ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary), ctypes.POINTER(_CMeshHop), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
 LIB.lsim_mesh_forward.restype = ctypes.c_int32
 LIB.lsim_mesh_forward.argtypes = [
     ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),

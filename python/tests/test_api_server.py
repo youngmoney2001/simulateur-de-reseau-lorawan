@@ -180,13 +180,61 @@ def test_terrain_path_in_scenario_is_refused_with_its_code(api):
     assert body["problems"][0]["code"] == "terrain_not_allowed"
 
 
-def test_mesh_is_refused_explicitly(api):
+def test_mesh_without_profile_is_refused_by_the_scenario_rules(api):
     d = _scenario()
     d.pop("gateway")
     d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0}, {"name": "b", "x_m": 500, "y_m": 0}]
     d["mesh"] = {"border": "a"}
     status, body = api.call("POST", "/api/v1/runs", {"scenario": d})
     assert status == 422 and "mesh" in body["message"]
+
+
+def test_mesh_downlink_options_are_refused_explicitly(api):
+    d = _mesh_scenario()
+    for protocol in ({"confirmed_uplinks": True}, {"downlink_every": 1}, {"join": True}):
+        status, body = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": protocol})
+        assert status == 422 and body["code"] == "validation_error", protocol
+        assert "mesh" in body["message"]
+
+
+def _mesh_scenario(count=40):
+    d = _scenario(count=count, messages=4)
+    d.pop("gateway")
+    d["gateways"] = [
+        {"name": "frontiere", "x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15,
+         "profile": "rak5148", "mesh": True},
+        {"name": "relais", "x_m": 1200, "y_m": 0, "antenna_gain_dbi": 2.15,
+         "profile": "rak5148", "mesh": True},
+        {"name": "ip", "x_m": -2500, "y_m": 0, "antenna_gain_dbi": 2.15},
+    ]
+    d["mesh"] = {"border": "frontiere", "spreading_factor": 12, "bandwidth_khz": 203,
+                 "coding_rate": 1, "payload_bytes": 32, "capture_db": 6, "max_hops": 8}
+    return d
+
+
+def test_mesh_run_reports_totals_and_per_device_losses(api):
+    # L'exemple du dépôt, SF12 sur le mesh : des trames décodées sont perdues sur le relais.
+    import yaml
+    example = Path(__file__).resolve().parents[2] / "examples" / "mesh_relais_quartier.yaml"
+    d = yaml.safe_load(example.read_text(encoding="utf-8"))
+    d["mesh"]["spreading_factor"] = 12
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    RunSummary.model_validate(summary)
+    t = summary["totals"]
+    assert t["sent"] == t["received"] + t["lost_sensitivity"] + t["lost_collision"] \
+        + t["lost_gateway_busy"] + t.get("lost_mesh", 0)
+    assert t.get("lost_mesh", 0) > 0  # SF12 sur le mesh : pertes réelles
+    _, devices = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    items = devices["items"]
+    assert sum(x["received"] for x in items) == t["received"]
+    assert sum(x.get("lost_mesh", 0) for x in items) == t["lost_mesh"]
+    _, page = api.call("GET", f"/api/v1/runs/{rid}/events?limit=500")
+    kinds = {e["kind"] for e in page["items"]}
+    assert "mesh_hop" in kinds
 
 
 def test_unknown_route_and_bad_run_id_are_404(api):

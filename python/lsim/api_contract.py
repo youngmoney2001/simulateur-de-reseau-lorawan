@@ -38,9 +38,10 @@ ProblemCode = Literal[
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
-    "lost_sensitivity", "lost_collision", "rx_window_missed",
+    "lost_sensitivity", "lost_collision", "rx_window_missed", "mesh_hop",
 ]
-HopOutcome = Literal["delivered", "lost_sensitivity", "lost_collision", "not_listened", "sent"]
+HopOutcome = Literal["delivered", "lost_sensitivity", "lost_collision", "lost_half_duplex",
+                     "not_listened", "sent", "suppressed"]
 
 
 class _Strict(BaseModel):
@@ -120,6 +121,9 @@ class Totals(_Strict):
     lost_collision: int = Field(ge=0)
     airtime_ns: int = Field(ge=0)
     lost_gateway_busy: int = Field(0, ge=0)  # reçue pendant une émission passerelle
+    # Mesh seulement : décodée par une passerelle, mais non remise au LNS par le mesh.
+    # Absent hors mesh. sent = received + lost_sensitivity + lost_collision + lost_gateway_busy + lost_mesh.
+    lost_mesh: Optional[int] = Field(default=None, ge=0)
 
 
 class GatewayLoadOut(_Strict):
@@ -141,6 +145,7 @@ class DeviceRowOut(_Strict):
     lost_sensitivity: int = Field(ge=0)
     lost_collision: int = Field(ge=0)
     airtime_ns: int = Field(ge=0)
+    lost_mesh: Optional[int] = Field(default=None, ge=0)  # mesh seulement (voir Totals)
     energy_per_message_j: Optional[float] = None
     average_current_ua: Optional[float] = None
 

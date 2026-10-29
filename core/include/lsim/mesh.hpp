@@ -30,6 +30,7 @@ enum class Status : std::int32_t {
     InvalidHops = 7,         // max_hops hors de 1..8
     UnknownNode = 8,         // trame reçue par un indice de passerelle inexistant
     TooManyReceptions = 9,   // trop de réceptions suivies : réduire la simulation
+    BufferTooSmall = 10,     // journal des sauts plus grand que le tampon fourni (count renseigné)
 };
 
 // Issue d'une trame au terme du relais.
@@ -47,6 +48,26 @@ enum class CopyState : std::uint8_t {
     Suppressed = 1,          // le relais a renoncé : un autre l'avait déjà transmise
     Border = 2,              // la passerelle a elle-même la frontière : remise directe
     NoRoute = 3,             // pas de route vers la frontière
+};
+
+// Issue d'un saut (une entrée par émission mesh et par intention, et par copie supprimée).
+enum class HopOutcome : std::uint8_t {
+    Received = 0,            // le saut prévu a reçu la copie
+    LostCollision = 1,       // le saut prévu a été brouillé
+    LostHalfDuplex = 2,      // le saut prévu émettait
+    Suppressed = 3,          // copie abandonnée : un doublon avait déjà été relayé (pas d'émission)
+};
+
+// Journal d'un saut. Pour une émission : t_start/t_end de l'émission ; pour une copie
+// supprimée : t_start = t_end = instant de la décision.
+struct HopEvent {
+    std::uint64_t frame_id = 0;
+    std::uint32_t sender = 0;
+    std::uint32_t receiver = 0;     // saut prévu (next[sender])
+    std::int64_t t_start = 0;
+    std::int64_t t_end = 0;
+    std::uint8_t outcome = 0;       // HopOutcome
+    std::uint8_t hop_index = 0;     // numéro du saut de la copie, 0 = premier
 };
 
 // Paramètres de la liaison mesh (toutes les passerelles identiques).
@@ -111,6 +132,7 @@ Status routes(const Radio& radio, std::size_t n, const std::uint8_t* capable,
 Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                const double* rssi, const std::int32_t* next, std::uint32_t border,
                bool suppress, std::int64_t backoff_window_ns, const Frame* frames,
-               std::size_t frame_count, Delivery* out, Summary* summary);
+               std::size_t frame_count, Delivery* out, Summary* summary,
+               std::vector<HopEvent>* log = nullptr);
 
 }  // namespace lsim::mesh

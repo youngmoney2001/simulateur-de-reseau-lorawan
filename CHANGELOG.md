@@ -3,10 +3,18 @@
 ## 0.1.0 (non publiée)
 
 
+### Mesh par saut dans la trace API
+
+- `lsim.mesh_pass.mesh_pass` : passe mesh extraite de `run_scenario` et partagée avec la trace (`build_multi_trace`). Sur `examples/mesh_relais_quartier.yaml`, totaux, résumé mesh et compteurs par dispositif sont identiques à la version précédente.
+- Natif : `lsim_mesh_forward_log` (et `mesh::forward` avec journal optionnel) renvoie chaque émission mesh avec son saut prévu, son issue et ses instants ; tampon borné, taille requise renvoyée si trop petit (statut 810, réessai côté Python).
+- Trace : événements `mesh_hop` ; issue `lost_mesh` pour les trames décodées non remises ; champs optionnels `lost_mesh` (totaux, par dispositif). Absents hors mesh.
+- API v1 : `mesh` accepté en uplinks seuls. `join`, `confirmed_uplinks` et `downlink_every` refusés en mesh (`validation_error`). Schémas régénérés (`trace_event`, `trace_page`, `run_summary`, `device_page`).
+- Tests : `python/tests/test_mesh_trace.py` (concordance avec `run_scenario`, journal natif, variante avec pertes mesh), `test_mesh.py` (journal, invariants, réessai du tampon), `test_api_server.py` (run mesh réel, refus des descentes).
+
 ### Join en multi-passerelles
 
 - Moteur natif multi (`core/src/engine.cpp`, `simulate_uplinks_multi_downlinks`) : règle `join` (`MultiDownlinkRule`), join-request décodée -> join-accept à fin + 5 s par la meilleure passerelle, 17 octets. API C : `lsim_downlink_rule.join`, `lsim_downlink_record.join`, `lsim_multi_tx_record.join_request` (champs ajoutés en fin de structure).
-- Placement des descendantes : première place libre à partir de l'ouverture RX1 (au lieu d'un `busy_until`), nécessaire car un join-accept s'ouvre plus tard qu'un downlink de données créé après lui. Résultats identiques sans join (empreintes de référence vérifiées).
+- Placement des descendantes : première place libre à partir de l'ouverture RX1 (au lieu d'un `busy_until`), nécessaire car un join-accept s'ouvre plus tard qu'un downlink de données créé après lui. Sans join, le placement natif est identique à la version précédente (comparaison bit à bit des descentes). Les empreintes de trace changent pour les runs à charge confirmée, à cause du libellé `data_ack` ci-dessous, et non à cause du placement.
 - `lsim.trace_events.build_multi_trace` : événements `join_request` et `join_accept` ; libellé `data_ack` des charges sur uplink confirmé (comme le mono) ; `decoded_mask` transmis au wrapper des descendantes.
 - L'API accepte `protocol.join` en multi ; seul le mesh reste refusé.
 - Tests : `python/tests/test_multi_join.py` (mono = multi sans contention, invariants du join, aucun chevauchement de descendantes).

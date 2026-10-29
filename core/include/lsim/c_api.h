@@ -923,6 +923,18 @@ typedef struct lsim_mesh_summary {
     uint64_t lost_half_duplex;   /* sauts perdus : récepteur en émission */
 } lsim_mesh_summary;
 
+/* Journal d'un saut mesh (mesh::HopEvent). outcome : 0 reçu, 1 collision, 2 demi-duplex,
+   3 copie supprimée (t_start = t_end = décision). */
+typedef struct lsim_mesh_hop {
+    uint64_t frame_id;
+    uint32_t sender;
+    uint32_t receiver;
+    int64_t  t_start_ns;
+    int64_t  t_end_ns;
+    uint8_t  outcome;
+    uint8_t  hop_index;
+} lsim_mesh_hop;
+
 LSIM_API int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out);
 LSIM_API int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out);
 // Tirage de shadowing (dB) d'un indice donné : même fonction que le cœur de simulation
@@ -939,6 +951,16 @@ LSIM_API int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_cou
                                    int64_t backoff_window_ns,
                                    const lsim_mesh_frame* frames, size_t frame_count,
                                    lsim_mesh_delivery* out, lsim_mesh_summary* summary);
+/* Comme lsim_mesh_forward, avec le journal des sauts. Si le journal dépasse hop_capacity,
+   rien n'est écrit, *hop_count reçoit la taille requise et le statut est BufferTooSmall (810). */
+LSIM_API int32_t lsim_mesh_forward_log(const lsim_mesh_radio* radio, size_t node_count,
+                                       const uint8_t* capable, const double* rssi_dbm,
+                                       const int32_t* next, uint32_t border, int suppress,
+                                       int64_t backoff_window_ns,
+                                       const lsim_mesh_frame* frames, size_t frame_count,
+                                       lsim_mesh_delivery* out, lsim_mesh_summary* summary,
+                                       lsim_mesh_hop* hops, size_t hop_capacity,
+                                       size_t* hop_count);
 
 #ifdef __cplusplus
 }

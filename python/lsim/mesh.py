@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 from lsim._native import LIB as _LIB
-from lsim._native import _CMeshDelivery, _CMeshFrame, _CMeshRadio, _CMeshSummary
+from lsim._native import _CMeshDelivery, _CMeshFrame, _CMeshHop, _CMeshRadio, _CMeshSummary
 from lsim.lora import StatusError
 from lsim.radio import LogDistanceModel
 
@@ -55,6 +55,8 @@ _BW_KHZ = (203, 406, 812, 1625)
 _LOSS_NAMES = ("", "no_route", "half_duplex", "collision", "suppressed")
 _COPY_STATES = ("forwarded", "suppressed", "border", "no_route")
 MAX_FRAMES = 5_000_000  # kMaxFrames côté natif
+_BUFFER_TOO_SMALL = 800 + 10  # mesh::Status::BufferTooSmall + LSIM_STATUS_MESH_BASE
+_HOP_OUTCOMES = ("received", "lost_collision", "lost_half_duplex", "suppressed")
 
 
 def _check(status: int) -> None:
@@ -296,6 +298,23 @@ class MeshDelivery:
     copy_state: str = ""      # sort de la copie reçue à l'accès : forwarded, suppressed, border, no_route
 
 
+@dataclass(frozen=True)
+class MeshHop:
+    """Un saut mesh journalisé : émission d'un relais vers le saut prévu, ou copie supprimée.
+
+    `t_start_ns`/`t_end_ns` : durée de l'émission ; pour une copie supprimée, les deux valent
+    l'instant de la décision. `outcome` : received, lost_collision, lost_half_duplex, suppressed.
+    """
+
+    frame_id: int
+    sender_id: str
+    receiver_id: str
+    t_start_ns: int
+    t_end_ns: int
+    outcome: str
+    hop_index: int
+
+
 @dataclass
 class MeshResult:
     deliveries: list[MeshDelivery] = field(default_factory=list)
@@ -303,6 +322,7 @@ class MeshResult:
     suppressed: int = 0           # copies abandonnées parce qu'un doublon avait été relayé
     lost_collision: int = 0       # sauts perdus par collision
     lost_half_duplex: int = 0     # sauts perdus : récepteur en émission
+    hops: tuple[MeshHop, ...] = ()  # journal des sauts (seulement si demandé)
 
     @property
     def delivered(self) -> int:
@@ -317,7 +337,8 @@ class MeshResult:
 def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
                    radio: Optional[MeshRadio] = None,
                    suppress_duplicates: bool = True,
-                   backoff_window_ns: int = 0) -> MeshResult:
+                   backoff_window_ns: int = 0,
+                   with_hops: bool = False) -> MeshResult:
     """Relais des trames saut par saut sur la bande mesh (calcul natif).
 
     `suppress_duplicates=True` (défaut) : un relais n'émet la trame qu'une fois et
@@ -347,10 +368,29 @@ def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
     c_sum = _CMeshSummary()
     nxt = (ctypes.c_int32 * n)(*graph.next_hop)
     cap = (ctypes.c_uint8 * n)(*graph.capable)
-    _check(_LIB.lsim_mesh_forward(
-        ctypes.byref(_c_radio(radio)), n, cap, graph.rssi, nxt, graph._index[graph.border_id],
-        1 if suppress_duplicates else 0, backoff_window_ns, c_frames, len(frames), c_out,
-        ctypes.byref(c_sum)))
+    args = (ctypes.byref(_c_radio(radio)), n, cap, graph.rssi, nxt, graph._index[graph.border_id],
+            1 if suppress_duplicates else 0, backoff_window_ns, c_frames, len(frames), c_out,
+            ctypes.byref(c_sum))
+    hops: tuple[MeshHop, ...] = ()
+    if with_hops:
+        # Journal borné : si le tampon est trop petit, le natif donne la taille requise.
+        size = max(1024, 4 * len(frames))
+        while True:
+            c_hops = (_CMeshHop * size)()
+            c_count = ctypes.c_size_t(0)
+            status = _LIB.lsim_mesh_forward_log(*args, c_hops, size, ctypes.byref(c_count))
+            if status != _BUFFER_TOO_SMALL:
+                break
+            size = int(c_count.value)
+        _check(status)
+        hops = tuple(
+            MeshHop(frame_id=int(h.frame_id), sender_id=graph.ids[h.sender],
+                    receiver_id=graph.ids[h.receiver], t_start_ns=int(h.t_start_ns),
+                    t_end_ns=int(h.t_end_ns), outcome=_HOP_OUTCOMES[h.outcome],
+                    hop_index=int(h.hop_index))
+            for h in c_hops[:c_count.value])
+    else:
+        _check(_LIB.lsim_mesh_forward(*args))
     out: list[MeshDelivery] = []
     for k in range(len(frames)):
         d = c_out[k]
@@ -369,4 +409,5 @@ def forward_frames(frames: Sequence[MeshFrame], graph: MeshGraph,
         suppressed=int(c_sum.suppressed),
         lost_collision=int(c_sum.lost_collision),
         lost_half_duplex=int(c_sum.lost_half_duplex),
+        hops=hops,
     )

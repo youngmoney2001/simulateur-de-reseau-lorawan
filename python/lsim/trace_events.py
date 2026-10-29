@@ -44,6 +44,7 @@ from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
+from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
     Counters,
@@ -432,6 +433,10 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
 
 _MULTI_UPLINK_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "received",
                          3: "lost_gateway_busy"}
+# Saut mesh (journal natif) -> issue de l'événement `mesh_hop`.
+_MESH_HOP_OUTCOME = {"received": "delivered", "lost_collision": "lost_collision",
+                     "lost_half_duplex": "lost_half_duplex", "suppressed": "suppressed"}
+MESH_BAND_HZ = 2_400_000_000
 _MULTI_HOP_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "delivered", 3: "not_listened"}
 _MULTI_DOWNLINK_OUTCOME = {0: "delivered", 1: "lost_sensitivity", 2: "gateway_busy",
                            3: "device_transmitting"}
@@ -439,13 +444,20 @@ _MULTI_DOWNLINK_OUTCOME = {0: "delivered", 1: "lost_sensitivity", 2: "gateway_bu
 
 @dataclass(frozen=True)
 class MultiTraceRun:
-    """Trace multi-passerelles : totaux et charges issus du même calcul natif que les événements."""
+    """Trace multi-passerelles : totaux et charges issus du même calcul natif que les événements.
+
+    Mesh : `totals.received` et `per_device[i].received` sont les trames remises au LNS (après
+    relais) ; `lost_mesh` (et `lost_mesh_by_device`) compte les trames décodées puis perdues sur le
+    mesh. Hors mesh : `lost_mesh` et `lost_mesh_by_device` valent None.
+    """
 
     per_device: tuple[Counters, ...]
     totals: Counters
     per_gateway: tuple  # GatewayRxCounters, dans l'ordre de `gateway_names`
     gateway_names: tuple[str, ...]
     events: tuple[ProtocolEvent, ...]
+    lost_mesh: Optional[int] = None
+    lost_mesh_by_device: Optional[tuple[int, ...]] = None
 
 
 def _finite_or_none(x: float) -> Optional[float]:
@@ -460,9 +472,14 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
     le dispositif est jointé si ce join-accept lui parvient. Une join-request perdue est répétée à
     l'émission suivante. Ce n'est pas la règle du mono (première émission seulement) : voir docs.
 
-    Le mesh n'est pas couvert (refusé en amont). Les totaux, les compteurs par dispositif et la charge
-    par passerelle viennent du même appel natif (`simulate_multi_downlinks`) que les événements : ils
-    concordent par construction.
+    Mesh (`scenario.model.mesh`) : la passe mesh (`mesh_pass`, la même que `run_scenario`) relaie
+    chaque copie vers la frontière. Un événement `mesh_hop` par émission mesh (ou copie supprimée),
+    à l'instant d'émission. Une trame décodée mais non remise est une perte `lost_mesh` (issue
+    `lost_mesh` de la trame). Les descentes (join, ACK, downlink) ne sont pas modélisées sur le mesh :
+    elles sont refusées.
+
+    Les totaux, les compteurs par dispositif et la charge par passerelle viennent du même appel natif
+    (`simulate_multi_downlinks`) que les événements : ils concordent par construction.
     """
     devices, _group_of, _indices = scenario.deploy()
     if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
@@ -477,24 +494,50 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                         device_antenna_gain_dbi=options.device_antenna_gain_dbi,
                         device_rx_offset_db=options.device_rx_offset_db,
                         join=options.join)
+    if scenario.model.mesh is not None and (options.join or options.confirmed_uplinks
+                                            or options.downlink_every):
+        raise ValueError("mesh : join, ACK et downlink non modélisés sur le mesh")
     result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
                                       scenario.environment)
+    mesh = None
+    delivered: frozenset = frozenset()
+    if scenario.model.mesh is not None:
+        mesh = mesh_pass(scenario, devices, models, result.trace, with_hops=True)
+        delivered = mesh.delivered_frames
+        decoded = {i for i, r in enumerate(result.trace) if r.outcome == 2}
+        if not delivered <= decoded:
+            raise RuntimeError("mesh : trame remise sans avoir été décodée (incohérent)")
     pending: list[tuple[int, int, str, int, int, tuple[HopEvent, ...], str]] = []
 
     def add(t: int, kind: str, device: int, gw: int, hops: list[HopEvent], outcome: str) -> None:
         pending.append((t, len(pending), kind, device, gw, tuple(hops), outcome))
 
-    for r in result.trace:
+    for i_rec, r in enumerate(result.trace):
         d = r.device_index
         radio = radios[d]
         best = r.best_gateway
         to_id = f"gw:{names[best]}" if best >= 0 else "gw:none"
         hops = [HopEvent(_dev(d), to_id, r.start_ns, radio.freq_hz, radio.dr,
                          _finite_or_none(r.best_rssi_dbm), _MULTI_HOP_OUTCOME[r.outcome])]
-        if r.outcome == 2 and best >= 0:
+        outcome = _MULTI_UPLINK_OUTCOME[r.outcome]
+        if mesh is not None and r.outcome == 2:
+            if i_rec in delivered:
+                hops.append(HopEvent(to_id, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
+            else:
+                outcome = "lost_mesh"
+        elif r.outcome == 2 and best >= 0:
             hops.append(HopEvent(to_id, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
         kind = "join_request" if r.join_request else "uplink"
-        add(r.start_ns, kind, d, max(best, 0), hops, _MULTI_UPLINK_OUTCOME[r.outcome])
+        add(r.start_ns, kind, d, max(best, 0), hops, outcome)
+
+    if mesh is not None:
+        idx_of = {name: k for k, name in enumerate(names)}
+        for h in mesh.mesh_result.hops:
+            d = result.trace[h.frame_id].device_index
+            hop = HopEvent(f"gw:{h.sender_id}", f"gw:{h.receiver_id}", h.t_start_ns, MESH_BAND_HZ,
+                           None, None, _MESH_HOP_OUTCOME[h.outcome])
+            add(h.t_start_ns, "mesh_hop", d, idx_of[h.sender_id], [hop],
+                _MESH_HOP_OUTCOME[h.outcome])
 
     for dl in result.downlinks:
         d, g = dl.device_index, dl.gateway_index
@@ -538,10 +581,27 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
         for k, (t, _order, kind, d, g, hops, outcome) in enumerate(pending)
     )
     net = result.network
-    totals = Counters(net.sent, net.received, net.lost_sensitivity, net.lost_collision,
+    if mesh is None:
+        totals = Counters(net.sent, net.received, net.lost_sensitivity, net.lost_collision,
+                          net.airtime_ns, net.lost_gateway_busy)
+        return MultiTraceRun(per_device=result.per_device, totals=totals,
+                             per_gateway=result.per_gateway, gateway_names=names, events=events)
+    # Mesh : remises au LNS par dispositif ; le reste des trames décodées est « lost_mesh ».
+    per_device, lost_by_device = [], []
+    for d, c in enumerate(result.per_device):
+        got = mesh.delivered_by_device[d]
+        if got > c.received:
+            raise RuntimeError("mesh : plus de trames remises que de trames décodées")
+        lost_by_device.append(c.received - got)
+        per_device.append(Counters(c.sent, got, c.lost_sensitivity, c.lost_collision,
+                                   c.airtime_ns, c.lost_gateway_busy))
+    received = len(delivered)
+    totals = Counters(net.sent, received, net.lost_sensitivity, net.lost_collision,
                       net.airtime_ns, net.lost_gateway_busy)
-    return MultiTraceRun(per_device=result.per_device, totals=totals,
-                         per_gateway=result.per_gateway, gateway_names=names, events=events)
+    return MultiTraceRun(per_device=tuple(per_device), totals=totals,
+                         per_gateway=result.per_gateway, gateway_names=names, events=events,
+                         lost_mesh=net.received - received,
+                         lost_mesh_by_device=tuple(lost_by_device))
 
 
 def downlink_airtime_by_device(scenario: Scenario, events: Sequence[ProtocolEvent],

@@ -52,6 +52,19 @@
           "title": "Lost Collision",
           "type": "integer"
         },
+        "lost_mesh": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lost Mesh"
+        },
         "lost_sensitivity": {
           "minimum": 0,
           "title": "Lost Sensitivity",

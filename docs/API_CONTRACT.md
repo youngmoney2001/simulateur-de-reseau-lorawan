@@ -65,7 +65,12 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
 `TraceEvent` : `seq`, `t_ns`, `kind`, `device_index`, `gateway_index`, `outcome`, `hops`.
 
 - `kind` : `join_request`, `join_accept`, `uplink`, `ack`, `downlink`, `lost_sensitivity`,
-  `lost_collision`, `rx_window_missed`.
+  `lost_collision`, `rx_window_missed`, `mesh_hop` (mesh seulement : une émission d'un relais vers
+  son saut prévu, à l'instant d'émission ; `device_index` est le dispositif d'origine de la trame,
+  `gateway_index` le relais émetteur ; `outcome` : `delivered`, `lost_collision`, `lost_half_duplex`
+  ou `suppressed` pour une copie abandonnée sans émission).
+- Issue `lost_mesh` d'un `uplink` (mesh seulement) : trame décodée par une passerelle, non remise au
+  LNS par le mesh (aucune copie n'a atteint la frontière).
 - `hops` (au plus 8) : une entrée par saut (`from_id`, `to_id`, `t_ns`, `freq_hz`, `dr`,
   `rssi_dbm`, `outcome`). Le journal affiche ces sauts dans l'ordre.
 - Ordre : `seq` strictement croissant, `t_ns` non décroissant.
@@ -121,8 +126,15 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   jamais de chemin. Le relief est lu une fois puis gardé en mémoire. Son empreinte entre dans
   `scenario_sha256` (même scénario, autre relief : autre identifiant). `GET /terrains` liste le catalogue.
   Sans `--terrain-catalog`, le catalogue est vide. Un identifiant inconnu ou invalide : 422 sur `terrain_id`.
-- Refusé explicitement (`validation_error`, jamais calculé à tort) : **mesh** (trace par saut non
-  construite).
+- **Mesh** (`mesh`) : la trace contient un événement `mesh_hop` par émission d'un relais vers son saut
+  prévu (ou par copie abandonnée, `suppressed`), à l'instant d'émission. Les issues des sauts sont
+  `delivered`, `lost_collision`, `lost_half_duplex`, `suppressed`. Les trames décodées puis non remises
+  au LNS par le mesh sont comptées en `lost_mesh` (totaux, par dispositif, issue `lost_mesh` d'un
+  `uplink`) : `sent = received + lost_sensitivity + lost_collision + lost_gateway_busy + lost_mesh`.
+  Les champs `lost_mesh` sont absents hors mesh. Les totaux égalent `run_scenario` (test de
+  concordance). Limites : uplinks seulement. `join`, `confirmed_uplinks` et `downlink_every` sont refusés
+  (`validation_error`) : les descentes ne sont pas modélisées sur le mesh. Les compteurs `gateways`
+  sont ceux du décodage à l'accès (un relais décode comme une passerelle), pas ceux du mesh.
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
   dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel
   et a ajouté `gateways` : c'est une rupture de la règle d'additivité, acceptée pour permettre le multi.
@@ -202,7 +214,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 1. Données MNT réelles : à vérifier avant tout usage d'étude (les exemples sont synthétiques).
 2. ~~Exposer `events`~~ : fait (pagination par `seq`).
 3. ~~Implémenter le serveur~~ : fait (v1). ~~Relief (catalogue)~~ : fait. ~~Énergie avec protocole ou
-   multi~~ : fait. ~~Join en multi-passerelles~~ : fait. Reste : mesh (trace par saut, à concevoir).
+   multi~~ : fait. ~~Join en multi-passerelles~~ : fait. ~~Mesh par saut~~ : fait (uplinks ; descentes
+   sur mesh non modélisées, refusées). Reste : modéliser les descentes sur le mesh si besoin.
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)

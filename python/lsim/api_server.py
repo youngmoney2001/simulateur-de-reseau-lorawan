@@ -11,7 +11,7 @@ construction, et le serveur vérifie la somme des compteurs par dispositif avant
 
 Périmètre : mono et multi-passerelles, environnement à obstacles et relief. Relief : identifiant
 `terrain_id` résolu dans le catalogue serveur (`--terrain-catalog`, fichiers `<id>.csv`) ; le client
-ne fournit jamais de chemin. Refusé explicitement (`validation_error`) : mesh (trace par saut non construite).
+ne fournit jamais de chemin. Mesh : trace par saut (`mesh_hop`), uplinks seulement ; join, ACK et downlink refusés en mesh.
 
 L'énergie suit la trace : airtime des descendantes reçues par dispositif (mono et multi).
 
@@ -344,8 +344,11 @@ class _Job:
 def _check_request(req: RunCreate) -> None:
     model = req.scenario
     if model.mesh is not None:
-        raise ApiError(422, "validation_error",
-                       "mesh : non exposé par l'API v1 (voir docs/API_CONTRACT.md)")
+        p = req.protocol
+        if p.join or p.confirmed_uplinks or p.downlink_every:
+            raise ApiError(422, "validation_error",
+                           "mesh : join, ACK et downlink non modélisés sur le mesh "
+                           "(voir docs/API_CONTRACT.md)")
 
 
 class TerrainCatalog:
@@ -412,13 +415,13 @@ def _scenario_for(model: Any, terrain_id: Optional[str], catalog: TerrainCatalog
 
 
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
-                 energy_profile: Optional[str]) -> dict[str, Any]:
+                 energy_profile: Optional[str], lost_mesh: Optional[int] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
                       lost_sensitivity=totals.lost_sensitivity,
                       lost_collision=totals.lost_collision, airtime_ns=totals.airtime_ns,
-                      lost_gateway_busy=totals.lost_gateway_busy).model_dump(),
+                      lost_gateway_busy=totals.lost_gateway_busy, lost_mesh=lost_mesh).model_dump(),
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
     )
@@ -601,9 +604,12 @@ class RunService:
         scenario = job.scenario
         devices, group_of, index_in_group = scenario.deploy()
         energy_rows: dict[int, Any] = {}
+        mesh_lost_total: Optional[int] = None
+        mesh_lost_by_device: Optional[tuple[int, ...]] = None
         if job.multi:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
+            mesh_lost_total, mesh_lost_by_device = mt.lost_mesh, mt.lost_mesh_by_device
             gateway_load, gateways = None, [
                 GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
                                  lost_collision=g.lost_collision,
@@ -634,12 +640,15 @@ class RunService:
                 x_m=dev.x_m, y_m=dev.y_m, spreading_factor=dev.spreading_factor,
                 sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
                 lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
+                lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),
                 energy_per_message_j=getattr(e, "energy_per_message_j", None),
                 average_current_ua=getattr(e, "average_current_ua", None),
             ).model_dump(exclude_none=True))
         # Invariant : la somme des compteurs par dispositif égale les totaux publiés.
         if (sum(r["sent"] for r in rows) != totals.sent
-                or sum(r["received"] for r in rows) != totals.received):
+                or sum(r["received"] for r in rows) != totals.received
+                or (mesh_lost_total is not None
+                    and sum(r.get("lost_mesh", 0) for r in rows) != mesh_lost_total)):
             raise RuntimeError("compteurs par dispositif et totaux ne concordent pas")
         events_out = []
         for ev in events:
@@ -651,7 +660,7 @@ class RunService:
                        "outcome": h.outcome} for h in ev.hops],
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
-                               job.energy_profile)
+                               job.energy_profile, mesh_lost_total)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {

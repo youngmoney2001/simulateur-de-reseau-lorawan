@@ -182,7 +182,8 @@ std::int64_t backoff_ns(std::uint32_t relay, std::uint64_t frame_id, std::int64_
 Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                const double* rssi, const std::int32_t* next, std::uint32_t border,
                bool suppress, std::int64_t backoff_window_ns, const Frame* frames,
-               std::size_t frame_count, Delivery* out, Summary* summary) {
+               std::size_t frame_count, Delivery* out, Summary* summary,
+               std::vector<HopEvent>* log) {
     if (capable == nullptr || rssi == nullptr || next == nullptr || summary == nullptr ||
         (frame_count > 0 && (frames == nullptr || out == nullptr))) {
         return Status::InvalidInput;
@@ -265,6 +266,10 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
             const auto key = std::make_pair(r, frame_id);
             if (relay_state.count(key) != 0) {        // déjà pris en charge : copie superflue
                 ++summary->suppressed;
+                if (log != nullptr) {
+                    log->push_back(HopEvent{frame_id, r, static_cast<std::uint32_t>(next[r]), t, t,
+                                            static_cast<std::uint8_t>(HopOutcome::Suppressed), index});
+                }
                 return;
             }
             relay_state[key] = RelayState::Pending;
@@ -301,6 +306,11 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                 const auto st = relay_state[{s, tx.frame_id}];
                 if (st != RelayState::Pending) {
                     ++summary->suppressed;  // copie en file, supprimée par un doublon entendu
+                    if (log != nullptr) {
+                        log->push_back(HopEvent{tx.frame_id, s, static_cast<std::uint32_t>(next[s]),
+                                                ev.t, ev.t,
+                                                static_cast<std::uint8_t>(HopOutcome::Suppressed), tx.index});
+                    }
                     continue;
                 }
             }
@@ -342,6 +352,9 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
         const std::uint64_t tx_frame = txs[ev.id].frame_id;
         const std::size_t tx_copy = txs[ev.id].copy;
         const std::uint8_t tx_index = txs[ev.id].index;
+        const std::uint32_t tx_sender = txs[ev.id].sender;
+        const std::int64_t tx_start = txs[ev.id].start;
+        const std::int64_t tx_end = txs[ev.id].end;
         for (const std::size_t rid : tx_rx) {
             const Rx q = rxs[rid];
             const std::uint32_t r = q.receiver;
@@ -365,6 +378,13 @@ Status forward(const Radio& radio, std::size_t n, const std::uint8_t* capable,
                 }
             }
 
+            if (q.intended && log != nullptr) {
+                const auto outcome = half_duplex ? HopOutcome::LostHalfDuplex
+                                     : collided  ? HopOutcome::LostCollision
+                                                 : HopOutcome::Received;
+                log->push_back(HopEvent{tx_frame, tx_sender, r, tx_start, tx_end,
+                                        static_cast<std::uint8_t>(outcome), tx_index});
+            }
             if (half_duplex || collided) {
                 if (q.intended) {
                     if (half_duplex) {

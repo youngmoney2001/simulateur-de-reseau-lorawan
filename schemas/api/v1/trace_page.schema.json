@@ -33,8 +33,10 @@
             "delivered",
             "lost_sensitivity",
             "lost_collision",
+            "lost_half_duplex",
             "not_listened",
-            "sent"
+            "sent",
+            "suppressed"
           ],
           "title": "Outcome",
           "type": "string"
@@ -103,7 +105,8 @@
             "downlink",
             "lost_sensitivity",
             "lost_collision",
-            "rx_window_missed"
+            "rx_window_missed",
+            "mesh_hop"
           ],
           "title": "Kind",
           "type": "string"

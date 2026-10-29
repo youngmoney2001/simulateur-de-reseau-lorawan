@@ -264,3 +264,64 @@ def test_mesh_shadowing_bounds_are_checked():
         build_mesh(nodes, border_id="g0", radio=RADIO, shadowing_sigma_db=-1.0)
     with pytest.raises(ValueError):
         build_mesh(nodes, border_id="g0", radio=RADIO, shadowing_sigma_db=31.0)
+
+
+def _invariants(result):
+    sent = [h for h in result.hops if h.outcome != "suppressed"]
+    assert len(sent) == result.transmissions
+    assert sum(h.outcome == "suppressed" for h in result.hops) == result.suppressed
+    assert sum(h.outcome == "lost_collision" for h in result.hops) == result.lost_collision
+    assert sum(h.outcome == "lost_half_duplex" for h in result.hops) == result.lost_half_duplex
+
+
+def test_hop_log_records_relay_and_suppressed_copy():
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0),
+             MeshNode("r2", 400.0, 400.0)]
+    graph = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    air = RADIO.airtime_ns
+    frames = [MeshFrame(7, "r1", 0), MeshFrame(7, "r2", air + air // 2)]
+    result = forward_frames(frames, graph, RADIO, with_hops=True)
+    _invariants(result)
+    sent = [h for h in result.hops if h.outcome != "suppressed"]
+    assert [(h.sender_id, h.receiver_id, h.outcome, h.t_start_ns, h.t_end_ns) for h in sent] == [
+        ("r1", "border", "received", 0, air)]
+    (supp,) = [h for h in result.hops if h.outcome == "suppressed"]
+    assert supp.sender_id == "r2" and supp.t_start_ns == supp.t_end_ns == air + air // 2
+
+
+def test_hop_log_does_not_change_the_result():
+    nodes = [MeshNode("border", 0.0, 0.0), MeshNode("r1", 800.0, 0.0),
+             MeshNode("r2", 400.0, 400.0)]
+    graph = build_mesh(nodes, border_id="border", radio=RADIO, path_loss=STEEP)
+    frames = [MeshFrame(k, "r1" if k % 2 else "r2", 1_000 * k) for k in range(40)]
+    plain = forward_frames(frames, graph, RADIO)
+    logged = forward_frames(frames, graph, RADIO, with_hops=True)
+    assert plain.deliveries == logged.deliveries
+    assert (plain.transmissions, plain.suppressed) == (logged.transmissions, logged.suppressed)
+    assert plain.hops == ()
+    _invariants(logged)
+
+
+def test_hop_log_reports_collisions_on_the_intended_hop():
+    # Même géométrie que le test de capture : g1 et g3 émettent vers g2 en même temps.
+    nodes = [MeshNode("g0", 0.0, 0.0), MeshNode("g2", 800.0, 0.0),
+             MeshNode("g1", 1600.0, 0.0), MeshNode("g3", 800.0, 400.0)]
+    graph = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP)
+    frames = [MeshFrame(1, "g1", 0), MeshFrame(2, "g3", 0)]
+    result = forward_frames(frames, graph, RADIO, with_hops=True)
+    _invariants(result)
+    lost = [h for h in result.hops if h.outcome == "lost_collision"]
+    assert [(h.sender_id, h.receiver_id) for h in lost] == [("g1", "g2")]
+
+
+def test_hop_log_grows_past_the_initial_buffer():
+    # Chaîne de 8 sauts : chaque trame produit 8 émissions, donc plus de 4 × trames. Le natif
+    # répond « tampon trop petit » et le journal est relu avec la taille requise.
+    nodes = _line(MAX_HOPS + 1, 800.0)
+    graph = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP)
+    air = RADIO.airtime_ns
+    frames = [MeshFrame(k, f"g{MAX_HOPS}", 12 * air * k) for k in range(50)]  # sans chevauchement
+    result = forward_frames(frames, graph, RADIO, with_hops=True)
+    assert len(result.hops) > 4 * len(frames)  # réessai déclenché (copies perdues en route incluses)
+    assert result.delivered == len(frames)
+    _invariants(result)

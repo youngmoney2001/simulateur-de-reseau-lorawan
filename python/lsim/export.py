@@ -6,7 +6,6 @@ assembler, calculer le taux de livraison (PDR) et les écrire.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -15,26 +14,11 @@ from lsim import __version__
 from lsim.energy_report import device_energies
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
-from lsim.gateway_profiles import get_profile
-from lsim.mesh import (
-    DOWNLINK_ACK_PHY_BYTES,
-    MESH_ENVELOPE_DOWN_BYTES,
-    MESH_ENVELOPE_UP_BYTES,
-    MeshFrame,
-    MeshNode,
-    MeshRadio,
-    build_mesh,
-    downlink_window,
-    forward_frames,
-    lorawan_phy_bytes,
-    time_on_air_ns,
-)
-from lsim.radio import LogDistanceModel
+from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     Counters,
     GatewayLoad,
     GatewayRxCounters,
-    environment_path_loss_matrix,
     simulate_uplinks,
     simulate_uplinks_multi,
 )
@@ -177,121 +161,33 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
                          gateway_names=_gateway_names(gw_models),
                          gateway_loads=tuple(result.per_gateway))
 
-    nodes, gw_index = [], {}
-    for k, g in enumerate(gw_models):
-        tx = get_profile(g.profile).tx_power_max_dbm if g.profile is not None else None
-        if g.mesh and tx is None:
-            raise ValueError(f"passerelle {g.name!r} : puissance d'émission mesh non publiée")
-        nodes.append(MeshNode(gateway_id=g.name, x_m=g.x_m, y_m=g.y_m, mesh_capable=g.mesh,
-                              tx_power_dbm=tx if tx is not None else 0.0,
-                              antenna_gain_dbi=g.antenna_gain_dbi))
-        gw_index[g.name] = k
-    radio = MeshRadio(spreading_factor=mesh_cfg.spreading_factor,
-                      bandwidth_khz=mesh_cfg.bandwidth_khz, coding_rate=mesh_cfg.coding_rate,
-                      payload_bytes=mesh_cfg.payload_bytes, capture_db=mesh_cfg.capture_db)
-    fixed_size = mesh_cfg.payload_bytes if mesh_cfg.frame_size == "fixed" else None
-    # Le mesh vit à 2,4 GHz, même exposant que l'accès. Le shadowing mesh est un tirage par
-    # paire de passerelles (`mesh.shadowing_sigma_db`), pas celui de l'accès. Avec environnement,
-    # la perte entre passerelles (relief et obstacles, antennes à hauteur passerelle) est
-    # calculée par le natif ; sans environnement, log-distance seul.
-    mesh_prop = dataclasses.replace(scenario.propagation(), frequency_hz=2_400_000_000.0,
-                                    shadowing_sigma_db=0.0)
-    path_matrix = None
-    if scenario.environment is not None:
-        path_matrix = environment_path_loss_matrix(
-            [(g.x_m, g.y_m) for g in gw_models], mesh_prop, scenario.environment)
-    mesh_model = LogDistanceModel(frequency_hz=mesh_prop.frequency_hz,
-                                  exponent=mesh_prop.exponent)
-    graph = build_mesh(nodes, mesh_cfg.border, radio, path_loss=mesh_model,
-                       max_hops=mesh_cfg.max_hops, path_loss_db=path_matrix,
-                       shadowing_sigma_db=mesh_cfg.shadowing_sigma_db,
-                       shadowing_seed=scenario.propagation().shadowing_seed)
-
-    # Une copie par passerelle décodeuse. Passerelle sans mesh : backhaul IP, remise directe.
-    # Relais : une émission par trame si la suppression est active (identifiant de trame),
-    # après une attente déterministe de `relay_backoff_airtimes` temps d'antenne.
-    trace = result.trace
-    frames: list[MeshFrame] = []
-    direct_frame: set[int] = set()
-    seen_frames = 0
-    for rec_index, rec in enumerate(trace):
-        if rec.decoded_mask == 0:
-            continue
-        seen_frames += 1
-        for g, model in enumerate(gw_models):
-            if not (rec.decoded_mask >> g) & 1:
-                continue
-            if model.mesh and model.name != mesh_cfg.border:
-                # Un relais confie sa copie au mesh ; la frontière, elle, la remet directement.
-                size = fixed_size if fixed_size is not None else (
-                    lorawan_phy_bytes(devices[rec.device_index].payload_bytes)
-                    + MESH_ENVELOPE_UP_BYTES)
-                frames.append(MeshFrame(frame_id=rec_index, rx_gateway_id=model.name,
-                                        t_ns=rec.end_ns, payload_bytes=size))
-            else:
-                direct_frame.add(rec_index)
-    backoff_ns = mesh_cfg.relay_backoff_airtimes * radio.airtime_ns
-    mesh_result = forward_frames(frames, graph, radio,
-                                 suppress_duplicates=mesh_cfg.suppress_duplicates,
-                                 backoff_window_ns=backoff_ns)
-
-    # « Direct » : remise sans saut mesh (passerelle à backhaul IP, ou frontière elle-même).
-    delivered_frames: set[int] = set(direct_frame)
-    via_mesh_frames: set[int] = set()
-    no_route = 0
-    for d in mesh_result.deliveries:
-        if d.delivered:
-            delivered_frames.add(d.frame_id)
-            if d.hops == 0:
-                direct_frame.add(d.frame_id)
-            else:
-                via_mesh_frames.add(d.frame_id)
-        elif d.copy_state == "no_route":
-            no_route += 1
-    via_mesh_frames -= direct_frame
-    # Descente : une réponse par trame remise. Le natif donne le même saut et la même
-    # latence pour toutes les copies d'une trame ; une trame décodée par la frontière
-    # elle-même a 0 saut.
-    # Descente : acquittement seul sur le lien mesh (taille PHY 12 o + enveloppe 15 o).
-    mesh_air = time_on_air_ns(mesh_cfg.spreading_factor, mesh_cfg.bandwidth_khz * 1000,
-                              DOWNLINK_ACK_PHY_BYTES + MESH_ENVELOPE_DOWN_BYTES,
-                              mesh_cfg.coding_rate)
-    best_by_frame = {d.frame_id: d for d in mesh_result.deliveries if d.delivered}
-    dl_counts = {"rx1": 0, "rx2": 0, "missed": 0}
-    for frame_id in delivered_frames:
-        if frame_id in direct_frame or frame_id not in best_by_frame:
-            hops, latency = 0, 0
-        else:
-            hops, latency = best_by_frame[frame_id].hops, best_by_frame[frame_id].latency_ns or 0
-        dl_counts[downlink_window(latency, hops, mesh_air)] += 1
-    delivered_by_device = [0] * len(devices)
-    for rec_index in delivered_frames:
-        delivered_by_device[trace[rec_index].device_index] += 1
-
-    totals = Counters(result.network.sent, len(delivered_frames),
+    mp = mesh_pass(scenario, devices, gw_models, result.trace)
+    d_frames = mp.delivered_frames
+    mesh_result = mp.mesh_result
+    totals = Counters(result.network.sent, len(d_frames),
                       result.network.lost_sensitivity, result.network.lost_collision,
                       result.network.airtime_ns, result.network.lost_gateway_busy)
     summary = MeshSummary(
-        frames=seen_frames,
-        delivered=len(delivered_frames),
-        direct=len(direct_frame),
-        via_mesh=len(via_mesh_frames),
-        copies_on_mesh=len(frames),
+        frames=mp.seen_frames,
+        delivered=len(d_frames),
+        direct=len(mp.direct_frames),
+        via_mesh=len(mp.via_mesh_frames),
+        copies_on_mesh=mp.copies_on_mesh,
         transmissions=mesh_result.transmissions,
         suppressed=mesh_result.suppressed,
-        no_route=no_route,
+        no_route=mp.no_route,
         hop_losses=tuple(
             (reason, n) for reason, n in (
                 ("collision", mesh_result.lost_collision),
                 ("half_duplex", mesh_result.lost_half_duplex),
             ) if n
         ),
-        dl_rx1=dl_counts["rx1"],
-        dl_rx2=dl_counts["rx2"],
-        dl_missed=dl_counts["missed"],
-        dl_mesh_airtime_ns=mesh_air,
+        dl_rx1=mp.dl_counts["rx1"],
+        dl_rx2=mp.dl_counts["rx2"],
+        dl_missed=mp.dl_counts["missed"],
+        dl_mesh_airtime_ns=mp.mesh_air_ns,
     )
-    rows = _rows(devices, groups, indices, energies, result.per_device, delivered_by_device)
+    rows = _rows(devices, groups, indices, energies, result.per_device, list(mp.delivered_by_device))
     return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,
                      seed=scenario.model.seed, rows=rows, totals=totals, gateway=None,
                      energy_profile=energy_profile, mesh=summary,
