@@ -57,6 +57,7 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .journal-row { border-bottom: 1px solid var(--line); padding: 2px 0; }
 .journal-row.ok { border-left: 3px solid #2e7d32; padding-left: 6px; }
 .journal-row.lost { border-left: 3px solid #c62828; padding-left: 6px; }
+.journal-row.mac { border-left: 3px solid #6a1b9a; padding-left: 6px; }
 .journal-row.current { background: #fff8e1; }
 .journal-head { background: none; border: 0; padding: 2px 0; cursor: pointer; text-align: left; font: inherit; }
 .journal-row ul { margin: 2px 0 4px 16px; padding: 0; color: #546e7a; }

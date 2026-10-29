@@ -127,7 +127,7 @@ export function createPlayer({ svg, panel, positionOf }) {
       const head = document.createElement("button");
       head.type = "button";
       head.className = "journal-head";
-      head.textContent = `${row.time} · ${row.source} · ${row.kind} · ${row.outcome}`;
+      head.textContent = `${row.time} · ${row.source} · ${row.label} · ${row.outcome}`;
       head.addEventListener("click", () => { setPlaying(false); clock = Number(row.t_ns); draw(); });
       li.append(head);
       if (row.hops.length) {
