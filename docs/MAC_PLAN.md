@@ -1,6 +1,6 @@
 # Commandes MAC dans la simulation : plan par phases
 
-Statut : phase 1 terminée (socle) ; phases 2 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
+Statut : phase 1 terminée ; phase 2 en cours (DeviceTime fait, LinkADR et DutyCycle en attente de la boucle fermée) ; phases 3 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
 (`python/lsim/mac.py`, `core/src/mac_commands.cpp`) ; son usage dans la simulation ne l'est pas.
 
 ## Décisions retenues
@@ -15,7 +15,11 @@ Statut : phase 1 terminée (socle) ; phases 2 à 5 à faire. Étape 1 faite (con
 DevStatusAns (choix retenu : calendrier de rangs passé au moteur, une seule exécution) : la réponse n'existe que si la requête est reçue. Le calendrier réserve donc 3 octets dans l'uplink suivant chaque requête planifiée, sans supposer la réponse ; la réponse n'est confirmée (événement `mac_answer`) que si cet uplink est reçu. ABI : `lsim_simulate_uplinks_trace_v2` ; v1 inchangée. Réservations : `python/lsim/mac_plan.py`, `trace_events.mac_reservations`, partagées par la trace et l'export.
 Interface : le journal affiche un libellé MAC dédié (`macLabel`, `isMacEvent` dans `web/src/studio/animation.js`) et une classe de ligne propre.
 Annotations : `mac_request` et les `mac_answer` ajoutés à un downlink n'ont pas de saut propre (pas de trame redessinée) ; seul un downlink dédié à une réponse en porte un.
-2. **ADR et temps** : LinkADRReq/Ans (via la décision ADR existante), DeviceTimeReq/Ans, DutyCycleReq/Ans.
+2. **ADR et temps** (en cours) :
+   - Fait : DeviceTimeReq/Ans. `device_time_every` (bloc `mac:`) : DeviceTimeReq (1 octet, réservée) dans l'uplink de rang multiple de N ; DeviceTimeAns (6 octets : CID, secondes GPS, fraction 1/256 s) dans la descente qui répond, confirmée (`mac_answer`) seulement si cette descente est reçue. Ancre temporelle : époque GPS en t = 0 de la simulation (décision du propriétaire, sans champ de date au schéma).
+   - Reste, bloqué par une décision d'architecture : LinkADRReq/Ans et DutyCycleReq/Ans. Le moteur fixe aujourd'hui le SF, la puissance et le duty cycle de chaque dispositif pour toute la simulation (`EndDevice`). Une commande reçue doit changer les émissions suivantes, donc dépendre des collisions et des pertes radio.
+   - Décision retenue : boucle fermée, dans le moteur, en une seule exécution (ni points fixes multi-passes, ni réservation fixe). Chantier de refonte : le moteur doit traiter les émissions en ordre temporel et appliquer une descente reçue aux émissions suivantes. La décision ADR existante (`python/lsim/adr.py`, fonction pure) servira de calcul de référence côté serveur.
+   - Non commencé : aucun code moteur pour cette boucle.
 3. **Configuration radio et classes** : RXParamSetup, NewChannel, RXTimingSetup, DlChannel, ADRParamSetup, PingSlot (info, channel), BeaconFreq, RejoinParamSetup, ForceRejoin, avec leurs effets sur le modèle.
 4. **Orchestration** : commandes initiées par le serveur, files de descentes, réponses différées, refus, expiration, interaction avec les classes A, B et C.
 5. **Validation et interface** : vecteurs de référence, conformité TS001-1.1.0, journal détaillé, métriques, limites documentées.
@@ -23,7 +27,7 @@ Annotations : `mac_request` et les `mac_answer` ajoutés à un downlink n'ont pa
 ## Vérification de la phase 1
 - Sans bloc `mac:`, `run_scenario` (avec et sans profil énergie) et `build_trace` (deux jeux d'options) donnent des sorties identiques à la base `1f43370`, sur les trois scénarios de `examples/` : 6 résultats de run, 6 traces de 3 000 à 8 575 événements. Empreintes SHA-256 des sorties : run `d2cb0fac6c2d99504d888e497f5e07c56ba0f7b81deaf560584c78ee19b4e1ea`, trace `ed126d7ff5aac3b006f31067d73fb6a5f5b5bf9b597021589910c24db8dc865b`.
 - Script reproductible : `scripts/mac_baseline_dump.py` (le fichier de trace s'écrit à côté, suffixe `.trace.json`).
-- Tests : `pytest python/tests` (1531 réussis) ; `lsim_tests` (644 644 vérifications) ; `npm test` dans `web/` (29 réussis).
+- Tests : `pytest python/tests` (1539 réussis) ; `lsim_tests` (644 644 vérifications) ; `npm test` dans `web/` (29 réussis).
 
 ## Règles à respecter
 - FOpts limité à 15 octets : pas de troncature ; les commandes excédentaires passent dans une trame suivante selon les règles de transport.

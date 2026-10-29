@@ -315,6 +315,13 @@
           "title": "Device Status Every",
           "type": "integer"
         },
+        "device_time_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Device Time Every",
+          "type": "integer"
+        },
         "link_check_every": {
           "default": 0,
           "maximum": 1000,

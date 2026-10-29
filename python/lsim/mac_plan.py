@@ -20,11 +20,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from lsim import mac
-from lsim.mac import LinkCheckReq, MacCommand
+from lsim.mac import DeviceTimeReq, LinkCheckReq, MacCommand
 
 MAX_FOPTS = 15
 # Tailles des commandes en FOpts : CID seul pour LinkCheckReq, CID + batterie + marge pour DevStatusAns.
 LINK_CHECK_REQ_BYTES = 1
+DEVICE_TIME_REQ_BYTES = 1  # CID seul (charge utile nulle)
 DEVICE_STATUS_ANS_BYTES = 3
 
 
@@ -45,10 +46,12 @@ class MacSchedule:
     link_check_every: int = 0  # LinkCheckReq émise par le dispositif (uplink de rang multiple de N)
     device_status_every: int = 0  # DevStatusReq émise par le serveur (uplink reçu de rang multiple de N)
     link_margin_installation_db: int = 0  # marge d'installation soustraite de la marge rapportée
+    device_time_every: int = 0  # DeviceTimeReq émise par le dispositif (uplink de rang multiple de N)
 
     def __post_init__(self) -> None:
         _check_period("link_check_every", self.link_check_every)
         _check_period("device_status_every", self.device_status_every)
+        _check_period("device_time_every", self.device_time_every)
         if (isinstance(self.link_margin_installation_db, bool)
                 or not isinstance(self.link_margin_installation_db, int)
                 or not 0 <= self.link_margin_installation_db <= 60):
@@ -56,15 +59,19 @@ class MacSchedule:
 
     @property
     def enabled(self) -> bool:
-        return self.link_check_every > 0 or self.device_status_every > 0
+        return self.link_check_every > 0 or self.device_status_every > 0 or self.device_time_every > 0
 
 
 def uplink_requests(schedule: MacSchedule, rank: int) -> list[MacCommand]:
-    """Commandes que le dispositif place en FOpts de l'uplink de rang `rank` (certaines)."""
+    """Commandes que le dispositif place en FOpts de l'uplink de rang `rank` (certaines), par CID
+    croissant (LinkCheckReq 0x02, DeviceTimeReq 0x0D)."""
     _check_rank(rank)
+    out: list[MacCommand] = []
     if schedule.link_check_every and rank % schedule.link_check_every == 0:
-        return [LinkCheckReq()]
-    return []
+        out.append(LinkCheckReq())
+    if schedule.device_time_every and rank % schedule.device_time_every == 0:
+        out.append(DeviceTimeReq())
+    return out
 
 
 def device_status_request_due(schedule: MacSchedule, rank: int) -> bool:
@@ -81,7 +88,8 @@ def reserved_extra_bytes(schedule: MacSchedule, rank: int) -> int:
     (conservatif, même si la requête n'est pas reçue).
     """
     _check_rank(rank)
-    extra = LINK_CHECK_REQ_BYTES * len(uplink_requests(schedule, rank))
+    extra = sum(LINK_CHECK_REQ_BYTES if isinstance(c, LinkCheckReq) else DEVICE_TIME_REQ_BYTES
+                for c in uplink_requests(schedule, rank))
     if rank >= 2 and device_status_request_due(schedule, rank - 1):
         extra += DEVICE_STATUS_ANS_BYTES
     if extra > MAX_FOPTS:

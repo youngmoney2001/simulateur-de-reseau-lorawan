@@ -200,3 +200,33 @@ def test_mac_annotations_do_not_duplicate_frames_in_the_animation():
         if e.kind == "mac_answer":
             assert e.hops == () or len(e.hops) == 1  # réponse seule : downlink dédié, sinon annotation
     assert any(e.kind == "mac_request" for e in tr.events)
+
+
+def test_device_time_ans_carries_gps_seconds_and_1_256_fraction():
+    from lsim.mac import DeviceTimeAns
+    from lsim.trace_events import _downlink_fopts
+    # 1,123 s après l'époque GPS (t = 0) : 1 s et 0,123 s = 31/256 (arrondi inférieur).
+    fopts = _downlink_fopts(None, False, device_time_ns=1_123_000_000)
+    assert decode_all(fopts, downlink=True) == [DeviceTimeAns(seconds=1, fraction=31)]
+
+
+def test_device_time_answers_are_confirmed_only_for_received_downlinks():
+    tr = build_trace(_scenario({"device_time_every": 2}), ProtocolOptions())
+    reqs = _kinds(tr, "mac_request")
+    answers = _kinds(tr, "mac_answer")
+    assert reqs and all(r.outcome == "DeviceTimeReq" for r in reqs)
+    assert all(a.outcome == "delivered" for a in answers)
+    assert 0 < len(answers) <= len(reqs)
+
+
+def test_device_time_reservations_follow_the_uplink_ranks():
+    from lsim.trace_events import mac_reservations
+    sc = _scenario({"device_time_every": 2})
+    devices, _, _ = sc.deploy()
+    res = mac_reservations(sc, devices)
+    assert res == tuple((i, r, 1) for i in range(len(devices)) for r in (2, 4, 6))
+
+
+def test_device_time_period_is_bounded_by_the_schema():
+    with pytest.raises(ValueError):
+        ScenarioModel.model_validate({**copy.deepcopy(BASE), "mac": {"device_time_every": 1001}})

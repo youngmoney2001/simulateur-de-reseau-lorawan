@@ -266,6 +266,7 @@ class MacModel(_Strict):
     link_check_every: int = Field(0, ge=0, le=1000)
     device_status_every: int = Field(0, ge=0, le=1000)
     link_margin_installation_db: int = Field(0, ge=0, le=60)
+    device_time_every: int = Field(0, ge=0, le=1000)
 
 
 class ScenarioModel(_Strict):
@@ -286,12 +287,14 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
-        if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every):
+        if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every
+                                     or self.mac.device_time_every):
             if self.gateways is not None or self.mesh is not None:
                 raise ValueError("commandes MAC : passerelle unique uniquement "
                                  "(pas de « gateways » ni de mesh)")
-            # Réservation maximale d'une émission : LinkCheckReq (1) + DevStatusAns (3).
-            extra = (1 if self.mac.link_check_every else 0) + (3 if self.mac.device_status_every else 0)
+            # Réservation maximale d'une émission : LinkCheckReq (1) + DeviceTimeReq (1) + DevStatusAns (3).
+            extra = ((1 if self.mac.link_check_every else 0) + (1 if self.mac.device_time_every else 0)
+                     + (3 if self.mac.device_status_every else 0))
             for g in self.groups:
                 if g.payload_bytes + extra > 255:
                     raise ValueError(f"groupe {g.name!r} : charge de {g.payload_bytes} octets + "

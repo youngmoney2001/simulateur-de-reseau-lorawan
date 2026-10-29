@@ -47,7 +47,7 @@ from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
 from lsim.mesh import MESH_ENVELOPE_DOWN_BYTES, MESH_ENVELOPE_UP_BYTES
 from lsim import mac as lsim_mac
-from lsim.mac import DevStatusReq, LinkCheckAns, LinkCheckReq
+from lsim.mac import DevStatusReq, DeviceTimeAns, DeviceTimeReq, LinkCheckAns, LinkCheckReq
 from lsim import mac_plan
 from lsim.mac_plan import MacSchedule, device_status_request_due, uplink_requests
 from lsim.mesh_pass import mesh_pass
@@ -270,7 +270,7 @@ def _joined_times(jobs: Sequence[_Job], starts: Sequence[Optional[int]]) -> dict
     return out
 
 
-_MAC_NAME = {LinkCheckReq: "LinkCheckReq", DevStatusReq: "DevStatusReq"}
+_MAC_NAME = {LinkCheckReq: "LinkCheckReq", DevStatusReq: "DevStatusReq", DeviceTimeReq: "DeviceTimeReq"}
 
 
 def _mac_ranks(records: Sequence[TxRecord]) -> list[int]:
@@ -337,6 +337,7 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
         else:
             accepted[d] += 1
             wants_answer = mac is not None and LinkCheckReq() in uplink_requests(mac, ranks[i])
+            wants_time = mac is not None and DeviceTimeReq() in uplink_requests(mac, ranks[i])
             carries_ds = mac is not None and device_status_request_due(mac, ranks[i])
             if wants_answer:
                 margin = _link_margin_db(r, mac.link_margin_installation_db)
@@ -348,7 +349,7 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             elif options.confirmed_uplinks:
                 kind, content = "ack", "ack_only"
                 base = ACK_FRAME_BYTES
-            elif wants_answer:
+            elif wants_answer or wants_time:
                 kind, content = "mac_answer", "delivered"
                 base = ACK_FRAME_BYTES
             elif carries_ds:
@@ -357,7 +358,9 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             else:
                 continue
             t_open = r.end_ns + RECEIVE_DELAY1_NS
-            fopts = _downlink_fopts(margin, carries_ds)
+            # DeviceTimeAns : heure GPS au début de la fenêtre RX1 (époque GPS en t = 0 de la simulation).
+            fopts = _downlink_fopts(margin, carries_ds,
+                                    device_time_ns=t_open if wants_time else None)
         airtime = _downlink_airtime_ns(radio, base + len(fopts))
 
         nxt = next_start.get(i)
@@ -371,14 +374,20 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
     return jobs
 
 
-def _downlink_fopts(margin: Optional[int], carries_ds: bool) -> bytes:
-    """FOpts d'un downlink : LinkCheckAns (si `margin` n'est pas None), puis DevStatusReq (si
-    `carries_ds`). Ordre CID croissant ; jamais tronqué (15 octets au plus)."""
+def _downlink_fopts(margin: Optional[int], carries_ds: bool,
+                    device_time_ns: Optional[int] = None) -> bytes:
+    """FOpts d'un downlink : LinkCheckAns (si `margin` n'est pas None), DevStatusReq (si
+    `carries_ds`), DeviceTimeAns (si `device_time_ns` n'est pas None : heure GPS, époque en t = 0).
+    Ordre CID croissant (LinkCheckAns 0x02, DevStatusReq 0x06, DeviceTimeAns 0x0D) ; jamais
+    tronqué (15 octets au plus)."""
     cmds: list = []
     if margin is not None:
         cmds.append(LinkCheckAns(margin, 1))
     if carries_ds:
         cmds.append(DevStatusReq())
+    if device_time_ns is not None:
+        cmds.append(DeviceTimeAns(seconds=device_time_ns // 1_000_000_000,
+                                  fraction=(device_time_ns % 1_000_000_000) * 256 // 1_000_000_000))
     fopts = b""
     for cmd in cmds:
         fopts = lsim_mac.append_fopts(fopts, cmd)
@@ -473,10 +482,13 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         # sa réponse LinkCheckAns ; une DevStatusReq est toujours annotée. Un downlink perdu
         # n'apporte ni réponse ni requête.
         if ok and job.fopts:
-            for cmd in lsim_mac.decode_all(job.fopts, downlink=True):
-                if isinstance(cmd, LinkCheckAns) and job.kind != "mac_answer":
-                    add(start, "mac_answer", d, [], "delivered")
-                elif isinstance(cmd, DevStatusReq):
+            cmds = lsim_mac.decode_all(job.fopts, downlink=True)
+            # Une seule réponse par descente, même si elle acquitte plusieurs requêtes.
+            answers = [c for c in cmds if isinstance(c, (LinkCheckAns, DeviceTimeAns))]
+            if answers and job.kind != "mac_answer":
+                add(start, "mac_answer", d, [], "delivered")
+            for cmd in cmds:
+                if isinstance(cmd, DevStatusReq):
                     add(start, "mac_request", d, [], "DevStatusReq")
 
     if len(pending) > MAX_EVENTS:
@@ -518,11 +530,13 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
 def _schedule_of(scenario: Scenario) -> Optional[MacSchedule]:
     """Calendrier MAC du scénario ; None si le bloc `mac:` est absent ou désactivé."""
     m = scenario.model.mac
-    if m is None or (m.link_check_every == 0 and m.device_status_every == 0):
+    if m is None or (m.link_check_every == 0 and m.device_status_every == 0
+                     and m.device_time_every == 0):
         return None
     return MacSchedule(link_check_every=m.link_check_every,
                        device_status_every=m.device_status_every,
-                       link_margin_installation_db=m.link_margin_installation_db)
+                       link_margin_installation_db=m.link_margin_installation_db,
+                       device_time_every=m.device_time_every)
 
 
 def mac_reservations(scenario: Scenario, devices) -> tuple[tuple[int, int, int], ...]:

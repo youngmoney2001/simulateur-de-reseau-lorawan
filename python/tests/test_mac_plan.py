@@ -97,3 +97,21 @@ def test_bounds_and_input_types_are_refused():
         uplink_requests(MacSchedule(link_check_every=1), 0)
     with pytest.raises(ValueError):
         reserved_extra_bytes(MacSchedule(device_status_every=1), 0)
+
+
+def test_device_time_req_is_planned_and_reserved_at_its_rank():
+    from lsim.mac import DeviceTimeReq
+    s = MacSchedule(device_time_every=3)
+    assert s.enabled
+    assert [n for n in range(1, 10) if uplink_requests(s, n)] == [3, 6, 9]
+    assert uplink_requests(s, 3) == [DeviceTimeReq()]
+    assert reserved_extra_bytes(s, 3) == 1
+    assert reserved_extra_bytes(s, 4) == 0
+
+
+def test_link_check_and_device_time_share_an_uplink_in_cid_order():
+    from lsim.mac import DeviceTimeReq
+    s = MacSchedule(link_check_every=3, device_time_every=3)
+    assert uplink_requests(s, 3) == [LinkCheckReq(), DeviceTimeReq()]
+    assert reserved_extra_bytes(s, 3) == 2
+    assert mac.decode_all(uplink_fopts(s, 3), downlink=False) == [LinkCheckReq(), DeviceTimeReq()]
