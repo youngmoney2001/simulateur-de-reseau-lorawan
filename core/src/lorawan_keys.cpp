@@ -58,4 +58,22 @@ CryptoStatus derive_session_keys_11(const Key128& nwk_key, const Key128& app_key
     return st;
 }
 
+CryptoStatus derive_session_keys_10(const Key128& app_key,
+                                    const std::array<std::uint8_t, 3>& app_nonce,
+                                    const std::array<std::uint8_t, 3>& net_id,
+                                    const std::array<std::uint8_t, 2>& dev_nonce,
+                                    SessionKeys10& out) {
+    // Données communes : AppNonce | NetID | DevNonce = 3 + 3 + 2 = 8 octets.
+    std::array<std::uint8_t, 8> data{};
+    for (std::size_t i = 0; i < 3; ++i) data[i] = app_nonce[i];
+    for (std::size_t i = 0; i < 3; ++i) data[3 + i] = net_id[i];
+    for (std::size_t i = 0; i < 2; ++i) data[6 + i] = dev_nonce[i];
+
+    CryptoStatus st = derive(app_key, 0x01, data.data(), data.size(), out.nwk_s_key);
+    if (st == CryptoStatus::Ok) st = derive(app_key, 0x02, data.data(), data.size(), out.app_s_key);
+
+    mbedtls_platform_zeroize(data.data(), data.size());
+    return st;
+}
+
 }  // namespace lsim::lorawan

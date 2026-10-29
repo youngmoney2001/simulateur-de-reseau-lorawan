@@ -33,6 +33,13 @@ struct SessionKeys11 {
     Key128 app_s_key;        // AppSKey : chiffrement de la charge applicative
 };
 
+// Clés de session LoRaWAN 1.0.x (TS001-1.0.x §6.1.3) : NwkSKey (MIC, chiffrement du port 0)
+// et AppSKey (chiffrement de la charge applicative), dérivées de AppKey.
+struct SessionKeys10 {
+    Key128 nwk_s_key;  // NwkSKey
+    Key128 app_s_key;  // AppSKey
+};
+
 // Clés de vie des serveurs de jointure, dérivées de NwkKey et DevEUI (8 octets).
 LSIM_API crypto::CryptoStatus derive_join_keys(const Key128& nwk_key,
                                       const std::array<std::uint8_t, 8>& dev_eui,
@@ -45,5 +52,14 @@ LSIM_API crypto::CryptoStatus derive_session_keys_11(const Key128& nwk_key, cons
                                             const std::array<std::uint8_t, 8>& join_eui,
                                             const std::array<std::uint8_t, 2>& dev_nonce,
                                             SessionKeys11& out);
+
+// Clés de session 1.0.x après un join-accept réussi.
+//   app_nonce : 3 octets (AppNonce), net_id : 3 octets (NetID), dev_nonce : 2 octets.
+// Tous les champs sont passés dans l'ordre des ondes (little-endian).
+LSIM_API crypto::CryptoStatus derive_session_keys_10(const Key128& app_key,
+                                                     const std::array<std::uint8_t, 3>& app_nonce,
+                                                     const std::array<std::uint8_t, 3>& net_id,
+                                                     const std::array<std::uint8_t, 2>& dev_nonce,
+                                                     SessionKeys10& out);
 
 }  // namespace lsim::lorawan
