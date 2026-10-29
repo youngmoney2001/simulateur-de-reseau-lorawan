@@ -190,7 +190,8 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
                       bandwidth_khz=mesh_cfg.bandwidth_khz, coding_rate=mesh_cfg.coding_rate,
                       payload_bytes=mesh_cfg.payload_bytes, capture_db=mesh_cfg.capture_db)
     fixed_size = mesh_cfg.payload_bytes if mesh_cfg.frame_size == "fixed" else None
-    # Le mesh vit à 2,4 GHz, même exposant que l'accès, sans shadowing. Avec environnement,
+    # Le mesh vit à 2,4 GHz, même exposant que l'accès. Le shadowing mesh est un tirage par
+    # paire de passerelles (`mesh.shadowing_sigma_db`), pas celui de l'accès. Avec environnement,
     # la perte entre passerelles (relief et obstacles, antennes à hauteur passerelle) est
     # calculée par le natif ; sans environnement, log-distance seul.
     mesh_prop = dataclasses.replace(scenario.propagation(), frequency_hz=2_400_000_000.0,
@@ -202,7 +203,9 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
     mesh_model = LogDistanceModel(frequency_hz=mesh_prop.frequency_hz,
                                   exponent=mesh_prop.exponent)
     graph = build_mesh(nodes, mesh_cfg.border, radio, path_loss=mesh_model,
-                       max_hops=mesh_cfg.max_hops, path_loss_db=path_matrix)
+                       max_hops=mesh_cfg.max_hops, path_loss_db=path_matrix,
+                       shadowing_sigma_db=mesh_cfg.shadowing_sigma_db,
+                       shadowing_seed=scenario.propagation().shadowing_seed)
 
     # Une copie par passerelle décodeuse. Passerelle sans mesh : backhaul IP, remise directe.
     # Relais : une émission par trame si la suppression est active (identifiant de trame),

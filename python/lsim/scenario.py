@@ -31,7 +31,7 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
-from lsim.gateway_profiles import can_relay, get_profile
+from lsim.gateway_profiles import can_relay, can_simulate_radio, get_profile
 
 SCHEMA_VERSION = 1
 MAX_DEVICES = 10_000
@@ -74,6 +74,9 @@ class MeshModel(_Strict):
     # (déterministe par relais et trame). 0 : pas d'attente, donc pas de suppression
     # entre relais qui reçoivent la même trame au même instant.
     relay_backoff_airtimes: int = Field(4, ge=0, le=64)
+    # Shadowing log-normal des liaisons entre passerelles mesh : un tirage par paire,
+    # réciproque, graine = propagation.shadowing_seed. 0 : liaisons déterministes.
+    shadowing_sigma_db: float = Field(0.0, ge=0.0, le=30.0)
 
 
 class PropagationModel(_Strict):
@@ -272,9 +275,13 @@ class ScenarioModel(_Strict):
             for g in self.gateways:
                 if g.profile is not None:
                     try:
-                        get_profile(g.profile)
+                        prof = get_profile(g.profile)
                     except KeyError:
                         raise ValueError(f"profil inconnu : {g.profile!r}") from None
+                    if not can_simulate_radio(prof):
+                        raise ValueError(
+                            f"profil {g.profile!r} : hôte sans radio publiée, choisir un module "
+                            "radio (voir docs/USAGE.md)")
                 if g.mesh and (g.profile is None or not can_relay(get_profile(g.profile))):
                     raise ValueError(f"passerelle {g.name!r} : mesh exige un profil à radio mesh documentée")
             if self.mesh is not None:

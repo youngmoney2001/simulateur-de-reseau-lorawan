@@ -596,6 +596,14 @@ LIB.lsim_encode_join_accept.argtypes = [
 LIB.lsim_decode_join_accept.restype = ctypes.c_int32
 LIB.lsim_decode_join_accept.argtypes = [
     _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, _U8P, ctypes.POINTER(_CJoinAccept)]
+LIB.lsim_encode_rejoin_join_accept.restype = ctypes.c_int32
+LIB.lsim_encode_rejoin_join_accept.argtypes = [
+    ctypes.POINTER(_CJoinAccept), _U8P, _U8P, _U8P, ctypes.c_uint8, ctypes.c_uint16,
+    _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_decode_rejoin_join_accept.restype = ctypes.c_int32
+LIB.lsim_decode_rejoin_join_accept.argtypes = [
+    _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.POINTER(_CJoinAccept)]
 LIB.lsim_mac_encode.restype = ctypes.c_int32
 LIB.lsim_mac_encode.argtypes = [
     ctypes.POINTER(_CMacCommand), _U8P, ctypes.POINTER(ctypes.c_size_t)]
@@ -752,6 +760,9 @@ LIB.lsim_mesh_airtime_ns.restype = ctypes.c_int32
 LIB.lsim_mesh_airtime_ns.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int64)]
 LIB.lsim_mesh_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_mesh_sensitivity_dbm.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_shadowing_sample_db.restype = ctypes.c_int32
+LIB.lsim_shadowing_sample_db.argtypes = [
+    ctypes.c_uint64, ctypes.c_uint32, ctypes.c_double, ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_mesh_routes.restype = ctypes.c_int32
 LIB.lsim_mesh_routes.argtypes = [
     ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),

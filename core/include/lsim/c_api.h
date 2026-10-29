@@ -274,6 +274,20 @@ LSIM_API int32_t lsim_decode_join_accept(const uint8_t* in, size_t len,
                                          const uint8_t dev_nonce[2],
                                          lsim_join_accept* out);
 
+// Join-accept déclenché par une rejoin-request (1.1 §6.2.4.4) : JSEncKey, JSIntKey,
+// JoinReqType = rejoin_type (0, 1 ou 2), RJcount remplace DevNonce. OptNeg obligatoire.
+LSIM_API int32_t lsim_encode_rejoin_join_accept(const lsim_join_accept* accept,
+                                                const uint8_t nwk_key[16],
+                                                const uint8_t dev_eui[8],
+                                                const uint8_t join_eui[8], uint8_t rejoin_type,
+                                                uint16_t rjcount, uint8_t* out, size_t cap,
+                                                size_t* out_len);
+LSIM_API int32_t lsim_decode_rejoin_join_accept(const uint8_t* in, size_t len,
+                                                const uint8_t nwk_key[16],
+                                                const uint8_t dev_eui[8],
+                                                const uint8_t join_eui[8], uint8_t rejoin_type,
+                                                uint16_t rjcount, lsim_join_accept* out);
+
 /* -------------------------------------------------------------- Simulateur */
 
 typedef struct lsim_end_device {
@@ -908,6 +922,11 @@ typedef struct lsim_mesh_summary {
 
 LSIM_API int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out);
 LSIM_API int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out);
+// Tirage de shadowing (dB) d'un indice donné : même fonction que le cœur de simulation
+// (`shadowing_sample_db`), gaussienne d'écart-type sigma_db. Utilisé par le mesh pour
+// tirer une valeur par paire de passerelles.
+LSIM_API int32_t lsim_shadowing_sample_db(uint64_t seed, uint32_t device_index, double sigma_db,
+                                          double* out);
 LSIM_API int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_count,
                                   const uint8_t* capable, const double* rssi_dbm,
                                   uint32_t border, uint32_t max_hops, int32_t* next);

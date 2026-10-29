@@ -307,4 +307,155 @@ JoinStatus decode_join_accept(const std::uint8_t* in, std::size_t len,
     return JoinStatus::Ok;
 }
 
+
+// ----------------------------------------------------------- Join-accept après rejoin
+
+namespace {
+
+JoinStatus check_rejoin_accept_args(const JoinAcceptFields& f, std::uint8_t rejoin_type) {
+    if (rejoin_type > 2) {
+        return JoinStatus::FieldOutOfRange;
+    }
+    // Un rejoin implique LoRaWAN 1.1 : OptNeg doit être positionné.
+    if ((f.dl_settings & kOptNegMask) == 0) {
+        return JoinStatus::FieldOutOfRange;
+    }
+    return JoinStatus::Ok;
+}
+
+std::array<std::uint8_t, 2> rjcount_slot(std::uint16_t rjcount) {
+    return {static_cast<std::uint8_t>(rjcount), static_cast<std::uint8_t>(rjcount >> 8)};
+}
+
+}  // namespace
+
+JoinStatus encode_rejoin_join_accept(const JoinAcceptFields& f, const crypto::Key128& nwk_key,
+                                     const std::array<std::uint8_t, 8>& dev_eui,
+                                     const std::array<std::uint8_t, 8>& join_eui,
+                                     std::uint8_t rejoin_type, std::uint16_t rjcount,
+                                     std::uint8_t* out, std::size_t cap,
+                                     std::size_t& out_written) {
+    out_written = 0;
+    if (out == nullptr) {
+        return JoinStatus::InvalidLength;
+    }
+    JoinStatus st = check_rejoin_accept_args(f, rejoin_type);
+    if (st != JoinStatus::Ok) {
+        return st;
+    }
+    const std::size_t body_len = f.has_cflist ? kBodyCfl : kBodyNoCfl;
+    const std::size_t wire_len = 1 + body_len + kMicLen;
+    if (cap < wire_len) {
+        return JoinStatus::BufferTooSmall;
+    }
+
+    std::array<std::uint8_t, 1 + kBodyCfl> msg{};
+    msg[0] = kMhdrJoinAccept;
+    std::memcpy(msg.data() + 1, f.join_nonce.data(), 3);
+    std::memcpy(msg.data() + 4, f.net_id.data(), 3);
+    store_le32(f.dev_addr, msg.data() + 7);
+    msg[11] = f.dl_settings;
+    msg[12] = f.rx_delay;
+    if (f.has_cflist) {
+        std::memcpy(msg.data() + 13, f.cflist.data(), 16);
+    }
+    const std::size_t msg_len = 1 + body_len;
+
+    JoinKeys jk{};
+    if (derive_join_keys(nwk_key, dev_eui, jk) != crypto::CryptoStatus::Ok) {
+        wipe(msg.data(), msg.size());
+        return JoinStatus::CryptoFailure;
+    }
+    const auto slot = rjcount_slot(rjcount);
+    std::array<std::uint8_t, 4> mic{};
+    st = compute_join_accept_mic_11(jk.js_int_key, rejoin_type, join_eui, slot, msg.data(),
+                                    msg_len, mic);
+    if (st == JoinStatus::Ok) {
+        std::array<std::uint8_t, kBodyCfl + kMicLen> enc{};
+        std::memcpy(enc.data(), msg.data() + 1, body_len);
+        std::memcpy(enc.data() + body_len, mic.data(), kMicLen);
+        const std::size_t enc_len = body_len + kMicLen;
+        st = join_accept_encrypt(jk.js_enc_key, enc.data(), enc_len);
+        if (st == JoinStatus::Ok) {
+            out[0] = kMhdrJoinAccept;
+            std::memcpy(out + 1, enc.data(), enc_len);
+            out_written = wire_len;
+        }
+        wipe(enc.data(), enc.size());
+    }
+    wipe(&jk, sizeof jk);
+    wipe(msg.data(), msg.size());
+    return st;
+}
+
+JoinStatus decode_rejoin_join_accept(const std::uint8_t* in, std::size_t len,
+                                     const crypto::Key128& nwk_key,
+                                     const std::array<std::uint8_t, 8>& dev_eui,
+                                     const std::array<std::uint8_t, 8>& join_eui,
+                                     std::uint8_t rejoin_type, std::uint16_t rjcount,
+                                     JoinAcceptFields& out) {
+    out = JoinAcceptFields{};
+    if (in == nullptr || (len != kJoinAcceptSizeNoCfl && len != kJoinAcceptSizeCfl)) {
+        return JoinStatus::InvalidLength;
+    }
+    if (in[0] != kMhdrJoinAccept) {
+        return JoinStatus::InvalidMHDR;
+    }
+    if (rejoin_type > 2) {
+        return JoinStatus::FieldOutOfRange;
+    }
+    const std::size_t enc_len = len - 1;
+    const std::size_t body_len = enc_len - kMicLen;
+
+    JoinKeys jk{};
+    if (derive_join_keys(nwk_key, dev_eui, jk) != crypto::CryptoStatus::Ok) {
+        return JoinStatus::CryptoFailure;
+    }
+    std::array<std::uint8_t, kBodyCfl + kMicLen> dec{};
+    std::memcpy(dec.data(), in + 1, enc_len);
+    JoinStatus st = join_accept_decrypt(jk.js_enc_key, dec.data(), enc_len);
+    if (st != JoinStatus::Ok) {
+        wipe(dec.data(), dec.size());
+        wipe(&jk, sizeof jk);
+        return st;
+    }
+    std::array<std::uint8_t, 1 + kBodyCfl> msg{};
+    msg[0] = kMhdrJoinAccept;
+    std::memcpy(msg.data() + 1, dec.data(), body_len);
+    const std::size_t msg_len = 1 + body_len;
+    const std::uint8_t dl = dec[10];
+    if ((dl & kOptNegMask) == 0) {
+        wipe(dec.data(), dec.size());
+        wipe(&jk, sizeof jk);
+        return JoinStatus::FieldOutOfRange;
+    }
+
+    std::array<std::uint8_t, 4> expected{};
+    st = compute_join_accept_mic_11(jk.js_int_key, rejoin_type, join_eui, rjcount_slot(rjcount),
+                                    msg.data(), msg_len, expected);
+    wipe(&jk, sizeof jk);
+    if (st != JoinStatus::Ok) {
+        wipe(dec.data(), dec.size());
+        return st;
+    }
+    if (!lsim::constant_time_equal(expected.data(), dec.data() + body_len, kMicLen)) {
+        wipe(dec.data(), dec.size());
+        return JoinStatus::MicMismatch;
+    }
+
+    JoinAcceptFields f;
+    std::memcpy(f.join_nonce.data(), dec.data(), 3);
+    std::memcpy(f.net_id.data(), dec.data() + 3, 3);
+    f.dev_addr = load_le32(dec.data() + 6);
+    f.dl_settings = dl;
+    f.rx_delay = dec[11];
+    f.has_cflist = body_len == kBodyCfl;
+    if (f.has_cflist) {
+        std::memcpy(f.cflist.data(), dec.data() + 12, 16);
+    }
+    out = f;
+    wipe(dec.data(), dec.size());
+    return JoinStatus::Ok;
+}
+
 }  // namespace lsim::lorawan

@@ -201,3 +201,102 @@ def test_concurrent_distinct_devices_all_registered_with_unique_addresses(db_pat
     assert len(addrs) == 20
     assert len(set(addrs)) == 20
     assert DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY).device_count() == 20
+
+
+# ----------------------------------------------------------- join-accept après rejoin (1.1 §6.2.4.4)
+
+def _keys_with_join_eui(dev_eui: bytes) -> DeviceKeys:
+    if dev_eui not in (DEV_A, DEV_B) and not dev_eui.startswith(b"\xaa"):
+        raise KeyError("dispositif inconnu")
+    return DeviceKeys(NWK_KEY, SINT_KEY, JSINT_KEY, join_eui=JOIN_EUI)
+
+
+@pytest.fixture
+def rejoin_server(db_path):
+    return JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY), NET_ID,
+                      _keys_with_join_eui)
+
+
+def _rejoin1(rjcount1: int) -> bytes:
+    from lsim.rejoin import Rejoin1, encode_1
+    return encode_1(Rejoin1(join_eui=JOIN_EUI, dev_eui=DEV_A, rjcount1=rjcount1), JSINT_KEY)
+
+
+def _rejoin02(rejoin_type: int, rjcount0: int) -> bytes:
+    return encode_02(Rejoin02(rejoin_type=rejoin_type, net_id=NET_ID, dev_eui=DEV_A,
+                              rjcount0=rjcount0), SINT_KEY)
+
+
+def test_rejoin_type_1_accept_is_decodable_by_the_device(rejoin_server):
+    from lsim.security import decode_rejoin_join_accept
+    out = rejoin_server.accept_rejoin(_rejoin1(1))
+    assert out.rejoin_type == 1 and out.join_eui == JOIN_EUI and out.rjcount == 1
+    assert len(out.accept_wire) == 17
+    accept = decode_rejoin_join_accept(out.accept_wire, NWK_KEY, DEV_A, JOIN_EUI, 1, 1)
+    assert accept.dev_addr == out.dev_addr
+    assert accept.join_nonce == out.join_nonce.to_bytes(3, "little")
+    assert accept.dl_settings & 0x80
+
+
+def test_rejoin_type_0_and_2_accept_use_provisioned_join_eui(rejoin_server):
+    from lsim.security import decode_rejoin_join_accept
+    for rejoin_type in (0, 2):
+        out = rejoin_server.accept_rejoin(_rejoin02(rejoin_type, 1 + rejoin_type))
+        assert out.join_eui == JOIN_EUI
+        accept = decode_rejoin_join_accept(out.accept_wire, NWK_KEY, DEV_A, JOIN_EUI,
+                                           rejoin_type, 1 + rejoin_type)
+        assert accept.dev_addr == out.dev_addr
+
+
+def test_rejoin_accept_is_bound_to_join_req_type_and_rjcount(rejoin_server):
+    from lsim.security import decode_rejoin_join_accept
+    out = rejoin_server.accept_rejoin(_rejoin02(0, 4))
+    # Un autre JoinReqType ou un autre RJcount donne un MIC faux : rien n'est exposé.
+    with pytest.raises(StatusError):
+        decode_rejoin_join_accept(out.accept_wire, NWK_KEY, DEV_A, JOIN_EUI, 2, 4)
+    with pytest.raises(StatusError):
+        decode_rejoin_join_accept(out.accept_wire, NWK_KEY, DEV_A, JOIN_EUI, 0, 5)
+    # Un join-accept de rejoin n'est pas un join-accept de join-request (JoinReqType 0xFF).
+    with pytest.raises(StatusError):
+        decode_join_accept(out.accept_wire, NWK_KEY, DEV_A, JOIN_EUI, (4).to_bytes(2, "little"))
+
+
+def test_rejoin_type_2_changes_dev_addr(rejoin_server):
+    first = rejoin_server.accept_rejoin(_rejoin02(0, 1))
+    second = rejoin_server.accept_rejoin(_rejoin02(2, 2))
+    assert second.dev_addr != first.dev_addr
+    assert second.join_nonce == first.join_nonce + 1
+
+
+def test_rejoin_accept_replay_is_rejected_and_state_unchanged(rejoin_server, db_path):
+    msg = _rejoin1(3)
+    rejoin_server.accept_rejoin(msg)
+    before = _raw_blob(db_path)
+    with pytest.raises(StatusError):
+        rejoin_server.accept_rejoin(msg)
+    assert _raw_blob(db_path) == before
+
+
+def test_rejoin_type_0_without_provisioned_join_eui_is_refused(db_path):
+    server = JoinServer(DurableJoinStore(db_path, INTEGRITY_KEY, DATA_KEY), NET_ID, _keys)
+    server.handle_join_request(_join(DEV_A, 1))   # écriture légitime : l'état existe
+    before = _raw_blob(db_path)
+    with pytest.raises(ValueError, match="JoinEUI"):
+        server.accept_rejoin(_rejoin02(0, 1))
+    assert _raw_blob(db_path) == before
+
+
+def test_rejoin_type_0_resets_rjcount0_for_the_device(rejoin_server):
+    rejoin_server.accept_rejoin(_rejoin02(0, 5))
+    # Après un join-accept, le dispositif repart de RJcount0 = 0 : 1 doit être accepté.
+    rejoin_server.accept_rejoin(_rejoin02(0, 1))
+
+
+def test_rejoin_with_invalid_mic_does_not_produce_accept(rejoin_server, db_path):
+    bad = bytearray(_rejoin1(2))
+    bad[-1] ^= 0x01
+    rejoin_server.accept_rejoin(_rejoin02(0, 1))   # écriture légitime : l'état existe
+    before = _raw_blob(db_path)
+    with pytest.raises(StatusError):
+        rejoin_server.accept_rejoin(bytes(bad))
+    assert _raw_blob(db_path) == before

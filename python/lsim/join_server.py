@@ -8,11 +8,15 @@ Pour chaque join-request valide, dans une seule transaction :
 5. le join-accept est chiffré avec NwkKey.
 Si une étape échoue, la transaction est annulée : aucun DevNonce ni compteur n'est consommé.
 
-Limite (source) : les rejoin-requests (types 0, 1, 2) sont vérifiés et comptés, mais ce module
-ne génère pas le join-accept qui les suit. La spec LoRaWAN 1.1 (§6.2.4.1, §6.2.4.2, §6.2.3,
-tableaux 13 et 14) ne définit ni DevNonce ni JoinEUI pour ce join-accept (type 0/2 : ni JoinEUI
-ni DevNonce ; type 1 : pas de DevNonce) : le MIC JSIntKey et le chiffrement JSEncKey ne peuvent pas
-être encodés sans entrée inventée. Levée par un erratum officiel, pas par ce module.
+Rejoin-requests (1.1 §6.2.4) : `handle_rejoin` vérifie le MIC et le compteur (RJcount) sans
+répondre. `accept_rejoin` produit en plus le join-accept de rejoin, dans la même transaction
+(§6.2.4.4) : JSEncKey pour le chiffrement, JSIntKey pour le MIC, JoinReqType 0x00, 0x01 ou 0x02,
+RJcount à la place de DevNonce (dérivation des clés de session). Pour les types 0 et 2, le
+message ne porte pas le JoinEUI : il est fourni par `DeviceKeys.join_eui` (provisionné avec le
+dispositif). Le join-accept réinitialise RJcount0 côté serveur, comme côté dispositif.
+Limite : l'ancien contexte de sécurité est remplacé immédiatement ; §6.2.4 demande de le
+conserver jusqu'au premier uplink réussi dans le nouveau contexte (non modélisé).
+
 Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé de racine.
 La session de données (clés de session 1.1 et compteurs) est créée dans la même transaction que
 le join-accept : une jointure acceptée sans session est impossible. Sans AppKey, AppSKey n'est
@@ -26,7 +30,12 @@ from typing import Callable, Optional, Union
 
 from lsim.join_store import DurableJoinStore
 from lsim.rejoin import Rejoin02, Rejoin1
-from lsim.security import JoinAccept, derive_session_keys_11, encode_join_accept
+from lsim.security import (
+    JoinAccept,
+    derive_session_keys_11,
+    encode_join_accept,
+    encode_rejoin_join_accept,
+)
 
 _JOIN_REQUEST_LEN = 23
 _REJOIN_02_LEN = 19
@@ -43,6 +52,8 @@ class DeviceKeys:
     s_nwk_s_int_key: Optional[bytes] = field(default=None, repr=False)   # rejoin types 0 et 2
     js_int_key: Optional[bytes] = field(default=None, repr=False)        # rejoin type 1
     app_key: Optional[bytes] = field(default=None, repr=False)           # dérivation AppSKey
+    # JoinEUI provisionné : requis pour rejoin type 0/2 (le message ne le porte pas).
+    join_eui: Optional[bytes] = None
 
     def __post_init__(self) -> None:
         for name in ("nwk_key", "app_key", "s_nwk_s_int_key", "js_int_key"):
@@ -51,6 +62,9 @@ class DeviceKeys:
                 continue
             if not isinstance(value, (bytes, bytearray)) or len(value) != 16:
                 raise ValueError(f"{name} doit faire 16 octets")
+        if self.join_eui is not None and (
+                not isinstance(self.join_eui, (bytes, bytearray)) or len(self.join_eui) != 8):
+            raise ValueError("join_eui doit faire 8 octets")
 
     def __repr__(self) -> str:
         return "DeviceKeys(<secret>)"
@@ -61,6 +75,18 @@ class JoinOutcome:
     dev_eui: bytes
     join_eui: bytes
     dev_nonce: bytes
+    join_nonce: int
+    dev_addr: int
+    accept_wire: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class RejoinOutcome:
+    """Rejoin accepté et join-accept de rejoin produit (même transaction)."""
+    rejoin_type: int
+    dev_eui: bytes
+    join_eui: bytes
+    rjcount: int
     join_nonce: int
     dev_addr: int
     accept_wire: bytes = field(repr=False)
@@ -116,6 +142,71 @@ class JoinServer:
                 self._on_join(tx, req.dev_eui)
         return JoinOutcome(dev_eui=req.dev_eui, join_eui=req.join_eui, dev_nonce=req.dev_nonce,
                            join_nonce=join_nonce, dev_addr=dev_addr, accept_wire=accept)
+
+    def _issue_session(self, tx, dev_eui: bytes, join_eui: bytes, dev_nonce_slot: bytes,
+                       keys: DeviceKeys) -> tuple[int, int, bytes, JoinAccept]:
+        """JoinNonce, DevAddr, session de données ; retourne (JoinNonce, DevAddr, JoinNonce, accept)."""
+        join_nonce = tx.next_value("join_nonce", dev_eui, _JOIN_NONCE_LIMIT)
+        nwk_addr = tx.next_value("nwk_addr", b"", _NWK_ADDR_LIMIT)
+        dev_addr = (self._nwk_id << 25) | nwk_addr
+        tx.set_device_address(dev_eui, dev_addr)
+        join_nonce_wire = join_nonce.to_bytes(3, "little")
+        accept = JoinAccept(join_nonce=join_nonce_wire, net_id=self._net_id,
+                            dev_addr=dev_addr, dl_settings=self._dl_settings,
+                            rx_delay=self._rx_delay)
+        session = derive_session_keys_11(
+            keys.nwk_key, keys.app_key or bytes(16), join_nonce_wire, join_eui, dev_nonce_slot)
+        tx.put_session(dev_eui, dev_addr, session, has_app_key=keys.app_key is not None)
+        return join_nonce, dev_addr, join_nonce_wire, accept
+
+    def accept_rejoin(self, wire: bytes) -> RejoinOutcome:
+        """Accepte une rejoin-request et produit son join-accept (1.1 §6.2.4.4), atomiquement.
+
+        Lève StatusError (MIC, RJcount), KeyError (dispositif inconnu) ou ValueError (clé ou
+        JoinEUI absent) ; dans ces cas, aucun état n'est modifié.
+        """
+        if not isinstance(wire, (bytes, bytearray)) or len(wire) < 2:
+            raise ValueError("rejoin-request trop courte")
+        rejoin_type = wire[1]
+        if rejoin_type in (0, 2):
+            if len(wire) != _REJOIN_02_LEN:
+                raise ValueError("rejoin-request de type 0/2 : 19 octets attendus")
+            dev_eui = bytes(wire[5:13])
+            keys = self._keys(dev_eui)
+            if keys.s_nwk_s_int_key is None:
+                raise ValueError("clé SNwkSIntKey absente : rejoin type 0/2 impossible")
+            if keys.join_eui is None:
+                raise ValueError("JoinEUI provisionné absent : rejoin type 0/2 impossible")
+            join_eui = keys.join_eui
+        elif rejoin_type == 1:
+            if len(wire) != _REJOIN_1_LEN:
+                raise ValueError("rejoin-request de type 1 : 24 octets attendus")
+            dev_eui = bytes(wire[10:18])
+            keys = self._keys(dev_eui)
+            if keys.js_int_key is None:
+                raise ValueError("clé JSIntKey absente : rejoin type 1 impossible")
+            join_eui = bytes(wire[2:10])
+        else:
+            raise ValueError("type de rejoin-request inconnu")
+        with self._store.transaction() as tx:
+            if rejoin_type in (0, 2):
+                check = tx.registry.accept_rejoin_02(bytes(wire), keys.s_nwk_s_int_key)
+                rjcount = check.rjcount0
+                # Le join-accept remet RJcount0 à zéro côté dispositif : même effet ici.
+                tx.registry.on_join_accepted(dev_eui)
+            else:
+                check = tx.registry.accept_rejoin_1(bytes(wire), keys.js_int_key)
+                rjcount = check.rjcount1
+            slot = rjcount.to_bytes(2, "little")
+            join_nonce, dev_addr, join_nonce_wire, accept = self._issue_session(
+                tx, dev_eui, join_eui, slot, keys)
+            accept_wire = encode_rejoin_join_accept(
+                accept, keys.nwk_key, dev_eui, join_eui, rejoin_type, rjcount)
+            if self._on_join is not None:
+                self._on_join(tx, dev_eui)
+        return RejoinOutcome(rejoin_type=rejoin_type, dev_eui=dev_eui, join_eui=join_eui,
+                             rjcount=rjcount, join_nonce=join_nonce, dev_addr=dev_addr,
+                             accept_wire=accept_wire)
 
     def handle_rejoin(self, wire: bytes) -> Union[Rejoin02, Rejoin1]:
         """Accepte une rejoin-request (types 0, 1, 2) : MIC et RJcount vérifiés, état persisté."""

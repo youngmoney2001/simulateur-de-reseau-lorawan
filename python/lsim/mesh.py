@@ -179,15 +179,39 @@ class MeshGraph:
         return tuple(path)
 
 
+# Sel du tirage de shadowing mesh : sépare ces tirages de ceux de l'accès (même graine).
+MESH_SHADOW_SALT = 0x4D6573684C6E6B31  # « MeshLnk1 »
+
+
+def pair_shadowing_db(seed: int, i: int, j: int, n: int, sigma_db: float) -> float:
+    """Shadowing réciproque de la paire {i, j} (dB, même valeur dans les deux sens).
+
+    Un tirage par paire : l'indice est min(i,j)*n + max(i,j), donc (i,j) et (j,i) partagent
+    la valeur. Fonction pure ; sigma_db = 0 donne 0.
+    """
+    if sigma_db == 0.0:
+        return 0.0
+    a, b = (i, j) if i < j else (j, i)
+    out = ctypes.c_double(0.0)
+    _check(_LIB.lsim_shadowing_sample_db((seed ^ MESH_SHADOW_SALT) & (2**64 - 1),
+                                         a * n + b, sigma_db, ctypes.byref(out)))
+    return out.value
+
+
 def build_mesh(nodes: Sequence[MeshNode], border_id: str, radio: MeshRadio,
                path_loss: Optional[LogDistanceModel] = None,
                max_hops: int = MAX_HOPS,
-               path_loss_db: Optional[Sequence[float]] = None) -> MeshGraph:
+               path_loss_db: Optional[Sequence[float]] = None,
+               shadowing_sigma_db: float = 0.0, shadowing_seed: int = 0) -> MeshGraph:
     """Calcule les liens faisables et les routes les plus courtes vers la frontière.
 
     Pertes de propagation : `path_loss_db` (matrice à plat n*n, calculée par le natif avec
     relief et obstacles) si fournie ; sinon le modèle `path_loss` (log-distance).
+    `shadowing_sigma_db` > 0 : un tirage log-normal par paire de passerelles, identique dans
+    les deux sens (liaison réciproque), déterministe pour `shadowing_seed`.
     """
+    if not 0.0 <= shadowing_sigma_db <= 30.0:
+        raise ValueError("shadowing_sigma_db doit être compris entre 0 et 30 dB")
     if not 1 <= max_hops <= MAX_HOPS:
         raise ValueError(f"max_hops doit être compris entre 1 et {MAX_HOPS}")
     if not 1 <= len(nodes) <= MAX_NODES:
@@ -218,6 +242,12 @@ def build_mesh(nodes: Sequence[MeshNode], border_id: str, radio: MeshRadio,
                 d = max(((a.x_m - b.x_m) ** 2 + (a.y_m - b.y_m) ** 2) ** 0.5, 1.0)
                 pl = model.path_loss_db(d)
             rssi[i * n + j] = a.tx_power_dbm + a.antenna_gain_dbi - pl + b.antenna_gain_dbi
+    if shadowing_sigma_db > 0.0:
+        for i in range(n):
+            for j in range(i + 1, n):
+                s_db = pair_shadowing_db(shadowing_seed, i, j, n, shadowing_sigma_db)
+                rssi[i * n + j] -= s_db
+                rssi[j * n + i] -= s_db
     cap = (ctypes.c_uint8 * n)(*capable)
     nxt = (ctypes.c_int32 * n)()
     border = ids.index(border_id)

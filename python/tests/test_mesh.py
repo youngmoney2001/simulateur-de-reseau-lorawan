@@ -215,3 +215,52 @@ def test_downlink_window_thresholds():
     assert downlink_window(0, 1, air + 1) == "rx2"      # au-delà de RX1 : RX2
     assert downlink_window(1_000_000_000, 1, air) == "rx2"     # aller-retour 2 s pile : RX2
     assert downlink_window(1_000_000_001, 1, air) == "missed"  # aller-retour > 2 s
+
+
+# ----------------------------------------------------------- shadowing entre passerelles mesh
+
+def _path_loss_offsets(base, shadowed, n):
+    """Écart entre liaisons sans et avec shadowing : rssi_base - rssi_shadowed, par (i, j)."""
+    return {(i, j): base.rssi[i * n + j] - shadowed.rssi[i * n + j]
+            for i in range(n) for j in range(n) if i != j}
+
+
+def test_mesh_shadowing_is_reciprocal_and_matches_pair_draw():
+    from lsim.mesh import pair_shadowing_db
+    nodes = _line(4, 500.0)
+    base = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP)
+    shadowed = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP,
+                          shadowing_sigma_db=6.0, shadowing_seed=42)
+    n = len(nodes)
+    off = _path_loss_offsets(base, shadowed, n)
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Un seul tirage par paire : les deux sens reçoivent la même valeur.
+            assert off[(i, j)] == pytest.approx(off[(j, i)], abs=1e-9)
+            assert off[(i, j)] == pytest.approx(pair_shadowing_db(42, i, j, n, 6.0), abs=1e-9)
+    # Les paires ne partagent pas toutes la même valeur.
+    assert len({round(v, 6) for v in off.values()}) > 2
+
+
+def test_mesh_shadowing_is_deterministic_per_seed_and_zero_is_identity():
+    nodes = _line(3, 400.0)
+    a = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP,
+                   shadowing_sigma_db=4.0, shadowing_seed=9)
+    b = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP,
+                   shadowing_sigma_db=4.0, shadowing_seed=9)
+    c = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP,
+                   shadowing_sigma_db=4.0, shadowing_seed=10)
+    base = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP)
+    zero = build_mesh(nodes, border_id="g0", radio=RADIO, path_loss=STEEP,
+                      shadowing_sigma_db=0.0, shadowing_seed=9)
+    assert list(a.rssi) == list(b.rssi)
+    assert list(a.rssi) != list(c.rssi)
+    assert list(zero.rssi) == list(base.rssi)
+
+
+def test_mesh_shadowing_bounds_are_checked():
+    nodes = _line(2, 300.0)
+    with pytest.raises(ValueError):
+        build_mesh(nodes, border_id="g0", radio=RADIO, shadowing_sigma_db=-1.0)
+    with pytest.raises(ValueError):
+        build_mesh(nodes, border_id="g0", radio=RADIO, shadowing_sigma_db=31.0)

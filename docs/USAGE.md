@@ -217,6 +217,8 @@ ensuite comme `terrain` du scénario (`type: dem_csv`, chemin relatif au YAML). 
 Plusieurs passerelles se déclarent dans `gateways` (au lieu de `gateway`). Chaque passerelle a un
 `name` unique ; un `profile` du catalogue (`python/lsim/gateway_profiles.py`) est requis pour
 qu'elle relaie.
+Un profil « hôte » (RAK7391 : Raspberry Pi CM4 avec emplacements pour modules) ne publie aucun
+paramètre radio : il est refusé comme passerelle radio, le module installé doit être déclaré.
 
 - `mesh: true` : la passerelle relaie sur la bande mesh 2,4 GHz (profil à radio mesh publiée :
   RAK5148). Sans `mesh`, la passerelle a un backhaul IP direct vers le LNS.
@@ -228,6 +230,9 @@ qu'elle relaie.
     dispositif) plus l'enveloppe mesh de 14 o en montant (ChirpStack Gateway Mesh).
   - `frame_size: fixed` : toutes les trames font `payload_bytes` (défaut 32 o, hypothèse
     d'avant la correction ; à utiliser pour comparer).
+  - `shadowing_sigma_db` (0 à 30, 0 par défaut) : shadowing log-normal des liaisons entre
+    passerelles, un tirage par paire, identique dans les deux sens ; graine
+    `propagation.shadowing_seed`. Le shadowing de l'accès n'est pas repris sur le mesh.
 
 Suppression des doublons : un relais ne transmet une trame qu'une fois. Il renonce à sa copie
 s'il entend un autre relais transmettre la même trame avant son propre départ. Chaque relais
@@ -255,7 +260,8 @@ Défaut : SF9 / 203 kHz (décision). SF12 / 203 kHz reste possible mais un acqui
 dure plus d'une seconde par saut et n'atteint plus RX1 ni RX2. Le SF et la bande se règlent
 dans le bloc `mesh` ; le choix automatique par profil d'équipement n'est pas implémenté.
 
-Limites : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision.
+Limites : le retour de descente n'a pas de collision ; le shadowing mesh est un tirage par
+paire (pas de variation dans le temps).
 
 Exemple : `examples/mesh_relais_quartier.yaml`.
 

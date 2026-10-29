@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "lsim/c_api.h"
+#include "lsim/engine.hpp"
 #include "lsim/mesh.hpp"
 
 namespace {
@@ -99,3 +100,16 @@ int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
 }
 
 }  // extern "C"
+
+int32_t lsim_shadowing_sample_db(uint64_t seed, uint32_t device_index, double sigma_db,
+                                 double* out) {
+    if (out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out = 0.0;
+    if (!(sigma_db >= 0.0) || sigma_db > lsim::sim::kMaxShadowingSigmaDb) {
+        return static_cast<int32_t>(lsim::lora::Status::InvalidParameter);
+    }
+    *out = lsim::sim::shadowing_sample_db(seed, device_index, sigma_db);
+    return 0;
+}

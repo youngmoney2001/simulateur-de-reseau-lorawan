@@ -120,4 +120,28 @@ LSIM_API JoinStatus decode_join_accept(const std::uint8_t* in, std::size_t len,
                                        const std::array<std::uint8_t, 2>& dev_nonce,
                                        JoinAcceptFields& out);
 
+// ----------------------------------------------------------- Join-accept après rejoin
+
+// Join-accept déclenché par une rejoin-request (LoRaWAN 1.1 §6.2.4.4, tableaux 13 et 14).
+// rejoin_type = 0, 1 ou 2. Chiffrement avec JSEncKey ; MIC avec JSIntKey, JoinReqType = rejoin_type ;
+// RJcount (0 ou 1, 16 bits LE) remplace DevNonce. OptNeg (bit 7 de DLSettings) doit valoir 1.
+// join_eui : JoinEUI du dispositif (lu dans la rejoin type 1 ; provisionné pour les types 0 et 2,
+// dont le message ne le porte pas).
+LSIM_API JoinStatus encode_rejoin_join_accept(const JoinAcceptFields& f,
+                                              const crypto::Key128& nwk_key,
+                                              const std::array<std::uint8_t, 8>& dev_eui,
+                                              const std::array<std::uint8_t, 8>& join_eui,
+                                              std::uint8_t rejoin_type, std::uint16_t rjcount,
+                                              std::uint8_t* out, std::size_t cap,
+                                              std::size_t& out_written);
+
+// Ouvre un join-accept de rejoin côté device : déchiffrement JSEncKey puis MIC JSIntKey.
+// `out` est remis à zéro en cas d'échec.
+LSIM_API JoinStatus decode_rejoin_join_accept(const std::uint8_t* in, std::size_t len,
+                                              const crypto::Key128& nwk_key,
+                                              const std::array<std::uint8_t, 8>& dev_eui,
+                                              const std::array<std::uint8_t, 8>& join_eui,
+                                              std::uint8_t rejoin_type, std::uint16_t rjcount,
+                                              JoinAcceptFields& out);
+
 }  // namespace lsim::lorawan

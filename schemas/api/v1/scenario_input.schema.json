@@ -369,6 +369,13 @@
           "title": "Relay Backoff Airtimes",
           "type": "integer"
         },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        },
         "spreading_factor": {
           "default": 9,
           "maximum": 12,

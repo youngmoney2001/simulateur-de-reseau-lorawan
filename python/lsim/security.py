@@ -383,6 +383,53 @@ def encode_join_accept(accept: JoinAccept, nwk_key: bytes, dev_eui: bytes,
     return bytes(out[:written.value])
 
 
+def encode_rejoin_join_accept(accept: JoinAccept, nwk_key: bytes, dev_eui: bytes,
+                              join_eui: bytes, rejoin_type: int, rjcount: int) -> bytes:
+    """Join-accept déclenché par une rejoin-request (1.1 §6.2.4.4) : 17 ou 33 octets.
+
+    Chiffré avec JSEncKey, MIC JSIntKey, JoinReqType = rejoin_type, RJcount remplace DevNonce.
+    """
+    if rejoin_type not in (0, 1, 2):
+        raise ValueError("rejoin_type doit valoir 0, 1 ou 2")
+    if not 0 <= rjcount <= 0xFFFF:
+        raise ValueError("rjcount doit tenir sur 16 bits")
+    if not accept.dl_settings & 0x80:
+        raise ValueError("OptNeg (bit 7 de dl_settings) requis pour un join-accept de rejoin")
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    deui = _bytes_arg("dev_eui", dev_eui, 8)
+    jeui = _bytes_arg("join_eui", join_eui, 8)
+    cap = 33
+    out = (_U8 * cap)()
+    written = ctypes.c_size_t(0)
+    _check(LIB.lsim_encode_rejoin_join_accept(
+        ctypes.byref(accept._to_c()), ctypes.cast(key, ctypes.POINTER(_U8)),
+        ctypes.cast(deui, ctypes.POINTER(_U8)), ctypes.cast(jeui, ctypes.POINTER(_U8)),
+        rejoin_type, rjcount, out, cap, ctypes.byref(written)))
+    return bytes(out[:written.value])
+
+
+def decode_rejoin_join_accept(wire: bytes, nwk_key: bytes, dev_eui: bytes, join_eui: bytes,
+                              rejoin_type: int, rjcount: int) -> JoinAccept:
+    """Ouvre un join-accept de rejoin côté device. MIC JSIntKey vérifié avant exposition."""
+    if not isinstance(wire, (bytes, bytearray)) or len(wire) not in (17, 33):
+        raise ValueError("join-accept de 17 ou 33 octets attendu")
+    if rejoin_type not in (0, 1, 2):
+        raise ValueError("rejoin_type doit valoir 0, 1 ou 2")
+    key = _bytes_arg("nwk_key", nwk_key, 16)
+    deui = _bytes_arg("dev_eui", dev_eui, 8)
+    jeui = _bytes_arg("join_eui", join_eui, 8)
+    src = (_U8 * len(wire)).from_buffer_copy(bytes(wire))
+    out = _CJoinAccept()
+    _check(LIB.lsim_decode_rejoin_join_accept(
+        ctypes.cast(src, ctypes.POINTER(_U8)), len(wire),
+        ctypes.cast(key, ctypes.POINTER(_U8)), ctypes.cast(deui, ctypes.POINTER(_U8)),
+        ctypes.cast(jeui, ctypes.POINTER(_U8)), rejoin_type, rjcount, ctypes.byref(out)))
+    return JoinAccept(
+        join_nonce=bytes(out.join_nonce), net_id=bytes(out.net_id), dev_addr=out.dev_addr,
+        dl_settings=out.dl_settings, rx_delay=out.rx_delay,
+        cflist=bytes(out.cflist) if out.has_cflist else None)
+
+
 def decode_join_accept(wire: bytes, nwk_key: bytes, dev_eui: bytes, join_eui: bytes,
                        dev_nonce: bytes) -> JoinAccept:
     """Ouvre un join-accept côté device. MIC vérifié avant exposition des champs."""

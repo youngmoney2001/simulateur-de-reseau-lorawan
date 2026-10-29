@@ -845,6 +845,56 @@ int32_t lsim_decode_join_accept(const uint8_t* in, size_t len, const uint8_t nwk
     }
 }
 
+int32_t lsim_encode_rejoin_join_accept(const lsim_join_accept* accept, const uint8_t nwk_key[16],
+                                       const uint8_t dev_eui[8], const uint8_t join_eui[8],
+                                       uint8_t rejoin_type, uint16_t rjcount, uint8_t* out,
+                                       size_t cap, size_t* out_len) {
+    if (accept == nullptr || nwk_key == nullptr || dev_eui == nullptr || join_eui == nullptr ||
+        out == nullptr || out_len == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_len = 0;
+    try {
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        std::size_t n = 0;
+        const auto st = lsim::lorawan::encode_rejoin_join_accept(
+            to_accept(*accept), k, arr8(dev_eui), arr8(join_eui), rejoin_type, rjcount, out, cap,
+            n);
+        if (st == lsim::lorawan::JoinStatus::Ok) {
+            *out_len = n;
+        }
+        return map_join(st);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_decode_rejoin_join_accept(const uint8_t* in, size_t len, const uint8_t nwk_key[16],
+                                       const uint8_t dev_eui[8], const uint8_t join_eui[8],
+                                       uint8_t rejoin_type, uint16_t rjcount,
+                                       lsim_join_accept* out) {
+    if (in == nullptr || nwk_key == nullptr || dev_eui == nullptr || join_eui == nullptr ||
+        out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    std::memset(out, 0, sizeof *out);
+    try {
+        Key128 k;
+        std::memcpy(k.data(), nwk_key, 16);
+        lsim::lorawan::JoinAcceptFields f;
+        const auto st = lsim::lorawan::decode_rejoin_join_accept(
+            in, len, k, arr8(dev_eui), arr8(join_eui), rejoin_type, rjcount, f);
+        if (st == lsim::lorawan::JoinStatus::Ok) {
+            from_accept(f, *out);
+        }
+        return map_join(st);
+    } catch (...) {
+        std::memset(out, 0, sizeof *out);
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 }  // extern "C"
 
 // ------------------------------------------- Plusieurs passerelles (uplinks)

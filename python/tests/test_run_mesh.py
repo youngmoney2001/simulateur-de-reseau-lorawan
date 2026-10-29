@@ -214,3 +214,35 @@ def test_frame_size_defaults_to_device_payload():
 
     assert MeshModel(border="x").frame_size == "device"
     assert MeshModel(border="x").payload_bytes == 32
+
+
+def test_mesh_shadowing_is_a_scenario_field_with_bounds():
+    base = _base([BORDER, {"name": "ip", "x_m": 500, "y_m": 0}],
+                 mesh={"border": "frontiere", "shadowing_sigma_db": 6.0})
+    assert _scenario(base).model.mesh.shadowing_sigma_db == 6.0
+    with pytest.raises(ValidationError):
+        _scenario(_base([BORDER], mesh={"border": "frontiere", "shadowing_sigma_db": 31.0}))
+    with pytest.raises(ValidationError):
+        _scenario(_base([BORDER], mesh={"border": "frontiere", "shadowing_sigma_db": -0.5}))
+
+
+def test_mesh_shadowing_changes_routing_inputs_deterministically():
+    text = EXAMPLE.read_text(encoding="utf-8").replace("count: 300", "count: 40")
+    text_sh = text.replace("max_hops: 8", "max_hops: 8\n  shadowing_sigma_db: 8")
+    assert text_sh != text
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        p1 = Path(tmp) / "a.yaml"
+        p1.write_text(text_sh, encoding="utf-8")
+        r1 = run_scenario(load_scenario(p1))
+        r2 = run_scenario(load_scenario(p1))
+    assert r1.mesh is not None
+    assert r1.mesh.delivered == r2.mesh.delivered
+    assert r1.mesh.transmissions == r2.mesh.transmissions
+
+
+def test_host_profile_is_refused_as_radio_gateway():
+    d = _base([{"name": "h", "x_m": 0, "y_m": 0, "profile": "rak7391"},
+               {"name": "ip", "x_m": 500, "y_m": 0}])
+    with pytest.raises(ValidationError, match="hôte sans radio"):
+        _scenario(d)

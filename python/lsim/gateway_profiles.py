@@ -17,12 +17,15 @@ class GatewayProfile:
     key: str                       # identifiant stable (minuscules, sans espace)
     vendor: str
     model: str
-    source: str                    # fiche constructeur citée
+    source: str                    # fiche constructeur citée (URL ou document fourni)
     access_bands: tuple[str, ...]  # régions LoRaWAN de l'accès capteurs
     max_channels: Optional[int]    # canaux de réception ; None si non publié
-    rx_sensitivity_min_dbm: Optional[float]  # valeur « min » publiée
+    rx_sensitivity_min_dbm: Optional[float]  # sensibilité publiée (min ou typique : voir notes)
     tx_power_max_dbm: Optional[float]
     mesh_bands: tuple[str, ...] = ()         # bandes du lien mesh documentées (vide : aucune)
+    # Hôte : porteur de modules, sans radio LoRa propre publiée. Un hôte ne peut pas être
+    # utilisé comme passerelle radio : il faut un module dans ses emplacements.
+    is_host: bool = False
     notes: tuple[str, ...] = field(default=())
 
 
@@ -48,21 +51,44 @@ CATALOG: tuple[GatewayProfile, ...] = (
     GatewayProfile(
         key="rak5148",
         vendor="RAKwireless",
-        model="RAK5148 WisLink LPWAN 2.4 GHz Concentrator Module",
-        source="https://docs.rakwireless.com/product-categories/wislink/rak5148/overview/",
+        model="RAK5148 WisLink LPWAN 2.4 GHz Concentrator Module (RAK5148-211 / RAK5148-221)",
+        source="Fiche technique RAK5148 (9 pages, fournie) ; one-pager RAK5148 (fourni)",
         access_bands=("ISM2400",),
-        max_channels=None,
-        rx_sensitivity_min_dbm=-132.0,  # SX1280 : -132 dBm à SF12/203 kHz, mode haute sensibilité
-        tx_power_max_dbm=27.0,          # module (3+1 SX1280) : 27 dBm, la puce seule 12,5 dBm
+        max_channels=None,              # la fiche ne publie pas de nombre de canaux d'accès
+        rx_sensitivity_min_dbm=-132.0,  # typique, SF12 / 203 kHz (fiche)
+        tx_power_max_dbm=27.0,          # 3+1 SX1280 : Tx max 27 dBm (fiche)
         mesh_bands=("ISM2400",),
         notes=(
-            "Module mini-PCIe 2,4 GHz (SX1280, 3 pour la réception, 1 pour l'émission).",
-            "Sensibilité publiée à SF12/203 kHz seulement. Les simulations mesh utilisent le "
-            "tableau basse consommation SX1280 (plus conservateur) : voir lsim.mesh.",
-            "Hôte possible : RAK7391 (jusqu'à quatre modules, dont un 2,4 GHz) ; le module seul "
-            "ne donne pas la sensibilité des autres SF/BW.",
+            "Module mini-PCIe 2,4 GHz : 3 SX1280 en réception, 1 en émission (fiche).",
+            "Alimentation 3,3 V (3,0 à 3,6 V) ; 810 mA max en émission, 179 mA en réception ; "
+            "-40 à +85 °C ; ESD 1 kV ; interface USB.",
+            "Modèles : RAK5148-211 (USB, reset MCU) et RAK5148-221 (USB, GPS ZOE-M8Q, reset MCU).",
+            "Sensibilité fiche : -132 dBm (SF12 / 203 kHz) et -110 dBm (SF7 / 1625 kHz), valeurs "
+            "typiques. La table basse consommation Semtech donne -106 dBm à SF7 / 1625 kHz : "
+            "les simulations mesh gardent cette table, plus conservatrice (lsim.mesh).",
+            "Nombre de canaux d'accès non publié : max_channels reste vide.",
             "Le guide mesh RAK utilise 2,4 GHz, BW 812 kHz, CR 4/8 : non modélisé ici, la "
             "configuration du moteur reste paramétrable.",
+        ),
+    ),
+    GatewayProfile(
+        key="rak7391",
+        vendor="RAKwireless",
+        model="RAK7391 WisGate Connect (hôte Raspberry Pi CM4)",
+        source="Brochure WisGate Connect (RAK7391), fichier fourni",
+        access_bands=(),
+        max_channels=None,
+        rx_sensitivity_min_dbm=None,
+        tx_power_max_dbm=None,
+        mesh_bands=(),
+        is_host=True,
+        notes=(
+            "Hôte : Raspberry Pi CM4 (BCM2711), 3 emplacements mini-PCIe, 1 M.2 B-key, "
+            "2 WisBlock IO, alimentation 10 à 28 V DC, 170 × 170 mm (brochure).",
+            "La brochure ne publie aucun paramètre radio du concentrateur : aucune sensibilité, "
+            "aucune puissance, aucune bande. Le profil ne porte donc aucune valeur radio.",
+            "Non simulable seul comme passerelle : déclarer le module installé (par exemple "
+            "rak5148) dans un profil dédié dès que sa compatibilité est publiée.",
         ),
     ),
 )
@@ -78,3 +104,8 @@ def get_profile(key: str) -> GatewayProfile:
 def can_relay(profile: GatewayProfile) -> bool:
     """Vrai si le profil documente une radio mesh : condition nécessaire pour relayer."""
     return len(profile.mesh_bands) > 0
+
+
+def can_simulate_radio(profile: GatewayProfile) -> bool:
+    """Vrai si le profil peut servir de passerelle radio (un hôte seul ne le peut pas)."""
+    return not profile.is_host and len(profile.access_bands) > 0
