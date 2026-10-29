@@ -192,6 +192,19 @@ void run_downlink_plan_tests() {
             CHECK_EQ(got[k].start_ns, ref[k].start_ns);
             CHECK_EQ(got[k].end_ns, ref[k].end_ns);
         }
+        // Bande RX1 invalide : code InvalidRadio précis, dès la construction (sans trame reçue).
+        DeviceRadio bad_bw = radio_sf7();
+        bad_bw.rx1_bw_hz = 100'000;
+        CHECK_EQ(DownlinkScheduler({bad_bw}, o).status(), PlanStatus::InvalidRadio);
+        CHECK_EQ(plan_downlinks({}, {bad_bw}, o, ev, ref), PlanStatus::InvalidRadio);
+        const lsim_plan_device cbad{868'100'000, -1, 868'100'000, 14.0, 7, 100'000};
+        lsim_plan_options copt{};
+        lsim_plan_event cev[1];
+        lsim_interval cbusy[1];
+        size_t cn_ev = 0;
+        size_t cn_busy = 0;
+        CHECK_EQ(lsim_plan_downlinks_v1(nullptr, 0, &cbad, 1, &copt, cev, 1, &cn_ev, cbusy, 1, &cn_busy),
+                 LSIM_STATUS_PLAN_BASE + 2);
         // Options invalides : signalées dès la construction.
         PlanOptions bad;
         bad.downlink_payload_bytes = 243;

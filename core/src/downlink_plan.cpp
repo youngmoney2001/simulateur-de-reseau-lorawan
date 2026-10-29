@@ -18,6 +18,13 @@ constexpr std::uint32_t kAckFrameBytes = 12;
 constexpr std::uint32_t kDataFrameOverheadBytes = 13;
 constexpr std::uint32_t kMaxDownlinkPayloadBytes = 242;
 
+// Débit RX1 valide : SF 7..12 et largeur 125, 250 ou 500 kHz. Vérifié à la construction, pour que
+// l'erreur porte sur le paramètre radio et non sur une descente planifiée plus tard.
+bool valid_rx1(const DeviceRadio& r) {
+    if (r.rx1_sf < 7 || r.rx1_sf > 12) return false;
+    return r.rx1_bw_hz == 125'000 || r.rx1_bw_hz == 250'000 || r.rx1_bw_hz == 500'000;
+}
+
 Outcome from_uplink(UplinkOutcome o) {
     switch (o) {
         case UplinkOutcome::Received: return Outcome::Received;
@@ -86,7 +93,7 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         if (r.device >= radios.size()) return PlanStatus::InvalidInput;
     }
     for (const DeviceRadio& rad : radios) {
-        if (rad.rx1_sf < 7 || rad.rx1_sf > 12) return PlanStatus::InvalidRadio;
+        if (!valid_rx1(rad)) return PlanStatus::InvalidRadio;
     }
 
     // Début de l'émission suivante du même dispositif (requête de désoccupation de RX1).
@@ -264,7 +271,7 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
         return;
     }
     for (const DeviceRadio& rad : radios) {
-        if (rad.rx1_sf < 7 || rad.rx1_sf > 12) {
+        if (!valid_rx1(rad)) {
             status_ = PlanStatus::InvalidRadio;
             return;
         }
