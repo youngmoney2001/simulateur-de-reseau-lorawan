@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="plan régional des données et des fenêtres RX1 (défaut : %(default)s)")
     dl = sub.add_parser("downlink", help="mettre un downlink en file pour un dispositif")
     dl.add_argument("--db", required=True, help="base SQLite du registre de jointure")
-    dl.add_argument("--dev-eui", required=True, help="DevEUI, 8 octets en hexadécimal")
+    dl.add_argument("--dev-eui", required=True, help="DevEUI, 8 octets en hexadécimal (ordre d'affichage TTN)")
     dl.add_argument("--fport", type=int, required=True, help="FPort applicatif (1 à 223)")
     dl.add_argument("--payload-hex", default="", help="charge utile en hexadécimal")
     dl.add_argument("--confirmed", action="store_true", help="downlink confirmé")

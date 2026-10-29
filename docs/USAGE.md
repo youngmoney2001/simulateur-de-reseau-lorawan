@@ -104,7 +104,7 @@ python -m lsim serve --host 0.0.0.0 --port 1700 --db joins.sqlite --keys keys.js
 
 Le plan régional (`--region`) doit être celui de la passerelle : `EU868` (défaut), `US915` ou `AU915`.
 
-- `keys.json` : `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`, mode 600 exigé.
+- `keys.json` : `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`, mode 600 exigé. Le DevEUI s'écrit en ordre d'affichage (comme dans TTN) ; le serveur fait la conversion.
 - Passerelle : pointer le packet forwarder vers ce serveur (`server_address`, ports up/down).
 - Jointure : join-request valide → join-accept en PULL_RESP, à `tmst + 5 s` (RP002 §2.3), sur la fenêtre RX1 du plan (`lsim.plan`). La session de données (clés de session 1.1, compteurs) est créée dans la même transaction.
 - Données :
@@ -165,11 +165,10 @@ python -m lsim serve --transport basicstation --host 0.0.0.0 --port 8887 \
 - Sécurité : taille de message bornée (16 Kio), trames masquées obligatoires, RSV refusés, UTF-8
   vérifié, délai de handshake 10 s, inactivité 300 s, nombre de connexions borné (503 au-delà).
 
-**Convention des identifiants** : le cœur reçoit les EUI et nonces en ordre de transmission
-(LSB first), inverse de l'affichage TTN. Basic Station envoie les EUI dans l'ordre d'affichage ;
-la conversion est faite par le serveur. En revanche, `keys.json` et `lsim downlink --dev-eui`
-attendent le DevEUI **en ordre de transmission** (ex. `0102030405060708` pour le DevEUI affiché
-`08-07-06-05-04-03-02-01`). À vérifier avant la mise en service.
+**Ordre des identifiants** : `keys.json` et `lsim downlink --dev-eui` attendent le DevEUI en
+**ordre d'affichage** (comme TTN et Basic Station). Le cœur travaille en ordre de transmission
+(LSB first) ; la conversion est faite une seule fois, à la lecture de `keys.json` et à la mise en
+file. Exemple : le DevEUI affiché `08-07-06-05-04-03-02-01` s'écrit `0807060504030201`.
 
 **Limites** : authentification des passerelles seulement par TLS (pas de certificat client ni de
 jeton) ; `router` en format ID6 non accepté (EUI ou entier seulement) ; un seul concentrateur et

@@ -34,6 +34,9 @@
 - Plans régionaux EU868, US915 et AU915 (`--region`) : canaux, débits, RX1 (modulo 8 pour US915 et AU915), charges maximales, DLSettings.
 - Chiffrement au repos des sessions, compteurs et charges en file (AES-256-GCM, clé `LSIM_DATA_KEY`, extra `serve` = `cryptography`).
 - Base SQLite créée en mode 0600 ; refus si elle est accessible à d'autres utilisateurs.
+- DevEUI dans `keys.json` et `lsim downlink --dev-eui` : ordre d'affichage TTN (conversion interne).
+- Basic Station : `hwspec` `sx1301/N` (seul préfixe accepté par Station), `JoinEui` à `null`
+  (pas de filtre), conformité vérifiée sur les vecteurs officiels `selftest_lora.c`.
 
 ### Données
 - Paramètres de propagation indoor (Université de Siegen, CC BY 4.0) déposés dans

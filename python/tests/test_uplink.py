@@ -325,7 +325,7 @@ def test_enqueue_cli_helper_validates_input(tmp_path, monkeypatch):
     env = Env(tmp_path)
     env.join_device()
     db = tmp_path / "join.sqlite"
-    dev_hex = DEV.hex()
+    dev_hex = DEV[::-1].hex()                     # DevEUI en ordre d'affichage
     with pytest.raises(ValueError):
         serve.enqueue_downlink(db, dev_hex, 0, "00", False)            # FPort 0 interdit
     with pytest.raises(ValueError):

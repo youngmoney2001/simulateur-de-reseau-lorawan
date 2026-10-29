@@ -5,7 +5,7 @@ Secrets :
 - clé de données (chiffrement au repos des sessions et de la file, AES-256-GCM) :
   variable LSIM_DATA_KEY (64 caractères hex), distincte de la clé d'intégrité et hors de la base ;
 - clés des dispositifs : fichier JSON
-  `{"devices": {"<DevEUI hex>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`,
+  `{"devices": {"<DevEUI hex, ordre d'affichage TTN>": {"nwk_key": "<32 hex>", "app_key": "<32 hex, optionnel>"}}}`,
   refusé si accessible au groupe ou aux autres (mode 0600 attendu).
   Sans app_key : les uplinks FPort 0 sont vérifiés, mais FPort > 0 n'est pas déchiffré ni livré.
 Aucun secret n'est écrit dans les journaux ; les charges utiles ne sont pas journalisées.
@@ -59,7 +59,7 @@ def load_keys_file(path: Path) -> dict[bytes, DeviceKeys]:
         raise ValueError("fichier de clés : champ « devices » attendu")
     table: dict[bytes, DeviceKeys] = {}
     for dev_hex, entry in devices.items():
-        dev_eui = _hex(dev_hex, 8, "DevEUI")
+        dev_eui = _hex(dev_hex, 8, "DevEUI")[::-1]     # ordre d'affichage TTN -> transmission
         if not isinstance(entry, dict):
             raise ValueError("entrée de dispositif non objet")
         nwk_key = _hex(entry.get("nwk_key"), 16, f"nwk_key {dev_hex}")
@@ -98,7 +98,7 @@ def enqueue_downlink(db_path: Path, dev_eui_hex: str, fport: int, payload_hex: s
                      confirmed: bool, region: str = DEFAULT_REGION) -> int:
     """Met un downlink en file pour un dispositif ; retourne la longueur de la file."""
     plan = get_plan(region)
-    dev_eui = _hex(dev_eui_hex, 8, "DevEUI")
+    dev_eui = _hex(dev_eui_hex, 8, "DevEUI")[::-1]     # ordre d'affichage TTN -> transmission
     try:
         payload = bytes.fromhex(payload_hex) if payload_hex else b""
     except ValueError as exc:
@@ -159,7 +159,7 @@ def _log_delivery(delivery: Delivery) -> None:
         content = f"{len(delivery.payload)} octets"
     logging.getLogger("lsim.serve").info(
         "uplink dispositif %s : FCnt %d, FPort %s, %s, charge %s",
-        delivery.dev_eui.hex(), delivery.fcnt,
+        delivery.dev_eui[::-1].hex(), delivery.fcnt,
         "-" if delivery.fport is None else delivery.fport,
         "confirmé" if delivery.confirmed else "non confirmé", content)
 
