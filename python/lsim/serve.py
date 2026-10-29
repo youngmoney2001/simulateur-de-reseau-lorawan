@@ -10,7 +10,7 @@ Secrets :
   Sans app_key : les uplinks FPort 0 sont vérifiés, mais FPort > 0 n'est pas déchiffré ni livré.
 Aucun secret n'est écrit dans les journaux ; les charges utiles ne sont pas journalisées.
 
-Couche données : plan régional choisi au démarrage (`--region` : EU868, US915, AU915, AS923 ou KR920, voir `lsim.plan`).
+Couche données : plan régional choisi au démarrage (`--region` : EU868, US915, AU915, AS923, KR920 ou IN865, voir `lsim.plan`).
 La passerelle doit utiliser le même plan. `lsim downlink` met un downlink en file ; il est émis au
 prochain uplink du dispositif (classe A).
 """

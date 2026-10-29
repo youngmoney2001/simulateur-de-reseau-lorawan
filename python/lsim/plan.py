@@ -18,7 +18,7 @@ import importlib
 import re
 from typing import Callable, Mapping
 
-_BUILTIN_MODULES = ("lsim.eu868", "lsim.us915", "lsim.au915", "lsim.as923", "lsim.kr920")
+_BUILTIN_MODULES = ("lsim.eu868", "lsim.us915", "lsim.au915", "lsim.as923", "lsim.kr920", "lsim.in865")
 
 RECEIVE_DELAY1_US = 1_000_000        # RP002 §2.3 : RECEIVE_DELAY1 = 1 s, toutes régions
 _CHANNEL_TOLERANCE_HZ = 1_000        # la passerelle rapporte la fréquence en Hz précis
