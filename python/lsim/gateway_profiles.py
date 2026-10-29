@@ -51,6 +51,8 @@ CATALOG: tuple[GatewayProfile, ...] = (
             "Pas de relais tant que le constructeur ne le confirme pas.",
             "Sensibilité : -139 dBm (fiche officielle) contre -142 dBm (manuel V1.3). Valeur "
             "retenue : la fiche officielle, la plus récente.",
+            "Point de sensibilité non publié : la fiche donne -139 dBm (min) sans spreading factor ni "
+            "largeur de bande, donc aucun décalage n'est appliqué (0 dB, décision confirmée par l'auteur).",
         ),
     ),
     GatewayProfile(
