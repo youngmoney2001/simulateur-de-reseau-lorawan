@@ -206,4 +206,52 @@ LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t de
                                     std::vector<TxRecord>* trace = nullptr,
                                     const std::vector<Interval>* gateway_busy = nullptr);
 
+// ------------------------------------------------------------- Plusieurs passerelles
+//
+// Chaque passerelle reçoit indépendamment les mêmes émissions (sensibilité et collision calculées
+// à son propre RSSI). Le serveur déduplique : une trame est livrée une fois si au moins une
+// passerelle la décode. Les copies supplémentaires sont comptées (`duplicates`).
+//
+// Hors périmètre de cette fonction : downlinks et demi-duplex par passerelle (passerelles
+// émettant pendant une trame). Le chemin mono-passerelle (`simulate_uplinks`) reste inchangé.
+
+inline constexpr std::size_t kMaxGateways = 64;
+
+// Statistiques réseau, après déduplication serveur.
+struct NetworkStats {
+    std::uint64_t sent = 0;
+    std::uint64_t received = 0;         // trames livrées au serveur (une fois par trame)
+    std::uint64_t duplicates = 0;       // copies décodées en plus de la première
+    std::uint64_t lost_sensitivity = 0;  // aucune passerelle au-dessus de la sensibilité
+    std::uint64_t lost_collision = 0;    // au-dessus de la sensibilité quelque part, mais collisionnée partout
+    std::uint64_t airtime_ns = 0;
+};
+
+// Statistiques par passerelle : trames décodées ou perdues à cette seule passerelle.
+struct GatewayRxStats {
+    std::uint64_t received = 0;
+    std::uint64_t lost_sensitivity = 0;
+    std::uint64_t lost_collision = 0;
+};
+
+// Issue réseau d'une émission. `receivers` = nombre de passerelles qui l'ont décodée.
+struct MultiTx {
+    std::uint32_t device = 0;
+    SimTime start_ns = 0;
+    SimTime end_ns = 0;
+    std::uint8_t spreading_factor = 7;
+    std::uint32_t receivers = 0;
+    std::int32_t best_gateway = -1;     // meilleure passerelle parmi les décodeurs (-1 : aucune)
+    double best_rssi_dbm = 0.0;         // RSSI à cette passerelle (ou RSSI max si aucune)
+    TxOutcome outcome = TxOutcome::LostSensitivity;  // Received si receivers > 0
+};
+
+// `per_gateway` doit contenir `gateway_count` entrées. `trace` optionnel (trié par début).
+LSIM_API SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t device_count,
+                                          const GatewaySpec* gateways, std::size_t gateway_count,
+                                          const PropagationSpec& prop, DeviceStats* per_device,
+                                          NetworkStats& totals, GatewayRxStats* per_gateway,
+                                          const env::Environment* environment = nullptr,
+                                          std::vector<MultiTx>* trace = nullptr);
+
 }  // namespace lsim::sim

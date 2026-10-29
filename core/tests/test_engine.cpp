@@ -377,7 +377,137 @@ void test_gateway_busy_blocks_reception() {
 
 }  // namespace
 
+// ---------------------------------------------------------- plusieurs passerelles
+
+EndDeviceSpec device_xy(double x_m, double y_m, std::uint8_t sf) {
+    EndDeviceSpec d = device_at(x_m, sf, 0);
+    d.position.y_m = y_m;
+    return d;
+}
+
+GatewaySpec gateway_xy(double x_m, double y_m) {
+    GatewaySpec g;
+    g.position.x_m = x_m;
+    g.position.y_m = y_m;
+    return g;
+}
+
+// Un dispositif hors de portée de la passerelle A est reçu par la passerelle B.
+void test_multi_second_gateway_rescues_device() {
+    const EndDeviceSpec d[] = {device_xy(20000.0, 0.0, 7)};
+    const GatewaySpec solo[] = {gateway_xy(0.0, 0.0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw1[1];
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, solo, 1, PropagationSpec{}, st, tot, gw1) ==
+               SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{0});
+    CHECK_EQ(tot.lost_sensitivity, std::uint64_t{1});
+
+    const GatewaySpec pair[] = {gateway_xy(0.0, 0.0), gateway_xy(20000.0, 100.0)};
+    GatewayRxStats gw2[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, pair, 2, PropagationSpec{}, st, tot, gw2, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(tot.lost_sensitivity, std::uint64_t{0});
+    CHECK_EQ(gw2[0].lost_sensitivity, std::uint64_t{1});
+    CHECK_EQ(gw2[1].received, std::uint64_t{1});
+    CHECK_EQ(trace[0].receivers, std::uint32_t{1});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{1});
+    CHECK_TRUE(trace[0].outcome == TxOutcome::Received);
+}
+
+// Deux passerelles proches décodent la même trame : livrée une fois, copie comptée.
+void test_multi_deduplicates_copies() {
+    const EndDeviceSpec d[] = {device_xy(10.0, 0.0, 7)};
+    const GatewaySpec gws[] = {gateway_xy(0.0, 0.0), gateway_xy(0.0, 50.0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, gws, 2, PropagationSpec{}, st, tot, gw, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.sent, std::uint64_t{1});
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(tot.duplicates, std::uint64_t{1});
+    CHECK_EQ(st[0].received, std::uint64_t{1});
+    CHECK_EQ(gw[0].received, std::uint64_t{1});
+    CHECK_EQ(gw[1].received, std::uint64_t{1});
+    CHECK_EQ(trace[0].receivers, std::uint32_t{2});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{0});  // le plus proche gagne le RSSI
+}
+
+// Collision : chaque dispositif est capturé par la passerelle qui lui est proche, et détruit
+// à l'autre. Le réseau les reçoit tous les deux (diversité).
+void test_multi_capture_per_gateway() {
+    const EndDeviceSpec d[] = {device_xy(10.0, 0.0, 7), device_xy(2990.0, 0.0, 7)};
+    const GatewaySpec gws[] = {gateway_xy(0.0, 0.0), gateway_xy(3000.0, 0.0)};
+    DeviceStats st[2];
+    NetworkStats tot;
+    GatewayRxStats gw[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 2, gws, 2, PropagationSpec{}, st, tot, gw, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{2});
+    CHECK_EQ(tot.lost_collision, std::uint64_t{0});
+    // Chaque passerelle détruit la trame du dispositif éloigné de elle : A à B, B à A.
+    CHECK_EQ(gw[0].lost_collision, std::uint64_t{1});
+    CHECK_EQ(gw[1].lost_collision, std::uint64_t{1});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{0});
+    CHECK_EQ(trace[1].best_gateway, std::int32_t{1});
+}
+
+// Avec une seule passerelle, la fonction multi donne les mêmes compteurs que simulate_uplinks.
+void test_multi_single_gateway_matches_single_path() {
+    std::vector<EndDeviceSpec> devs;
+    for (int k = 0; k < 6; ++k) {
+        EndDeviceSpec d = device_xy(100.0 + 4000.0 * k, 50.0 * k, static_cast<std::uint8_t>(7 + k % 3));
+        d.messages = 3;
+        d.period_ns = 2'000'000'000;
+        d.start_offset_ns = 150'000'000 * k;
+        devs.push_back(d);
+    }
+    std::vector<DeviceStats> a(devs.size());
+    SimulationStats ta;
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{}, a.data(),
+                                ta) == SimStatus::Ok);
+    std::vector<DeviceStats> b(devs.size());
+    NetworkStats tb;
+    GatewayRxStats gw[1];
+    const GatewaySpec one[] = {gateway()};
+    CHECK_TRUE(simulate_uplinks_multi(devs.data(), devs.size(), one, 1, PropagationSpec{}, b.data(),
+                                      tb, gw) == SimStatus::Ok);
+    CHECK_EQ(tb.sent, ta.sent);
+    CHECK_EQ(tb.received, ta.received);
+    CHECK_EQ(tb.lost_collision, ta.lost_collision);
+    CHECK_EQ(tb.lost_sensitivity, ta.lost_sensitivity);
+    CHECK_EQ(tb.duplicates, std::uint64_t{0});
+    CHECK_EQ(tb.airtime_ns, ta.airtime_ns);
+    CHECK_EQ(tb.received + tb.lost_collision + tb.lost_sensitivity, tb.sent);
+    CHECK_TRUE(ta.received > 0 && ta.lost_sensitivity > 0);
+}
+
+void test_multi_invalid_inputs() {
+    const EndDeviceSpec d[] = {device_at(10.0, 7, 0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw[1];
+    const GatewaySpec none[1] = {gateway()};
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, none, 0, PropagationSpec{}, st, tot, gw) ==
+               SimStatus::InvalidInput);
+    std::vector<GatewaySpec> many(kMaxGateways + 1, gateway());
+    std::vector<GatewayRxStats> gwv(kMaxGateways + 1);
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, many.data(), many.size(), PropagationSpec{}, st, tot,
+                                      gwv.data()) == SimStatus::InvalidInput);
+}
+
 void run_engine_tests() {
+    test_multi_second_gateway_rescues_device();
+    test_multi_deduplicates_copies();
+    test_multi_capture_per_gateway();
+    test_multi_single_gateway_matches_single_path();
+    test_multi_invalid_inputs();
     test_gateway_busy_blocks_reception();
     test_trace_matches_counters();
     test_duty_cycle_spacing();

@@ -465,4 +465,210 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     return SimStatus::Ok;
 }
 
+// ------------------------------------------------- simulate_uplinks_multi
+
+SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t device_count,
+                                 const GatewaySpec* gateways, std::size_t gateway_count,
+                                 const PropagationSpec& prop, DeviceStats* per_device,
+                                 NetworkStats& totals, GatewayRxStats* per_gateway,
+                                 const env::Environment* environment, std::vector<MultiTx>* trace) {
+    totals = NetworkStats{};
+    if (trace != nullptr) trace->clear();
+    if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
+    if (gateway_count == 0 || gateway_count > kMaxGateways || gateways == nullptr ||
+        per_gateway == nullptr) {
+        return SimStatus::InvalidInput;
+    }
+    if (device_count > 0 && (devices == nullptr || per_device == nullptr)) {
+        return SimStatus::InvalidInput;
+    }
+    for (std::size_t g = 0; g < gateway_count; ++g) {
+        const SimStatus gs = validate_inputs(gateways[g], prop);
+        if (gs != SimStatus::Ok) return gs;
+        per_gateway[g] = GatewayRxStats{};
+    }
+    const env::Environment no_environment{};
+    const env::Environment& envr = environment != nullptr ? *environment : no_environment;
+    if (environment != nullptr) {
+        if (env::validate_environment(envr) != env::EnvStatus::Ok) {
+            return SimStatus::InvalidEnvironment;
+        }
+        const std::uint64_t checks = static_cast<std::uint64_t>(device_count) *
+                                     envr.obstacle_count * gateway_count;
+        if (checks > env::kMaxObstacleChecks) return SimStatus::EnvironmentWorkLimit;
+    }
+
+    const std::size_t G = gateway_count;
+    std::vector<SimTime> airtime(device_count);
+    std::vector<double> sensitivity(device_count);
+    std::vector<double> rssi(device_count * G);  // rssi[i * G + g]
+    std::uint64_t total_tx = 0;
+
+    radio::LogDistanceModel model;
+    model.frequency_hz = prop.frequency_hz;
+    model.reference_distance_m = prop.reference_distance_m;
+    model.exponent = prop.exponent;
+
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        const SimStatus ds = validate_device(d);
+        if (ds != SimStatus::Ok) return ds;
+        per_device[i] = DeviceStats{};
+
+        lora::RadioConfig rc;
+        rc.spreading_factor = d.spreading_factor;
+        rc.bandwidth = lora::Bandwidth::Bw125kHz;
+        rc.coding_rate = 1;
+        rc.low_data_rate_optimize = lora::low_data_rate_required(d.spreading_factor, rc.bandwidth);
+        const lora::AirtimeResult at = lora::time_on_air(rc, d.payload_bytes);
+        if (at.status != lora::Status::Ok) return SimStatus::InvalidInput;
+        airtime[i] = at.nanoseconds;
+
+        double s = 0.0;
+        if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) != lora::Status::Ok) {
+            return SimStatus::InvalidInput;
+        }
+        sensitivity[i] = s;
+
+        // Shadowing : un tirage par dispositif, commun à toutes les passerelles (hypothèse :
+        // évanouissement lent côté dispositif). Voir docs/STUDY_PANEL_SPEC.md.
+        const double shadow = shadowing_sample_db(prop.shadowing_seed, static_cast<std::uint32_t>(i),
+                                                  prop.shadowing_sigma_db);
+        for (std::size_t g = 0; g < G; ++g) {
+            const GatewaySpec& gw = gateways[g];
+            const double dx = d.position.x_m - gw.position.x_m;
+            const double dy = d.position.y_m - gw.position.y_m;
+            const double dist = std::max(std::hypot(dx, dy), prop.reference_distance_m);
+            double path_loss = 0.0;
+            if (environment != nullptr) {
+                env::PathLoss pl{};
+                if (env::path_loss_db(model, d.position.x_m, d.position.y_m, gw.position.x_m,
+                                      gw.position.y_m, envr, pl) != env::EnvStatus::Ok) {
+                    return SimStatus::InvalidEnvironment;
+                }
+                path_loss = pl.total_db;
+            } else {
+                const radio::BudgetResult pl = radio::log_distance_path_loss_db(model, dist);
+                if (pl.status != lora::Status::Ok) return SimStatus::InvalidInput;
+                path_loss = pl.value;
+            }
+            rssi[i * G + g] = d.tx_power_dbm + gw.antenna_gain_dbi - path_loss - shadow;
+        }
+
+        total_tx += d.messages;
+        if (total_tx > kMaxTransmissions) return SimStatus::TooManyTransmissions;
+    }
+
+    // Émissions, triées par début puis par dispositif (ordre déterministe).
+    std::vector<Tx> txs;
+    txs.reserve(static_cast<std::size_t>(total_tx));
+    SimTime max_airtime = 0;
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        const double off_factor = (1.0 - d.duty_cycle) / d.duty_cycle;
+        SimTime prev_end = 0;
+        for (std::uint32_t k = 0; k < d.messages; ++k) {
+            const double nominal_d = static_cast<double>(d.start_offset_ns) +
+                                     static_cast<double>(k) * static_cast<double>(d.period_ns);
+            if (nominal_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+            SimTime t = static_cast<SimTime>(nominal_d);
+            if (k > 0 && off_factor > 0.0) {
+                const double earliest_d = static_cast<double>(prev_end) +
+                                          std::round(static_cast<double>(airtime[i]) * off_factor);
+                if (earliest_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+                t = std::max(t, static_cast<SimTime>(earliest_d));
+            }
+            Tx tx;
+            tx.start = t;
+            tx.end = t + airtime[i];
+            tx.device = static_cast<std::uint32_t>(i);
+            tx.sf = d.spreading_factor;
+            tx.rssi_dbm = 0.0;  // RSSI par passerelle : voir rssi[]
+            txs.push_back(tx);
+            prev_end = tx.end;
+            ++per_device[i].sent;
+            ++totals.sent;
+            per_device[i].airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            max_airtime = std::max(max_airtime, airtime[i]);
+        }
+    }
+    std::stable_sort(txs.begin(), txs.end(), [](const Tx& a, const Tx& b) {
+        if (a.start != b.start) return a.start < b.start;
+        return a.device < b.device;
+    });
+
+    if (trace != nullptr) trace->reserve(txs.size());
+    for (std::size_t a = 0; a < txs.size(); ++a) {
+        const Tx& ta = txs[a];
+        MultiTx out;
+        out.device = ta.device;
+        out.start_ns = ta.start;
+        out.end_ns = ta.end;
+        out.spreading_factor = ta.sf;
+        out.best_rssi_dbm = -1e300;
+        bool any_collision = false;
+
+        for (std::size_t g = 0; g < G; ++g) {
+            const double r = rssi[ta.device * G + g];
+            if (r < sensitivity[ta.device]) {
+                ++per_gateway[g].lost_sensitivity;
+                continue;
+            }
+            // Interférence maximale à cette passerelle parmi les émissions simultanées de même SF.
+            bool interfered = false;
+            double max_interf = -1e300;
+            auto consider = [&](const Tx& tb) {
+                if (tb.sf == ta.sf && overlap(ta, tb)) {
+                    interfered = true;
+                    max_interf = std::max(max_interf, rssi[tb.device * G + g]);
+                }
+            };
+            for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
+                consider(txs[b]);
+            }
+            for (std::size_t b = a; b-- > 0;) {
+                if (txs[b].start + max_airtime <= ta.start) break;
+                consider(txs[b]);
+            }
+            const bool captured = !interfered || (r - max_interf >= prop.capture_threshold_db);
+            if (captured) {
+                ++per_gateway[g].received;
+                ++out.receivers;
+                if (r > out.best_rssi_dbm) {
+                    out.best_rssi_dbm = r;
+                    out.best_gateway = static_cast<std::int32_t>(g);
+                }
+            } else {
+                ++per_gateway[g].lost_collision;
+                any_collision = true;
+            }
+        }
+        // RSSI max si aucune passerelle ne décode : sert à la trace.
+        if (out.best_gateway < 0) {
+            double max_r = -1e300;
+            for (std::size_t g = 0; g < G; ++g) max_r = std::max(max_r, rssi[ta.device * G + g]);
+            out.best_rssi_dbm = max_r;
+        }
+
+        DeviceStats& st = per_device[ta.device];
+        if (out.receivers > 0) {
+            out.outcome = TxOutcome::Received;
+            ++st.received;
+            ++totals.received;
+            totals.duplicates += out.receivers - 1;
+        } else if (any_collision) {
+            out.outcome = TxOutcome::LostCollision;
+            ++st.lost_collision;
+            ++totals.lost_collision;
+        } else {
+            out.outcome = TxOutcome::LostSensitivity;
+            ++st.lost_sensitivity;
+            ++totals.lost_sensitivity;
+        }
+        if (trace != nullptr) trace->push_back(out);
+    }
+    return SimStatus::Ok;
+}
+
 }  // namespace lsim::sim
