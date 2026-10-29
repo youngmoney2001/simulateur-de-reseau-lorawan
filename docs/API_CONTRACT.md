@@ -1,8 +1,13 @@
 # Contrat d'API moteur ↔ navigateur (v1)
 
-Statut : **proposé**, non implémenté. Les formes de données sont dans
-`python/lsim/api_contract.py` ; les schémas JSON publiés sont dans `schemas/api/v1/`. Les tests
-(`python/tests/test_api_contract.py`) vérifient que les schémas restent synchronisés avec le code.
+Statut : **v1 implémentée** (`python/lsim/api_server.py`, bibliothèque standard, sans dépendance
+nouvelle), limites ci-dessous. Les formes de données sont dans `python/lsim/api_contract.py` ; les
+schémas JSON publiés sont dans `schemas/api/v1/`. Les tests `python/tests/test_api_contract.py`
+vérifient que les schémas restent synchronisés avec le code ; `python/tests/test_api_server.py`
+vérifie le serveur (jetons, routes, pagination, refus, file bornée, annulation).
+
+Lancer : `python -m lsim.api_server issue-token --tokens FICHIER --owner NOM` (jeton affiché une
+fois), puis `python -m lsim.api_server serve --tokens FICHIER --port 8765` (écoute sur 127.0.0.1).
 
 Régénérer les schémas après une modification :
 
@@ -91,8 +96,17 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   (par défaut : aucune charge ; seuls uplinks, pertes et ACK/join-accept sont produits quand les
   options correspondantes sont activées).
 
-Tant que la route `events` n'existe pas, l'animation n'est pas disponible côté navigateur ; les
-totaux (`summary`, `devices`) le sont.
+La route `events` est exposée (v1). Sa trace provient de `lsim.trace_events.build_trace`, et le
+serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier le run.
+
+**Limites de la v1 (implémentation)** :
+- scénarios **mono-passerelle** seulement : multi-passerelles, mesh et `environment` (relief,
+  obstacles) sont refusés à la création avec `validation_error`, et non calculés à tort ;
+- runs **en mémoire** du processus : perdus au redémarrage ; 20 runs par jeton, 200 au total ;
+  une seule file de calcul (16 en attente, 4 actifs par jeton) ;
+- pas de limite de débit par jeton (exigée au §6, non implémentée) ;
+- pas de TLS dans le serveur : le relais HTTPS est requis hors machine de confiance ;
+- erreur interne : code `run_failed`, message générique, sans trace.
 
 ## 5. Erreurs
 
@@ -151,8 +165,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 
 1. Catalogue de reliefs (décision utilisateur ; données MNT à vérifier avant intégration).
 2. Exposer `events` à partir de `lsim.trace_events` (pagination par `seq`).
-3. Implémenter le serveur (`python/lsim/api_server.py`) selon ce contrat, avec tests de
-   contrat (chaque réponse validée par son schéma).
+3. ~~Implémenter le serveur~~ : fait (v1, voir ci-dessus). Reste : limite de débit, persistance
+   des runs, TLS ou relais documenté.
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)

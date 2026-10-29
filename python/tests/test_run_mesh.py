@@ -246,3 +246,45 @@ def test_host_profile_is_refused_as_radio_gateway():
                {"name": "ip", "x_m": 500, "y_m": 0}])
     with pytest.raises(ValidationError, match="hôte sans radio"):
         _scenario(d)
+
+
+RELAY_1 = {"name": "relais-1", "x_m": 1200, "y_m": 0, "profile": "rak5148", "mesh": True}
+RELAY_2 = {"name": "relais-2", "x_m": 2400, "y_m": 0, "profile": "rak5148", "mesh": True}
+
+
+def _relay_needed(sigma=None):
+    """Frontière seule à portée des dispositifs (tx -14 dBm) : le mesh doit sauver les trames."""
+    mesh = {"border": "frontiere"}
+    if sigma is not None:
+        mesh["shadowing_sigma_db"] = sigma
+    d = _base([BORDER, RELAY_1, RELAY_2], mesh=mesh, radius=3500, count=150)
+    d["groups"][0]["tx_power_dbm"] = -14
+    return d
+
+
+def test_shadowing_changes_delivery_when_relays_are_needed():
+    """Sensibilité : sans shadowing, toutes les trames relayées arrivent ; avec 8 dB, des
+    relais tombent sous la sensibilité et des trames sont perdues (graine 7, déterministe)."""
+    r0 = run_scenario(_scenario(_relay_needed(0.0)))
+    r8 = run_scenario(_scenario(_relay_needed(8.0)))
+    assert r0.mesh.via_mesh > 0
+    assert r0.mesh.delivered == r0.mesh.frames
+    assert r8.mesh.delivered < r0.mesh.delivered
+    assert r8.mesh.frames == r0.mesh.frames
+
+
+def test_shadowing_is_inert_when_border_hears_every_frame():
+    """Exemple livré : la frontière entend toutes les trames en direct, le mesh ne sert qu'à
+    des copies redondantes. Le shadowing ne change donc pas la livraison."""
+    text = EXAMPLE.read_text(encoding="utf-8").replace("count: 300", "count: 40")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        outs = []
+        for sigma in (0, 30):
+            p = Path(tmp) / f"s{sigma}.yaml"
+            p.write_text(text.replace("max_hops: 8", f"max_hops: 8\n  shadowing_sigma_db: {sigma}"),
+                         encoding="utf-8")
+            outs.append(run_scenario(load_scenario(p)).mesh)
+    for m in outs:
+        assert m.via_mesh == 0 and m.direct == m.frames
+    assert outs[0].delivered == outs[1].delivered
