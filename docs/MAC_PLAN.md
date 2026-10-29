@@ -11,7 +11,7 @@ Statut : phase 1, étape 1 faite (configuration). Le codec des 19 commandes exis
 - Compatibilité : les scénarios sans commandes MAC gardent leurs résultats.
 
 ## Phases
-1. **Socle** (en cours) : étape 1 faite, bloc `mac:` validé (`link_check_every`, `device_status_every`), sans effet moteur. Reste : LinkCheckReq/Ans, DevStatusReq/Ans en FOpts, événements de trace, temps d'antenne avec FOpts.
+1. **Socle** (en cours) : étape 1 faite, bloc `mac:` validé (`link_check_every` : LinkCheckReq émise par le dispositif en uplink ; `device_status_every` : DevStatusReq émise par le serveur en descente, réponse DevStatusAns en uplink). Étape 2 faite : calendrier et encodage dans `python/lsim/mac_plan.py`, testés. Reste : réponses serveur (LinkCheckAns, DevStatusAns), événements de trace, temps d'antenne avec FOpts.
 2. **ADR et temps** : LinkADRReq/Ans (via la décision ADR existante), DeviceTimeReq/Ans, DutyCycleReq/Ans.
 3. **Configuration radio et classes** : RXParamSetup, NewChannel, RXTimingSetup, DlChannel, ADRParamSetup, PingSlot (info, channel), BeaconFreq, RejoinParamSetup, ForceRejoin, avec leurs effets sur le modèle.
 4. **Orchestration** : commandes initiées par le serveur, files de descentes, réponses différées, refus, expiration, interaction avec les classes A, B et C.
