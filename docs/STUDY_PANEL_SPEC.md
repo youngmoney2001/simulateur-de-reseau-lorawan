@@ -192,5 +192,5 @@ implémenter, voir `docs/API_CONTRACT.md`). Les tentatives sont journalisées sa
 
 | Bande du lien mesh | **Bande dédiée**, distincte de la bande des capteurs (choix de l'auteur) |
 
-Points restants avant la phase 2 : le choix précis de la bande dédiée (sous-GHz second canal ou
-2,4 GHz), et le nombre de sauts par défaut (proposé : 8, comme ChirpStack).
+Décidé : 8 sauts par défaut, comme ChirpStack (auteur). Reste ouvert : le choix précis de la bande
+dédiée (sous-GHz second canal ou 2,4 GHz). Le moteur la prend en paramètre, sans valeur codée en dur.
