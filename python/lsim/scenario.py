@@ -88,6 +88,9 @@ class GroupModel(_Strict):
     # le plus restrictif entre `duty_cycle` et la sous-bande du canal `channel_freq_hz`.
     region: Optional[str] = None
     channel_freq_hz: int = Field(868_100_000, gt=0)
+    # US915 / AU915 seulement : sous-bande 1 à 8 (8 canaux 125 kHz + 1 canal 500 kHz). Le canal
+    # `channel_freq_hz` doit appartenir à cette sous-bande.
+    sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
 
     @property
@@ -97,6 +100,20 @@ class GroupModel(_Strict):
         from lsim.regions import PROFILES
         limit = PROFILES[self.region].duty_cycle_limit(self.channel_freq_hz, self.tx_power_dbm)
         return self.duty_cycle if limit is None else min(self.duty_cycle, limit)
+
+    @model_validator(mode="after")
+    def _sub_band_consistent(self) -> "GroupModel":
+        if self.sub_band is None:
+            return self
+        from lsim.channel_mask import FAMILY, sub_band_channels
+        from lsim.plan import get_plan
+        if self.region not in FAMILY:
+            raise ValueError("sub_band : réservé aux régions US915 et AU915")
+        index = get_plan(self.region).channel_index(self.channel_freq_hz / 1_000_000)
+        if index not in sub_band_channels(self.sub_band):
+            raise ValueError(
+                f"{self.region} : canal {self.channel_freq_hz} Hz hors de la sous-bande {self.sub_band}")
+        return self
 
     @model_validator(mode="after")
     def _region_known_and_in_plan(self) -> "GroupModel":
@@ -239,6 +256,8 @@ class Scenario:
         for group in dumped.get("groups", []):
             if group.get("duty_cycle") == 1.0:
                 group.pop("duty_cycle", None)
+            if group.get("sub_band") is None:
+                group.pop("sub_band", None)
             if group.get("region") is None:
                 group.pop("region", None)
                 group.pop("channel_freq_hz", None)

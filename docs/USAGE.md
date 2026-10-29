@@ -129,7 +129,7 @@ Limites des trames de données :
 - Une seule copie est traitée : avec plusieurs passerelles, les copies suivantes sont rejetées comme rejeu.
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
 - Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
-- US915 et AU915 : pas de sous-bandes choisies par masque de canaux (LinkADRReq) ni LR-FHSS. Le dispositif rejoint sur les canaux par défaut, sans CFList.
+- US915 et AU915 : le groupe de scénario peut porter `sub_band` (1 à 8) ; son canal doit alors appartenir à la sous-bande. La règle LinkADRReq (ChMaskCntl 0 à 7) est dans `lsim.channel_mask`. Le serveur n'émet pas encore de LinkADRReq : un dispositif réel rejoint sur les 72 canaux, sans CFList, et une passerelle 8 canaux ne l'entend que s'il est restreint à sa sous-bande. LR-FHSS non implémenté.
 - AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
