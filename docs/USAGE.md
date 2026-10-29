@@ -220,8 +220,11 @@ qu'elle relaie.
 Un profil « hôte » (RAK7391 : Raspberry Pi CM4 avec emplacements pour modules) ne publie aucun
 paramètre radio : il est refusé comme passerelle radio, le module installé doit être déclaré.
 
-- `mesh: true` : la passerelle relaie sur la bande mesh 2,4 GHz (profil à radio mesh publiée :
-  RAK5148). Sans `mesh`, la passerelle a un backhaul IP direct vers le LNS.
+- `mesh: true` : la passerelle relaie sur la bande mesh 2,4 GHz. Profil de relais : `rak5146-rak5148`
+  (RAK5146 pour les capteurs sous-GHz, RAK5148 pour le lien mesh ; solution publiée par RAK, compatibilité
+  logicielle à confirmer). Un relais `rak5148` seul ne reçoit pas les capteurs sous-GHz : une région de
+  groupe absente de ses bandes d'accès est refusée à la validation. Sans `mesh`, la passerelle a un backhaul
+  IP direct vers le LNS.
 - `mesh` (bloc de scénario) : `border` (nom de la passerelle frontière, `mesh: true`),
   `spreading_factor` (5 à 12), `bandwidth_khz` (203, 406, 812 ou 1625), `coding_rate`,
   `max_hops` (1 à 8, 8 par défaut), `capture_db`, `suppress_duplicates` (vrai par défaut),

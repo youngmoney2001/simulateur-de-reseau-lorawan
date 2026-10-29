@@ -284,6 +284,15 @@ class ScenarioModel(_Strict):
                             "radio (voir docs/USAGE.md)")
                 if g.mesh and (g.profile is None or not can_relay(get_profile(g.profile))):
                     raise ValueError(f"passerelle {g.name!r} : mesh exige un profil à radio mesh documentée")
+            for g in self.gateways:
+                if g.mesh and g.profile is not None:
+                    prof = get_profile(g.profile)
+                    for grp in self.groups:
+                        if grp.region is not None and prof.access_bands and grp.region not in prof.access_bands:
+                            raise ValueError(
+                                f"passerelle {g.name!r} : profil {g.profile!r} sans accès {grp.region} "
+                                "(un relais doit recevoir les capteurs de sa région ; le module mesh seul "
+                                "ne suffit pas)")
             if self.mesh is not None:
                 border = next((g for g in self.gateways if g.name == self.mesh.border), None)
                 if border is None:

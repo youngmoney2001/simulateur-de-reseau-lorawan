@@ -4,26 +4,26 @@
 # - « ip-ouest » a un backhaul IP direct et ne relaie pas.
 # Le mesh vit à 2,4 GHz avec le même exposant de propagation que l'accès (obstacles et relief ignorés).
 schema_version: 1
-name: Quartier avec relais mesh RAK5148
+name: Quartier avec relais mesh RAK5146 + RAK5148
 seed: 42
 gateways:
   - name: frontiere
     x_m: 0
     y_m: 0
     antenna_gain_dbi: 2.15
-    profile: rak5148
+    profile: rak5146-rak5148
     mesh: true
   - name: relais-1
     x_m: 1200
     y_m: 0
     antenna_gain_dbi: 2.15
-    profile: rak5148
+    profile: rak5146-rak5148
     mesh: true
   - name: relais-2
     x_m: 2400
     y_m: 0
     antenna_gain_dbi: 2.15
-    profile: rak5148
+    profile: rak5146-rak5148
     mesh: true
   - name: ip-ouest
     x_m: -2500

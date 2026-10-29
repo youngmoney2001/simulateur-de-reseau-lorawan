@@ -33,7 +33,7 @@ from lsim.study_contract import Node, SensorSettings
 
 DEFAULT_REGION = "EU868"
 DEFAULT_SUB_BAND = 1
-MESH_PROFILE = "rak5148"       # seul profil du catalogue à radio mesh publiée (voir gateway_profiles)
+MESH_PROFILE = "rak5146-rak5148"  # relais : accès sous-GHz + lien mesh 2,4 GHz (gateway_profiles)
 MESH_DEFAULTS = {"spreading_factor": 9, "bandwidth_khz": 203, "max_hops": 8}   # défauts de MeshModel
 NOT_MODELLED = ("puissance d'émission des passerelles", "fréquence réglée sur les passerelles",
                 "interface Ethernet", "serveur réseau (le LNS est implicite derrière la frontière)")

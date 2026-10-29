@@ -72,6 +72,28 @@ CATALOG: tuple[GatewayProfile, ...] = (
         ),
     ),
     GatewayProfile(
+        key="rak5146-rak5148",
+        vendor="RAKwireless",
+        model="Passerelle relais RAK « Outdoor Gateway Mesh » : RAK5146 (accès sous-GHz) + RAK5148 (mesh 2,4 GHz)",
+        source=(
+            "Fiche RAK5146 (docs.rakwireless.com, wislink/rak5146/datasheet) ; fiche RAK5148 ; page "
+            "produit « Outdoor Gateway Mesh with 2.4G Backhaul » (store.rakwireless.com)"
+        ),
+        access_bands=("EU433", "EU868", "RU864", "CN470", "US915", "AS923", "AU915", "KR920", "IN865"),
+        max_channels=8,                 # page produit : « 8 channels subGHz LoRa concentrator (RAK5146) »
+        rx_sensitivity_min_dbm=-139.0,  # RAK5146, accès : -139 dBm à SF12 / 125 kHz (fiche)
+        tx_power_max_dbm=27.0,          # RAK5146 : Tx jusqu'à 27 dBm (fiche)
+        mesh_bands=("ISM2400",),        # RAK5148 : lien relais 2,4 GHz
+        notes=(
+            "Hôte à deux concentrateurs : le RAK5146 reçoit les capteurs sous-GHz, le RAK5148 "
+            "porte le lien mesh 2,4 GHz (page produit RAK, ChirpStack Gateway OS).",
+            "Compatibilité confirmée par la page produit RAK ; la compatibilité de chaque version "
+            "logicielle reste à valider par le constructeur.",
+            "Sensibilité d'accès : RAK5146. Sensibilité du lien mesh : table du RAK5148 (lsim.mesh).",
+            "Un relais RAK5148 seul ne reçoit pas les capteurs sous-GHz : la règle de scénario le refuse.",
+        ),
+    ),
+    GatewayProfile(
         key="rak7391",
         vendor="RAKwireless",
         model="RAK7391 WisGate Connect (hôte Raspberry Pi CM4)",

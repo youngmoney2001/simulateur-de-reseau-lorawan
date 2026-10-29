@@ -310,3 +310,17 @@ def test_export_balances_with_mesh_losses_and_matches_the_trace(tmp_path):
         + run.mesh.lost_mesh
     assert run.mesh.lost_mesh == build_multi_trace(sc, ProtocolOptions()).lost_mesh
     assert run.mesh.frames == run.mesh.delivered + run.mesh.lost_mesh
+
+
+def test_relay_module_alone_cannot_serve_sub_ghz_sensors():
+    """Un relais RAK5148 seul ne reçoit pas les capteurs EU868 : refusé à la validation."""
+    def scenario(profile, region):
+        border = {"name": "frontiere", "x_m": 0, "y_m": 0, "profile": "rak5146-rak5148", "mesh": True}
+        d = _base([border, {"name": "relais", "x_m": 800, "y_m": 0, "profile": profile, "mesh": True}],
+                  mesh={"border": "frontiere", "spreading_factor": 9, "bandwidth_khz": 203, "max_hops": 2})
+        d["groups"][0]["region"] = region
+        return d
+    with pytest.raises(ValidationError, match="sans accès EU868"):
+        _scenario(scenario("rak5148", "EU868"))
+    _scenario(scenario("rak5146-rak5148", "EU868"))          # relais composite : accepté
+    _scenario(scenario("rak5148", None))                     # sans région : le moteur ne contraint pas

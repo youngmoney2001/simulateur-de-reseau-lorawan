@@ -69,7 +69,7 @@ def test_relays_compile_to_a_mesh_around_the_border():
     assert model.mesh.max_hops == 2           # la plus petite valeur réglée
     assert model.mesh.spreading_factor == 9   # défaut du moteur
     assert {g.name: g.mesh for g in model.gateways} == {"frontiere": True, "relais-1": True}
-    assert all(g.profile == "rak5148" for g in model.gateways)
+    assert all(g.profile == "rak5146-rak5148" for g in model.gateways)   # accès sous-GHz + mesh 2,4 GHz
 
 
 @pytest.mark.parametrize("nodes, configuration, message", [

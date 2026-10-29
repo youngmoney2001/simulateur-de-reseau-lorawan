@@ -52,3 +52,21 @@ def test_undocumented_mesh_cannot_relay():
 def test_unknown_profile_is_refused():
     with pytest.raises(KeyError):
         get_profile("inconnu")
+
+
+def test_composite_relay_profile_is_sourced_and_carries_both_radios():
+    """Relais RAK : RAK5146 pour les capteurs sous-GHz, RAK5148 pour le lien mesh 2,4 GHz."""
+    p = get_profile("rak5146-rak5148")
+    assert can_relay(p) and can_simulate_radio(p)
+    assert "EU868" in p.access_bands and "US915" in p.access_bands
+    assert p.mesh_bands == ("ISM2400",)
+    assert p.rx_sensitivity_min_dbm == -139.0   # fiche RAK5146, SF12 / 125 kHz
+    assert p.tx_power_max_dbm == 27.0
+    assert p.max_channels == 8
+    assert "RAK5146" in p.source and "RAK5148" in p.source
+
+
+def test_mesh_only_module_has_no_sub_ghz_access():
+    p = get_profile("rak5148")
+    assert can_relay(p)
+    assert p.access_bands == ("ISM2400",)
