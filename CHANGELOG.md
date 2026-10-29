@@ -13,7 +13,8 @@
 - Obstacles et relief sur le mesh : perte de propagation entre passerelles calculée par le natif (`lsim_env_path_loss_matrix`), antennes à hauteur passerelle. Un mur de 60 dB entre frontière et relais supprime la route (test d'intégration).
 - GeoJSON multi-passerelles : une passerelle par entrée, une couverture par passerelle et par groupe (`gateway` dans les propriétés). Le refus est supprimé.
 - Charge par passerelle en multi : trames audibles (RSSI ≥ sensibilité), union des intervalles, simultanéité maximale (`lsim_gateway_rx_stats` : quatre champs ajoutés en fin de structure). Une passerelle a `busy_ns`, `peak_concurrent`, `utilization`. Sur l'exemple, toutes les passerelles entendent les 3000 trames (portée de 3,5 km) : la charge est donc identique entre elles.
-- Limites restantes : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision ni de file d'attente ; le défaut de bande mesh (203 kHz, SF12) est à confirmer par l'opérateur.
+- Défaut mesh : SF9 / 203 kHz (décision). À SF12 / 203 kHz, un saut d'acquittement dure 1,01 s : aucune descente relayée ne tient dans RX1 ni RX2. Le bloc `mesh` (SF, bande, CR) reste réglable par scénario ; le choix automatique par profil d'équipement n'est pas implémenté. Le bloc `mesh` n'existait pas sur `main` : ce changement de défaut n'affecte aucun contrat publié.
+- Limites restantes : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision ni de file d'attente.
 - Constat sur la saturation : la frontière décode 2810 trames sur 2840 directement ; le mesh n'en apporte que 21. Les 4977 émissions mesh et les 1840 collisions de relais servent donc surtout à des copies redondantes.
 - Moteur multi-passerelles : `decoded_mask` par émission (bit g : passerelle g a décodé), ajouté en fin de `lsim_multi_tx_record`.
 

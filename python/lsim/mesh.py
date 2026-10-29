@@ -122,7 +122,7 @@ class MeshNode:
 class MeshRadio:
     """Paramètres de la liaison mesh sur 2,4 GHz (passerelles identiques)."""
 
-    spreading_factor: int = 12
+    spreading_factor: int = 9
     bandwidth_khz: int = 203
     coding_rate: int = 1
     payload_bytes: int = 32   # trame relayée (LoRaWAN + enveloppe mesh)

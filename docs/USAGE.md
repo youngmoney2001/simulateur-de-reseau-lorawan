@@ -251,8 +251,11 @@ dans le rapport et dans les métadonnées Parquet (`lsim.gateways`).
 GeoJSON multi-passerelles : une passerelle, un point et une couverture par groupe ; la couverture
 tient compte du relief et des obstacles.
 
-Limites : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision ;
-le défaut de bande mesh (203 kHz, SF12) reste à confirmer (voir CHANGELOG).
+Défaut : SF9 / 203 kHz (décision). SF12 / 203 kHz reste possible mais un acquittement relayé y
+dure plus d'une seconde par saut et n'atteint plus RX1 ni RX2. Le SF et la bande se règlent
+dans le bloc `mesh` ; le choix automatique par profil d'équipement n'est pas implémenté.
+
+Limites : le shadowing n'est pas appliqué au mesh ; le retour de descente n'a pas de collision.
 
 Exemple : `examples/mesh_relais_quartier.yaml`.
 

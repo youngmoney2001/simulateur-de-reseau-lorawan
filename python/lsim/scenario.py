@@ -58,7 +58,7 @@ class MeshModel(_Strict):
     """Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau."""
 
     border: str = Field(min_length=1, max_length=64)
-    spreading_factor: int = Field(12, ge=5, le=12)
+    spreading_factor: int = Field(9, ge=5, le=12)  # défaut : SF9/203 kHz (voir docs/USAGE.md)
     bandwidth_khz: Literal[203, 406, 812, 1625] = 203
     coding_rate: int = Field(1, ge=1, le=4)
     # Taille relayée. « device » : trame LoRaWAN réelle du dispositif + enveloppe mesh

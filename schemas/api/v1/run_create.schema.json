@@ -481,7 +481,7 @@
           "type": "integer"
         },
         "spreading_factor": {
-          "default": 12,
+          "default": 9,
           "maximum": 12,
           "minimum": 5,
           "title": "Spreading Factor",

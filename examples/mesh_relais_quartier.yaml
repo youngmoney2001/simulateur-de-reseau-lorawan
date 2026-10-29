@@ -31,7 +31,7 @@ gateways:
     antenna_gain_dbi: 2.15
 mesh:
   border: frontiere
-  spreading_factor: 12
+  spreading_factor: 9
   bandwidth_khz: 203
   coding_rate: 1
   payload_bytes: 32
