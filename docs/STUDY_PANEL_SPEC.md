@@ -1,40 +1,60 @@
 # Panneau d'étude étudiant : spécification (brouillon, non implémentée)
 
-Statut : **proposition**, à valider avant tout code d'interface. Périmètre : `web/` et le contrat
-d'API (`docs/API_CONTRACT.md`). Le moteur (`core/`, `python/lsim/`) n'est modifié que là où ce
-document le signale.
+Statut : **proposition validée sur le périmètre** (réponses de l'auteur consignées en §10),
+détails d'implémentation encore ouverts. Périmètre : `web/` et le contrat d'API
+(`docs/API_CONTRACT.md`). Le moteur (`core/`, `python/lsim/`) n'est modifié que là où ce document
+le signale. Aucun code d'interface n'est écrit à ce stade.
 
 ## 1. Objectif et public
 
-Un panneau pédagogique, sur le modèle des simulateurs de réseau pour la formation CCNA : on
-construit une topologie, on configure chaque équipement en ligne de commande, on lance la
-simulation et on observe les trames, puis un exercice vérifie le résultat automatiquement.
+Un panneau pédagogique : on construit une topologie, on configure chaque équipement en ligne de
+commande, on lance la simulation et on observe les trames. Un exercice est **noté** par vérification
+automatique côté serveur.
 
-Public : étudiants en réseaux LoRaWAN, puis ingénieurs qui se forment sur un plan de réseau
-donné. Le panneau n'a pas vocation à reproduire un firmware réel : il reproduit une **interface
-de configuration** et un **comportement modélisé**.
+Public : étudiants en réseaux LoRaWAN, puis ingénieurs qui se forment sur un plan de réseau. Le
+panneau reproduit une **interface de configuration** et un **comportement modélisé**, pas un
+firmware réel.
 
-## 2. Précision sur « mesh »
+## 2. Architecture visée
 
-LoRaWAN n'a pas de routage mesh entre capteurs. Les capteurs émettent directement vers les
-passerelles (étoile d'étoiles). Le « mesh » retenu ici est donc le **backhaul maillé entre
-passerelles** : chaque passerelle reçoit en radio, et les passerelles se relient entre elles en
-IP (filaire ou sans fil) jusqu'à un serveur. Les capteurs ne relaient jamais les messages des
-autres. Un relais de type répéteur radio est hors périmètre (voir §9).
+> Réseau LoRaWAN avec backhaul maillé interpasserelles, permettant le relais des données vers une
+> passerelle frontière connectée au serveur réseau.
 
-Hypothèse à confirmer par l'auteur (§10, question 1).
+- Les capteurs émettent en LoRaWAN standard, directement vers une passerelle. Ils ne relaient jamais
+  les messages des autres capteurs (pas de mesh entre capteurs, pas de répéteur de capteur).
+- Les **passerelles relais** (sans accès Internet) retransmettent les trames des capteurs ou d'autres
+  relais vers une **passerelle frontière**, qui est connectée au serveur réseau LoRaWAN.
+- Le backhaul maillé est un **lien radio LoRa entre passerelles**, sur une seconde radio ou une
+  bande dédiée, comme le fait ChirpStack Gateway Mesh : la passerelle frontière déballe la trame
+  relayée et la transmet au serveur comme si elle l'avait reçue directement. Le protocole exact
+  (encapsulation, nombre de sauts, bande) est un paramètre du modèle, pas une copie d'un produit.
+- Limite de sauts : 8 par défaut (valeur de ChirpStack Gateway Mesh), configurable.
+
+Source de référence du mécanisme : documentation ChirpStack Gateway Mesh
+(chirpstack.io/docs/chirpstack-gateway-mesh).
+
+Un backhaul **IP** entre passerelles (Ethernet, Wi-Fi, cellulaire) est une variante du même
+modèle : une passerelle frontière reste obligatoire. Il est hors du premier jalon.
 
 ## 3. Équipements
 
 | Équipement | Rôle | Configuration (CLI) |
 |---|---|---|
 | Capteur (end device) | Émet en classe A (classe B hors périmètre initial) | Plan régional, débit, puissance, période, clés (masquées) |
-| Passerelle (gateway) | Reçoit en radio, relaie vers le serveur | Plan régional, sous-bande, antenne, puissance TX, serveur, interface backhaul |
-| Nœud de backhaul (routeur IP) | Relie les passerelles entre elles | Interfaces, adresses, routes, coût de lien |
+| Passerelle relais | Reçoit en radio, relaie par le backhaul maillé, sans Internet | Plan régional, radio mesh (fréquence, SF, BW, CR), nombre de sauts max |
+| Passerelle frontière | Reçoit en radio et depuis le maillage, connectée au serveur | Idem + serveur (GWMP ou Basic Station), net-id |
 | Serveur de jointure et réseau | Jointure, déduplication, acquittements | NetID, plan, clés (masquées), adresse |
 | Application | Reçoit les données | Hors CLI |
 
-## 4. Interface de configuration (style IOS)
+Les modèles sont un mélange de **génériques** (paramètres libres) et de **références commerciales**
+(profils par défaut inspirés de produits réels, par exemple des passerelles RAK). Les profils
+commerciaux ne reprennent que les paramètres publiés dans leur documentation ; les commandes propres
+à un fabricant ne sont pas reproduites sans source.
+
+## 4. Interface de configuration (inspirée d'IOS)
+
+L'interface **s'inspire** d'IOS : elle n'est pas une copie fidèle de la syntaxe ou des messages
+Cisco. Les modes et conventions sont conservés pour l'apprentissage.
 
 ### 4.1 Modes
 
@@ -43,89 +63,87 @@ Hypothèse à confirmer par l'auteur (§10, question 1).
 | `gw1>` | Utilisateur | Par défaut ; `show` limité |
 | `gw1#` | Privilégié | `enable` |
 | `gw1(config)#` | Configuration globale | `configure terminal` |
-| `gw1(config-if)#` | Interface (radio ou backhaul) | `interface lora 0`, `interface eth 0` |
-| `gw1(config-router)#` | Routage backhaul | `router ...` |
+| `gw1(config-if)#` | Interface (radio, mesh, backhaul) | `interface lora 0`, `interface mesh 0`, `interface eth 0` |
 
 Chaque équipement a son propre état. `exit`, `end`, `?` (aide contextuelle) et l'auto-complétion
-suivent les conventions IOS. Les erreurs de syntaxe affichent la position du caractère fautif, comme
-IOS (`% Invalid input detected at '^' marker.`).
+suivent les conventions IOS. Les erreurs de syntaxe indiquent la position fautive par un marqueur
+`^`, sans reproduire exactement les messages Cisco.
 
 ### 4.2 Commandes (noyau proposé)
 
-Radio (interface `lora 0`) :
+Radio d'accès (`interface lora 0`) :
 
-- `region EU868|US915|AU915|AS923|KR920|IN865|RU864` : plan régional (lecture seule sur capteur) ;
-- `sub-band N` (US915/AU915) ;
-- `tx-power DBM` ; `antenna gain DBI` ;
-- `frequency MHZ` (dans le plan).
+- `region EU868|US915|AU915|AS923|KR920|IN865|RU864` ;
+- `sub-band N` (US915/AU915) ; `tx-power DBM` ; `antenna gain DBI` ; `frequency MHZ`.
+
+Radio mesh (`interface mesh 0`, passerelles relais et frontière) :
+
+- `mode relay|border` ; `frequency MHZ` ; `spreading-factor N` ; `bandwidth KHZ` ;
+- `max-hops N` (1 à 8) ; `tx-power DBM`.
 
 Passerelle (config globale) :
 
 - `lorawan net-id HEX6` ; `lorawan server ADDR port up-PORT down-PORT` (GWMP) ;
-- `lorawan transport udp|basicstation` ;
-- `lorawan location X Y` (coordonnées en mètres ou lat/lon).
-
-Backhaul (interface `eth 0` ou `wifi-mesh 0`) :
-
-- `ip address ADDR/MASK` ; `link-cost N` ; `no shutdown` / `shutdown` ;
-- `ip route PREFIX via NEXT-HOP` (routage statique) ; `router ospf`/`router rip` hors périmètre initial.
+- `lorawan transport udp|basicstation` ; `lorawan location X Y`.
 
 Vérification (`show`) :
 
-- `show version`, `show running-config`, `show interfaces`, `show lorawan devices`,
-  `show lorawan sessions`, `show ip route`, `show lorawan counters` (pertes par cause).
+- `show version`, `show running-config`, `show interfaces`, `show mesh neighbors`,
+  `show mesh routes`, `show lorawan devices`, `show lorawan sessions`,
+  `show lorawan counters` (pertes par cause : sensibilité, collision, hors-fenêtre,
+  saut maximal dépassé, passerelle occupée).
 
 Gestion :
 
 - `copy running-config startup-config` ; `reload` (efface l'état non sauvegardé) ;
-- `write erase` pour réinitialiser un équipement d'exercice.
+  `write erase` (réinitialise un équipement d'exercice).
 
-Les mots de passe, clés et `LSIM_*` ne sont jamais affichés : `show running-config` masque les
-clés en `******`, conformément au contrat d'API (aucune clé dans une réponse).
+Les clés et secrets ne sont **jamais** affichés : `show running-config` masque les clés (`******`),
+conformément au contrat d'API.
 
-### 4.3 Règles de cohérence (contrôlées par le moteur, pas par l'interface)
+### 4.3 Règles de cohérence (contrôlées par le moteur)
 
-- Une passerelle et ses capteurs doivent partager le même plan régional : sinon les trames sont
-  perdues (issue explicite, pas silencieuse).
-- Une passerelle sans `lorawan server` ou sans liaison backhaul vers un serveur ne relaie rien.
-- Un `shutdown` sur l'interface backhaul coupe le relais ; les trames déjà reçues sont
-  comptées comme `lost_backhaul`.
+- Une passerelle et ses capteurs doivent partager le même plan régional ; sinon les trames sont
+  perdues avec une issue explicite (pas silencieuse).
+- Une passerelle relais dont aucune route mesh ne mène à une frontière ne relaie rien.
+- Un relais ne transmet qu'à `max-hops` au plus ; au-delà, la trame est perdue (issue explicite).
+- Une passerelle frontière ignore les uplinks radio directs si la configuration le demande (cas
+  présent dans la documentation RAK, à reproduire comme option).
+- Un `shutdown` sur l'interface mesh coupe le relais ; les trames en transit sont comptées comme
+  perdues.
 
 ## 5. Ce que le moteur doit gagner
 
-Les commandes ci-dessus correspondent à des paramètres qui existent, sauf les points suivants :
-
-1. **Plusieurs passerelles** : le moteur ne gère qu'une passerelle (`Gateway` dans
-   `python/lsim/simulator.py`). Il faut calculer la réception par passerelle, puis dédupliquer
-   au serveur (une copie retenue : la meilleure ou la première). C'est le cœur du protocole
-   LoRaWAN en réseau dense et la condition du backhaul.
-2. **Backhaul** : modèle de lien IP (délai, perte, débit, coût) entre passerelles et serveur.
-   Aujourd'hui le backhaul est sans perte et sans délai (`ROADMAP`). Il faut un modèle
-   explicite, avec des valeurs sourcées ou marquées hypothétiques.
-3. **Routage** : pour un réseau simple, routage statique. Un protocole de routage dynamique
-   (OSPF, RPL, etc.) n'est pas inventé : il sera ajouté seulement sur une spécification publiée.
-4. **Sensibilité** : la référence reste SX1276 tant que la fiche SX1262 n'est pas intégrée
+1. **Plusieurs passerelles** : le moteur ne calcule qu'une passerelle (`Gateway` dans
+   `python/lsim/simulator.py`). Il faut calculer la réception par passerelle, puis dédupliquer au
+   serveur (une copie retenue).
+2. **Backhaul maillé radio** : chaque saut relais est une transmission LoRa avec son temps
+   d'antenne, ses collisions et son duty cycle. C'est le point le plus coûteux : il consomme la
+   même ressource radio que les capteurs (ou une bande dédiée, selon la configuration).
+3. **Routage** : table de routes vers la frontière, construite par la configuration (routage
+   statique au départ). Aucun protocole de routage dynamique n'est inventé.
+4. **Sensibilité** : référence SX1276 tant que la fiche SX1262 n'est pas intégrée
    (`device_rx_offset_db` en attendant).
 
-## 6. Exercices avec vérification automatique
+## 6. Exercices notés avec vérification automatique
 
-Un exercice est un fichier qui contient :
+Un exercice contient :
 
-- une topologie de départ (capteurs, passerelles, backhaul, serveur) ;
-- un énoncé (par exemple « faire parvenir 95 % des messages du capteur C au serveur ») ;
-- une liste de contraintes vérifiées : configuration (`show running-config` attendu),
-  connectivité (`ping` modélisé entre deux nœuds), résultat de simulation (PDR, latence,
+- une topologie de départ (capteurs, passerelles relais et frontière, serveur) ;
+- un énoncé (par exemple « 95 % des messages du capteur C atteignent le serveur ») ;
+- des **critères** vérifiés côté serveur : configuration attendue (`show running-config`),
+  connectivité (route mesh présente), résultat de simulation (PDR, latence, nombre de sauts,
   passerelle utilisée) ;
-- un barème et des indices (non donnés d'emblée).
+- un **barème** : chaque critère a un poids, et la note est la somme des critères réussis ;
+- des indices, révélés à la demande et comptés dans la note.
 
-La vérification se fait côté serveur, sur un état de simulation, jamais sur une réponse
-envoyée par le navigateur. L'étudiant ne voit pas la solution de référence.
+La vérification se fait côté serveur, sur l'état réel de la simulation. Le navigateur n'envoie
+jamais de résultat à valider. La solution de référence n'est jamais envoyée au client.
 
-Exemples d'exercices (indicatifs) :
+Exemples (indicatifs) :
 
-1. Configurer une passerelle sur le plan EU868 et vérifier qu'un capteur est joint.
-2. Ajouter une seconde passerelle pour couvrir un capteur masqué, puis relier les deux
-   passerelles au serveur par backhaul.
+1. Configurer une passerelle sur EU868 et vérifier qu'un capteur est joint.
+2. Ajouter un relais pour couvrir un capteur masqué, puis le relier à la frontière (au plus 2 sauts).
 3. Corriger un plan régional incohérent entre capteur et passerelle.
 4. Choisir une sous-bande US915 pour éviter une collision avec un autre groupe.
 
@@ -133,37 +151,41 @@ Exemples d'exercices (indicatifs) :
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
-| POST | `/api/v1/sessions/{id}/cli` | Exécute une commande dans un mode donné ; réponse : sortie et nouveau mode |
+| POST | `/api/v1/sessions/{id}/cli` | Exécute une commande dans un mode ; réponse : sortie et nouveau mode |
 | GET | `/api/v1/sessions/{id}/topology` | État de la topologie et des configurations (secrets masqués) |
-| POST | `/api/v1/exercises/{id}/check` | Vérifie la solution de l'étudiant (côté serveur) |
-| GET | `/api/v1/exercises` | Catalogue des exercices (sans solution) |
+| GET | `/api/v1/exercises` | Catalogue des exercices (sans solution ni critères détaillés) |
+| POST | `/api/v1/exercises/{id}/submit` | Dépose la configuration de l'étudiant ; le serveur note et renvoie le détail des critères |
 
-Chaque session est liée à un identifiant d'utilisateur et protégée par le jeton prévu dans le
-contrat (authentification à implémenter, voir `docs/API_CONTRACT.md`). Les tentatives de
-configuration sont journalisées sans secrets.
+Chaque session est liée à un utilisateur et protégée par le jeton prévu (authentification à
+implémenter, voir `docs/API_CONTRACT.md`). Les tentatives sont journalisées sans secrets.
 
 ## 8. Phasage proposé
 
-1. Spécification validée (ce document) et ajout au contrat.
+1. Spécification validée et ajout au contrat.
 2. Moteur multi-passerelles avec déduplication, tests C++ et Python.
-3. Modèle de backhaul et routage statique.
+3. Backhaul maillé radio (saut, collisions, duty cycle) et routage statique.
 4. CLI d'un équipement (une passerelle), tests de la grammaire et des erreurs.
 5. Topologie multi-équipements et simulation pas à pas.
-6. Exercices et vérification côté serveur.
+6. Exercices notés et vérification côté serveur.
 7. Interface graphique (éditeur de topologie, animation des trames, journal par saut).
 
 ## 9. Hors périmètre initial
 
 - Relais ou répéteur radio entre capteurs (non standard LoRaWAN) ;
-- classe B et classe C (classe A seulement au départ) ;
-- firmware réel, émulation binaire d'un équipement physique ;
-- protocoles de routage dynamiques non publiés ;
+- backhaul IP entre passerelles (variante ultérieure) ;
+- classes B et C ;
+- firmware réel et émulation binaire d'un équipement physique ;
+- protocoles de routage dynamiques ;
 - multi-utilisateurs et paquets macOS/Windows (voir la feuille de route).
 
-## 10. Questions ouvertes
+## 10. Décisions
 
-1. Le « mesh » visé est-il bien le backhaul maillé entre passerelles (§2) ? Sinon, préciser.
-2. La CLI doit-elle être **fidèle à IOS** (syntaxe et messages), ou seulement inspirée de celle-ci ?
-3. Les exercices sont-ils notés (score) ou seulement validés (réussi/échoué) ?
-4. Les équipements sont-ils des modèles génériques, ou des références commerciales (RAK, Dragino,
-   Kerlink) avec leurs commandes propres ?
+| Sujet | Décision de l'auteur |
+|---|---|
+| Sens de « mesh » | Backhaul maillé entre passerelles (relais vers une passerelle frontière), pas de mesh entre capteurs |
+| Fidélité CLI | Inspirée d'IOS, pas fidèle (syntaxe et messages) |
+| Exercices | Notés (barème, somme des critères) |
+| Équipements | Mélange de modèles génériques et de références commerciales |
+
+Points restants à trancher avant la phase 2 : la bande du lien mesh (même bande que les capteurs ou
+bande dédiée), et le nombre de sauts par défaut (proposé : 8, comme ChirpStack).
