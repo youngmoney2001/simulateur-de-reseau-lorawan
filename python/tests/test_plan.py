@@ -7,7 +7,7 @@ from lsim.us915 import US915
 
 
 def test_registry_lists_both_regions():
-    assert plan_names() == ["AU915", "EU868", "US915"]
+    assert plan_names() == ["AS923", "AU915", "EU868", "US915"]
     assert get_plan("US915") is US915
 
 
