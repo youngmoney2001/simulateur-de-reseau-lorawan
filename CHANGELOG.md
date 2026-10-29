@@ -14,7 +14,7 @@
 
 ### Panneau d'étude : sessions, CLI et liaison aux résultats (servis)
 - Routes : `POST /api/v1/sessions`, `GET /api/v1/sessions/{id}/topology`, `POST /api/v1/sessions/{id}/cli`, `POST /api/v1/sessions/{id}/simulation`. Propriétaire filtré (404 pour un autre compte), bornes et expiration en mémoire.
-- `show lorawan counters` et `show mesh counters` affichent les compteurs réels de la passerelle de même nom dans le run lié. Les `show` non alimentés par le moteur (voisins, routes, appareils) sont retirés de la grammaire.
+- `show lorawan counters` et `show mesh counters` affichent les compteurs réels de la passerelle associée dans le run lié (association explicite, voir ci-dessous). Les `show` non alimentés par le moteur (voisins, routes, appareils) sont retirés de la grammaire.
 - Exercices : servis depuis (voir l'entrée « exercices notés » ci-dessus).
 - Tests : `python/tests/test_study_api.py` (20). Suite Python : 1412 passés, 1 ignoré.
 
