@@ -23,9 +23,8 @@ le clôt. Sans acquittement, il est considéré non reçu et n'est pas renvoyé 
 Retransmission d'un uplink confirmé déjà accepté (delta 0, MIC valide) : ACK seul renvoyé,
 sans nouvelle livraison ni changement d'état. Un uplink non confirmé répété est rejeté.
 
-Commandes MAC : une commande mise en file avec FPort 0 (`Transaction.enqueue`) est émise en
-FOpts d'un downlink sans FPort. Les FOpts montants ne sont pas interprétés ici (le journal les
-décode) ; FPending et ADR ne sont pas interprétés. Les
+Commandes MAC à acquitter (`mac_pending`) : renvoyées en FOpts à chaque downlink jusqu'au
+LinkADRAns du dispositif, au plus MAC_MAX_ATTEMPTS fois. FPending et ADR ne sont pas interprétés. Les
 charges de FPort > 0 sans AppKey ne sont pas déchiffrables et ne sont pas livrées.
 """
 
@@ -34,8 +33,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
+import logging
+
+from lsim import mac
 from lsim.gwmp import Rxpk, Txpk
-from lsim.join_store import DurableJoinStore, QueueItem, Transaction
+from lsim.join_store import MAC_MAX_ATTEMPTS, DurableJoinStore, QueueItem, Transaction
 from lsim.lora import StatusError
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.security import (
@@ -49,6 +51,41 @@ MTYPE_REJOIN_REQUEST = 0b110
 _MIN_FRAME_LEN = 12          # MHDR, DevAddr, FCtrl, FCnt, MIC
 _ACK_BIT = 0x20              # FCtrl.ACK en uplink
 _COUNTER32_LIMIT = 0xFFFFFFFF
+_FOPTS_MAX = 15
+CID_LINK_ADR = 0x03          # LinkADRReq / LinkADRAns
+_log = logging.getLogger("lsim.uplink")
+
+
+def _acked_cids(fopts: bytes) -> set[int]:
+    """CID des commandes acquittées dans les FOpts montants (LinkADRAns : trois bits à 1)."""
+    if not fopts:
+        return set()
+    try:
+        answers = mac.decode_all(fopts, downlink=False)
+    except (ValueError, StatusError):
+        return set()
+    acked: set[int] = set()
+    for answer in answers:
+        if isinstance(answer, mac.LinkAdrAns) and answer.channel_mask_ack \
+                and answer.data_rate_ack and answer.power_ack:
+            acked.add(CID_LINK_ADR)
+    return acked
+
+
+def _pending_fopts(tx: Transaction, dev_eui: bytes) -> tuple[bytes, list[int]]:
+    """FOpts des commandes à renvoyer : au plus 15 octets, en abandonnant les épuisées."""
+    fopts = b""
+    sent: list[int] = []
+    for item in tx.pending_mac(dev_eui):
+        if item.attempts >= MAC_MAX_ATTEMPTS:
+            tx.mac_done(dev_eui, item.cid)
+            _log.warning("commande MAC %d non acquittée après %d essais : abandon",
+                         item.cid, item.attempts)
+            continue
+        if len(fopts) + len(item.command) <= _FOPTS_MAX:
+            fopts += item.command
+            sent.append(item.cid)
+    return fopts, sent
 
 
 @dataclass(frozen=True)
@@ -150,6 +187,10 @@ class DataUplinkHandler:
             _save(tx, rec, fcnt_up=rec.fcnt_up, pending=rec.pending_conf, sent=sent)
             return Outcome("data_ack_repeated", txpk=txpk, dev_eui=rec.dev_eui)
 
+        for cid in _acked_cids(frame.fopts):
+            tx.mac_done(rec.dev_eui, cid)
+        mac_fopts, mac_sent = _pending_fopts(tx, rec.dev_eui)
+
         fport = frame.fport
         payload = frame.payload if (fport is not None and fport > 0 and rec.has_app_key) else None
         delivery = Delivery(dev_eui=rec.dev_eui, dev_addr=dev_addr, fcnt=cand,
@@ -158,12 +199,14 @@ class DataUplinkHandler:
         head = tx.queue_head(rec.dev_eui)
         txpk = None
         sent = None
-        if head is not None or frame.confirmed:
+        if head is not None or frame.confirmed or mac_fopts:
             txpk, sent = _build_downlink(
                 rxpk, rec, rx1, ack_for=cand if frame.confirmed else None, send=head,
-                max_payload=self._plan.queue_payload_max)
+                max_payload=self._plan.queue_payload_max, fopts=mac_fopts)
             if head is not None:
                 tx.dequeue(head.seq)
+            for cid in mac_sent:
+                tx.mac_attempted(rec.dev_eui, cid)
         # Nouvelle trame valide : toute confirmation en attente est close (acquittée ou perdue).
         # Un downlink confirmé émis ici devient la confirmation attendue de l'uplink suivant.
         pending = sent.counter if (sent is not None and sent.confirmed) else None
@@ -180,14 +223,11 @@ class _Sent:
 
 
 def _build_downlink(rxpk: Rxpk, rec, rx1: tuple[float, str], ack_for: Optional[int],
-                    send: Optional[QueueItem], max_payload: int) -> tuple[Txpk, _Sent]:
+                    send: Optional[QueueItem], max_payload: int,
+                    fopts: bytes = b"") -> tuple[Txpk, _Sent]:
     """Chiffre et signe le downlink, sans rien persister. RX1 : tmst + 1 s, canal et débit du plan."""
     fport = send.fport if send is not None else None
     payload = send.payload if send is not None else b""
-    fopts = b""
-    if send is not None and send.fport == 0:
-        # Commande MAC en file (FPort 0 interne) : transportée dans FOpts, sans FPort ni charge.
-        fopts, fport, payload = send.payload, None, b""
     if len(payload) > max_payload:
         # Impossible par construction : la file refuse les charges au-dessus de queue_payload_max.
         raise ValueError("charge en file au-delà de la limite du plan")

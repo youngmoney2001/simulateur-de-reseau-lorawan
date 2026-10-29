@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS downlink_queue (
     payload BLOB NOT NULL           -- charge applicative, chiffrée (lsim.sealed)
 );
 CREATE INDEX IF NOT EXISTS downlink_queue_eui ON downlink_queue (dev_eui, seq);
+CREATE TABLE IF NOT EXISTS mac_pending (
+    dev_eui BLOB NOT NULL,
+    cid INTEGER NOT NULL,
+    command BLOB NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (dev_eui, cid)
+);
 """
 
 _BUSY_TIMEOUT_S = 30.0
@@ -96,6 +103,18 @@ class QueueItem:
     fport: int
     confirmed: bool
     payload: bytes = field(repr=False)
+
+
+# Commande MAC à acquitter : renvoyée dans les FOpts de chaque downlink tant que le dispositif
+# ne la confirme pas (LinkADRAns), au plus MAC_MAX_ATTEMPTS fois.
+MAC_MAX_ATTEMPTS = 8
+
+
+@dataclass(frozen=True)
+class PendingMac:
+    cid: int
+    command: bytes = field(repr=False)
+    attempts: int
 
 
 class QueueFullError(OverflowError):
@@ -221,6 +240,37 @@ class Transaction:
     def queue_length(self, dev_eui: bytes) -> int:
         return self._conn.execute(
             "SELECT COUNT(*) FROM downlink_queue WHERE dev_eui = ?", (dev_eui,)).fetchone()[0]
+
+    @staticmethod
+    def _mac_aad(dev_eui: bytes, cid: int) -> bytes:
+        return b"lsim/mac/v1" + bytes(dev_eui) + bytes([cid])
+
+    def enqueue_mac(self, dev_eui: bytes, cid: int, command: bytes) -> None:
+        """Met une commande MAC à acquitter (remplace une commande de même CID, compteur remis à 0)."""
+        if not 0 <= cid <= 255 or not 1 <= len(command) <= 15:
+            raise ValueError("commande MAC : CID 0..255 et 1 à 15 octets")
+        sealed = self._need_sealer().seal(bytes(command), self._mac_aad(dev_eui, cid))
+        self._conn.execute(
+            "INSERT INTO mac_pending (dev_eui, cid, command, attempts) VALUES (?, ?, ?, 0)"
+            " ON CONFLICT(dev_eui, cid) DO UPDATE SET command = excluded.command, attempts = 0",
+            (dev_eui, cid, sealed))
+
+    def pending_mac(self, dev_eui: bytes) -> list[PendingMac]:
+        rows = self._conn.execute(
+            "SELECT cid, command, attempts FROM mac_pending WHERE dev_eui = ? ORDER BY cid",
+            (dev_eui,)).fetchall()
+        sealer = self._need_sealer()
+        return [PendingMac(cid=cid, command=sealer.open(bytes(blob), self._mac_aad(dev_eui, cid)),
+                           attempts=attempts)
+                for cid, blob, attempts in rows]
+
+    def mac_attempted(self, dev_eui: bytes, cid: int) -> None:
+        self._conn.execute(
+            "UPDATE mac_pending SET attempts = attempts + 1 WHERE dev_eui = ? AND cid = ?",
+            (dev_eui, cid))
+
+    def mac_done(self, dev_eui: bytes, cid: int) -> None:
+        self._conn.execute("DELETE FROM mac_pending WHERE dev_eui = ? AND cid = ?", (dev_eui, cid))
 
 
 # Format interne d'une session (clair avant scellement) : clés, has_app, FCntUp, NFCntDown,

@@ -31,7 +31,8 @@ from lsim.basicstation import DEFAULT_HWSPEC, BasicStationServer, make_ssl_conte
 from lsim.channel_mask import FAMILY, link_adr_for_sub_band
 from lsim.gwmp_server import JoinUplinkHandler, start_server
 from lsim.join_server import DeviceKeys, JoinServer
-from lsim.join_store import DurableJoinStore, QueueFullError
+from lsim.join_store import DurableJoinStore
+from lsim.uplink import CID_LINK_ADR
 from lsim.lora import StatusError
 from lsim.plan import Plan, get_plan
 from lsim.uplink import DataUplinkHandler, Delivery, UplinkRouter
@@ -123,13 +124,9 @@ def build_handler(store: DurableJoinStore, keys: dict[bytes, DeviceKeys], net_id
         command = link_adr_payload(plan, sub_band)
 
         def queue_command(tx, dev_eui: bytes) -> None:
-            # Mise en file dans la transaction de jointure : une jointure ne peut pas être
-            # acceptée sans sa commande. Si la file est pleine, la jointure réussit quand même.
-            try:
-                tx.enqueue(dev_eui, 0, False, command)
-            except QueueFullError:
-                logging.getLogger("lsim.serve").warning(
-                    "file pleine : LinkADRReq de sous-bande %d non mis en file", sub_band)
+            # Dans la transaction de jointure : la commande est persistée avec la session.
+            # Elle est renvoyée à chaque downlink jusqu'à acquittement (uplink.py).
+            tx.enqueue_mac(dev_eui, CID_LINK_ADR, command)
 
         on_join = queue_command
 

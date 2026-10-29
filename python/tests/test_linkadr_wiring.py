@@ -9,7 +9,7 @@ import pytest
 from lsim import mac
 from lsim.gwmp import Rxpk
 from lsim.join_server import DeviceKeys
-from lsim.join_store import DurableJoinStore
+from lsim.join_store import MAC_MAX_ATTEMPTS, DurableJoinStore
 from lsim.plan import get_plan
 from lsim.security import (
     DownlinkContext, JoinRequest, UplinkContext, UplinkFrame, encode_join_request,
@@ -114,7 +114,7 @@ def test_join_queues_link_adr_and_first_downlink_carries_it(store):
     _join(handler)
     with store.transaction() as tx:
         rec = tx.session_by_eui(DEV)
-        assert tx.queue_length(DEV) == 1
+        assert [item.cid for item in tx.pending_mac(DEV)] == [3]
     # Uplink non confirmé (DR0 SF10/125, canal 8 à 903,9 MHz) : le downlink RX1 porte FOpts.
     wire = seal_uplink(
         UplinkFrame(dev_addr=rec.dev_addr, fcnt=0, payload=b"", fport=None, confirmed=False,
@@ -131,18 +131,70 @@ def test_join_queues_link_adr_and_first_downlink_carries_it(store):
     assert mac.decode_all(frame.fopts, downlink=True)[0].ch_mask == 0b10
 
 
-def test_queued_link_adr_sent_once(store):
+def _uplink(rec, fcnt, fopts=b""):
+    wire = seal_uplink(
+        UplinkFrame(dev_addr=rec.dev_addr, fcnt=fcnt, payload=b"", fport=None, confirmed=False,
+                    ack=False, fopts=fopts),
+        rec.keys, UplinkContext(fcnt32=fcnt, conf_fcnt=0, tx_dr=0, tx_ch=8))
+    return _rxpk(wire, 903.9, "SF10BW125")
+
+
+def test_link_adr_resent_until_max_attempts_without_answer(store):
     handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
     _join(handler)
     with store.transaction() as tx:
         rec = tx.session_by_eui(DEV)
-    for fcnt in (0, 1):
-        wire = seal_uplink(
-            UplinkFrame(dev_addr=rec.dev_addr, fcnt=fcnt, payload=b"", fport=None,
-                        confirmed=False, ack=False),
-            rec.keys, UplinkContext(fcnt32=fcnt, conf_fcnt=0, tx_dr=0, tx_ch=8))
-        outcome = handler.handle(_rxpk(wire, 903.9, "SF10BW125"))
-    assert outcome.txpk is None          # la commande est partie au premier uplink seulement
+    sent = 0
+    for fcnt in range(MAC_MAX_ATTEMPTS + 2):
+        outcome = handler.handle(_uplink(rec, fcnt))
+        if outcome.txpk is not None:
+            sent += 1
+            frame = open_downlink(outcome.txpk.payload, rec.keys,
+                                  DownlinkContext(conf_fcnt=0, nfcnt32=fcnt, afcnt32=0))
+            assert frame.fopts == link_adr_payload(US915, 2)
+    # Un LinkADRReq par uplink, jusqu'à MAC_MAX_ATTEMPTS, puis abandon.
+    assert sent == MAC_MAX_ATTEMPTS
+    with store.transaction() as tx:
+        assert tx.pending_mac(DEV) == []
+
+
+def test_link_adr_stops_after_acknowledgement(store):
+    handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
+    _join(handler)
+    with store.transaction() as tx:
+        rec = tx.session_by_eui(DEV)
+    first = handler.handle(_uplink(rec, 0))
+    assert first.txpk is not None                      # renvoyé une fois
+    ack = mac.encode(mac.LinkAdrAns(channel_mask_ack=True, data_rate_ack=True, power_ack=True))
+    handler.handle(_uplink(rec, 1, fopts=ack))         # le dispositif acquitte
+    later = handler.handle(_uplink(rec, 2))
+    assert later.txpk is None                          # plus de renvoi
+    with store.transaction() as tx:
+        assert tx.pending_mac(DEV) == []
+
+
+def test_negative_answer_keeps_command_pending(store):
+    handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
+    _join(handler)
+    with store.transaction() as tx:
+        rec = tx.session_by_eui(DEV)
+    refused = mac.encode(mac.LinkAdrAns(channel_mask_ack=False, data_rate_ack=True, power_ack=True))
+    handler.handle(_uplink(rec, 0, fopts=refused))
+    with store.transaction() as tx:
+        assert [item.cid for item in tx.pending_mac(DEV)] == [3]
+
+
+def test_rejoin_resets_attempts(store):
+    handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
+    _join(handler)
+    with store.transaction() as tx:
+        rec = tx.session_by_eui(DEV)
+    handler.handle(_uplink(rec, 0))
+    with store.transaction() as tx:
+        assert tx.pending_mac(DEV)[0].attempts == 1
+        tx.enqueue_mac(DEV, 3, link_adr_payload(US915, 2))
+    with store.transaction() as tx:
+        assert tx.pending_mac(DEV)[0].attempts == 0
 
 
 def test_eu868_join_queues_nothing(store):
