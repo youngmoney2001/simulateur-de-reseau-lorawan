@@ -197,14 +197,17 @@ class DataUplinkHandler:
 
         for cid in _acked_cids(frame.fopts):
             tx.mac_done(rec.dev_eui, cid)
-        mac_fopts, mac_sent = _pending_fopts(tx, rec.dev_eui)
+        # Rejoin en attente : downlinks et commandes MAC partent seulement sur le nouveau
+        # contexte. Un uplink sur l'ancien n'en reçoit que l'acquittement (confirmé).
+        held = tx.pending_by_eui(rec.dev_eui) is not None
+        mac_fopts, mac_sent = (b"", []) if held else _pending_fopts(tx, rec.dev_eui)
 
         fport = frame.fport
         payload = frame.payload if (fport is not None and fport > 0 and rec.has_app_key) else None
         delivery = Delivery(dev_eui=rec.dev_eui, dev_addr=dev_addr, fcnt=cand,
                             confirmed=frame.confirmed, fport=fport, payload=payload,
                             fopts=frame.fopts)
-        head = tx.queue_head(rec.dev_eui)
+        head = None if held else tx.queue_head(rec.dev_eui)
         txpk = None
         sent = None
         if head is not None or frame.confirmed or mac_fopts:

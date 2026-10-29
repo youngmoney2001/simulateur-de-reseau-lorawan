@@ -204,6 +204,12 @@ class JoinServer:
                 tx, dev_eui, join_eui, slot, keys, pending=True)
             accept_wire = encode_rejoin_join_accept(
                 accept, keys.nwk_key, dev_eui, join_eui, rejoin_type, rjcount)
+            if rejoin_type in (0, 1):
+                # Join-accept après rejoin type 0 ou 1 : paramètres MAC remis à leurs valeurs par
+                # défaut (1.1 §6.2.3). Les commandes en attente ne s'appliquent plus. Type 2 :
+                # paramètres radio conservés, commandes gardées. Fait avant on_join, qui peut
+                # en émettre de nouvelles.
+                tx.clear_mac_pending(dev_eui)
             if self._on_join is not None:
                 self._on_join(tx, dev_eui)
         return RejoinOutcome(rejoin_type=rejoin_type, dev_eui=dev_eui, join_eui=join_eui,

@@ -172,12 +172,14 @@ class Transaction:
 
     def put_session(self, dev_eui: bytes, dev_addr: int, keys: SessionKeys11,
                     has_app_key: bool) -> None:
-        """Remplace la session du dispositif (join-request : ancienne session et contexte en
-        attente disparaissent dans la transaction)."""
+        """Remplace la session du dispositif (join-request : ancienne session, contexte en attente,
+        commandes MAC et file disparaissent dans la transaction)."""
         sealer = self._need_sealer()
         self._conn.execute("DELETE FROM sessions WHERE dev_eui = ? OR dev_addr = ?",
                            (dev_eui, dev_addr))
         self._conn.execute("DELETE FROM pending_sessions WHERE dev_eui = ?", (dev_eui,))
+        # Join-request : réinitialisation complète des paramètres MAC (1.1 §6.2.3).
+        self._conn.execute("DELETE FROM mac_pending WHERE dev_eui = ?", (dev_eui,))
         plain = _encode_session(keys, has_app_key, fcnt_up=-1, nfcnt=0, afcnt=0, pending=None)
         self._conn.execute(
             "INSERT INTO sessions (dev_addr, dev_eui, sealed) VALUES (?, ?, ?)",
@@ -231,8 +233,17 @@ class Transaction:
         self._conn.execute(
             "INSERT INTO sessions (dev_addr, dev_eui, sealed) VALUES (?, ?, ?)",
             (dev_addr, dev_eui, sealer.seal(plain, self._session_aad(dev_addr, dev_eui))))
-        self._conn.execute("DELETE FROM downlink_queue WHERE dev_eui = ?", (dev_eui,))
+        # La file de downlinks est conservée : elle part sur le nouveau contexte.
         return _decode_session(dev_addr, dev_eui, plain)
+
+    def pending_by_eui(self, dev_eui: bytes) -> Optional[SessionRecord]:
+        row = self._conn.execute(
+            "SELECT dev_addr FROM pending_sessions WHERE dev_eui = ?", (dev_eui,)).fetchone()
+        return None if row is None else self.pending_by_addr(int(row[0]))
+
+    def clear_mac_pending(self, dev_eui: bytes) -> None:
+        """Commandes MAC en attente abandonnées : le dispositif réinitialise ses paramètres MAC."""
+        self._conn.execute("DELETE FROM mac_pending WHERE dev_eui = ?", (dev_eui,))
 
     def session_by_addr(self, dev_addr: int) -> Optional[SessionRecord]:
         return self._session("WHERE dev_addr = ?", dev_addr)

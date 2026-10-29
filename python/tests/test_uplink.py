@@ -593,3 +593,94 @@ def test_pending_context_survives_restart(tmp_path):
     rxpk = Rxpk(tmst=TMST, freq_mhz=868.1, chan=0, rfch=0, crc_ok=True, datr="SF7BW125",
                 codr="4/5", rssi=-60, lsnr=7.0, payload=wire)
     assert router.handle(rxpk).issue == "data_accepted"
+
+
+def _rejoin_any(env, rejoin_type=1, rjcount=1):
+    """Rejoin type 0, 1 ou 2 accepté ; retourne (DevAddr, clés côté dispositif)."""
+    from lsim.rejoin import Rejoin02, Rejoin1, encode_02, encode_1
+
+    def keys(dev_eui):
+        if dev_eui != DEV:
+            raise KeyError("dispositif inconnu")
+        return DeviceKeys(NWK, s_nwk_s_int_key=SNWK_INT, js_int_key=JSINT, app_key=APP,
+                          join_eui=JOIN_EUI)
+
+    server = JoinServer(env.store, NET_ID, keys, dl_settings=env.plan.dl_settings)
+    if rejoin_type == 1:
+        wire = encode_1(Rejoin1(join_eui=JOIN_EUI, dev_eui=DEV, rjcount1=rjcount), JSINT)
+    else:
+        wire = encode_02(Rejoin02(rejoin_type=rejoin_type, net_id=NET_ID, dev_eui=DEV,
+                                  rjcount0=rjcount), SNWK_INT)
+    out = server.accept_rejoin(wire)
+    session = derive_session_keys_11(NWK, APP, out.join_nonce.to_bytes(3, "little"),
+                                     JOIN_EUI, rjcount.to_bytes(2, "little"))
+    return out.dev_addr, session
+
+
+def test_downlink_queued_during_pending_waits_for_new_context(env):
+    addr0, keys0 = env.join_device()
+    env.store.enqueue_downlink(DEV, 1, False, b"hi")
+    addr1, keys1 = _rejoin_any(env, 1)
+    # Uplink sur l'ancien contexte : aucun downlink de la file, ni ACK pour un non confirmé.
+    old = env.handle(up(keys0, addr0, 0, b"o", fport=1))
+    assert old.issue == "data_accepted" and old.txpk is None
+    with env.store.transaction() as tx:
+        assert tx.queue_length(DEV) == 1
+    # Premier uplink valide du nouveau contexte : la file part, chiffrée avec ses clés.
+    new = env.handle(up(keys1, addr1, 0, b"n", fport=1))
+    assert new.issue == "data_accepted" and new.txpk is not None
+    assert open_dl(new.txpk, keys1, conf=0, nfcnt=0).payload == b"hi"
+    with env.store.transaction() as tx:
+        assert tx.queue_length(DEV) == 0
+
+
+def test_confirmed_uplink_on_old_context_gets_ack_but_no_queue(env):
+    addr0, keys0 = env.join_device()
+    env.store.enqueue_downlink(DEV, 1, False, b"hold")
+    addr1, _ = _rejoin_any(env, 1)
+    outcome = env.handle(up(keys0, addr0, 0, b"c", fport=1, confirmed=True))
+    assert outcome.issue == "data_accepted" and outcome.txpk is not None
+    ack = open_dl(outcome.txpk, keys0, conf=0, nfcnt=0)
+    assert ack.ack is True and ack.fport is None      # acquittement seulement, pas de charge
+
+
+def _queue_mac(env):
+    with env.store.transaction() as tx:
+        tx.enqueue_mac(DEV, 0x03, b"\x03\x00")
+
+
+def test_rejoin_type_1_and_0_clear_mac_pending_type_2_keeps_it(env):
+    env.join_device()
+    _queue_mac(env)     # commande MAC en attente
+    _rejoin_any(env, 1)
+    with env.store.transaction() as tx:
+        assert tx.pending_mac(DEV) == []
+    _queue_mac(env)
+    _rejoin_any(env, 0, rjcount=1)
+    with env.store.transaction() as tx:
+        assert tx.pending_mac(DEV) == []
+    _queue_mac(env)
+    _rejoin_any(env, 2, rjcount=2)
+    with env.store.transaction() as tx:
+        assert [m.cid for m in tx.pending_mac(DEV)] == [0x03]
+
+
+def test_promotion_is_rolled_back_when_uplink_is_rejected_later(env, monkeypatch):
+    import lsim.uplink as uplink_mod
+    addr0, keys0 = env.join_device()
+    addr1, keys1 = _rejoin_any(env, 1)
+
+    def reject(*args, **kwargs):
+        raise uplink_mod._Reject("test_rejet_apres_promotion")
+
+    monkeypatch.setattr(uplink_mod, "_save", reject)
+    outcome = env.handle(up(keys1, addr1, 0, b"x", fport=1))
+    assert outcome.issue == "test_rejet_apres_promotion"
+    # Rien n'a changé : l'ancien contexte est toujours la session, le nouveau reste en attente.
+    assert env.session(addr0) is not None
+    assert env.session(addr1) is None
+    with env.store.transaction() as tx:
+        assert tx.pending_by_addr(addr1) is not None
+    monkeypatch.undo()
+    assert env.handle(up(keys1, addr1, 0, b"x", fport=1)).issue == "data_accepted"
+    assert env.session(addr0) is None
