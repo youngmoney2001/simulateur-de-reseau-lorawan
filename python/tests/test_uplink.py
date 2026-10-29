@@ -504,3 +504,92 @@ def test_serve_requires_data_key(tmp_path, monkeypatch):
     monkeypatch.delenv("LSIM_DATA_KEY", raising=False)
     with pytest.raises(ValueError, match="LSIM_DATA_KEY"):
         serve.open_store(tmp_path / "x.sqlite")
+
+
+# Contexte après rejoin (1.1 §6.2.4) : l'ancien reste valide jusqu'au premier uplink valide
+# du nouveau contexte.
+
+SNWK_INT = bytes(range(0x30, 0x40))
+JSINT = bytes(range(0x50, 0x60))
+
+
+def _rejoin(env, rjcount=1):
+    """Rejoin type 1 accepté par le serveur ; retourne (DevAddr, clés côté dispositif)."""
+    from lsim.rejoin import Rejoin1, encode_1
+
+    def keys(dev_eui):
+        if dev_eui != DEV:
+            raise KeyError("dispositif inconnu")
+        return DeviceKeys(NWK, s_nwk_s_int_key=SNWK_INT, js_int_key=JSINT, app_key=APP)
+
+    server = JoinServer(env.store, NET_ID, keys, dl_settings=env.plan.dl_settings)
+    wire = encode_1(Rejoin1(join_eui=JOIN_EUI, dev_eui=DEV, rjcount1=rjcount), JSINT)
+    out = server.accept_rejoin(wire)
+    session = derive_session_keys_11(NWK, APP, out.join_nonce.to_bytes(3, "little"),
+                                     JOIN_EUI, rjcount.to_bytes(2, "little"))
+    return out.dev_addr, session
+
+
+def test_old_context_stays_valid_after_rejoin(env):
+    addr0, keys0 = env.join_device()
+    addr1, _ = _rejoin(env)
+    assert addr1 != addr0
+    with env.store.transaction() as tx:
+        assert tx.pending_by_addr(addr1) is not None
+    assert env.handle(up(keys0, addr0, 0, b"old", fport=1)).issue == "data_accepted"
+    assert env.session(addr0) is not None
+
+
+def test_first_valid_uplink_on_new_context_discards_old(env):
+    addr0, keys0 = env.join_device()
+    addr1, keys1 = _rejoin(env)
+    outcome = env.handle(up(keys1, addr1, 0, b"new", fport=1))
+    assert outcome.issue == "data_accepted"
+    assert outcome.delivery.payload == b"new"
+    assert env.session(addr0) is None                 # ancien contexte abandonné
+    assert env.session(addr1).fcnt_up == 0            # nouveau devient la session
+    assert env.handle(up(keys0, addr0, 1, b"old", fport=1)).issue == "data_unknown_addr"
+
+
+def test_uplink_with_wrong_keys_on_new_address_promotes_nothing(env):
+    addr0, keys0 = env.join_device()
+    addr1, _ = _rejoin(env)
+    assert env.handle(up(keys0, addr1, 0, b"x", fport=1)).issue == "data_mic_failed"
+    with env.store.transaction() as tx:
+        assert tx.pending_by_addr(addr1) is not None
+    assert env.session(addr0) is not None
+    assert env.handle(up(keys0, addr0, 0, b"ok", fport=1)).issue == "data_accepted"
+
+
+def test_second_rejoin_replaces_unconfirmed_pending(env):
+    addr0, keys0 = env.join_device()
+    addr1, keys1 = _rejoin(env, rjcount=1)
+    addr2, keys2 = _rejoin(env, rjcount=2)
+    assert env.handle(up(keys1, addr1, 0, b"a", fport=1)).issue == "data_unknown_addr"
+    assert env.handle(up(keys0, addr0, 0, b"b", fport=1)).issue == "data_accepted"
+    assert env.handle(up(keys2, addr2, 0, b"c", fport=1)).issue == "data_accepted"
+
+
+def test_join_request_discards_pending_and_old_context(env):
+    addr0, _ = env.join_device()
+    addr1, keys1 = _rejoin(env)
+    addr2, keys2 = env.join_device(dev_nonce=2)
+    assert env.session(addr0) is None
+    assert env.handle(up(keys1, addr1, 0, b"x", fport=1)).issue == "data_unknown_addr"
+    assert env.handle(up(keys2, addr2, 0, b"y", fport=1)).issue == "data_accepted"
+
+
+def test_pending_context_survives_restart(tmp_path):
+    env = Env(tmp_path)
+    addr0, keys0 = env.join_device()
+    addr1, keys1 = _rejoin(env)
+    reopened = DurableJoinStore(tmp_path / "join.sqlite", INTEGRITY, DATA_KEY)
+    with reopened.transaction() as tx:
+        assert tx.pending_by_addr(addr1) is not None
+        assert tx.session_by_addr(addr0) is not None
+    router = UplinkRouter(JoinUplinkHandler(env.join, env.plan),
+                          DataUplinkHandler(reopened, env.plan))
+    wire = up(keys1, addr1, 0, b"after restart", fport=1)
+    rxpk = Rxpk(tmst=TMST, freq_mhz=868.1, chan=0, rfch=0, crc_ok=True, datr="SF7BW125",
+                codr="4/5", rssi=-60, lsnr=7.0, payload=wire)
+    assert router.handle(rxpk).issue == "data_accepted"

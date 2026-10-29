@@ -14,8 +14,9 @@ répondre. `accept_rejoin` produit en plus le join-accept de rejoin, dans la mê
 RJcount à la place de DevNonce (dérivation des clés de session). Pour les types 0 et 2, le
 message ne porte pas le JoinEUI : il est fourni par `DeviceKeys.join_eui` (provisionné avec le
 dispositif). Le join-accept réinitialise RJcount0 côté serveur, comme côté dispositif.
-Limite : l'ancien contexte de sécurité est remplacé immédiatement ; §6.2.4 demande de le
-conserver jusqu'au premier uplink réussi dans le nouveau contexte (non modélisé).
+L'ancien contexte de sécurité reste valide : le nouveau est mis en attente, et devient la session
+au premier uplink valide qui l'utilise (1.1 §6.2.4). Un uplink encore sur l'ancien contexte
+n'y change rien. Une join-request complète remplace les deux.
 
 Les clés sont fournies par `key_provider` : ce module ne stocke aucune clé de racine.
 La session de données (clés de session 1.1 et compteurs) est créée dans la même transaction que
@@ -144,8 +145,8 @@ class JoinServer:
                            join_nonce=join_nonce, dev_addr=dev_addr, accept_wire=accept)
 
     def _issue_session(self, tx, dev_eui: bytes, join_eui: bytes, dev_nonce_slot: bytes,
-                       keys: DeviceKeys) -> tuple[int, int, bytes, JoinAccept]:
-        """JoinNonce, DevAddr, session de données ; retourne (JoinNonce, DevAddr, JoinNonce, accept)."""
+                       keys: DeviceKeys, *, pending: bool) -> tuple[int, int, bytes, JoinAccept]:
+        """JoinNonce, DevAddr et session. `pending` : rejoin, contexte mis en attente."""
         join_nonce = tx.next_value("join_nonce", dev_eui, _JOIN_NONCE_LIMIT)
         nwk_addr = tx.next_value("nwk_addr", b"", _NWK_ADDR_LIMIT)
         dev_addr = (self._nwk_id << 25) | nwk_addr
@@ -156,7 +157,8 @@ class JoinServer:
                             rx_delay=self._rx_delay)
         session = derive_session_keys_11(
             keys.nwk_key, keys.app_key or bytes(16), join_nonce_wire, join_eui, dev_nonce_slot)
-        tx.put_session(dev_eui, dev_addr, session, has_app_key=keys.app_key is not None)
+        store = tx.put_pending_session if pending else tx.put_session
+        store(dev_eui, dev_addr, session, has_app_key=keys.app_key is not None)
         return join_nonce, dev_addr, join_nonce_wire, accept
 
     def accept_rejoin(self, wire: bytes) -> RejoinOutcome:
@@ -199,7 +201,7 @@ class JoinServer:
                 rjcount = check.rjcount1
             slot = rjcount.to_bytes(2, "little")
             join_nonce, dev_addr, join_nonce_wire, accept = self._issue_session(
-                tx, dev_eui, join_eui, slot, keys)
+                tx, dev_eui, join_eui, slot, keys, pending=True)
             accept_wire = encode_rejoin_join_accept(
                 accept, keys.nwk_key, dev_eui, join_eui, rejoin_type, rjcount)
             if self._on_join is not None:

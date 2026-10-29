@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     dev_eui BLOB NOT NULL UNIQUE,
     sealed BLOB NOT NULL            -- clés et compteurs, chiffrés (lsim.sealed)
 );
+CREATE TABLE IF NOT EXISTS pending_sessions (
+    dev_eui BLOB PRIMARY KEY,
+    dev_addr INTEGER NOT NULL UNIQUE,
+    sealed BLOB NOT NULL            -- contexte du dernier rejoin, en attente d'un uplink valide
+);
 CREATE TABLE IF NOT EXISTS downlink_queue (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     dev_eui BLOB NOT NULL,
@@ -167,16 +172,67 @@ class Transaction:
 
     def put_session(self, dev_eui: bytes, dev_addr: int, keys: SessionKeys11,
                     has_app_key: bool) -> None:
-        """Remplace la session du dispositif (rejoin : l'ancienne disparaît dans la transaction)."""
+        """Remplace la session du dispositif (join-request : ancienne session et contexte en
+        attente disparaissent dans la transaction)."""
         sealer = self._need_sealer()
         self._conn.execute("DELETE FROM sessions WHERE dev_eui = ? OR dev_addr = ?",
                            (dev_eui, dev_addr))
+        self._conn.execute("DELETE FROM pending_sessions WHERE dev_eui = ?", (dev_eui,))
         plain = _encode_session(keys, has_app_key, fcnt_up=-1, nfcnt=0, afcnt=0, pending=None)
         self._conn.execute(
             "INSERT INTO sessions (dev_addr, dev_eui, sealed) VALUES (?, ?, ?)",
             (dev_addr, dev_eui, sealer.seal(plain, self._session_aad(dev_addr, dev_eui))))
         # Une file de la session précédente ne doit pas survivre au rejoin.
         self._conn.execute("DELETE FROM downlink_queue WHERE dev_eui = ?", (dev_eui,))
+
+    @staticmethod
+    def _pending_aad(dev_addr: int, dev_eui: bytes) -> bytes:
+        return b"lsim/pending/v1" + dev_addr.to_bytes(4, "big") + bytes(dev_eui)
+
+    def put_pending_session(self, dev_eui: bytes, dev_addr: int, keys: SessionKeys11,
+                            has_app_key: bool) -> None:
+        """Contexte issu d'un rejoin (1.1 §6.2.4) : l'ancienne session reste valide.
+
+        Le nouveau est mis en attente jusqu'au premier uplink valide qui l'utilise. Un rejoin
+        antérieur encore en attente est remplacé (l'ancienne session n'est pas touchée)."""
+        sealer = self._need_sealer()
+        self._conn.execute("DELETE FROM pending_sessions WHERE dev_eui = ?", (dev_eui,))
+        plain = _encode_session(keys, has_app_key, fcnt_up=-1, nfcnt=0, afcnt=0, pending=None)
+        self._conn.execute(
+            "INSERT INTO pending_sessions (dev_eui, dev_addr, sealed) VALUES (?, ?, ?)",
+            (dev_eui, dev_addr, sealer.seal(plain, self._pending_aad(dev_addr, dev_eui))))
+
+    def pending_by_addr(self, dev_addr: int) -> Optional[SessionRecord]:
+        sealer = self._need_sealer()
+        row = self._conn.execute(
+            "SELECT dev_eui, sealed FROM pending_sessions WHERE dev_addr = ?",
+            (dev_addr,)).fetchone()
+        if row is None:
+            return None
+        dev_eui, blob = bytes(row[0]), bytes(row[1])
+        plain = sealer.open(blob, self._pending_aad(dev_addr, dev_eui))
+        return _decode_session(dev_addr, dev_eui, plain)
+
+    def promote_pending(self, dev_eui: bytes) -> SessionRecord:
+        """Premier uplink valide du nouveau contexte : il remplace l'ancien, dans la transaction.
+
+        L'ancienne session et sa file de downlinks disparaissent ; le contexte en attente
+        devient la session. Lève ValueError s'il n'y a rien en attente."""
+        sealer = self._need_sealer()
+        row = self._conn.execute(
+            "SELECT dev_addr, sealed FROM pending_sessions WHERE dev_eui = ?",
+            (dev_eui,)).fetchone()
+        if row is None:
+            raise ValueError("aucun contexte en attente pour ce dispositif")
+        dev_addr, blob = int(row[0]), bytes(row[1])
+        plain = sealer.open(blob, self._pending_aad(dev_addr, dev_eui))
+        self._conn.execute("DELETE FROM sessions WHERE dev_eui = ?", (dev_eui,))
+        self._conn.execute("DELETE FROM pending_sessions WHERE dev_eui = ?", (dev_eui,))
+        self._conn.execute(
+            "INSERT INTO sessions (dev_addr, dev_eui, sealed) VALUES (?, ?, ?)",
+            (dev_addr, dev_eui, sealer.seal(plain, self._session_aad(dev_addr, dev_eui))))
+        self._conn.execute("DELETE FROM downlink_queue WHERE dev_eui = ?", (dev_eui,))
+        return _decode_session(dev_addr, dev_eui, plain)
 
     def session_by_addr(self, dev_addr: int) -> Optional[SessionRecord]:
         return self._session("WHERE dev_addr = ?", dev_addr)

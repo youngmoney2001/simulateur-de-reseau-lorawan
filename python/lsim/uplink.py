@@ -165,8 +165,12 @@ class DataUplinkHandler:
     def _process(self, tx: Transaction, rxpk: Rxpk, wire: bytes, dev_addr: int, ack: bool,
                  fcnt16: int, tx_dr: int, tx_ch: int, rx1: tuple[float, str]) -> Outcome:
         rec = tx.session_by_addr(dev_addr)
+        fresh = False   # contexte issu d'un rejoin, en attente de son premier uplink valide
         if rec is None:
-            raise _Reject("data_unknown_addr")
+            rec = tx.pending_by_addr(dev_addr)
+            if rec is None:
+                raise _Reject("data_unknown_addr")
+            fresh = True
         cand, retrans = reconstruct_fcnt32(rec.fcnt_up, fcnt16)
         if cand > _COUNTER32_LIMIT:
             raise _Reject("data_counter_exhausted")
@@ -176,6 +180,10 @@ class DataUplinkHandler:
                 fcnt32=cand, conf_fcnt=conf, tx_dr=tx_dr, tx_ch=tx_ch))
         except (StatusError, ValueError):
             raise _Reject("data_replay" if retrans else "data_mic_failed") from None
+        if fresh:
+            # Premier uplink valide du nouveau contexte : l'ancien est abandonné (1.1 §6.2.4).
+            # Dans la transaction : un rejet ultérieur annule aussi cette promotion.
+            rec = tx.promote_pending(rec.dev_eui)
 
         if retrans:
             if not frame.confirmed:
