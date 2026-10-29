@@ -149,7 +149,7 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   (uplink et descente additionnés). Absents hors mesh. Montant et descente partagent une passe mesh
   (temps d'antenne, suppression, attente). Repli RX2 : une descente que la passerelle ne peut servir
   en RX1 tente RX2 (fin + 2 s, SF `rx2_sf` du plan) ; la fréquence RX2 n'est pas modélisée. Limite :
-  une trame mesh est bornée à 255 o (charge descendante > 227 o refusée). Les compteurs `gateways` (reçues, collisions d'accès) sont
+  une trame mesh est bornée à 255 o : charge descendante > 227 o ou charge montante relayée > 228 o refusée à la création (422). Les compteurs `gateways` (reçues, collisions d'accès) sont
   ceux du décodage à l'accès.
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
   dans la v1 de départ (`bfde0e9`), `gateway` était **obligatoire**. Commit `2fd310c` l'a rendu optionnel

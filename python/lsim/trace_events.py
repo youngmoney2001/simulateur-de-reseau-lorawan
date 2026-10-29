@@ -44,6 +44,7 @@ from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
+from lsim.mesh import MESH_ENVELOPE_DOWN_BYTES, MESH_ENVELOPE_UP_BYTES
 from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
@@ -461,6 +462,34 @@ _MULTI_DOWNLINK_OUTCOME = {0: "delivered", 1: "lost_sensitivity", 2: "gateway_bu
 
 # Retour mesh : bornes de la boucle à point fixe (ordonnancement des descentes ↔ trace).
 MAX_MESH_RETURN_ITERATIONS = 64
+# Une trame mesh (enveloppe comprise) fait 255 o au plus (`lsim.mesh.forward_frames`).
+MAX_MESH_UPLINK_PAYLOAD_BYTES = 255 - MESH_ENVELOPE_UP_BYTES - DATA_FRAME_OVERHEAD_BYTES  # 228
+MAX_MESH_DOWNLINK_PAYLOAD_BYTES = 255 - MESH_ENVELOPE_DOWN_BYTES - DATA_FRAME_OVERHEAD_BYTES  # 227
+
+
+def mesh_payload_problem(scenario: Scenario, options: ProtocolOptions) -> Optional[tuple[str, str]]:
+    """(champ, message) si une charge ne tient pas dans une trame mesh, sinon None.
+
+    Refus anticipé : sans cela, la passe mesh échoue à l'exécution. Montant : seulement si un
+    relais achemine (taille « device »). Descente : charge des downlinks de données.
+    """
+    cfg = scenario.model.mesh
+    if cfg is None:
+        return None
+    if options.downlink_every > 0 and options.downlink_payload_bytes > MAX_MESH_DOWNLINK_PAYLOAD_BYTES:
+        return ("protocol.downlink_payload_bytes",
+                f"charge de descente de {options.downlink_payload_bytes} o : une trame mesh "
+                f"est bornée à 255 o, enveloppe de {MESH_ENVELOPE_DOWN_BYTES} o et en-tête "
+                f"comprises (maximum {MAX_MESH_DOWNLINK_PAYLOAD_BYTES} o sur mesh)")
+    relays = any(g.mesh and g.name != cfg.border for g in scenario.gateway_models())
+    if relays and cfg.frame_size == "device":
+        biggest = max((g.payload_bytes for g in scenario.model.groups), default=0)
+        if biggest > MAX_MESH_UPLINK_PAYLOAD_BYTES:
+            return ("scenario",
+                    f"charge montante de {biggest} o : une trame relayée est bornée à 255 o, "
+                    f"enveloppe de {MESH_ENVELOPE_UP_BYTES} o comprise (maximum "
+                    f"{MAX_MESH_UPLINK_PAYLOAD_BYTES} o sur mesh)")
+    return None
 # Départ au plus tôt d'une descente qui n'est pas acheminée (sentinelle natif : jamais).
 MESH_NEVER_NS = (1 << 63) - 1
 
@@ -636,6 +665,9 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
     Les totaux, les compteurs par dispositif et la charge par passerelle viennent du même appel natif
     (`simulate_multi_downlinks`) que les événements : ils concordent par construction.
     """
+    problem = mesh_payload_problem(scenario, options)
+    if problem is not None:
+        raise ValueError(problem[1])
     devices, _group_of, _indices = scenario.deploy()
     if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")

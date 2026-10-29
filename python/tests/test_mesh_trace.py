@@ -211,3 +211,24 @@ def test_uplinks_and_downlinks_share_one_mesh_pass(small, monkeypatch):
     frame_ids = {h.frame_id for h in mp.mesh_result.hops}
     assert any(f < base for f in frame_ids) and any(f >= base for f in frame_ids)
     assert all(h.frame_id < base for h in mp.uplink_hops)
+
+
+def test_mesh_payload_limits_are_exact_at_the_255_byte_frame(small):
+    """227 o de descente et 228 o de montante relayée : exécutés. Au-delà : refusés avant la passe."""
+    from lsim.scenario import Scenario
+    from lsim.trace_events import MAX_MESH_DOWNLINK_PAYLOAD_BYTES, MAX_MESH_UPLINK_PAYLOAD_BYTES
+
+    assert (MAX_MESH_DOWNLINK_PAYLOAD_BYTES, MAX_MESH_UPLINK_PAYLOAD_BYTES) == (227, 228)
+    ok = build_multi_trace(small, ProtocolOptions(confirmed_uplinks=True, downlink_every=1,
+                                                  downlink_payload_bytes=227))
+    assert ok.mesh_loads is not None
+    with pytest.raises(ValueError, match="descente"):
+        build_multi_trace(small, ProtocolOptions(downlink_every=1, downlink_payload_bytes=228))
+    def with_payload(n):
+        groups = [g.model_copy(update={"payload_bytes": n}) for g in small.model.groups]
+        return Scenario(small.model.model_copy(update={"groups": groups}))
+
+    build_multi_trace(with_payload(228), ProtocolOptions())
+    up_bad = with_payload(229)
+    with pytest.raises(ValueError, match="montante"):
+        build_multi_trace(up_bad, ProtocolOptions())

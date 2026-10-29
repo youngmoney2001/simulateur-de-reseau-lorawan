@@ -11,7 +11,7 @@
 - Point fixe : sur (départs au plus tôt des descentes, délai frontière de chaque uplink), par message. Cap inchangé à 64.
 - Natif : `lsim_mesh_forward_routed_log` (destination par trame) ; `lsim_mesh_forward[_log]` reste un wrapper aux résultats identiques.
 - Enveloppe mesh : 14 o (montant) et 15 o (descente) confirmés par la documentation ChirpStack (MHDR, métadonnées, relay ID, MIC). Non vérifiés sur un relais physique. La taille de trame relayée par défaut (32 o) reste une hypothèse.
-- Limite trouvée : une trame mesh est bornée à 255 o. Une descente de plus de 227 o (PHY 13 + charge + enveloppe 15) est refusée à l'exécution (`ValueError`) ; à refuser plus tôt côté API (non fait).
+- Limite trouvée : une trame mesh est bornée à 255 o. Une descente de plus de 227 o (PHY 13 + charge + enveloppe 15) ou une charge montante relayée de plus de 228 o (13 + charge + enveloppe 14) est refusée : 422 `validation_error` à la création d'un run (champ `protocol.downlink_payload_bytes` ou `scenario`), et `ValueError` dans `build_multi_trace` pour les appelants hors API. Montant contrôlé seulement si un relais achemine et si `frame_size` vaut `device`.
 - Tests : `python/tests/test_rx2_fallback.py` (repli avec `dl_ready_ns`, désactivation, validation du SF, SF issu du plan), `test_mesh_trace.py` (passe jointe, descente perdue sans airtime, départ non avant le premier saut). Suite : 1359 passés, 1 ignoré.
 
 ### Descentes et charge par relais sur mesh

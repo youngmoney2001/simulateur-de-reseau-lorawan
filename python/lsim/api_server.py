@@ -58,6 +58,7 @@ from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
 from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
+    mesh_payload_problem,
 )
 
 log = logging.getLogger("lsim.api")
@@ -471,7 +472,11 @@ class RunService:
         except ValidationError as exc:
             raise _validation_error(exc) from None
         scenario = _scenario_for(req.scenario, req.terrain_id, self.terrains)
-        job = _Job(scenario=scenario, options=ProtocolOptions(**req.protocol.model_dump()),
+        options = ProtocolOptions(**req.protocol.model_dump())
+        problem = mesh_payload_problem(scenario, options)  # refusé ici, pas à l'exécution
+        if problem is not None:
+            raise ApiError(422, "validation_error", problem[1], problem[0])
+        job = _Job(scenario=scenario, options=options,
                    energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
         with self._lock:
             owned = self._store.owner_runs(owner)

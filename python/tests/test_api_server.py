@@ -824,3 +824,29 @@ def test_serve_refuses_plain_http_outside_loopback(tmp_path):
     with pytest.raises(SystemExit):
         srv.main(["serve", "--tokens", str(tokens), "--runs-db", ":memory:",
                   "--host", "0.0.0.0", "--port", "0"])
+
+
+def test_mesh_payload_beyond_the_255_byte_frame_is_refused_at_creation(api):
+    """Charge de descente au-delà de 227 o (trame mesh 255 o, enveloppe comprise) : 422 à la
+    création, sans run en file. Juste en dessous (227 o) : accepté."""
+    d = _mesh_scenario()
+    status, body = api.call("POST", "/api/v1/runs",
+                            {"scenario": d, "protocol": {"downlink_every": 1,
+                                                         "downlink_payload_bytes": 228}})
+    assert status == 422
+    assert body["code"] == "validation_error" and body["field"] == "protocol.downlink_payload_bytes"
+    status, created = api.call("POST", "/api/v1/runs",
+                               {"scenario": d, "protocol": {"downlink_every": 1,
+                                                            "downlink_payload_bytes": 227}})
+    assert status == 202
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+
+
+def test_mesh_uplink_payload_beyond_the_frame_is_refused_when_a_relay_forwards(api):
+    d = _mesh_scenario()
+    d["groups"][0]["payload_bytes"] = 229  # 13 + 229 + 14 = 256 o relayé
+    status, body = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 422 and body["code"] == "validation_error"
+    d["groups"][0]["payload_bytes"] = 228
+    status, _ = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 202
