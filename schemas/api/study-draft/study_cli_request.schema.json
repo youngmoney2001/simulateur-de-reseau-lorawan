@@ -3,6 +3,7 @@
   "properties": {
     "command": {
       "maxLength": 256,
+      "pattern": "^[^\\r\\n\\x00]*$",
       "title": "Command",
       "type": "string"
     },

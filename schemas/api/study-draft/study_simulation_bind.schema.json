@@ -1,0 +1,16 @@
+{
+  "additionalProperties": false,
+  "description": "Liaison d'une simulation terminée à la session. Un équipement reçoit les compteurs de la\npasserelle de même nom dans le run ; les autres n'en reçoivent pas.",
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Run Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "SimulationBind",
+  "type": "object"
+}

@@ -388,10 +388,13 @@ def _show_interfaces(sess: Session, args: list) -> str:
     ])
 
 
-def _no_simulation(key: str) -> Callable:
+def _from_simulation(key: str) -> Callable:
+    """`show` sur les résultats liés à l'équipement (`sess.simulation`, rempli par la session)."""
+
     def run(sess: Session, args: list) -> str:
         if sess.simulation is None or key not in sess.simulation:
-            return "% Aucune simulation pour cet équipement : lancez une simulation."
+            return ("% Aucun résultat pour cet équipement : liez une simulation terminée à la "
+                    "session (équipement de même nom qu'une passerelle du run).")
         return str(sess.simulation[key])
 
     return run
@@ -414,11 +417,8 @@ COMMANDS: tuple[Command, ...] = (
     Command(P, ("show", "startup-config"), _show_startup),
     Command(P, ("show", "version"), _show_version),
     Command(P, ("show", "interfaces"), _show_interfaces),
-    Command(P, ("show", "mesh", "neighbors"), _no_simulation("mesh_neighbors")),
-    Command(P, ("show", "mesh", "routes"), _no_simulation("mesh_routes")),
-    Command(P, ("show", "lorawan", "devices"), _no_simulation("devices")),
-    Command(P, ("show", "lorawan", "sessions"), _no_simulation("sessions")),
-    Command(P, ("show", "lorawan", "counters"), _no_simulation("counters")),
+    Command(P, ("show", "lorawan", "counters"), _from_simulation("lorawan_counters")),
+    Command(P, ("show", "mesh", "counters"), _from_simulation("mesh_counters")),
     Command(P, ("copy", "running-config", "startup-config"), _copy),
     Command(P, ("reload",), _reload),
     Command(P, ("write", "erase"), _write_erase),
@@ -480,6 +480,37 @@ def _match(cmd: Command, toks: list[tuple[int, str]]):
     if i < len(toks):
         return "extra", i, None, None
     return "ok", i, values, None
+
+
+def new_session(node_id: str) -> Session:
+    """Session d'équipement neuve : nom d'hôte = identifiant du nœud, configuration par défaut."""
+    return Session(node_id=node_id, config=GatewayConfig(hostname=node_id),
+                   startup=GatewayConfig(hostname=node_id))
+
+
+def counters_text(report: dict) -> dict[str, str]:
+    """Compteurs d'une passerelle (`GatewayReportOut` du résumé de run) en texte de `show`."""
+    observation = report["observation_ns"]
+    utilization = (100.0 * report["busy_ns"] / observation) if observation else 0.0
+    lorawan = "\n".join([
+        f"received {report['received']}",
+        f"lost sensitivity {report['lost_sensitivity']}",
+        f"lost collision {report['lost_collision']}",
+        f"lost gateway-busy {report['lost_gateway_busy']}",
+        f"audible frames {report['audible_frames']}",
+        f"busy {report['busy_ns'] / 1e9:.3f} s (utilisation {utilization:.2f} %, "
+        f"pic simultané {report['peak_concurrent']})",
+    ])
+    out = {"lorawan_counters": lorawan}
+    if report.get("mesh_transmissions") is not None:
+        out["mesh_counters"] = "\n".join([
+            f"transmissions {report['mesh_transmissions']}",
+            f"busy {report['mesh_busy_ns'] / 1e9:.3f} s",
+            f"lost collision {report['mesh_lost_collision']}",
+            f"lost half-duplex {report['mesh_lost_half_duplex']}",
+            f"suppressed {report['mesh_suppressed']}",
+        ])
+    return out
 
 
 def execute(sess: Session, line: str) -> CliResult:

@@ -1,7 +1,8 @@
 """Contrat du panneau d'étude (brouillon, `docs/STUDY_PANEL_SPEC.md` §7) : formes des données.
 
-Brouillon : aucune route n'est encore servie. Les schémas sont dans `schemas/api/study-draft/`,
-séparés de `schemas/api/v1` tant que le serveur ne les implémente pas. Règles de sécurité portées
+Servi pour les sessions, la CLI, la topologie et la liaison à une simulation (`api_server`) ; les
+exercices ne sont pas encore servis. Les schémas sont dans `schemas/api/study-draft/`, séparés de
+`schemas/api/v1` tant que la version n'est pas figée. Règles de sécurité portées
 par les types :
 
 - une clé ou un secret ne s'exprime que par la valeur `"******"` (aucune clé réelle en sortie) ;
@@ -33,8 +34,18 @@ Mode = Literal["user", "privileged", "config", "config-if"]
 NodeKind = Literal["sensor", "relay", "border", "server"]
 
 
+class Node(_Strict):
+    id: str = Field(pattern=ID_PATTERN)
+    kind: NodeKind
+    name: str = Field(min_length=1, max_length=64)
+    x_m: float = Field(ge=-1_000_000, le=1_000_000)
+    y_m: float = Field(ge=-1_000_000, le=1_000_000)
+
+
 class SessionCreate(_Strict):
     exercise_id: Optional[str] = Field(default=None, pattern=EXERCISE_PATTERN)
+    # Équipements de la topologie. Le CLI n'existe que pour `relay` et `border` (§4).
+    nodes: list[Node] = Field(default_factory=list, max_length=MAX_NODES)
 
 
 class SessionOut(_Strict):
@@ -44,7 +55,7 @@ class SessionOut(_Strict):
 
 class CliRequest(_Strict):
     node_id: str = Field(pattern=ID_PATTERN)
-    command: str = Field(max_length=256)  # une ligne ; vide = rien à faire
+    command: str = Field(max_length=256, pattern=r"^[^\r\n\x00]*$")  # une ligne ; vide = rien
 
 
 class CliError(_Strict):
@@ -60,14 +71,6 @@ class CliResponse(_Strict):
     error: Optional[CliError] = None
 
 
-class Node(_Strict):
-    id: str = Field(pattern=ID_PATTERN)
-    kind: NodeKind
-    name: str = Field(min_length=1, max_length=64)
-    x_m: float = Field(ge=-1_000_000, le=1_000_000)
-    y_m: float = Field(ge=-1_000_000, le=1_000_000)
-
-
 class NodeState(_Strict):
     """État résumé d'un équipement : jamais de clé réelle (`keys` ne vaut que « ****** »)."""
 
@@ -76,6 +79,20 @@ class NodeState(_Strict):
     region: Optional[str] = Field(default=None, max_length=16)
     configured: bool
     keys: Optional[Literal["******"]] = None
+
+
+class SimulationBind(_Strict):
+    """Liaison d'une simulation terminée à la session. Un équipement reçoit les compteurs de la
+    passerelle de même nom dans le run ; les autres n'en reçoivent pas."""
+
+    run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+
+
+class SimulationBound(_Strict):
+    session_id: str = Field(pattern=SESSION_PATTERN)
+    run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    linked: list[str] = Field(max_length=MAX_NODES)     # identifiants d'équipements
+    unlinked: list[str] = Field(max_length=MAX_NODES)
 
 
 class SessionTopology(_Strict):
@@ -129,6 +146,8 @@ _MODELS: dict[str, type[BaseModel]] = {
     "study_exercise_list": ExerciseList,
     "study_submit_request": SubmitRequest,
     "study_submit_result": SubmitResult,
+    "study_simulation_bind": SimulationBind,
+    "study_simulation_bound": SimulationBound,
 }
 
 

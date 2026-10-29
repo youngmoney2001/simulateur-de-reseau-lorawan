@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "linked": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "title": "Linked",
+      "type": "array"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "unlinked": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "title": "Unlinked",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "run_id",
+    "linked",
+    "unlinked"
+  ],
+  "title": "SimulationBound",
+  "type": "object"
+}

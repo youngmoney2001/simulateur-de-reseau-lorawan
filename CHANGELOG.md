@@ -3,6 +3,12 @@
 ## 0.1.0 (non publiée)
 
 
+### Panneau d'étude : sessions, CLI et liaison aux résultats (servis)
+- Routes : `POST /api/v1/sessions`, `GET /api/v1/sessions/{id}/topology`, `POST /api/v1/sessions/{id}/cli`, `POST /api/v1/sessions/{id}/simulation`. Propriétaire filtré (404 pour un autre compte), bornes et expiration en mémoire.
+- `show lorawan counters` et `show mesh counters` affichent les compteurs réels de la passerelle de même nom dans le run lié. Les `show` non alimentés par le moteur (voisins, routes, appareils) sont retirés de la grammaire.
+- Exercices : **non servis** (catalogue, soumission, barème). `exercise_id` est refusé en 422.
+- Tests : `python/tests/test_study_api.py` (20). Suite Python : 1412 passés, 1 ignoré.
+
 ### CLI d'équipement du panneau d'étude (phase 4, brouillon)
 - `python/lsim/study_cli.py` : grammaire IOS côté serveur (modes utilisateur, privilégié, configuration, interface), abréviations par préfixe, marqueur `^` à la colonne fautive, `?` et Tabulation, `show running-config` n'affichant que les paramètres positionnés (aucun secret n'existe encore ; masquage par construction, `******`).
 - Commandes de vérification (`show mesh neighbors`, `show lorawan counters`, etc.) répondent « aucune simulation » tant qu'aucun résultat n'existe.

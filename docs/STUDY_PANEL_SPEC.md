@@ -161,14 +161,30 @@ Formes des données : `python/lsim/study_contract.py`, schémas dans `schemas/ap
 - Score : somme des critères réussis, moins les indices (borné à 0).
 - Clés : seule la valeur `"******"` est exprimable en sortie.
 
-Points ouverts (à trancher avant d'implémenter) : route de demande d'indice (les indices sont
-comptés dans la note, mais aucune route ne les révèle) ; barème d'un indice (points retirés) ;
-durée de vie et purge des sessions ; journalisation des tentatives (sans secrets).
+**Servi (`python/lsim/study_session.py`, routes dans `api_server`)** : création de session,
+topologie, CLI, liaison à une simulation terminée. Décisions prises à l'implémentation :
+
+- Sessions **en mémoire** : perdues au redémarrage (choix de l'auteur à confirmer). Expiration après
+  4 h sans activité ; 8 sessions par compte, 256 au total (429 `limit_exceeded` au-delà).
+- Un équipement (`relay` ou `border`) reçoit les compteurs de la passerelle **de même nom** dans le
+  run lié. Les capteurs et serveurs n'ont pas de CLI (422) et ne sont pas liés.
+- `show lorawan counters` et `show mesh counters` lisent le résumé du run (`GatewayReportOut`).
+  Les autres `show` simulés (voisins mesh, routes, appareils) ne sont **pas** dans la grammaire
+  tant que le moteur ne les expose pas : une commande inconnue donne une erreur d'entrée.
+- `exercise_id` est refusé (422) : aucun catalogue d'exercices n'existe encore.
+- Ligne de commande : une seule ligne (422 sinon). `exit` au niveau utilisateur redémarre la
+  console en mode utilisateur (message dans la sortie).
+
+Restent ouverts : catalogue et soumission d'exercices (routes `exercises`, barème, indices) ;
+route de demande d'indice (les indices sont comptés dans la note, mais aucune route ne les
+révèle) ; barème d'un indice (points retirés) ; journalisation des tentatives (sans secrets).
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
-| POST | `/api/v1/sessions/{id}/cli` | Exécute une commande dans un mode ; réponse : sortie et nouveau mode |
-| GET | `/api/v1/sessions/{id}/topology` | État de la topologie et des configurations (secrets masqués) |
+| POST | `/api/v1/sessions` | Crée une session avec ses équipements (`nodes`) — servi |
+| POST | `/api/v1/sessions/{id}/simulation` | Lie une simulation terminée (`run_id`) — servi |
+| POST | `/api/v1/sessions/{id}/cli` | Exécute une commande dans un mode ; réponse : sortie et nouveau mode — servi |
+| GET | `/api/v1/sessions/{id}/topology` | État de la topologie et des configurations (secrets masqués) — servi |
 | GET | `/api/v1/exercises` | Catalogue des exercices (sans solution ni critères détaillés) |
 | POST | `/api/v1/exercises/{id}/submit` | Dépose la configuration de l'étudiant ; le serveur note et renvoie le détail des critères |
 

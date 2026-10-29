@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlsplit
 
 from pydantic import ValidationError
@@ -54,6 +54,8 @@ from lsim.api_contract import (
     ValidateResponse, list_regions,
 )
 from lsim.energy_report import device_energies_protocol
+from lsim.study_contract import CliRequest, SessionCreate, SimulationBind
+from lsim.study_session import StudyError, StudyService
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
 from lsim.trace_events import (
@@ -705,10 +707,12 @@ class ApiServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
-                 tls_context: Optional[ssl.SSLContext] = None) -> None:
+                 tls_context: Optional[ssl.SSLContext] = None,
+                 study: Optional[StudyService] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
+        self.study = study if study is not None else StudyService()
         self._tls = tls_context
 
     def get_request(self):
@@ -833,6 +837,26 @@ class _Handler(BaseHTTPRequestHandler):
             return 200, self._validate()
         if method == "POST" and rest == "runs":
             return 202, svc.create(owner, self._json_body())
+        study: StudyService = self.server.study  # type: ignore[attr-defined]
+        if method == "POST" and rest == "sessions":
+            req = self._parse_body(SessionCreate)
+            created = self._study(lambda: study.create(owner, req))
+            return 201, created.model_dump(exclude_none=True)
+
+        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation)", rest)
+        if m is not None:
+            sid, action = m.group(1), m.group(2)
+            if method == "GET" and action == "topology":
+                return 200, self._study(lambda: study.topology(owner, sid)).model_dump()
+            if method == "POST" and action == "cli":
+                req = self._parse_body(CliRequest)
+                return 200, self._study(lambda: study.cli(owner, sid, req)).model_dump(
+                    exclude_none=True)
+            if method == "POST" and action == "simulation":
+                req = self._parse_body(SimulationBind)
+                summary = svc.summary(owner, req.run_id)  # propriétaire vérifié ; 409 si non fini
+                return 200, self._study(
+                    lambda: study.bind_run(owner, sid, req, summary)).model_dump()
 
         m = re.fullmatch(r"runs/([^/]+)(?:/(summary|devices|events))?", rest)
         if m is None:
@@ -851,6 +875,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return 200, svc.devices_page(owner, run_id, cursor, limit)
             return 200, svc.events_page(owner, run_id, cursor, limit)
         raise ApiError(404, "not_found", "route inconnue")
+
+    def _parse_body(self, model: type) -> Any:
+        try:
+            return model.model_validate(self._json_body())  # type: ignore[attr-defined]
+        except ValidationError as exc:
+            raise _validation_error(exc) from None
+
+    @staticmethod
+    def _study(call: Callable[[], Any]) -> Any:
+        try:
+            return call()
+        except StudyError as exc:
+            raise ApiError(exc.status, exc.code, exc.message, exc.field) from None
 
     def _validate(self) -> dict[str, Any]:
         try:
@@ -893,7 +930,8 @@ def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":mem
     service = RunService(RunStore(runs_db), max_queue=max_queue,
                          limiter=RateLimiter(per_minute=rate_per_min),
                          terrains=TerrainCatalog(terrain_dir))
-    return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls)
+    return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
+                     study=StudyService())
 
 
 def main(argv: Optional[list[str]] = None) -> int:

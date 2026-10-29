@@ -144,12 +144,35 @@ def test_copy_reload_and_write_erase_follow_the_config_lifecycle():
     assert s.config.lora.region == "AS923" and s.mode == "user"
 
 
-def test_show_mesh_without_simulation_says_so_and_uses_results_when_present():
+def test_show_counters_say_so_without_a_linked_result_and_use_it_when_present():
     s = Session("gw1")
     run(s, "en")
-    assert "Aucune simulation" in run(s, "show mesh neighbors").output
-    s.simulation = {"mesh_neighbors": "relais-1 (-97 dBm)"}
-    assert run(s, "show mesh neighbors").output == "relais-1 (-97 dBm)"
+    assert "Aucun résultat" in run(s, "show lorawan counters").output
+    s.simulation = {"lorawan_counters": "received 3"}
+    assert run(s, "show lorawan counters").output == "received 3"
+    assert "Aucun résultat" in run(s, "show mesh counters").output
+
+
+def test_unimplemented_show_commands_are_not_in_the_grammar():
+    s = Session("gw1")
+    run(s, "en")
+    for line in ("show mesh neighbors", "show lorawan devices", "show mesh routes"):
+        assert run(s, line).error is not None
+
+
+def test_counters_text_matches_the_report_fields():
+    from lsim.study_cli import counters_text
+    report = {"received": 5, "lost_sensitivity": 1, "lost_collision": 2, "lost_gateway_busy": 0,
+              "audible_frames": 8, "busy_ns": 2_000_000_000, "peak_concurrent": 2,
+              "observation_ns": 10_000_000_000}
+    out = counters_text(report)
+    assert set(out) == {"lorawan_counters"}
+    assert "received 5" in out["lorawan_counters"]
+    assert "utilisation 20.00 %" in out["lorawan_counters"]
+    mesh = dict(report, mesh_transmissions=4, mesh_busy_ns=500_000_000, mesh_lost_collision=1,
+                mesh_lost_half_duplex=0, mesh_suppressed=2)
+    out = counters_text(mesh)
+    assert "transmissions 4" in out["mesh_counters"] and "suppressed 2" in out["mesh_counters"]
 
 
 def test_question_mark_lists_the_next_words_and_arguments():
