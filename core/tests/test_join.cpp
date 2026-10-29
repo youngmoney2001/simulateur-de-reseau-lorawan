@@ -27,6 +27,7 @@ bool same(const void* a, const void* b, std::size_t n) {
 }
 
 // Entrées du vecteur TTN « Join-request accept/no CFList » (ordre de transmission).
+const Bytes kDevEuiRejoin = {0xAA, 0xBB, 0xCC, 0xDD, 0x01, 0x02, 0x03, 0x04};
 const Bytes kJoinEui = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
 const Nonce2 kDevNonce = {0x01, 0x02};
 const std::uint8_t kLegacyPayload[13] = {0x20, 0x03, 0x02, 0x01, 0x03, 0x02, 0x01,
@@ -286,6 +287,52 @@ void test_fuzz_join_decoders() {
 
 }  // namespace
 
+// Join-accept après rejoin (1.1 §6.2.4.4) : aller-retour, JoinReqType et RJcount liés au MIC.
+void test_rejoin_join_accept_roundtrip_and_binding() {
+    JoinAcceptFields f;
+    f.join_nonce = {0x01, 0x02, 0x03};
+    f.net_id = {0x13, 0x00, 0x00};
+    f.dev_addr = 0x26011234;
+    f.dl_settings = 0x80;
+    f.rx_delay = 1;
+    std::uint8_t wire[33] = {};
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(encode_rejoin_join_accept(f, key01(), kDevEuiRejoin, kJoinEui, 1,
+                                                        0x0102, wire, sizeof wire, n)),
+             static_cast<int>(JoinStatus::Ok));
+    CHECK_EQ(n, kJoinAcceptSizeNoCfl);
+    CHECK_EQ(static_cast<int>(wire[0]), static_cast<int>(kMhdrJoinAccept));
+
+    JoinAcceptFields g;
+    CHECK_EQ(static_cast<int>(decode_rejoin_join_accept(wire, n, key01(), kDevEuiRejoin, kJoinEui,
+                                                        1, 0x0102, g)),
+             static_cast<int>(JoinStatus::Ok));
+    CHECK_TRUE(g.join_nonce == f.join_nonce && g.net_id == f.net_id && g.dev_addr == f.dev_addr);
+    CHECK_EQ(static_cast<int>(g.dl_settings), 0x80);
+
+    // Mauvais JoinReqType, mauvais RJcount, ou join-accept de join-request : MIC faux.
+    CHECK_EQ(static_cast<int>(decode_rejoin_join_accept(wire, n, key01(), kDevEuiRejoin, kJoinEui,
+                                                        0, 0x0102, g)),
+             static_cast<int>(JoinStatus::MicMismatch));
+    CHECK_EQ(static_cast<int>(decode_rejoin_join_accept(wire, n, key01(), kDevEuiRejoin, kJoinEui,
+                                                        1, 0x0103, g)),
+             static_cast<int>(JoinStatus::MicMismatch));
+    CHECK_TRUE(g.dev_addr == 0);  // rien n'est exposé
+    CHECK_EQ(static_cast<int>(decode_join_accept(wire, n, key01(), kDevEuiRejoin, kJoinEui,
+                                                 Nonce2{0x02, 0x01}, g)),
+             static_cast<int>(JoinStatus::MicMismatch));
+
+    // OptNeg obligatoire pour un rejoin.
+    f.dl_settings = 0x00;
+    CHECK_EQ(static_cast<int>(encode_rejoin_join_accept(f, key01(), kDevEuiRejoin, kJoinEui, 0,
+                                                        1, wire, sizeof wire, n)),
+             static_cast<int>(JoinStatus::FieldOutOfRange));
+    f.dl_settings = 0x80;
+    CHECK_EQ(static_cast<int>(encode_rejoin_join_accept(f, key01(), kDevEuiRejoin, kJoinEui, 3,
+                                                        1, wire, sizeof wire, n)),
+             static_cast<int>(JoinStatus::FieldOutOfRange));
+}
+
 void run_join_tests() {
     test_join_request_mic_ttn_vector();
     test_join_request_roundtrip_and_tamper();
@@ -297,4 +344,5 @@ void run_join_tests() {
     test_encode_buffer_too_small();
     test_end_to_end_join_then_uplink();
     test_fuzz_join_decoders();
+    test_rejoin_join_accept_roundtrip_and_binding();
 }

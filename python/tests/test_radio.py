@@ -15,7 +15,7 @@ from lsim.radio import (
 
 @pytest.mark.parametrize(
     "sf, expected",
-    [(7, -123.0), (8, -126.0), (9, -129.0), (10, -132.0), (11, -134.5), (12, -137.0)],
+    [(7, -123.0), (8, -126.0), (9, -129.0), (10, -132.0), (11, -133.0), (12, -136.0)],
 )
 def test_sensitivity_125khz_table(sf, expected):
     assert receiver_sensitivity_dbm(sf, 125_000) == pytest.approx(expected)
@@ -26,11 +26,9 @@ def test_sensitivity_decreases_with_sf():
     assert values == sorted(values, reverse=True)
 
 
-@pytest.mark.parametrize("bw", [250_000, 500_000])
-def test_uncalibrated_bandwidth_is_refused_explicitly(bw):
-    with pytest.raises(StatusError) as err:
-        receiver_sensitivity_dbm(7, bw)
-    assert err.value.code == 7  # UncalibratedSensitivity
+@pytest.mark.parametrize("bw,expected", [(250_000, -120.0), (500_000, -116.0)])
+def test_sensitivity_250_500_datasheet_values(bw, expected):
+    assert receiver_sensitivity_dbm(7, bw) == pytest.approx(expected)
 
 
 def test_free_space_reference_values():
@@ -51,7 +49,7 @@ def test_log_distance_equals_free_space_for_n2():
 def test_mapl_and_range_roundtrip():
     budget = LinkBudget(tx_power_dbm=14.0)
     mapl = budget.max_allowable_path_loss_db(receiver_sensitivity_dbm(12))
-    assert mapl == pytest.approx(151.0)
+    assert mapl == pytest.approx(150.0)  # 14 dBm - (-136 dBm), SF12 125 kHz
     m = LogDistanceModel(exponent=2.7)
     d = m.range_m(mapl)
     assert m.path_loss_db(d) == pytest.approx(mapl, abs=1e-6)

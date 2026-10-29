@@ -13,7 +13,7 @@ def reference_airtime_s(cfg: RadioConfig, pl: int) -> float:
     """Implémentation indépendante, en flottants, pour la différence."""
     tsym = (2**cfg.spreading_factor) / cfg.bandwidth_hz
     t_pre = (cfg.preamble_symbols + 4.25) * tsym
-    de = 1 if cfg.low_data_rate_optimize else 0
+    de = 1 if cfg.ldro_effective else 0
     ih = 0 if cfg.explicit_header else 1
     crc = 1 if cfg.crc_on else 0
     num = 8 * pl - 4 * cfg.spreading_factor + 28 + 16 * crc - 20 * ih
@@ -48,11 +48,23 @@ def test_matches_independent_float_reference(sf, bw, cr, pl):
         spreading_factor=sf,
         bandwidth_hz=bw,
         coding_rate=cr,
-        low_data_rate_optimize=(2**sf) / bw > 0.016,
     )
     exact_ns = time_on_air_ns(cfg, pl)
     ref_ns = reference_airtime_s(cfg, pl) * 1e9
     assert abs(exact_ns - ref_ns) < 1.0  # tolérance : arrondi flottant seulement
+
+
+def test_ldro_defaults_to_required_rule():
+    # Sans option explicite : SF11/SF12 à 125 kHz utilisent l'optimisation bas débit.
+    assert RadioConfig(spreading_factor=12).ldro_effective
+    assert RadioConfig(spreading_factor=11).ldro_effective
+    assert not RadioConfig(spreading_factor=10).ldro_effective
+    assert time_on_air_ns(RadioConfig(spreading_factor=12), 10) == 991_232_000
+    # À 51 octets, l'option explicite « désactivée » donne un résultat différent (pas de
+    # coïncidence de blocs comme à 10 octets).
+    on = time_on_air_ns(RadioConfig(spreading_factor=12), 51)
+    off = time_on_air_ns(RadioConfig(spreading_factor=12, low_data_rate_optimize=False), 51)
+    assert on != off and off < on
 
 
 def test_monotonic_in_payload():

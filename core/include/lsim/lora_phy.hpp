@@ -64,8 +64,8 @@ LSIM_API std::int64_t symbol_duration_ns(std::uint8_t spreading_factor, Bandwidt
 
 // Sensibilité récepteur (dBm) à PER 1 %, SX1276 mode LoRa, 125 kHz, CR 4/5.
 // Valeurs issues du datasheet Semtech SX1276/77/78/79 (SF7 à SF12).
-// Seule la bande 125 kHz est calibrée : 250/500 kHz renvoient
-// UncalibratedSensitivity tant que le datasheet n'est pas vérifié.
+// Blocs RFS_L125/250/500_HF (LnaBoost, bande 1, chemin Rx/Tx séparé) ;
+// SF7..SF12. Les autres largeurs renvoient UncalibratedSensitivity.
 LSIM_API Status receiver_sensitivity_dbm(std::uint8_t spreading_factor,
                                          Bandwidth bw, double& out_dbm);
 

@@ -298,9 +298,362 @@ void test_duty_cycle_invalid_inputs() {
     }
 }
 
+// La trace reprend exactement les issues des compteurs, dans l'ordre temporel.
+void test_trace_matches_counters() {
+    std::vector<EndDeviceSpec> devs;
+    for (int i = 0; i < 6; ++i) {
+        EndDeviceSpec d = device_at(100.0 * i, 7, 0);
+        d.start_offset_ns = static_cast<SimTime>(i) * 2'000'000;  // chevauchements partiels
+        d.period_ns = 1'000'000'000;
+        d.messages = 3;
+        devs.push_back(d);
+    }
+    devs[5].position.x_m = 9.0e5;  // trop loin : sous la sensibilité
+    std::vector<DeviceStats> per(devs.size());
+    SimulationStats tot;
+    std::vector<TxRecord> trace;
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per.data(), tot, nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(trace.size(), static_cast<std::size_t>(tot.sent));
+
+    std::uint64_t rec = 0, col = 0, sens = 0;
+    for (std::size_t k = 0; k < trace.size(); ++k) {
+        const TxRecord& t = trace[k];
+        CHECK_TRUE(t.end_ns > t.start_ns);
+        if (k > 0) CHECK_TRUE(trace[k - 1].start_ns <= t.start_ns);
+        if (t.outcome == TxOutcome::Received) ++rec;
+        else if (t.outcome == TxOutcome::LostCollision) ++col;
+        else ++sens;
+    }
+    CHECK_EQ(rec, tot.received);
+    CHECK_EQ(col, tot.lost_collision);
+    CHECK_EQ(sens, tot.lost_sensitivity);
+
+    // Sans trace : mêmes compteurs, et le vecteur de trace est vidé.
+    SimulationStats tot2;
+    std::vector<DeviceStats> per2(devs.size());
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per2.data(), tot2) == SimStatus::Ok);
+    CHECK_EQ(tot2.received, tot.received);
+    trace.push_back(TxRecord{});
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per2.data(), tot2, nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(trace.size(), static_cast<std::size_t>(tot2.sent));
+}
+
+// Demi-duplex : une trame reçue pendant une émission passerelle est perdue ; hors période, non.
+void test_gateway_busy_blocks_reception() {
+    std::vector<EndDeviceSpec> devs;
+    EndDeviceSpec d = device_at(10.0, 7, 0);  // trame proche : bien reçue sans passerelle occupée
+    d.messages = 2;
+    d.period_ns = 1'000'000'000;
+    devs.push_back(d);
+    std::vector<DeviceStats> per(1);
+    SimulationStats tot;
+    std::vector<TxRecord> trace;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per.data(), tot,
+                                nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{2});
+
+    // Passerelle occupée sur la première trame seulement.
+    const std::vector<Interval> busy{{trace[0].start_ns, trace[0].start_ns + 1'000'000}};
+    std::vector<DeviceStats> per2(1);
+    SimulationStats tot2;
+    std::vector<TxRecord> trace2;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per2.data(), tot2,
+                                nullptr, &trace2, &busy) == SimStatus::Ok);
+    CHECK_EQ(tot2.lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(tot2.received, std::uint64_t{1});
+    CHECK_TRUE(trace2[0].outcome == TxOutcome::LostGatewayBusy);
+    CHECK_TRUE(trace2[1].outcome == TxOutcome::Received);
+    CHECK_EQ(per2[0].lost_gateway_busy, std::uint64_t{1});
+
+    // Intervalle invalide refusé.
+    const std::vector<Interval> bad{{5, 5}};
+    SimulationStats tot3;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per2.data(), tot3,
+                                nullptr, nullptr, &bad) == SimStatus::InvalidGatewayBusy);
+}
+
 }  // namespace
 
+// ---------------------------------------------------------- plusieurs passerelles
+
+EndDeviceSpec device_xy(double x_m, double y_m, std::uint8_t sf) {
+    EndDeviceSpec d = device_at(x_m, sf, 0);
+    d.position.y_m = y_m;
+    return d;
+}
+
+GatewaySpec gateway_xy(double x_m, double y_m) {
+    GatewaySpec g;
+    g.position.x_m = x_m;
+    g.position.y_m = y_m;
+    return g;
+}
+
+// Un dispositif hors de portée de la passerelle A est reçu par la passerelle B.
+void test_multi_second_gateway_rescues_device() {
+    const EndDeviceSpec d[] = {device_xy(20000.0, 0.0, 7)};
+    const GatewaySpec solo[] = {gateway_xy(0.0, 0.0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw1[1];
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, solo, 1, PropagationSpec{}, st, tot, gw1) ==
+               SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{0});
+    CHECK_EQ(tot.lost_sensitivity, std::uint64_t{1});
+
+    const GatewaySpec pair[] = {gateway_xy(0.0, 0.0), gateway_xy(20000.0, 100.0)};
+    GatewayRxStats gw2[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, pair, 2, PropagationSpec{}, st, tot, gw2, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(tot.lost_sensitivity, std::uint64_t{0});
+    CHECK_EQ(gw2[0].lost_sensitivity, std::uint64_t{1});
+    CHECK_EQ(gw2[1].received, std::uint64_t{1});
+    CHECK_EQ(trace[0].receivers, std::uint32_t{1});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{1});
+    CHECK_TRUE(trace[0].outcome == TxOutcome::Received);
+}
+
+// Deux passerelles proches décodent la même trame : livrée une fois, copie comptée.
+void test_multi_deduplicates_copies() {
+    const EndDeviceSpec d[] = {device_xy(10.0, 0.0, 7)};
+    const GatewaySpec gws[] = {gateway_xy(0.0, 0.0), gateway_xy(0.0, 50.0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, gws, 2, PropagationSpec{}, st, tot, gw, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.sent, std::uint64_t{1});
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(tot.duplicates, std::uint64_t{1});
+    CHECK_EQ(st[0].received, std::uint64_t{1});
+    CHECK_EQ(gw[0].received, std::uint64_t{1});
+    CHECK_EQ(gw[1].received, std::uint64_t{1});
+    CHECK_EQ(trace[0].receivers, std::uint32_t{2});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{0});  // le plus proche gagne le RSSI
+}
+
+// Collision : chaque dispositif est capturé par la passerelle qui lui est proche, et détruit
+// à l'autre. Le réseau les reçoit tous les deux (diversité).
+void test_multi_capture_per_gateway() {
+    const EndDeviceSpec d[] = {device_xy(10.0, 0.0, 7), device_xy(2990.0, 0.0, 7)};
+    const GatewaySpec gws[] = {gateway_xy(0.0, 0.0), gateway_xy(3000.0, 0.0)};
+    DeviceStats st[2];
+    NetworkStats tot;
+    GatewayRxStats gw[2];
+    std::vector<MultiTx> trace;
+    CHECK_TRUE(simulate_uplinks_multi(d, 2, gws, 2, PropagationSpec{}, st, tot, gw, nullptr,
+                                      &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{2});
+    CHECK_EQ(tot.lost_collision, std::uint64_t{0});
+    // Chaque passerelle détruit la trame du dispositif éloigné de elle : A à B, B à A.
+    CHECK_EQ(gw[0].lost_collision, std::uint64_t{1});
+    CHECK_EQ(gw[1].lost_collision, std::uint64_t{1});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{0});
+    CHECK_EQ(trace[1].best_gateway, std::int32_t{1});
+}
+
+// Avec une seule passerelle, la fonction multi donne les mêmes compteurs que simulate_uplinks.
+void test_multi_single_gateway_matches_single_path() {
+    std::vector<EndDeviceSpec> devs;
+    for (int k = 0; k < 6; ++k) {
+        EndDeviceSpec d = device_xy(100.0 + 4000.0 * k, 50.0 * k, static_cast<std::uint8_t>(7 + k % 3));
+        d.messages = 3;
+        d.period_ns = 2'000'000'000;
+        d.start_offset_ns = 150'000'000 * k;
+        devs.push_back(d);
+    }
+    std::vector<DeviceStats> a(devs.size());
+    SimulationStats ta;
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{}, a.data(),
+                                ta) == SimStatus::Ok);
+    std::vector<DeviceStats> b(devs.size());
+    NetworkStats tb;
+    GatewayRxStats gw[1];
+    const GatewaySpec one[] = {gateway()};
+    CHECK_TRUE(simulate_uplinks_multi(devs.data(), devs.size(), one, 1, PropagationSpec{}, b.data(),
+                                      tb, gw) == SimStatus::Ok);
+    CHECK_EQ(tb.sent, ta.sent);
+    CHECK_EQ(tb.received, ta.received);
+    CHECK_EQ(tb.lost_collision, ta.lost_collision);
+    CHECK_EQ(tb.lost_sensitivity, ta.lost_sensitivity);
+    CHECK_EQ(tb.duplicates, std::uint64_t{0});
+    CHECK_EQ(tb.airtime_ns, ta.airtime_ns);
+    CHECK_EQ(tb.received + tb.lost_collision + tb.lost_sensitivity, tb.sent);
+    CHECK_TRUE(ta.received > 0 && ta.lost_sensitivity > 0);
+}
+
+void test_multi_invalid_inputs() {
+    const EndDeviceSpec d[] = {device_at(10.0, 7, 0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw[1];
+    const GatewaySpec none[1] = {gateway()};
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, none, 0, PropagationSpec{}, st, tot, gw) ==
+               SimStatus::InvalidInput);
+    std::vector<GatewaySpec> many(kMaxGateways + 1, gateway());
+    std::vector<GatewayRxStats> gwv(kMaxGateways + 1);
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, many.data(), many.size(), PropagationSpec{}, st, tot,
+                                      gwv.data()) == SimStatus::InvalidInput);
+}
+
+// Demi-duplex par passerelle : la passerelle A émet un downlink pendant la trame ; B la reçoit.
+void test_multi_busy_is_per_gateway() {
+    const EndDeviceSpec d[] = {device_xy(10.0, 0.0, 7)};
+    const GatewaySpec gws[] = {gateway_xy(0.0, 0.0), gateway_xy(0.0, 50.0)};
+    DeviceStats st[1];
+    NetworkStats tot;
+    GatewayRxStats gw[2];
+    std::vector<MultiTx> trace;
+    // A occupée sur la trame ; B libre.
+    const std::vector<std::vector<Interval>> busy_a{{{0, 1'000'000'000}}, {}};
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, gws, 2, PropagationSpec{}, st, tot, gw, nullptr,
+                                      &trace, &busy_a) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(gw[0].lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(gw[1].received, std::uint64_t{1});
+    CHECK_EQ(trace[0].receivers, std::uint32_t{1});
+    CHECK_EQ(trace[0].best_gateway, std::int32_t{1});
+
+    // Les deux occupées : perte réseau classée « passerelle occupée ».
+    const std::vector<std::vector<Interval>> busy_both{{{0, 1'000'000'000}}, {{0, 1'000'000'000}}};
+    NetworkStats tot2;
+    GatewayRxStats gw2[2];
+    std::vector<MultiTx> trace2;
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, gws, 2, PropagationSpec{}, st, tot2, gw2, nullptr,
+                                      &trace2, &busy_both) == SimStatus::Ok);
+    CHECK_EQ(tot2.received, std::uint64_t{0});
+    CHECK_EQ(tot2.lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(st[0].lost_gateway_busy, std::uint64_t{1});
+    CHECK_TRUE(trace2[0].outcome == TxOutcome::LostGatewayBusy);
+
+    // Liste de périodes incohérente avec le nombre de passerelles : refusée.
+    const std::vector<std::vector<Interval>> bad{{}};
+    CHECK_TRUE(simulate_uplinks_multi(d, 1, gws, 2, PropagationSpec{}, st, tot2, gw2, nullptr,
+                                      nullptr, &bad) == SimStatus::InvalidGatewayBusy);
+}
+
+// Downlink et demi-duplex : A est acquittée par la passerelle 0 ; B émet pendant ce downlink.
+void test_downlink_blocks_only_its_gateway() {
+    EndDeviceSpec a = device_xy(10.0, 0.0, 7);
+    a.messages = 1;
+    EndDeviceSpec b = device_xy(12.0, 0.0, 7);
+    b.messages = 1;
+    b.start_offset_ns = 1'050'000'000;  // pendant le downlink ACK de A (RX1 + 9 ms)
+    const EndDeviceSpec devs[] = {a, b};
+    MultiDownlinkRule rule;
+    rule.ack_uplinks = true;
+
+    // Une seule passerelle : B est perdue au demi-duplex, A reçoit son ACK.
+    const GatewaySpec one[] = {gateway_xy(0.0, 0.0)};
+    DeviceStats st[2];
+    NetworkStats tot;
+    GatewayRxStats gw[1];
+    std::vector<MultiTx> trace;
+    std::vector<MultiDownlink> dls;
+    CHECK_TRUE(simulate_uplinks_multi_downlinks(devs, 2, one, 1, PropagationSpec{}, rule, st, tot,
+                                                gw, nullptr, &trace, &dls) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{1});
+    CHECK_EQ(tot.lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(gw[0].lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(dls.size(), std::size_t{1});
+    CHECK_TRUE(dls[0].outcome == DownlinkOutcome::Delivered);
+    CHECK_EQ(dls[0].t_open_ns, trace[0].end_ns + 1'000'000'000);  // RX1 = fin + 1 s
+    CHECK_EQ(dls[0].start_ns, dls[0].t_open_ns);                  // passerelle libre : départ immédiat
+    CHECK_TRUE(dls[0].start_ns < trace[1].end_ns && trace[1].start_ns < dls[0].end_ns);  // B chevauche
+
+    // Deux passerelles : la seconde, libre, décode B. Pas de perte réseau.
+    const GatewaySpec two[] = {gateway_xy(0.0, 0.0), gateway_xy(0.0, 0.0)};
+    DeviceStats st2[2];
+    NetworkStats tot2;
+    GatewayRxStats gw2[2];
+    std::vector<MultiTx> trace2;
+    CHECK_TRUE(simulate_uplinks_multi_downlinks(devs, 2, two, 2, PropagationSpec{}, rule, st2,
+                                                tot2, gw2, nullptr, &trace2, nullptr) == SimStatus::Ok);
+    CHECK_EQ(tot2.received, std::uint64_t{2});
+    CHECK_EQ(tot2.lost_gateway_busy, std::uint64_t{0});
+    CHECK_EQ(gw2[0].lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(gw2[1].received, std::uint64_t{2});
+    CHECK_EQ(trace2[1].best_gateway, std::int32_t{1});  // B n'est décodée que par la passerelle 1
+}
+
+// Invariants sur un trafic dense : pas de downlinks qui se chevauchent sur une passerelle, aucune
+// trame décodée pendant une émission de sa passerelle répondante, et sans règle de downlink le
+// résultat égale le chemin sans émissions passerelle.
+void test_downlink_invariants_dense_traffic() {
+    std::vector<EndDeviceSpec> devs;
+    for (int k = 0; k < 60; ++k) {
+        EndDeviceSpec d = device_xy(20.0 * (k % 10), 20.0 * (k / 10), 7);
+        d.messages = 20;
+        d.period_ns = 3'000'000'000;
+        d.start_offset_ns = 70'000'000LL * k;
+        devs.push_back(d);
+    }
+    const std::vector<GatewaySpec> gws{gateway_xy(0.0, 0.0), gateway_xy(60.0, 40.0)};
+    std::vector<DeviceStats> st(devs.size());
+    NetworkStats tot;
+    std::vector<GatewayRxStats> gw(gws.size());
+    std::vector<MultiTx> trace;
+    std::vector<MultiDownlink> dls;
+    MultiDownlinkRule rule;
+    rule.ack_uplinks = true;
+    rule.every = 3;
+    CHECK_TRUE(simulate_uplinks_multi_downlinks(devs.data(), devs.size(), gws.data(), gws.size(),
+                                                PropagationSpec{}, rule, st.data(), tot, gw.data(),
+                                                nullptr, &trace, &dls) == SimStatus::Ok);
+    CHECK_TRUE(!dls.empty());
+    // Une passerelle n'émet jamais deux downlinks à la fois.
+    for (std::size_t x = 0; x < dls.size(); ++x) {
+        for (std::size_t y = 0; y < dls.size(); ++y) {
+            if (x == y || dls[x].start_ns < 0 || dls[y].start_ns < 0) continue;
+            if (dls[x].gateway != dls[y].gateway) continue;
+            CHECK_TRUE(!(dls[x].start_ns < dls[y].end_ns && dls[y].start_ns < dls[x].end_ns));
+        }
+    }
+    // Chaque trame décodée n'est pas en émission de sa passerelle répondante.
+    for (const MultiDownlink& dl : dls) {
+        if (dl.start_ns < 0) continue;
+        for (const MultiTx& m : trace) {
+            if (m.outcome != TxOutcome::Received) continue;
+            if (static_cast<std::uint32_t>(m.best_gateway) != dl.gateway) continue;
+            CHECK_TRUE(!(dl.start_ns < m.end_ns && m.start_ns < dl.end_ns));
+        }
+    }
+    CHECK_EQ(tot.sent, std::uint64_t{1200});
+    CHECK_EQ(tot.received + tot.lost_sensitivity + tot.lost_collision + tot.lost_gateway_busy,
+             tot.sent);
+
+    // Sans règle de downlink : pas de demi-duplex, même résultat que la fonction sans émission.
+    MultiDownlinkRule none;
+    std::vector<DeviceStats> sa(devs.size()), sb(devs.size());
+    NetworkStats ta, tb;
+    std::vector<GatewayRxStats> ga(gws.size()), gb(gws.size());
+    CHECK_TRUE(simulate_uplinks_multi_downlinks(devs.data(), devs.size(), gws.data(), gws.size(),
+                                                PropagationSpec{}, none, sa.data(), ta, ga.data(),
+                                                nullptr, nullptr, nullptr) == SimStatus::Ok);
+    CHECK_TRUE(simulate_uplinks_multi(devs.data(), devs.size(), gws.data(), gws.size(),
+                                      PropagationSpec{}, sb.data(), tb, gb.data()) == SimStatus::Ok);
+    CHECK_EQ(ta.received, tb.received);
+    CHECK_EQ(ta.lost_collision, tb.lost_collision);
+    CHECK_EQ(ta.lost_sensitivity, tb.lost_sensitivity);
+}
+
 void run_engine_tests() {
+    test_downlink_blocks_only_its_gateway();
+    test_downlink_invariants_dense_traffic();
+    test_multi_busy_is_per_gateway();
+    test_multi_second_gateway_rescues_device();
+    test_multi_deduplicates_copies();
+    test_multi_capture_per_gateway();
+    test_multi_single_gateway_matches_single_path();
+    test_multi_invalid_inputs();
+    test_gateway_busy_blocks_reception();
+    test_trace_matches_counters();
     test_duty_cycle_spacing();
     test_duty_cycle_invalid_inputs();
     test_gateway_load_metrics();

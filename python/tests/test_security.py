@@ -206,3 +206,31 @@ def test_downlink_wrong_counter_or_tamper_rejected():
     wire[-1] ^= 0x01
     with pytest.raises(StatusError):
         open_downlink(bytes(wire), keys, ctx)
+
+
+def test_rejoin_join_accept_rejects_optneg_clear_and_bad_type():
+    from lsim.security import JoinAccept, encode_rejoin_join_accept
+    accept = JoinAccept(join_nonce=bytes(3), net_id=bytes([0x13, 0, 0]), dev_addr=0x26000001,
+                        dl_settings=0x00, rx_delay=1)
+    with pytest.raises(ValueError, match="OptNeg"):
+        encode_rejoin_join_accept(accept, bytes(16), bytes(8), bytes(8), 1, 1)
+    accept = JoinAccept(join_nonce=bytes(3), net_id=bytes([0x13, 0, 0]), dev_addr=0x26000001,
+                        dl_settings=0x80, rx_delay=1)
+    with pytest.raises(ValueError):
+        encode_rejoin_join_accept(accept, bytes(16), bytes(8), bytes(8), 3, 1)
+    with pytest.raises(ValueError):
+        encode_rejoin_join_accept(accept, bytes(16), bytes(8), bytes(8), 1, 0x10000)
+
+
+def test_rejoin_join_accept_roundtrip_and_wrong_key():
+    from lsim.security import JoinAccept, decode_rejoin_join_accept, encode_rejoin_join_accept
+    accept = JoinAccept(join_nonce=bytes([1, 2, 3]), net_id=bytes([0x13, 0, 0]),
+                        dev_addr=0x26000001, dl_settings=0x80, rx_delay=1,
+                        cflist=bytes(range(16)))
+    key, dev, jeui = bytes(range(16)), bytes(range(8)), bytes(range(8, 16))
+    wire = encode_rejoin_join_accept(accept, key, dev, jeui, 1, 0x0102)
+    assert len(wire) == 33
+    assert decode_rejoin_join_accept(wire, key, dev, jeui, 1, 0x0102) == accept
+    other = bytes(16)
+    with pytest.raises(Exception):
+        decode_rejoin_join_accept(wire, other, dev, jeui, 1, 0x0102)

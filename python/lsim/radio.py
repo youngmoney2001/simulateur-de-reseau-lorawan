@@ -29,7 +29,7 @@ def _require_finite(name: str, x: float) -> float:
 
 
 def receiver_sensitivity_dbm(spreading_factor: int, bandwidth_hz: int = 125_000) -> float:
-    """Sensibilité récepteur SX1276 (dBm). Seul 125 kHz est calibré."""
+    """Sensibilité récepteur SX1276 (dBm), 125/250/500 kHz (datasheet Rev. 4)."""
     if not 7 <= spreading_factor <= 12:
         raise ValueError("spreading_factor doit être compris entre 7 et 12")
     if bandwidth_hz not in _VALID_BW_HZ:

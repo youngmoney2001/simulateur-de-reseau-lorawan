@@ -29,6 +29,7 @@ extern "C" {
  *   600..649 commandes MAC (mac::MacStatus + 600)
  *   650..699 rejoin-request (RejoinStatus + 650)
  *   700..749 registre serveur (RegistryStatus + 700 ; 740 handle inconnu, 741 paramètre invalide)
+ *   800..849 relais mesh (mesh::Status + 800)
  *   900      erreur interne (exception interceptée à la frontière)
  */
 #define LSIM_STATUS_CRYPTO_BASE 100
@@ -38,6 +39,7 @@ extern "C" {
 #define LSIM_STATUS_ENV_BASE    500
 #define LSIM_STATUS_JOIN_BASE   400
 #define LSIM_STATUS_MAC_BASE    600
+#define LSIM_STATUS_MESH_BASE   800
 #define LSIM_STATUS_REJOIN_BASE 650
 #define LSIM_STATUS_REGISTRY_BASE 700
 #define LSIM_STATUS_ADR_BASE    760
@@ -64,10 +66,48 @@ LSIM_API int32_t lsim_time_on_air_ns(const lsim_radio_config* cfg,
                             uint32_t payload_bytes,
                             int64_t* out_ns);
 
-/* Sensibilité récepteur (dBm), 125 kHz uniquement pour l'instant. */
+/* Sensibilité récepteur (dBm), 125/250/500 kHz, SF7..SF12. */
 LSIM_API int32_t lsim_receiver_sensitivity_dbm(uint8_t spreading_factor,
                                                uint32_t bandwidth_hz,
                                                double* out_dbm);
+
+/* Atténuation des matériaux (UIT-R P.2040-4). material_id dans [0, count) ;
+ * perte totale d'une dalle monocouche en incidence normale (interfaces incluses) ;
+ * out_extrapolated = 1 si la fréquence est hors de la plage documentée. */
+LSIM_API uint32_t lsim_material_count(void);
+LSIM_API int32_t lsim_material_traversal_loss_db(uint32_t material_id,
+                                                 double frequency_hz,
+                                                 double thickness_m,
+                                                 double* out_db,
+                                                 int32_t* out_extrapolated);
+
+/* Bilan énergétique d'un dispositif. profile_id : 0 = RAK4631, 1 = SX1262 + STM32L072
+ * (voir energy.hpp). Durées en ns entiers ; le reste de total_ns est en veille. */
+LSIM_API uint32_t lsim_energy_profile_count(void);
+LSIM_API int32_t lsim_energy_device(uint32_t profile_id, double tx_power_dbm,
+                                    uint32_t bandwidth_hz, uint64_t tx_ns, uint64_t rx_ns,
+                                    uint64_t mcu_active_ns, uint64_t total_ns,
+                                    double* out_energy_j, double* out_avg_current_ua);
+
+/* Classe A : uplinks identiques ; deux fenêtres RX1/RX2 par uplink de rx_window_ns
+ * (0 : durée du préambule), plus downlink_ns_total ; traitement MCU par uplink. */
+LSIM_API int32_t lsim_energy_device_class_a(uint32_t profile_id, double tx_power_dbm,
+                                            uint32_t bandwidth_hz, uint8_t spreading_factor,
+                                            uint16_t preamble_symbols, uint64_t uplinks,
+                                            uint64_t airtime_ns, uint64_t rx_window_ns,
+                                            uint64_t downlink_ns_total,
+                                            uint64_t mcu_ns_per_uplink, uint64_t total_ns,
+                                            double* out_energy_j, double* out_avg_current_ua);
+
+/* Courant d'émission (mA) : point du profil de puissance >= demandée. */
+LSIM_API int32_t lsim_energy_tx_current_ma(uint32_t profile_id, double tx_power_dbm,
+                                           double* out_ma);
+
+/* Paramètres d'un profil (transparence : sources dans energy.hpp). */
+LSIM_API int32_t lsim_energy_profile(uint32_t profile_id, double* supply_v,
+                                     double* rx_ma_125khz, double* rx_ma_250khz,
+                                     double* rx_ma_500khz, double* sleep_ua,
+                                     double* mcu_run_ma);
 
 /* Perte en espace libre (dB) : distance en m, fréquence en Hz. */
 LSIM_API int32_t lsim_free_space_path_loss_db(double distance_m,
@@ -234,6 +274,20 @@ LSIM_API int32_t lsim_decode_join_accept(const uint8_t* in, size_t len,
                                          const uint8_t dev_nonce[2],
                                          lsim_join_accept* out);
 
+// Join-accept déclenché par une rejoin-request (1.1 §6.2.4.4) : JSEncKey, JSIntKey,
+// JoinReqType = rejoin_type (0, 1 ou 2), RJcount remplace DevNonce. OptNeg obligatoire.
+LSIM_API int32_t lsim_encode_rejoin_join_accept(const lsim_join_accept* accept,
+                                                const uint8_t nwk_key[16],
+                                                const uint8_t dev_eui[8],
+                                                const uint8_t join_eui[8], uint8_t rejoin_type,
+                                                uint16_t rjcount, uint8_t* out, size_t cap,
+                                                size_t* out_len);
+LSIM_API int32_t lsim_decode_rejoin_join_accept(const uint8_t* in, size_t len,
+                                                const uint8_t nwk_key[16],
+                                                const uint8_t dev_eui[8],
+                                                const uint8_t join_eui[8], uint8_t rejoin_type,
+                                                uint16_t rjcount, lsim_join_accept* out);
+
 /* -------------------------------------------------------------- Simulateur */
 
 typedef struct lsim_end_device {
@@ -252,6 +306,7 @@ typedef struct lsim_gateway {
     double x_m;
     double y_m;
     double antenna_gain_dbi;
+    double rx_sensitivity_offset_db; /* décalage du seuil montant (dB), |.| <= 20 ; 0 = sans profil */
 } lsim_gateway;
 
 typedef struct lsim_propagation {
@@ -269,6 +324,7 @@ typedef struct lsim_device_stats {
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
     uint64_t airtime_ns;        /* temps d'antenne cumulé (ns) */
+    uint64_t lost_gateway_busy; /* reçue pendant une émission passerelle (demi-duplex) */
 } lsim_device_stats;
 
 typedef struct lsim_sim_stats {
@@ -281,7 +337,14 @@ typedef struct lsim_sim_stats {
     uint64_t gateway_peak_concurrent;    /* trames simultanées maximales */
     int64_t  observation_ns;             /* fin dernière trame - début première */
     double   gateway_utilization;        /* busy / observation, dans [0, 1] */
+    uint64_t lost_gateway_busy;          /* trames perdues pendant une émission passerelle */
 } lsim_sim_stats;
+
+/* Période d'émission de la passerelle : [start_ns, end_ns), end > start. */
+typedef struct lsim_interval {
+    int64_t start_ns;
+    int64_t end_ns;
+} lsim_interval;
 
 /* Simule les liaisons montantes. per_device doit contenir device_count entrées ;
  * totals reçoit la somme. */
@@ -326,6 +389,135 @@ LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_
                                            lsim_device_stats* per_device,
                                            lsim_sim_stats* totals);
 
+/* Trace par transmission (même moteur, mêmes temps que les compteurs). Une entrée par
+ * émission, dans l'ordre temporel. records : capacité record_capacity ; record_count reçoit
+ * le nombre réel. Si la capacité est insuffisante : statut 308 (LSIM_STATUS_SIM_BASE + 8)
+ * et record_count indique la taille requise. Borne : 200 000 émissions par appel (statut 309).
+ * outcome : 0 sous la sensibilité, 1 collision, 2 reçue. env NULL = terrain plat. */
+typedef struct lsim_tx_record {
+    uint32_t device_index;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  spreading_factor;
+    double   rssi_dbm;
+    uint8_t  outcome;
+} lsim_tx_record;
+
+LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t device_count,
+                                             const lsim_gateway* gateway,
+                                             const lsim_propagation* prop,
+                                             const lsim_environment* env,
+                                             lsim_device_stats* per_device,
+                                             lsim_sim_stats* totals, lsim_tx_record* records,
+                                             size_t record_capacity, size_t* record_count,
+                                             const lsim_interval* gateway_busy,
+                                             size_t gateway_busy_count);
+
+/* ------------------------------------------- Plusieurs passerelles (uplinks)
+ * Chaque passerelle reçoit les mêmes émissions ; le serveur déduplique (une livraison par
+ * trame). Voir lsim/engine.hpp. Pas de downlink ni de demi-duplex par passerelle ici.
+ * gateways : gateway_count entrées, 1..64. env NULL = terrain plat. per_gateway : gateway_count
+ * entrées. Statut 0, ou LSIM_STATUS_SIM_BASE + code du moteur (InvalidInput si gateway_count
+ * est hors bornes). */
+typedef struct lsim_network_stats {
+    uint64_t sent;
+    uint64_t received;          /* trames livrées au serveur, une fois par trame */
+    uint64_t duplicates;        /* copies décodées en plus de la première */
+    uint64_t lost_sensitivity;  /* aucune passerelle au-dessus de la sensibilité */
+    uint64_t lost_collision;    /* collisionnée à toutes les passerelles qui l'entendent */
+    uint64_t airtime_ns;
+    uint64_t lost_gateway_busy; /* passerelle(s) audibles en émission (downlink) */
+} lsim_network_stats;
+
+typedef struct lsim_gateway_rx_stats {
+    uint64_t received;          /* trames décodées par cette passerelle */
+    uint64_t lost_sensitivity;
+    uint64_t lost_collision;
+    uint64_t lost_gateway_busy; /* passerelle en émission pendant la trame */
+    uint64_t audible_frames;    /* trames au-dessus de la sensibilité à cette passerelle */
+    uint64_t busy_ns;           /* union de leurs intervalles */
+    uint64_t peak_concurrent;   /* simultanéité maximale */
+    int64_t  observation_ns;    /* fin de la dernière émission - début de la première */
+} lsim_gateway_rx_stats;
+
+/* Trace par émission, multi-passerelles. outcome : 0 sous la sensibilité partout, 1 collision,
+ * 2 reçue (receivers > 0 ; best_gateway = meilleure passerelle décodeuse), 3 passerelle(s)
+ * occupée(s) par un downlink. Sans décodeur, best_gateway = -1 et best_rssi = RSSI maximal. */
+typedef struct lsim_multi_tx_record {
+    uint32_t device_index;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  spreading_factor;
+    uint32_t receivers;
+    int32_t  best_gateway;
+    double   best_rssi_dbm;
+    uint8_t  outcome;
+    uint64_t decoded_mask;   /* bit g : passerelle g a décodé (g < 64) */
+    uint8_t  join_request;   /* 1 : join-request (rule.join, dispositif non jointé) */
+} lsim_multi_tx_record;
+
+/* busy : NULL = aucune émission passerelle. Sinon, périodes [start, end) de toutes les passerelles
+ * mises bout à bout ; busy_counts[g] = nombre de périodes de la passerelle g (gateway_count
+ * entrées). records : NULL si record_count est NULL (pas de trace) ; sinon capacité
+ * record_capacity, et record_count reçoit le nombre réel ; statut 308 si trop petit. */
+LSIM_API int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t device_count,
+                                             const lsim_gateway* gateways, size_t gateway_count,
+                                             const lsim_propagation* prop,
+                                             const lsim_environment* env,
+                                             lsim_device_stats* per_device,
+                                             lsim_network_stats* totals,
+                                             lsim_gateway_rx_stats* per_gateway,
+                                             const lsim_interval* busy,
+                                             const size_t* busy_counts,
+                                             lsim_multi_tx_record* records,
+                                             size_t record_capacity, size_t* record_count);
+
+/* Passerelles multiples avec downlinks (ordre de fin, calcul exact sans itération) : chaque uplink
+ * décodé est acquitté (ack_uplinks) ou reçoit une charge (une par `every` uplinks décodés) par la
+ * meilleure passerelle décodeuse, en RX1 (repli en RX2 si la passerelle est occupée en RX1,
+ * voir rx2_sf). Chaque passerelle sérialise ses downlinks et ne décode
+ * pas pendant les siens (demi-duplex par passerelle). Voir lsim/engine.hpp. */
+typedef struct lsim_downlink_rule {
+    uint8_t  ack_uplinks;             /* 0 ou 1 */
+    uint32_t every;                   /* 0 : aucune charge en file */
+    uint32_t payload_bytes;           /* 0..242 */
+    double   gateway_tx_power_dbm;
+    double   device_antenna_gain_dbi;
+    double   device_rx_offset_db;
+    uint8_t  join;                    /* 0 ou 1 : join-accept après une join-request décodée */
+    uint8_t  rx2_sf;                  /* SF de RX2 de repli (7..12, BW 125 kHz) ; 0 : pas de repli */
+} lsim_downlink_rule;
+
+/* outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors RX1 et RX2, 3 dispositif en émission.
+ * start_ns/end_ns = -1 si non émis. rx_window : 1 RX1, 2 RX2 (repli après RX1 occupée). */
+typedef struct lsim_downlink_record {
+    uint32_t device_index;
+    uint32_t gateway_index;
+    uint8_t  data;
+    int64_t  t_open_ns;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  outcome;
+    uint8_t  join;                    /* 1 : join-accept (17 octets) */
+    uint8_t  rx_window;               /* 1 : RX1 ; 2 : RX2 (repli) */
+} lsim_downlink_record;
+
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,
+                                                const lsim_gateway* gateways, size_t gateway_count,
+                                                const lsim_propagation* prop,
+                                                const lsim_downlink_rule* rule,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_network_stats* totals,
+                                                lsim_gateway_rx_stats* per_gateway,
+                                                lsim_multi_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                lsim_downlink_record* downlinks,
+                                                size_t downlink_capacity, size_t* downlink_count,
+                                                const int64_t* dl_ready_ns, size_t ready_count);
+/* dl_ready_ns (NULL : aucun) : départ au plus tôt de la descente de chaque émission (ordre :
+   dispositifs puis k), -1 aucune contrainte, INT64_MAX jamais ; ready_count = somme des messages. */
+
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).
  * device_class : 0 A, 1 B, 2 C. Latence = début de la première fenêtre utilisable moins
@@ -365,6 +557,15 @@ LSIM_API int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices,
 LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                                      double max_path_loss_db, const lsim_environment* env,
                                      double step_m, size_t azimuths, double* radii_out);
+
+/* Perte de propagation totale (dB) entre toutes les paires de points (relief et obstacles
+ * inclus). out_db[i*n+j] : émetteur i, récepteur j ; diagonale 0. 1 <= n <= 64 et
+ * n*n*obstacles <= borne de travail (statut 506). Hauteurs : celles de `env` (émetteur =
+ * device_height_m, récepteur = gateway_height_m). */
+LSIM_API int32_t lsim_env_path_loss_matrix(const lsim_propagation* prop,
+                                           const lsim_environment* env, size_t n,
+                                           const double* x_m, const double* y_m,
+                                           double* out_db);
 
 
 /* ------------------------------------------------- Commandes MAC 1.1 */
@@ -695,6 +896,90 @@ LSIM_API int32_t lsim_classb_beacon_state(const lsim_classb_device* d, uint64_t 
                                           uint8_t* state);
 LSIM_API int32_t lsim_classb_next_ping_slot(const lsim_classb_device* d, uint64_t now_ns,
                                             lsim_classb_ping_slot* out);
+
+/* Relais mesh 2,4 GHz (core/src/mesh.cpp). Disposition identique aux structures ctypes. */
+typedef struct lsim_mesh_radio {
+    uint8_t  spreading_factor;   /* 5..12 */
+    uint8_t  coding_rate;        /* 1..4 : 4/5 à 4/8 */
+    uint32_t bandwidth_hz;
+    uint32_t payload_bytes;      /* 0..255 */
+    uint32_t preamble_symbols;   /* 6..65535 */
+    double   capture_db;         /* >= 0 */
+} lsim_mesh_radio;
+
+typedef struct lsim_mesh_frame {
+    uint64_t frame_id;
+    uint32_t rx_node;            /* indice de la passerelle qui a reçu la trame */
+    int64_t  t_ns;               /* fin de réception sur l'accès */
+    uint32_t payload_bytes;      /* taille relayée (trame LoRaWAN + enveloppe), 0..255 */
+} lsim_mesh_frame;
+
+typedef struct lsim_mesh_delivery {
+    uint64_t frame_id;
+    uint8_t  delivered;          /* 0 ou 1 */
+    uint8_t  loss;               /* 0 livré, 1 no_route, 2 half_duplex, 3 collision, 4 suppressed */
+    uint8_t  hops;               /* sauts de la copie livrée en premier, 0 si non livré */
+    uint8_t  copy_state;         /* 0 relayée, 1 supprimée, 2 frontière, 3 sans route */
+    int64_t  latency_ns;         /* -1 si non livré */
+} lsim_mesh_delivery;
+
+typedef struct lsim_mesh_summary {
+    uint64_t transmissions;      /* émissions mesh effectives */
+    uint64_t suppressed;         /* copies abandonnées (doublon entendu avant départ) */
+    uint64_t lost_collision;     /* sauts perdus par collision */
+    uint64_t lost_half_duplex;   /* sauts perdus : récepteur en émission */
+} lsim_mesh_summary;
+
+/* Journal d'un saut mesh (mesh::HopEvent). outcome : 0 reçu, 1 collision, 2 demi-duplex,
+   3 copie supprimée (t_start = t_end = décision). */
+typedef struct lsim_mesh_hop {
+    uint64_t frame_id;
+    uint32_t sender;
+    uint32_t receiver;
+    int64_t  t_start_ns;
+    int64_t  t_end_ns;
+    uint8_t  outcome;
+    uint8_t  hop_index;
+} lsim_mesh_hop;
+
+LSIM_API int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out);
+LSIM_API int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out);
+// Tirage de shadowing (dB) d'un indice donné : même fonction que le cœur de simulation
+// (`shadowing_sample_db`), gaussienne d'écart-type sigma_db. Utilisé par le mesh pour
+// tirer une valeur par paire de passerelles.
+LSIM_API int32_t lsim_shadowing_sample_db(uint64_t seed, uint32_t device_index, double sigma_db,
+                                          double* out);
+LSIM_API int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_count,
+                                  const uint8_t* capable, const double* rssi_dbm,
+                                  uint32_t border, uint32_t max_hops, int32_t* next);
+LSIM_API int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
+                                   const uint8_t* capable, const double* rssi_dbm,
+                                   const int32_t* next, uint32_t border, int suppress,
+                                   int64_t backoff_window_ns,
+                                   const lsim_mesh_frame* frames, size_t frame_count,
+                                   lsim_mesh_delivery* out, lsim_mesh_summary* summary);
+/* Comme lsim_mesh_forward, avec le journal des sauts. Si le journal dépasse hop_capacity,
+   rien n'est écrit, *hop_count reçoit la taille requise et le statut est BufferTooSmall (810). */
+LSIM_API int32_t lsim_mesh_forward_log(const lsim_mesh_radio* radio, size_t node_count,
+                                       const uint8_t* capable, const double* rssi_dbm,
+                                       const int32_t* next, uint32_t border, int suppress,
+                                       int64_t backoff_window_ns,
+                                       const lsim_mesh_frame* frames, size_t frame_count,
+                                       lsim_mesh_delivery* out, lsim_mesh_summary* summary,
+                                       lsim_mesh_hop* hops, size_t hop_capacity,
+                                       size_t* hop_count);
+
+/* Comme lsim_mesh_forward_log, avec une destination par trame. `next_by_dest` : node_count x
+   node_count (ligne d = routes vers la passerelle d, -1 si aucune route) ; `dests[k]` : passerelle
+   de destination de la trame k (capable). Une même trame ne peut viser deux destinations. */
+LSIM_API int32_t lsim_mesh_forward_routed_log(const lsim_mesh_radio* radio, size_t node_count,
+                                              const uint8_t* capable, const double* rssi_dbm,
+                                              const int32_t* next_by_dest, const uint32_t* dests,
+                                              int suppress, int64_t backoff_window_ns,
+                                              const lsim_mesh_frame* frames, size_t frame_count,
+                                              lsim_mesh_delivery* out, lsim_mesh_summary* summary,
+                                              lsim_mesh_hop* hops, size_t hop_capacity,
+                                              size_t* hop_count);
 
 #ifdef __cplusplus
 }

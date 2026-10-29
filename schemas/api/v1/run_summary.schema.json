@@ -1,0 +1,378 @@
+{
+  "$defs": {
+    "GatewayLoadOut": {
+      "additionalProperties": false,
+      "properties": {
+        "busy_ns": {
+          "minimum": 0,
+          "title": "Busy Ns",
+          "type": "integer"
+        },
+        "observation_ns": {
+          "minimum": 0,
+          "title": "Observation Ns",
+          "type": "integer"
+        },
+        "peak_concurrent": {
+          "minimum": 0,
+          "title": "Peak Concurrent",
+          "type": "integer"
+        },
+        "utilization": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Utilization",
+          "type": "number"
+        }
+      },
+      "required": [
+        "busy_ns",
+        "peak_concurrent",
+        "observation_ns",
+        "utilization"
+      ],
+      "title": "GatewayLoadOut",
+      "type": "object"
+    },
+    "GatewayReportOut": {
+      "additionalProperties": false,
+      "description": "Passerelle d'un run multi-passerelles : trames reçues et charge de réception.",
+      "properties": {
+        "audible_frames": {
+          "minimum": 0,
+          "title": "Audible Frames",
+          "type": "integer"
+        },
+        "busy_ns": {
+          "minimum": 0,
+          "title": "Busy Ns",
+          "type": "integer"
+        },
+        "latency_p50_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency P50 Ms"
+        },
+        "latency_p95_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency P95 Ms"
+        },
+        "latency_samples": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Latency Samples",
+          "type": "integer"
+        },
+        "lost_collision": {
+          "minimum": 0,
+          "title": "Lost Collision",
+          "type": "integer"
+        },
+        "lost_gateway_busy": {
+          "minimum": 0,
+          "title": "Lost Gateway Busy",
+          "type": "integer"
+        },
+        "lost_sensitivity": {
+          "minimum": 0,
+          "title": "Lost Sensitivity",
+          "type": "integer"
+        },
+        "mesh_busy_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Busy Ns"
+        },
+        "mesh_inbound": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/MeshInboundOut"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Inbound"
+        },
+        "mesh_lost_collision": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Lost Collision"
+        },
+        "mesh_lost_half_duplex": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Lost Half Duplex"
+        },
+        "mesh_suppressed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Suppressed"
+        },
+        "mesh_transmissions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Transmissions"
+        },
+        "name": {
+          "maxLength": 64,
+          "title": "Name",
+          "type": "string"
+        },
+        "observation_ns": {
+          "minimum": 0,
+          "title": "Observation Ns",
+          "type": "integer"
+        },
+        "peak_concurrent": {
+          "minimum": 0,
+          "title": "Peak Concurrent",
+          "type": "integer"
+        },
+        "received": {
+          "minimum": 0,
+          "title": "Received",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "received",
+        "lost_sensitivity",
+        "lost_collision",
+        "lost_gateway_busy",
+        "audible_frames",
+        "busy_ns",
+        "peak_concurrent",
+        "observation_ns"
+      ],
+      "title": "GatewayReportOut",
+      "type": "object"
+    },
+    "MeshInboundOut": {
+      "additionalProperties": false,
+      "description": "Lien mesh observé : sauts livrés depuis `from_gateway` vers cette passerelle.",
+      "properties": {
+        "delivered": {
+          "minimum": 0,
+          "title": "Delivered",
+          "type": "integer"
+        },
+        "from_gateway": {
+          "maxLength": 64,
+          "title": "From Gateway",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_gateway",
+        "delivered"
+      ],
+      "title": "MeshInboundOut",
+      "type": "object"
+    },
+    "Totals": {
+      "additionalProperties": false,
+      "properties": {
+        "airtime_ns": {
+          "minimum": 0,
+          "title": "Airtime Ns",
+          "type": "integer"
+        },
+        "lost_collision": {
+          "minimum": 0,
+          "title": "Lost Collision",
+          "type": "integer"
+        },
+        "lost_gateway_busy": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Lost Gateway Busy",
+          "type": "integer"
+        },
+        "lost_mesh": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lost Mesh"
+        },
+        "lost_sensitivity": {
+          "minimum": 0,
+          "title": "Lost Sensitivity",
+          "type": "integer"
+        },
+        "received": {
+          "minimum": 0,
+          "title": "Received",
+          "type": "integer"
+        },
+        "sent": {
+          "minimum": 0,
+          "title": "Sent",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sent",
+        "received",
+        "lost_sensitivity",
+        "lost_collision",
+        "airtime_ns"
+      ],
+      "title": "Totals",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent\ndepuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent).",
+  "properties": {
+    "energy_profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Energy Profile"
+    },
+    "gateway": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GatewayLoadOut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "gateways": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/GatewayReportOut"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateways"
+    },
+    "pdr": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pdr"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scenario_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scenario Sha256",
+      "type": "string"
+    },
+    "seed": {
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "totals": {
+      "$ref": "#/$defs/Totals"
+    }
+  },
+  "required": [
+    "run_id",
+    "scenario_sha256",
+    "seed",
+    "totals"
+  ],
+  "title": "RunSummary",
+  "type": "object"
+}

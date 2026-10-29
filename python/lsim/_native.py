@@ -255,6 +255,7 @@ class _CGateway(ctypes.Structure):
         ("x_m", ctypes.c_double),
         ("y_m", ctypes.c_double),
         ("antenna_gain_dbi", ctypes.c_double),
+        ("rx_sensitivity_offset_db", ctypes.c_double),
     ]
 
 
@@ -276,6 +277,7 @@ class _CDeviceStats(ctypes.Structure):
         ("lost_sensitivity", ctypes.c_uint64),
         ("lost_collision", ctypes.c_uint64),
         ("airtime_ns", ctypes.c_uint64),
+        ("lost_gateway_busy", ctypes.c_uint64),
     ]
 
 
@@ -312,6 +314,92 @@ class _CSimStats(ctypes.Structure):
         ("gateway_peak_concurrent", ctypes.c_uint64),
         ("observation_ns", ctypes.c_int64),
         ("gateway_utilization", ctypes.c_double),
+        ("lost_gateway_busy", ctypes.c_uint64),
+    ]
+
+
+class _CInterval(ctypes.Structure):
+    _fields_ = [
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+    ]
+
+
+class _CNetworkStats(ctypes.Structure):
+    _fields_ = [
+        ("sent", ctypes.c_uint64),
+        ("received", ctypes.c_uint64),
+        ("duplicates", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("airtime_ns", ctypes.c_uint64),
+        ("lost_gateway_busy", ctypes.c_uint64),
+    ]
+
+
+class _CGatewayRxStats(ctypes.Structure):
+    _fields_ = [
+        ("received", ctypes.c_uint64),
+        ("lost_sensitivity", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("lost_gateway_busy", ctypes.c_uint64),
+        ("audible_frames", ctypes.c_uint64),
+        ("busy_ns", ctypes.c_uint64),
+        ("peak_concurrent", ctypes.c_uint64),
+        ("observation_ns", ctypes.c_int64),
+    ]
+
+
+class _CDownlinkRule(ctypes.Structure):
+    _fields_ = [
+        ("ack_uplinks", ctypes.c_uint8),
+        ("every", ctypes.c_uint32),
+        ("payload_bytes", ctypes.c_uint32),
+        ("gateway_tx_power_dbm", ctypes.c_double),
+        ("device_antenna_gain_dbi", ctypes.c_double),
+        ("device_rx_offset_db", ctypes.c_double),
+        ("join", ctypes.c_uint8),
+        ("rx2_sf", ctypes.c_uint8),
+    ]
+
+
+class _CDownlinkRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("gateway_index", ctypes.c_uint32),
+        ("data", ctypes.c_uint8),
+        ("t_open_ns", ctypes.c_int64),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("outcome", ctypes.c_uint8),
+        ("join", ctypes.c_uint8),
+        ("rx_window", ctypes.c_uint8),
+    ]
+
+
+class _CMultiTxRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("spreading_factor", ctypes.c_uint8),
+        ("receivers", ctypes.c_uint32),
+        ("best_gateway", ctypes.c_int32),
+        ("best_rssi_dbm", ctypes.c_double),
+        ("outcome", ctypes.c_uint8),
+        ("decoded_mask", ctypes.c_uint64),
+        ("join_request", ctypes.c_uint8),
+    ]
+
+
+class _CTxRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("spreading_factor", ctypes.c_uint8),
+        ("rssi_dbm", ctypes.c_double),
+        ("outcome", ctypes.c_uint8),
     ]
 
 
@@ -401,6 +489,26 @@ LIB = _load_library()
 
 LIB.lsim_receiver_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_receiver_sensitivity_dbm.argtypes = [ctypes.c_uint8, ctypes.c_uint32, _DBL]
+LIB.lsim_energy_profile_count.restype = ctypes.c_uint32
+LIB.lsim_energy_profile_count.argtypes = []
+LIB.lsim_energy_device.restype = ctypes.c_int32
+LIB.lsim_energy_device.argtypes = [
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_class_a.restype = ctypes.c_int32
+LIB.lsim_energy_device_class_a.argtypes = [
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_tx_current_ma.restype = ctypes.c_int32
+LIB.lsim_energy_tx_current_ma.argtypes = [ctypes.c_uint32, ctypes.c_double, _DBL]
+LIB.lsim_energy_profile.restype = ctypes.c_int32
+LIB.lsim_energy_profile.argtypes = [ctypes.c_uint32, _DBL, _DBL, _DBL, _DBL, _DBL, _DBL]
+LIB.lsim_material_count.restype = ctypes.c_uint32
+LIB.lsim_material_count.argtypes = []
+LIB.lsim_material_traversal_loss_db.restype = ctypes.c_int32
+LIB.lsim_material_traversal_loss_db.argtypes = [
+    ctypes.c_uint32, ctypes.c_double, ctypes.c_double, _DBL, ctypes.POINTER(ctypes.c_int32)]
 LIB.lsim_free_space_path_loss_db.restype = ctypes.c_int32
 LIB.lsim_free_space_path_loss_db.argtypes = [ctypes.c_double, ctypes.c_double, _DBL]
 LIB.lsim_log_distance_path_loss_db.restype = ctypes.c_int32
@@ -450,6 +558,33 @@ LIB.lsim_simulate_downlinks_env.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CDownlinkStats), ctypes.POINTER(_CDownlinkStats)]
+LIB.lsim_simulate_uplinks_trace.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_multi.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats),
+    ctypes.POINTER(_CGatewayRxStats), ctypes.POINTER(_CInterval), ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_simulate_uplinks_multi_dl.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDownlinkRule), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t]
+LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
+LIB.lsim_env_path_loss_matrix.argtypes = [
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
@@ -468,6 +603,14 @@ LIB.lsim_encode_join_accept.argtypes = [
 LIB.lsim_decode_join_accept.restype = ctypes.c_int32
 LIB.lsim_decode_join_accept.argtypes = [
     _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, _U8P, ctypes.POINTER(_CJoinAccept)]
+LIB.lsim_encode_rejoin_join_accept.restype = ctypes.c_int32
+LIB.lsim_encode_rejoin_join_accept.argtypes = [
+    ctypes.POINTER(_CJoinAccept), _U8P, _U8P, _U8P, ctypes.c_uint8, ctypes.c_uint16,
+    _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_decode_rejoin_join_accept.restype = ctypes.c_int32
+LIB.lsim_decode_rejoin_join_accept.argtypes = [
+    _U8P, ctypes.c_size_t, _U8P, _U8P, _U8P, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.POINTER(_CJoinAccept)]
 LIB.lsim_mac_encode.restype = ctypes.c_int32
 LIB.lsim_mac_encode.argtypes = [
     ctypes.POINTER(_CMacCommand), _U8P, ctypes.POINTER(ctypes.c_size_t)]
@@ -578,3 +721,88 @@ LIB.lsim_registry_export.argtypes = [
     ctypes.c_uint64, _U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 LIB.lsim_registry_import.restype = ctypes.c_int32
 LIB.lsim_registry_import.argtypes = [_U8P, _U8P, ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint64)]
+
+
+class _CMeshRadio(ctypes.Structure):
+    _fields_ = [
+        ("spreading_factor", ctypes.c_uint8),
+        ("coding_rate", ctypes.c_uint8),
+        ("bandwidth_hz", ctypes.c_uint32),
+        ("payload_bytes", ctypes.c_uint32),
+        ("preamble_symbols", ctypes.c_uint32),
+        ("capture_db", ctypes.c_double),
+    ]
+
+
+class _CMeshFrame(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("rx_node", ctypes.c_uint32),
+        ("t_ns", ctypes.c_int64),
+        ("payload_bytes", ctypes.c_uint32),
+    ]
+
+
+class _CMeshDelivery(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("delivered", ctypes.c_uint8),
+        ("loss", ctypes.c_uint8),
+        ("hops", ctypes.c_uint8),
+        ("copy_state", ctypes.c_uint8),
+        ("latency_ns", ctypes.c_int64),
+    ]
+
+
+class _CMeshHop(ctypes.Structure):
+    _fields_ = [
+        ("frame_id", ctypes.c_uint64),
+        ("sender", ctypes.c_uint32),
+        ("receiver", ctypes.c_uint32),
+        ("t_start_ns", ctypes.c_int64),
+        ("t_end_ns", ctypes.c_int64),
+        ("outcome", ctypes.c_uint8),
+        ("hop_index", ctypes.c_uint8),
+    ]
+
+
+class _CMeshSummary(ctypes.Structure):
+    _fields_ = [
+        ("transmissions", ctypes.c_uint64),
+        ("suppressed", ctypes.c_uint64),
+        ("lost_collision", ctypes.c_uint64),
+        ("lost_half_duplex", ctypes.c_uint64),
+    ]
+
+
+LIB.lsim_mesh_airtime_ns.restype = ctypes.c_int32
+LIB.lsim_mesh_airtime_ns.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int64)]
+LIB.lsim_mesh_sensitivity_dbm.restype = ctypes.c_int32
+LIB.lsim_mesh_sensitivity_dbm.argtypes = [ctypes.POINTER(_CMeshRadio), ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_shadowing_sample_db.restype = ctypes.c_int32
+LIB.lsim_shadowing_sample_db.argtypes = [
+    ctypes.c_uint64, ctypes.c_uint32, ctypes.c_double, ctypes.POINTER(ctypes.c_double)]
+LIB.lsim_mesh_routes.restype = ctypes.c_int32
+LIB.lsim_mesh_routes.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int32)]
+LIB.lsim_mesh_forward_log.restype = ctypes.c_int32
+LIB.lsim_mesh_forward_log.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32, ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary), ctypes.POINTER(_CMeshHop), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_mesh_forward_routed_log.restype = ctypes.c_int32
+LIB.lsim_mesh_forward_routed_log.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_uint32), ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary), ctypes.POINTER(_CMeshHop), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t)]
+LIB.lsim_mesh_forward.restype = ctypes.c_int32
+LIB.lsim_mesh_forward.argtypes = [
+    ctypes.POINTER(_CMeshRadio), ctypes.c_size_t, _U8P, ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_uint32, ctypes.c_int, ctypes.c_int64,
+    ctypes.POINTER(_CMeshFrame), ctypes.c_size_t, ctypes.POINTER(_CMeshDelivery),
+    ctypes.POINTER(_CMeshSummary)]

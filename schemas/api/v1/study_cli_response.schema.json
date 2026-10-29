@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "CliError": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Column",
+          "type": "integer"
+        },
+        "message": {
+          "maxLength": 200,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "column",
+        "message"
+      ],
+      "title": "CliError",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CliError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mode": {
+      "enum": [
+        "user",
+        "privileged",
+        "config",
+        "config-if"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "node_id": {
+      "pattern": "^[a-z][a-z0-9-]{0,31}$",
+      "title": "Node Id",
+      "type": "string"
+    },
+    "output": {
+      "maxLength": 8000,
+      "title": "Output",
+      "type": "string"
+    },
+    "prompt": {
+      "maxLength": 80,
+      "title": "Prompt",
+      "type": "string"
+    }
+  },
+  "required": [
+    "node_id",
+    "mode",
+    "prompt",
+    "output"
+  ],
+  "title": "CliResponse",
+  "type": "object"
+}

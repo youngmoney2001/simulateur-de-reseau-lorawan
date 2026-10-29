@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <map>
 
 #include "lsim/class_b.hpp"
 #include "lsim/environment.hpp"
@@ -25,6 +27,7 @@ struct Tx {
     std::uint32_t device = 0;
     std::uint8_t sf = 7;
     double rssi_dbm = 0.0;
+    std::uint32_t msg = 0;  // indice de l'émission : dispositifs dans l'ordre, puis k (multi)
 };
 
 bool overlap(const Tx& a, const Tx& b) {
@@ -70,6 +73,9 @@ SimStatus validate_device(const EndDeviceSpec& d) {
 
 SimStatus validate_inputs(const GatewaySpec& g, const PropagationSpec& p) {
     if (!finite(g.position.x_m) || !finite(g.position.y_m) || !finite(g.antenna_gain_dbi)) {
+        return SimStatus::InvalidInput;
+    }
+    if (!finite(g.rx_sensitivity_offset_db) || std::fabs(g.rx_sensitivity_offset_db) > 20.0) {
         return SimStatus::InvalidInput;
     }
     if (!finite(p.frequency_hz) || p.frequency_hz <= 0.0) return SimStatus::InvalidInput;
@@ -144,8 +150,36 @@ bool EventQueue::pop(Event& out) {
 SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                            const GatewaySpec& gateway, const PropagationSpec& prop,
                            DeviceStats* per_device, SimulationStats& totals,
-                           const env::Environment* environment) {
+                           const env::Environment* environment, std::vector<TxRecord>* trace,
+                           const std::vector<Interval>* gateway_busy) {
     totals = SimulationStats{};
+    if (trace != nullptr) trace->clear();
+    // Périodes d'émission passerelle : triées et fusionnées (intervalles disjoints, triés).
+    std::vector<Interval> busy;
+    if (gateway_busy != nullptr) {
+        busy = *gateway_busy;
+        for (const Interval& b : busy) {
+            if (b.end <= b.start) return SimStatus::InvalidGatewayBusy;
+        }
+        std::sort(busy.begin(), busy.end(), [](const Interval& a, const Interval& b) {
+            return a.start < b.start;
+        });
+        std::vector<Interval> merged;
+        for (const Interval& b : busy) {
+            if (!merged.empty() && b.start <= merged.back().end) {
+                merged.back().end = std::max(merged.back().end, b.end);
+            } else {
+                merged.push_back(b);
+            }
+        }
+        busy.swap(merged);
+    }
+    // Vrai si la trame [start, end) chevauche une période d'émission passerelle.
+    auto gateway_transmitting = [&busy](SimTime start, SimTime end) {
+        auto it = std::lower_bound(busy.begin(), busy.end(), start,
+                                   [](const Interval& b, SimTime s) { return b.end <= s; });
+        return it != busy.end() && it->start < end;
+    };
     if (device_count > kMaxEndDevices) {
         return SimStatus::TooManyDevices;
     }
@@ -334,42 +368,53 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     }
 
     // Évaluation : sensibilité, puis collision avec capture.
+    if (trace != nullptr) trace->reserve(txs.size());
     for (std::size_t a = 0; a < txs.size(); ++a) {
         const Tx& ta = txs[a];
         DeviceStats& st = per_device[ta.device];
+        TxOutcome outcome = TxOutcome::LostSensitivity;
 
         if (ta.rssi_dbm < sensitivity[ta.device]) {
             ++st.lost_sensitivity;
             ++totals.lost_sensitivity;
-            continue;
-        }
-
-        // Interférence maximale parmi les émissions simultanées de même SF.
-        bool interfered = false;
-        double max_interf = -1e300;
-        auto consider = [&](const Tx& tb) {
-            if (tb.sf == ta.sf && overlap(ta, tb)) {
-                interfered = true;
-                max_interf = std::max(max_interf, tb.rssi_dbm);
-            }
-        };
-        for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
-            consider(txs[b]);
-        }
-        for (std::size_t b = a; b-- > 0;) {
-            if (txs[b].start + max_airtime <= ta.start) {
-                break;  // plus aucune émission antérieure ne peut chevaucher
-            }
-            consider(txs[b]);
-        }
-
-        const bool captured = !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
-        if (captured) {
-            ++st.received;
-            ++totals.received;
+        } else if (gateway_transmitting(ta.start, ta.end)) {
+            // Demi-duplex : la passerelle émet un downlink, elle ne reçoit pas cette trame.
+            ++st.lost_gateway_busy;
+            ++totals.lost_gateway_busy;
+            outcome = TxOutcome::LostGatewayBusy;
         } else {
-            ++st.lost_collision;
-            ++totals.lost_collision;
+            // Interférence maximale parmi les émissions simultanées de même SF.
+            bool interfered = false;
+            double max_interf = -1e300;
+            auto consider = [&](const Tx& tb) {
+                if (tb.sf == ta.sf && overlap(ta, tb)) {
+                    interfered = true;
+                    max_interf = std::max(max_interf, tb.rssi_dbm);
+                }
+            };
+            for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
+                consider(txs[b]);
+            }
+            for (std::size_t b = a; b-- > 0;) {
+                if (txs[b].start + max_airtime <= ta.start) {
+                    break;  // plus aucune émission antérieure ne peut chevaucher
+                }
+                consider(txs[b]);
+            }
+
+            const bool captured = !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
+            if (captured) {
+                ++st.received;
+                ++totals.received;
+                outcome = TxOutcome::Received;
+            } else {
+                ++st.lost_collision;
+                ++totals.lost_collision;
+                outcome = TxOutcome::LostCollision;
+            }
+        }
+        if (trace != nullptr) {
+            trace->push_back(TxRecord{ta.device, ta.start, ta.end, ta.sf, ta.rssi_dbm, outcome});
         }
     }
 
@@ -422,6 +467,700 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
 
     for (std::size_t i = 0; i < device_count; ++i) {
         totals.sent += per_device[i].sent;
+    }
+    return SimStatus::Ok;
+}
+
+// ------------------------------------------------- simulate_uplinks_multi
+
+// Charge de réception par passerelle, sur les trames audibles (RSSI >= sensibilité) :
+// union des intervalles, pic de simultanéité. Balayage d'événements, fins avant débuts.
+static void fill_gateway_load(const std::vector<Tx>& txs, const std::vector<double>& rssi,
+                              const std::vector<double>& thresholds, std::size_t G,
+                              GatewayRxStats* per_gateway) {
+    if (txs.empty()) return;
+    SimTime first = txs.front().start;
+    SimTime last_end = txs.front().end;
+    for (const Tx& t : txs) {
+        first = std::min(first, t.start);
+        last_end = std::max(last_end, t.end);
+    }
+    std::vector<std::pair<SimTime, int>> events;
+    for (std::size_t g = 0; g < G; ++g) {
+        events.clear();
+        std::uint64_t audible = 0;
+        for (const Tx& t : txs) {
+            if (rssi[t.device * G + g] < thresholds[t.device * G + g]) continue;
+            events.emplace_back(t.start, +1);
+            events.emplace_back(t.end, -1);
+            ++audible;
+        }
+        std::sort(events.begin(), events.end());  // à égalité de temps, la fin (-1) passe avant
+        SimTime busy = 0;
+        SimTime run_start = 0;
+        std::int64_t depth = 0;
+        std::int64_t peak = 0;
+        for (const auto& ev : events) {
+            if (ev.second > 0) {
+                if (depth == 0) run_start = ev.first;
+                ++depth;
+                peak = std::max(peak, depth);
+            } else {
+                --depth;
+                if (depth == 0) busy += ev.first - run_start;
+            }
+        }
+        GatewayRxStats& gs = per_gateway[g];
+        gs.audible_frames = audible;
+        gs.busy_ns = static_cast<std::uint64_t>(busy);
+        gs.peak_concurrent = static_cast<std::uint64_t>(peak);
+        gs.observation_ns = last_end - first;
+    }
+}
+
+// Préparation commune aux fonctions multi-passerelles : airtime, sensibilité et RSSI par
+// dispositif et passerelle (rssi[i * G + g]). Le shadowing est tiré une fois par dispositif.
+static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_count,
+                        const GatewaySpec* gateways, std::size_t G, const PropagationSpec& prop,
+                        const env::Environment* environment, std::vector<SimTime>& airtime,
+                        std::vector<double>& sensitivity, std::vector<double>& rssi,
+                        std::vector<double>& thresholds, std::uint64_t& total_tx) {
+    const env::Environment no_environment{};
+    const env::Environment& envr = environment != nullptr ? *environment : no_environment;
+    airtime.assign(device_count, 0);
+    sensitivity.assign(device_count, 0.0);
+    rssi.assign(device_count * G, 0.0);
+    thresholds.assign(device_count * G, 0.0);
+    total_tx = 0;
+
+    radio::LogDistanceModel model;
+    model.frequency_hz = prop.frequency_hz;
+    model.reference_distance_m = prop.reference_distance_m;
+    model.exponent = prop.exponent;
+
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        const SimStatus ds = validate_device(d);
+        if (ds != SimStatus::Ok) return ds;
+
+        lora::RadioConfig rc;
+        rc.spreading_factor = d.spreading_factor;
+        rc.bandwidth = lora::Bandwidth::Bw125kHz;
+        rc.coding_rate = 1;
+        rc.low_data_rate_optimize = lora::low_data_rate_required(d.spreading_factor, rc.bandwidth);
+        const lora::AirtimeResult at = lora::time_on_air(rc, d.payload_bytes);
+        if (at.status != lora::Status::Ok) return SimStatus::InvalidInput;
+        airtime[i] = at.nanoseconds;
+
+        double s = 0.0;
+        if (lora::receiver_sensitivity_dbm(d.spreading_factor, rc.bandwidth, s) != lora::Status::Ok) {
+            return SimStatus::InvalidInput;
+        }
+        sensitivity[i] = s;
+
+        // Shadowing : un tirage par dispositif, commun à toutes les passerelles (hypothèse :
+        // évanouissement lent côté dispositif). Voir docs/STUDY_PANEL_SPEC.md.
+        const double shadow = shadowing_sample_db(prop.shadowing_seed, static_cast<std::uint32_t>(i),
+                                                  prop.shadowing_sigma_db);
+        for (std::size_t g = 0; g < G; ++g) {
+            const GatewaySpec& gw = gateways[g];
+            const double dx = d.position.x_m - gw.position.x_m;
+            const double dy = d.position.y_m - gw.position.y_m;
+            const double dist = std::max(std::hypot(dx, dy), prop.reference_distance_m);
+            double path_loss = 0.0;
+            if (environment != nullptr) {
+                env::PathLoss pl{};
+                if (env::path_loss_db(model, d.position.x_m, d.position.y_m, gw.position.x_m,
+                                      gw.position.y_m, envr, pl) != env::EnvStatus::Ok) {
+                    return SimStatus::InvalidEnvironment;
+                }
+                path_loss = pl.total_db;
+            } else {
+                const radio::BudgetResult pl = radio::log_distance_path_loss_db(model, dist);
+                if (pl.status != lora::Status::Ok) return SimStatus::InvalidInput;
+                path_loss = pl.value;
+            }
+            rssi[i * G + g] = d.tx_power_dbm + gw.antenna_gain_dbi - path_loss - shadow;
+        }
+
+        total_tx += d.messages;
+        if (total_tx > kMaxTransmissions) return SimStatus::TooManyTransmissions;
+    }
+
+    // Seuil montant par couple (dispositif, passerelle) : sensibilité du dispositif + décalage.
+    for (std::size_t i = 0; i < device_count; ++i) {
+        for (std::size_t g = 0; g < G; ++g) {
+            thresholds[i * G + g] = sensitivity[i] + gateways[g].rx_sensitivity_offset_db;
+        }
+    }
+    return SimStatus::Ok;
+}
+
+SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t device_count,
+                                 const GatewaySpec* gateways, std::size_t gateway_count,
+                                 const PropagationSpec& prop, DeviceStats* per_device,
+                                 NetworkStats& totals, GatewayRxStats* per_gateway,
+                                 const env::Environment* environment, std::vector<MultiTx>* trace,
+                                 const std::vector<std::vector<Interval>>* gateway_busy) {
+    totals = NetworkStats{};
+    if (trace != nullptr) trace->clear();
+    // Émissions passerelle par passerelle : bornes, tri et fusion, comme en mono-passerelle.
+    std::vector<std::vector<Interval>> busy(gateway_count);
+    if (gateway_busy != nullptr) {
+        if (gateway_busy->size() != gateway_count) return SimStatus::InvalidGatewayBusy;
+        for (std::size_t g = 0; g < gateway_count; ++g) {
+            std::vector<Interval> v = (*gateway_busy)[g];
+            for (const Interval& b : v) {
+                if (b.end <= b.start) return SimStatus::InvalidGatewayBusy;
+            }
+            std::sort(v.begin(), v.end(), [](const Interval& a, const Interval& b) {
+                return a.start < b.start;
+            });
+            std::vector<Interval> merged;
+            for (const Interval& b : v) {
+                if (!merged.empty() && b.start <= merged.back().end) {
+                    merged.back().end = std::max(merged.back().end, b.end);
+                } else {
+                    merged.push_back(b);
+                }
+            }
+            busy[g].swap(merged);
+        }
+    }
+    auto transmitting = [&busy](std::size_t g, SimTime start, SimTime end) {
+        const std::vector<Interval>& v = busy[g];
+        auto it = std::lower_bound(v.begin(), v.end(), start,
+                                   [](const Interval& b, SimTime s) { return b.end <= s; });
+        return it != v.end() && it->start < end;
+    };
+    if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
+    if (gateway_count == 0 || gateway_count > kMaxGateways || gateways == nullptr ||
+        per_gateway == nullptr) {
+        return SimStatus::InvalidInput;
+    }
+    if (gateway_busy != nullptr && gateway_busy->size() != gateway_count) {
+        return SimStatus::InvalidGatewayBusy;
+    }
+    if (device_count > 0 && (devices == nullptr || per_device == nullptr)) {
+        return SimStatus::InvalidInput;
+    }
+    for (std::size_t g = 0; g < gateway_count; ++g) {
+        const SimStatus gs = validate_inputs(gateways[g], prop);
+        if (gs != SimStatus::Ok) return gs;
+        per_gateway[g] = GatewayRxStats{};
+    }
+    const env::Environment no_environment{};
+    const env::Environment& envr = environment != nullptr ? *environment : no_environment;
+    if (environment != nullptr) {
+        if (env::validate_environment(envr) != env::EnvStatus::Ok) {
+            return SimStatus::InvalidEnvironment;
+        }
+        const std::uint64_t checks = static_cast<std::uint64_t>(device_count) *
+                                     envr.obstacle_count * gateway_count;
+        if (checks > env::kMaxObstacleChecks) return SimStatus::EnvironmentWorkLimit;
+    }
+
+    const std::size_t G = gateway_count;
+    std::vector<SimTime> airtime;
+    std::vector<double> sensitivity;
+    std::vector<double> rssi;  // rssi[i * G + g]
+    std::vector<double> thresholds;  // seuil montant par (dispositif, passerelle)
+    std::uint64_t total_tx = 0;
+    const SimStatus ls = prepare_links(devices, device_count, gateways, G, prop, environment,
+                                       airtime, sensitivity, rssi, thresholds, total_tx);
+    if (ls != SimStatus::Ok) return ls;
+    for (std::size_t i = 0; i < device_count; ++i) per_device[i] = DeviceStats{};
+
+    // Émissions, triées par début puis par dispositif (ordre déterministe).
+    std::vector<Tx> txs;
+    txs.reserve(static_cast<std::size_t>(total_tx));
+    SimTime max_airtime = 0;
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        const double off_factor = (1.0 - d.duty_cycle) / d.duty_cycle;
+        SimTime prev_end = 0;
+        for (std::uint32_t k = 0; k < d.messages; ++k) {
+            const double nominal_d = static_cast<double>(d.start_offset_ns) +
+                                     static_cast<double>(k) * static_cast<double>(d.period_ns);
+            if (nominal_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+            SimTime t = static_cast<SimTime>(nominal_d);
+            if (k > 0 && off_factor > 0.0) {
+                const double earliest_d = static_cast<double>(prev_end) +
+                                          std::round(static_cast<double>(airtime[i]) * off_factor);
+                if (earliest_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+                t = std::max(t, static_cast<SimTime>(earliest_d));
+            }
+            Tx tx;
+            tx.start = t;
+            tx.end = t + airtime[i];
+            tx.device = static_cast<std::uint32_t>(i);
+            tx.sf = d.spreading_factor;
+            tx.rssi_dbm = 0.0;  // RSSI par passerelle : voir rssi[]
+            txs.push_back(tx);
+            prev_end = tx.end;
+            ++per_device[i].sent;
+            ++totals.sent;
+            per_device[i].airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            max_airtime = std::max(max_airtime, airtime[i]);
+        }
+    }
+    std::stable_sort(txs.begin(), txs.end(), [](const Tx& a, const Tx& b) {
+        if (a.start != b.start) return a.start < b.start;
+        return a.device < b.device;
+    });
+    fill_gateway_load(txs, rssi, thresholds, G, per_gateway);
+
+    if (trace != nullptr) trace->reserve(txs.size());
+    for (std::size_t a = 0; a < txs.size(); ++a) {
+        const Tx& ta = txs[a];
+        MultiTx out;
+        out.device = ta.device;
+        out.start_ns = ta.start;
+        out.end_ns = ta.end;
+        out.spreading_factor = ta.sf;
+        out.best_rssi_dbm = -1e300;
+        bool any_collision = false;
+
+        bool any_busy = false;
+        for (std::size_t g = 0; g < G; ++g) {
+            const double r = rssi[ta.device * G + g];
+            if (r < thresholds[ta.device * G + g]) {
+                ++per_gateway[g].lost_sensitivity;
+                continue;
+            }
+            if (transmitting(g, ta.start, ta.end)) {
+                // Demi-duplex : cette passerelle émet un downlink, elle ne reçoit pas la trame.
+                ++per_gateway[g].lost_gateway_busy;
+                any_busy = true;
+                continue;
+            }
+            // Interférence maximale à cette passerelle parmi les émissions simultanées de même SF.
+            bool interfered = false;
+            double max_interf = -1e300;
+            auto consider = [&](const Tx& tb) {
+                if (tb.sf == ta.sf && overlap(ta, tb)) {
+                    interfered = true;
+                    max_interf = std::max(max_interf, rssi[tb.device * G + g]);
+                }
+            };
+            for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
+                consider(txs[b]);
+            }
+            for (std::size_t b = a; b-- > 0;) {
+                if (txs[b].start + max_airtime <= ta.start) break;
+                consider(txs[b]);
+            }
+            const bool captured = !interfered || (r - max_interf >= prop.capture_threshold_db);
+            if (captured) {
+                ++per_gateway[g].received;
+                ++out.receivers;
+                out.decoded_mask |= std::uint64_t{1} << g;
+                if (r > out.best_rssi_dbm) {
+                    out.best_rssi_dbm = r;
+                    out.best_gateway = static_cast<std::int32_t>(g);
+                }
+            } else {
+                ++per_gateway[g].lost_collision;
+                any_collision = true;
+            }
+        }
+        // RSSI max si aucune passerelle ne décode : sert à la trace.
+        if (out.best_gateway < 0) {
+            double max_r = -1e300;
+            for (std::size_t g = 0; g < G; ++g) max_r = std::max(max_r, rssi[ta.device * G + g]);
+            out.best_rssi_dbm = max_r;
+        }
+
+        DeviceStats& st = per_device[ta.device];
+        if (out.receivers > 0) {
+            out.outcome = TxOutcome::Received;
+            ++st.received;
+            ++totals.received;
+            totals.duplicates += out.receivers - 1;
+        } else if (any_collision) {
+            out.outcome = TxOutcome::LostCollision;
+            ++st.lost_collision;
+            ++totals.lost_collision;
+        } else if (any_busy) {
+            out.outcome = TxOutcome::LostGatewayBusy;
+            ++st.lost_gateway_busy;
+            ++totals.lost_gateway_busy;
+        } else {
+            out.outcome = TxOutcome::LostSensitivity;
+            ++st.lost_sensitivity;
+            ++totals.lost_sensitivity;
+        }
+        if (trace != nullptr) trace->push_back(out);
+    }
+    return SimStatus::Ok;
+}
+
+// ------------------------------------------ passerelles + downlinks (ordre de fin)
+
+namespace {
+
+// Airtime d'un downlink au débit RX1 (= SF de l'uplink, BW 125 kHz), CR 4/5, en-tête explicite,
+// sans CRC (LoRaWAN).
+SimStatus downlink_airtime(std::uint8_t sf, std::uint32_t payload_bytes, SimTime& out) {
+    lora::RadioConfig rc;
+    rc.spreading_factor = sf;
+    rc.bandwidth = lora::Bandwidth::Bw125kHz;
+    rc.coding_rate = 1;
+    rc.crc_on = false;
+    rc.explicit_header = true;
+    rc.low_data_rate_optimize = lora::low_data_rate_required(sf, rc.bandwidth);
+    const lora::AirtimeResult at = lora::time_on_air(rc, static_cast<std::uint8_t>(payload_bytes));
+    if (at.status != lora::Status::Ok) return SimStatus::InvalidInput;
+    out = at.nanoseconds;
+    return SimStatus::Ok;
+}
+
+// Périodes d'émission d'une passerelle : début -> fin, disjointes. Un join-accept est placé plus
+// tard dans le temps qu'un downlink de données créé après lui : une liste ordonnée par début
+// permet d'insérer et de chercher un créneau libre sans supposer que les débuts croissent.
+using BusyMap = std::map<SimTime, SimTime>;
+
+// Vrai si [start, end) chevauche une période.
+bool map_intersects(const BusyMap& m, SimTime start, SimTime end) {
+    auto it = m.lower_bound(start);
+    if (it != m.begin()) {
+        auto prev = std::prev(it);
+        if (prev->second > start) return true;
+    }
+    return it != m.end() && it->first < end;
+}
+
+// Premier instant >= t où [s, s + air) ne chevauche aucune période.
+SimTime first_free(const BusyMap& m, SimTime t, SimTime air) {
+    SimTime s = t;
+    auto it = m.upper_bound(s);
+    if (it != m.begin()) {
+        auto prev = std::prev(it);
+        if (prev->second > s) s = prev->second;
+    }
+    while (it != m.end() && it->first < s + air) {
+        s = it->second;
+        ++it;
+    }
+    return s;
+}
+
+constexpr std::uint32_t kAckFrameBytes = 12;      // MHDR, DevAddr, FCtrl, FCnt, MIC
+constexpr std::uint32_t kDataFrameOverhead = 13;  // ACK + FPort
+constexpr SimTime kRx1DelayNs = 1'000'000'000;
+constexpr SimTime kJoinAcceptDelayNs = 5'000'000'000;  // JOIN_ACCEPT_DELAY1 (RP002 §2.3)
+constexpr std::uint32_t kJoinAcceptBytes = 17;         // join-accept sans CFList
+constexpr SimTime kRx1WindowNs = 1'000'000'000;
+
+}  // namespace
+
+SimStatus simulate_uplinks_multi_downlinks(
+    const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
+    std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
+    DeviceStats* per_device, NetworkStats& totals, GatewayRxStats* per_gateway,
+    const env::Environment* environment, std::vector<MultiTx>* trace,
+    std::vector<MultiDownlink>* downlinks, const SimTime* dl_ready_ns) {
+    totals = NetworkStats{};
+    if (trace != nullptr) trace->clear();
+    if (downlinks != nullptr) downlinks->clear();
+    if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
+    if (gateway_count == 0 || gateway_count > kMaxGateways || gateways == nullptr ||
+        per_gateway == nullptr) {
+        return SimStatus::InvalidInput;
+    }
+    if (device_count > 0 && (devices == nullptr || per_device == nullptr)) {
+        return SimStatus::InvalidInput;
+    }
+    if (rule.payload_bytes > 242 || !finite(rule.gateway_tx_power_dbm) ||
+        !finite(rule.device_antenna_gain_dbi) || !finite(rule.device_rx_offset_db)) {
+        return SimStatus::InvalidInput;
+    }
+    for (std::size_t g = 0; g < gateway_count; ++g) {
+        const SimStatus gs = validate_inputs(gateways[g], prop);
+        if (gs != SimStatus::Ok) return gs;
+        per_gateway[g] = GatewayRxStats{};
+    }
+    const std::size_t G = gateway_count;
+    std::vector<SimTime> airtime;
+    std::vector<double> sensitivity;
+    std::vector<double> rssi;
+    std::vector<double> thresholds;  // seuil montant par (dispositif, passerelle)
+    std::uint64_t total_tx = 0;
+    const SimStatus ls = prepare_links(devices, device_count, gateways, G, prop, environment,
+                                       airtime, sensitivity, rssi, thresholds, total_tx);
+    if (ls != SimStatus::Ok) return ls;
+    for (std::size_t i = 0; i < device_count; ++i) per_device[i] = DeviceStats{};
+
+    // Émissions, triées par début (puis dispositif). Prochain début du même dispositif (-1 : aucun).
+    std::vector<Tx> txs;
+    txs.reserve(static_cast<std::size_t>(total_tx));
+    SimTime max_airtime = 0;
+    std::size_t msg_base = 0;
+    for (std::size_t i = 0; i < device_count; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        const double off_factor = (1.0 - d.duty_cycle) / d.duty_cycle;
+        SimTime prev_end = 0;
+        for (std::uint32_t k = 0; k < d.messages; ++k) {
+            const double nominal_d = static_cast<double>(d.start_offset_ns) +
+                                     static_cast<double>(k) * static_cast<double>(d.period_ns);
+            if (nominal_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+            SimTime t = static_cast<SimTime>(nominal_d);
+            if (k > 0 && off_factor > 0.0) {
+                const double earliest_d = static_cast<double>(prev_end) +
+                                          std::round(static_cast<double>(airtime[i]) * off_factor);
+                if (earliest_d > kMaxHorizonNs) return SimStatus::InvalidInput;
+                t = std::max(t, static_cast<SimTime>(earliest_d));
+            }
+            Tx tx;
+            tx.start = t;
+            tx.end = t + airtime[i];
+            tx.device = static_cast<std::uint32_t>(i);
+            tx.sf = d.spreading_factor;
+            tx.msg = static_cast<std::uint32_t>(msg_base + k);
+            txs.push_back(tx);
+            prev_end = tx.end;
+            ++per_device[i].sent;
+            ++totals.sent;
+            per_device[i].airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            totals.airtime_ns += static_cast<std::uint64_t>(airtime[i]);
+            max_airtime = std::max(max_airtime, airtime[i]);
+        }
+        msg_base += d.messages;
+    }
+    std::stable_sort(txs.begin(), txs.end(), [](const Tx& a, const Tx& b) {
+        if (a.start != b.start) return a.start < b.start;
+        return a.device < b.device;
+    });
+    fill_gateway_load(txs, rssi, thresholds, G, per_gateway);
+    const std::size_t T = txs.size();
+    std::vector<std::int64_t> next_start(T, -1);
+    {
+        std::vector<std::int64_t> last(device_count, -1);
+        for (std::size_t a = T; a-- > 0;) {
+            const std::uint32_t d = txs[a].device;
+            next_start[a] = last[d];
+            last[d] = static_cast<std::int64_t>(txs[a].start);
+        }
+    }
+
+    // Passe 1 (ordre de début) : échecs statiques par passerelle, indépendants des downlinks.
+    // Bit g de sens_fail : sous la sensibilité ; bit g de coll_fail : collision non capturée.
+    std::vector<std::uint64_t> sens_fail(T, 0), coll_fail(T, 0);
+    for (std::size_t a = 0; a < T; ++a) {
+        const Tx& ta = txs[a];
+        for (std::size_t g = 0; g < G; ++g) {
+            const double r = rssi[ta.device * G + g];
+            if (r < thresholds[ta.device * G + g]) {
+                sens_fail[a] |= std::uint64_t{1} << g;
+                continue;
+            }
+            bool interfered = false;
+            double max_interf = -1e300;
+            auto consider = [&](const Tx& tb) {
+                if (tb.sf == ta.sf && overlap(ta, tb)) {
+                    interfered = true;
+                    max_interf = std::max(max_interf, rssi[tb.device * G + g]);
+                }
+            };
+            for (std::size_t b = a + 1; b < T && txs[b].start < ta.end; ++b) consider(txs[b]);
+            for (std::size_t b = a; b-- > 0;) {
+                if (txs[b].start + max_airtime <= ta.start) break;
+                consider(txs[b]);
+            }
+            const bool captured = !interfered || (r - max_interf >= prop.capture_threshold_db);
+            if (!captured) coll_fail[a] |= std::uint64_t{1} << g;
+        }
+    }
+
+    // Passe 2 (ordre de fin) : décodage avec demi-duplex, puis downlink de la meilleure passerelle.
+    std::vector<std::size_t> by_end(T);
+    for (std::size_t a = 0; a < T; ++a) by_end[a] = a;
+    std::stable_sort(by_end.begin(), by_end.end(), [&txs](std::size_t x, std::size_t y) {
+        return txs[x].end < txs[y].end;
+    });
+    std::vector<BusyMap> busy(G);
+    std::vector<std::uint32_t> accepted(device_count, 0);
+    // Instant de réception du join-accept (fin de sa transmission) ; kNever tant que non reçu.
+    constexpr SimTime kNever = std::numeric_limits<SimTime>::max();
+    std::vector<SimTime> joined_at(device_count, kNever);
+    std::vector<MultiTx> out(T);
+    std::vector<MultiDownlink> dls;
+
+    // Place un downlink de `a` (RX1 à dl.t_open_ns) sur sa passerelle, ou le marque perdu.
+    // Première place libre à partir de t_open : un join-accept (ouverture tardive) ne retarde
+    // pas un downlink de données dont l'ouverture est plus tôt.
+    // Repli RX2 : si la passerelle ne peut émettre dans la fenêtre RX1, la descente tente RX2
+    // (ouverte 1 s après RX1, fenêtre de 1 s, SF `rule.rx2_sf`, même passerelle). Une émission
+    // du dispositif pendant RX2 est une perte finale. Fréquence RX2 non modélisée.
+    auto place = [&](MultiDownlink& dl, std::size_t a, std::uint32_t payload,
+                     double rssi_up) -> SimStatus {
+        const Tx& ta = txs[a];
+        SimTime air = 0;
+        if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
+        std::uint8_t sf_used = ta.sf;
+        // Départ au plus tôt : arrivée de la descente à la passerelle (retour mesh). Absent : t_open.
+        const SimTime ready = dl_ready_ns != nullptr ? dl_ready_ns[ta.msg] : -1;
+        if (ready == kDownlinkNever) {
+            dl.outcome = DownlinkOutcome::GatewayBusy;  // jamais acheminée (perdue sur le mesh)
+            return SimStatus::Ok;
+        }
+        if (next_start[a] >= 0 && next_start[a] < dl.t_open_ns + kRx1WindowNs) {
+            dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX1
+            return SimStatus::Ok;
+        }
+        const std::size_t g = dl.gateway;
+        SimTime start = first_free(busy[g], std::max(dl.t_open_ns, ready), air);
+        if (start - dl.t_open_ns >= kRx1WindowNs) {
+            // La passerelle ne peut émettre dans RX1 : repli sur RX2, sinon perte.
+            const SimTime open2 = dl.t_open_ns + kRx1WindowNs;
+            if (rule.rx2_sf == 0) {
+                dl.outcome = DownlinkOutcome::GatewayBusy;
+                return SimStatus::Ok;
+            }
+            SimTime air2 = 0;
+            if (downlink_airtime(rule.rx2_sf, payload, air2) != SimStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            if (next_start[a] >= 0 && next_start[a] < open2 + kRx1WindowNs) {
+                dl.outcome = DownlinkOutcome::DeviceTransmitting;  // le dispositif émet pendant RX2
+                return SimStatus::Ok;
+            }
+            start = first_free(busy[g], std::max(open2, ready), air2);
+            if (start - open2 >= kRx1WindowNs) {
+                dl.outcome = DownlinkOutcome::GatewayBusy;  // ni RX1 ni RX2 : perte
+                return SimStatus::Ok;
+            }
+            air = air2;
+            sf_used = rule.rx2_sf;
+            dl.rx_window = 2;
+        }
+        dl.start_ns = start;
+        dl.end_ns = start + air;
+        busy[g][start] = start + air;
+        // Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev.
+        double s = 0.0;
+        if (lora::receiver_sensitivity_dbm(sf_used, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
+            return SimStatus::InvalidInput;
+        }
+        const double rssi_dl = rssi_up - devices[ta.device].tx_power_dbm +
+                               rule.gateway_tx_power_dbm + rule.device_antenna_gain_dbi;
+        dl.outcome = rssi_dl >= s + rule.device_rx_offset_db ? DownlinkOutcome::Delivered
+                                                             : DownlinkOutcome::LostSensitivity;
+        return SimStatus::Ok;
+    };
+
+    for (std::size_t a : by_end) {
+        const Tx& ta = txs[a];
+        const std::uint32_t d = ta.device;
+        MultiTx m;
+        m.device = d;
+        m.start_ns = ta.start;
+        m.end_ns = ta.end;
+        m.spreading_factor = ta.sf;
+        m.best_rssi_dbm = -1e300;
+        bool any_collision = false;
+        bool any_busy = false;
+        std::uint32_t receivers = 0;
+        for (std::size_t g = 0; g < G; ++g) {
+            const std::uint64_t bit = std::uint64_t{1} << g;
+            GatewayRxStats& gs = per_gateway[g];
+            if (sens_fail[a] & bit) {
+                ++gs.lost_sensitivity;
+                continue;
+            }
+            if (map_intersects(busy[g], ta.start, ta.end)) {
+                ++gs.lost_gateway_busy;
+                any_busy = true;
+                continue;
+            }
+            if (coll_fail[a] & bit) {
+                ++gs.lost_collision;
+                any_collision = true;
+                continue;
+            }
+            ++gs.received;
+            ++receivers;
+            m.decoded_mask |= bit;
+            const double r = rssi[d * G + g];
+            if (r > m.best_rssi_dbm) {
+                m.best_rssi_dbm = r;
+                m.best_gateway = static_cast<std::int32_t>(g);
+            }
+        }
+        m.receivers = receivers;
+        if (m.best_gateway < 0) {
+            double max_r = -1e300;
+            for (std::size_t g = 0; g < G; ++g) max_r = std::max(max_r, rssi[d * G + g]);
+            m.best_rssi_dbm = max_r;
+        }
+
+        DeviceStats& st = per_device[d];
+        if (receivers > 0) {
+            m.outcome = TxOutcome::Received;
+            ++st.received;
+            ++totals.received;
+            totals.duplicates += receivers - 1;
+        } else if (any_collision) {
+            m.outcome = TxOutcome::LostCollision;
+            ++st.lost_collision;
+            ++totals.lost_collision;
+        } else if (any_busy) {
+            m.outcome = TxOutcome::LostGatewayBusy;
+            ++st.lost_gateway_busy;
+            ++totals.lost_gateway_busy;
+        } else {
+            m.outcome = TxOutcome::LostSensitivity;
+            ++st.lost_sensitivity;
+            ++totals.lost_sensitivity;
+        }
+        // Une trame démarrée avant la réception du join-accept est une join-request.
+        m.join_request = rule.join && !(joined_at[d] != kNever && ta.start >= joined_at[d]);
+        out[a] = m;
+
+        if (receivers == 0) continue;
+        const std::uint32_t gw = static_cast<std::uint32_t>(m.best_gateway);
+
+        if (m.join_request) {
+            // Join-request décodée : join-accept à fin + 5 s par la meilleure passerelle.
+            // Le dispositif est jointé seulement si le join-accept lui parvient.
+            MultiDownlink dl;
+            dl.device = d;
+            dl.gateway = gw;
+            dl.join = true;
+            dl.t_open_ns = ta.end + kJoinAcceptDelayNs;
+            if (place(dl, a, kJoinAcceptBytes, m.best_rssi_dbm) != SimStatus::Ok) {
+                return SimStatus::InvalidInput;
+            }
+            if (dl.outcome == DownlinkOutcome::Delivered &&
+                (joined_at[d] == kNever || dl.end_ns < joined_at[d])) {
+                joined_at[d] = dl.end_ns;  // premier join-accept reçu
+            }
+            dls.push_back(dl);
+            continue;
+        }
+
+        ++accepted[d];
+        const bool queued = rule.every > 0 && accepted[d] % rule.every == 0;
+        if (!queued && !rule.ack_uplinks) continue;
+
+        MultiDownlink dl;
+        dl.device = d;
+        dl.gateway = gw;
+        dl.data = queued;
+        dl.t_open_ns = ta.end + kRx1DelayNs;
+        const std::uint32_t payload = queued ? kDataFrameOverhead + rule.payload_bytes : kAckFrameBytes;
+        if (place(dl, a, payload, m.best_rssi_dbm) != SimStatus::Ok) return SimStatus::InvalidInput;
+        dls.push_back(dl);
+    }
+
+    if (trace != nullptr) {
+        trace->reserve(T);
+        for (std::size_t a = 0; a < T; ++a) trace->push_back(out[a]);
+    }
+    if (downlinks != nullptr) {
+        // Ordre d'ouverture RX1 (ordre de fin = ordre d'ouverture, car RX1 = fin + 1 s).
+        *downlinks = std::move(dls);
     }
     return SimStatus::Ok;
 }

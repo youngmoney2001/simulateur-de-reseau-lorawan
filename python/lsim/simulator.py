@@ -8,6 +8,7 @@ capture) est entièrement dans le cœur C++. Les limites (10 000 dispositifs,
 from __future__ import annotations
 
 import ctypes
+import dataclasses
 import math
 from dataclasses import dataclass
 from enum import IntEnum
@@ -19,9 +20,16 @@ from lsim._native import (
     _CDownlinkPlan,
     _CDownlinkStats,
     _CSimStats,
+    _CInterval,
+    _CTxRecord,
     _CEndDevice,
     _CEnvironment,
     _CGateway,
+    _CGatewayRxStats,
+    _CDownlinkRecord,
+    _CDownlinkRule,
+    _CMultiTxRecord,
+    _CNetworkStats,
     _CObstacle,
     _CPropagation,
 )
@@ -29,6 +37,7 @@ from lsim.environment import Environment
 from lsim.lora import StatusError
 
 MAX_END_DEVICES = 10_000
+MAX_TRACE_RECORDS = 200_000  # borne de trace (cœur : statut 309)
 MAX_DOWNLINKS_PER_DEVICE = 100_000
 MAX_RX_WINDOW_NS = 10_000_000_000
 MAX_PERIODICITY = 7
@@ -119,6 +128,7 @@ class Gateway:
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    rx_sensitivity_offset_db: float = 0.0   # 0 sans profil ; voir gateway_profiles.rx_sensitivity_offset_db
 
 
 @dataclass(frozen=True)
@@ -154,6 +164,7 @@ class Counters:
     lost_sensitivity: int = 0
     lost_collision: int = 0
     airtime_ns: int = 0  # temps d'antenne cumulé des trames émises
+    lost_gateway_busy: int = 0  # reçue pendant une émission de la passerelle (demi-duplex)
 
 
 @dataclass(frozen=True)
@@ -192,6 +203,12 @@ class SimulationResult:
     downlink_totals: DownlinkCounters = DownlinkCounters()
 
 
+def _gateway_rx(s) -> GatewayRxCounters:
+    return GatewayRxCounters(s.received, s.lost_sensitivity, s.lost_collision,
+                             s.lost_gateway_busy, s.audible_frames, s.busy_ns,
+                             s.peak_concurrent, s.observation_ns)
+
+
 def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
     """Traduit l'environnement en structure C. Retourne aussi les tampons à garder vivants."""
     keep: list[object] = []
@@ -221,6 +238,31 @@ def _c_environment(env: Environment) -> tuple[_CEnvironment, list[object]]:
         c_env.obstacles = ctypes.cast(c_obs, ctypes.POINTER(_CObstacle))
         c_env.obstacle_count = len(env.obstacles)
     return c_env, keep
+
+
+def environment_path_loss_matrix(positions: Sequence[tuple[float, float]],
+                                 propagation: Propagation,
+                                 environment: Environment) -> tuple[float, ...]:
+    """Pertes de propagation totales (dB) entre toutes les paires de points, relief et obstacles.
+
+    Résultat à plat : `out[i * n + j]`, émetteur i, récepteur j ; diagonale 0. Les deux
+    extrémités sont à la hauteur passerelle (cas du mesh entre passerelles). Pas de shadowing.
+    """
+    n = len(positions)
+    if not 1 <= n <= 64:
+        raise ValueError("entre 1 et 64 points")
+    env = dataclasses.replace(environment, device_height_m=environment.gateway_height_m)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db, 0.0, 0)
+    xs = (ctypes.c_double * n)(*[float(p[0]) for p in positions])
+    ys = (ctypes.c_double * n)(*[float(p[1]) for p in positions])
+    c_env, keep = _c_environment(env)
+    out = (ctypes.c_double * (n * n))()
+    status = LIB.lsim_env_path_loss_matrix(ctypes.byref(c_prop), ctypes.byref(c_env), n, xs, ys, out)
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    return tuple(out)
 
 
 def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db: float,
@@ -258,18 +300,35 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
     return tuple(out)
 
 
-def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
-                     propagation: Propagation,
-                     environment: Optional[Environment] = None) -> SimulationResult:
-    """Simule les liaisons montantes vers une passerelle et retourne les compteurs.
+@dataclass(frozen=True)
+class TxRecord:
+    """Une transmission de la trace native. outcome : 0 sous sensibilité, 1 collision, 2 reçue."""
 
-    `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
-    plat et sans obstacle (résultat identique au modèle log-distance seul).
-    """
-    if len(devices) > MAX_END_DEVICES:
-        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
-    n = len(devices)
-    c_devs = (_CEndDevice * n)()
+    device_index: int
+    start_ns: int
+    end_ns: int
+    spreading_factor: int
+    rssi_dbm: float
+    outcome: int
+
+    OUTCOME_LOST_SENSITIVITY = 0
+    OUTCOME_LOST_COLLISION = 1
+    OUTCOME_RECEIVED = 2
+    OUTCOME_LOST_GATEWAY_BUSY = 3  # passerelle en émission pendant la trame
+
+
+@dataclass(frozen=True)
+class TraceResult:
+    """Compteurs et trace par transmission, produits par le même appel natif."""
+
+    per_device: tuple[Counters, ...]
+    totals: Counters
+    gateway: GatewayLoad
+    records: tuple[TxRecord, ...]
+
+
+def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
+    c_devs = (_CEndDevice * len(devices))()
     for i, d in enumerate(devices):
         c = c_devs[i]
         c.x_m = d.x_m
@@ -281,7 +340,357 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         c.period_ns = d.period_ns
         c.messages = d.messages
         c.duty_cycle = d.duty_cycle
+    return c_devs
 
+
+def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
+                           propagation: Propagation,
+                           environment: Optional[Environment] = None,
+                           gateway_busy: Sequence[tuple[int, int]] = ()) -> TraceResult:
+    """Comme `simulate_uplinks`, avec une entrée de trace par transmission.
+
+    `gateway_busy` : périodes [début, fin) pendant lesquelles la passerelle émet (ns). Une trame
+    reçue qui les chevauche est perdue (demi-duplex, issue LOST_GATEWAY_BUSY).
+
+    Les temps de la trace (début, fin) sont ceux du moteur, en nanosecondes. La trace
+    est bornée par le cœur (statut 309 au-delà de 200 000 émissions).
+    """
+    if len(gateway_busy) > MAX_TRACE_RECORDS:
+        raise ValueError("trop de périodes d'émission passerelle")
+    c_busy = None
+    if gateway_busy:
+        c_busy = (_CInterval * len(gateway_busy))()
+        for k, (start, end) in enumerate(gateway_busy):
+            c_busy[k].start_ns = start
+            c_busy[k].end_ns = end
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    n = len(devices)
+    c_devs = _c_end_devices(devices)
+    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+    c_stats = (_CDeviceStats * n)()
+    c_tot = _CSimStats()
+    keep: list[object] = []
+    if environment is None:
+        c_env_ref = None
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+
+    # Taille requise : le cœur la renvoie en cas de tampon insuffisant (statut 308).
+    capacity = sum(d.messages for d in devices)
+    if capacity > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    count = ctypes.c_size_t(0)
+    records = (_CTxRecord * capacity)() if capacity else None
+    status = LIB.lsim_simulate_uplinks_trace(
+        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
+        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
+        c_busy, len(gateway_busy))
+    del keep
+    if status != 0:
+        raise StatusError(status)
+
+    per = tuple(
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
+        for s in c_stats
+    )
+    tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
+                   c_tot.airtime_ns, c_tot.lost_gateway_busy)
+    load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
+                       c_tot.observation_ns, c_tot.gateway_utilization)
+    trace = tuple(
+        TxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.rssi_dbm, r.outcome)
+        for r in (records[:count.value] if records is not None else ())
+    )
+    return TraceResult(per, tot, load, trace)
+
+
+@dataclass(frozen=True)
+class NetworkCounters:
+    """Compteurs réseau après déduplication serveur (une livraison par trame)."""
+
+    sent: int
+    received: int
+    duplicates: int
+    lost_sensitivity: int
+    lost_collision: int
+    lost_gateway_busy: int
+    airtime_ns: int
+
+
+@dataclass(frozen=True)
+class GatewayRxCounters:
+    """Trames décodées ou perdues à une passerelle donnée, et sa charge de réception.
+
+    La charge porte sur les trames audibles (RSSI >= sensibilité) : union des intervalles
+    (`busy_ns`), simultanéité maximale (`peak_concurrent`), sur la fenêtre d'observation.
+    """
+
+    received: int
+    lost_sensitivity: int
+    lost_collision: int
+    lost_gateway_busy: int
+    audible_frames: int = 0
+    busy_ns: int = 0
+    peak_concurrent: int = 0
+    observation_ns: int = 0
+
+    @property
+    def utilization(self) -> float:
+        return self.busy_ns / self.observation_ns if self.observation_ns > 0 else 0.0
+
+
+@dataclass(frozen=True)
+class MultiTxRecord:
+    """Issue réseau d'une émission. outcome : 0 sensibilité, 1 collision, 2 reçue, 3 passerelle occupée."""
+
+    device_index: int
+    start_ns: int
+    end_ns: int
+    spreading_factor: int
+    receivers: int
+    best_gateway: int      # -1 si aucune passerelle ne décode
+    best_rssi_dbm: float
+    outcome: int
+    decoded_mask: int = 0  # bit g : la passerelle g a décodé la trame (g < 64)
+    join_request: bool = False  # join-request d'un dispositif non jointé (rule.join)
+
+
+@dataclass(frozen=True)
+class MultiGatewayResult:
+    per_device: tuple[Counters, ...]
+    network: NetworkCounters
+    per_gateway: tuple[GatewayRxCounters, ...]
+    trace: tuple[MultiTxRecord, ...] = ()
+
+
+MAX_GATEWAYS = 64
+
+
+def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gateway],
+                           propagation: Propagation,
+                           environment: Optional[Environment] = None,
+                           gateway_busy: Optional[Sequence[Sequence[tuple[int, int]]]] = None,
+                           with_trace: bool = False) -> MultiGatewayResult:
+    """Simule les liaisons montantes vers plusieurs passerelles, avec déduplication serveur.
+
+    Chaque passerelle reçoit indépendamment (sensibilité, collision, puis demi-duplex à son
+    propre RSSI). Une trame est livrée au serveur si au moins une passerelle la décode ; les copies
+    sont comptées.
+
+    `gateway_busy` : pour chaque passerelle, ses périodes d'émission [début, fin) en ns (liste de
+    même longueur que `gateways`). `with_trace` : renvoie une entrée par émission.
+    """
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    if not 1 <= len(gateways) <= MAX_GATEWAYS:
+        raise ValueError(f"entre 1 et {MAX_GATEWAYS} passerelles")
+    if gateway_busy is not None and len(gateway_busy) != len(gateways):
+        raise ValueError("gateway_busy doit compter une liste par passerelle")
+    n = len(devices)
+    g_count = len(gateways)
+    total_messages = sum(d.messages for d in devices)
+    if with_trace and total_messages > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions")
+    c_devs = _c_end_devices(devices)
+    c_gws = (_CGateway * g_count)(*[
+        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+    c_stats = (_CDeviceStats * n)()
+    c_tot = _CNetworkStats()
+    c_gw_stats = (_CGatewayRxStats * g_count)()
+    # Périodes passerelle : tableau plat et compte par passerelle ; NULL si aucune.
+    c_busy, c_busy_counts, n_busy = None, None, 0
+    if gateway_busy is not None:
+        flat = [(a, b) for per in gateway_busy for (a, b) in per]
+        n_busy = len(flat)
+        if n_busy > MAX_TRACE_RECORDS:
+            raise ValueError("trop de périodes d'émission passerelle")
+        c_busy = (_CInterval * max(n_busy, 1))()
+        for k, (a, b) in enumerate(flat):
+            c_busy[k].start_ns = a
+            c_busy[k].end_ns = b
+        c_busy_counts = (ctypes.c_size_t * g_count)(*[len(per) for per in gateway_busy])
+    c_records = (_CMultiTxRecord * max(total_messages, 1))() if with_trace else None
+    c_record_count = ctypes.c_size_t(0)
+    if environment is None:
+        c_env_ref, keep = None, []
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+    status = LIB.lsim_simulate_uplinks_multi(
+        c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), c_env_ref,
+        c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
+        c_busy, c_busy_counts,
+        c_records, total_messages if with_trace else 0,
+        ctypes.byref(c_record_count) if with_trace else None)
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    per = tuple(
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
+        for s in c_stats
+    )
+    network = NetworkCounters(c_tot.sent, c_tot.received, c_tot.duplicates,
+                              c_tot.lost_sensitivity, c_tot.lost_collision,
+                              c_tot.lost_gateway_busy, c_tot.airtime_ns)
+    per_gw = tuple(_gateway_rx(s) for s in c_gw_stats)
+    trace: tuple[MultiTxRecord, ...] = ()
+    if with_trace:
+        trace = tuple(
+            MultiTxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.receivers,
+                          r.best_gateway, r.best_rssi_dbm, r.outcome, r.decoded_mask)
+            for r in c_records[:c_record_count.value])
+    return MultiGatewayResult(per_device=per, network=network, per_gateway=per_gw, trace=trace)
+
+
+@dataclass(frozen=True)
+class DownlinkRule:
+    """Règle de downlink multi-passerelles (voir lsim/engine.hpp)."""
+
+    ack_uplinks: bool = False
+    every: int = 0
+    payload_bytes: int = 10
+    gateway_tx_power_dbm: float = 14.0
+    device_antenna_gain_dbi: float = 0.0
+    device_rx_offset_db: float = 0.0
+    join: bool = False  # join-request décodée -> join-accept (17 octets, fin + 5 s)
+    rx2_sf: int = 12    # SF de la fenêtre RX2 de repli (0 : pas de repli ; 7..12, BW 125 kHz)
+
+
+@dataclass(frozen=True)
+class DownlinkRecord:
+    """Downlink planifié. outcome : 0 reçu, 1 sous la sensibilité, 2 passerelle hors RX1,
+    3 dispositif en émission. start_ns/end_ns = -1 si non émis. join : join-accept."""
+
+    device_index: int
+    gateway_index: int
+    data: bool
+    t_open_ns: int
+    start_ns: int
+    end_ns: int
+    outcome: int
+    join: bool = False
+    rx_window: int = 1  # 1 : RX1 ; 2 : RX2 (repli après une RX1 occupée côté passerelle)
+
+
+@dataclass(frozen=True)
+class MultiDownlinkResult:
+    per_device: tuple[Counters, ...]
+    network: NetworkCounters
+    per_gateway: tuple[GatewayRxCounters, ...]
+    trace: tuple[MultiTxRecord, ...]
+    downlinks: tuple[DownlinkRecord, ...]
+
+
+DL_READY_NEVER = (1 << 63) - 1  # INT64_MAX côté natif : descente jamais acheminée
+
+
+def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Gateway],
+                             propagation: Propagation, rule: DownlinkRule,
+                             environment: Optional[Environment] = None,
+                             dl_ready_ns: Optional[Sequence[int]] = None) -> MultiDownlinkResult:
+    """Passerelles multiples avec downlinks et demi-duplex par passerelle (calcul exact, C++).
+
+    Chaque uplink décodé est acquitté ou reçoit une charge par la meilleure passerelle décodeuse.
+    Chaque passerelle sérialise ses downlinks ; elle ne décode pas pendant les siens.
+
+    `dl_ready_ns` (optionnel) : départ au plus tôt de la descente de chaque émission, dans l'ordre
+    des émissions (dispositifs dans l'ordre, puis k) ; -1 aucune contrainte ; `DL_READY_NEVER`
+    descente jamais acheminée. Longueur : nombre total d'émissions.
+    """
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    if not 1 <= len(gateways) <= MAX_GATEWAYS:
+        raise ValueError(f"entre 1 et {MAX_GATEWAYS} passerelles")
+    if not 0 <= rule.payload_bytes <= 242:
+        raise ValueError("charge de downlink entre 0 et 242 octets")
+    if rule.every < 0:
+        raise ValueError("every doit être positif ou nul")
+    n = len(devices)
+    g_count = len(gateways)
+    total_messages = sum(d.messages for d in devices)
+    if total_messages > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions")
+    c_devs = _c_end_devices(devices)
+    c_gws = (_CGateway * g_count)(*[
+        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+    c_rule = _CDownlinkRule(1 if rule.ack_uplinks else 0, rule.every, rule.payload_bytes,
+                            rule.gateway_tx_power_dbm, rule.device_antenna_gain_dbi,
+                            rule.device_rx_offset_db, 1 if rule.join else 0, rule.rx2_sf)
+    c_stats = (_CDeviceStats * n)()
+    c_tot = _CNetworkStats()
+    c_gw_stats = (_CGatewayRxStats * g_count)()
+    c_records = (_CMultiTxRecord * max(total_messages, 1))()
+    c_record_count = ctypes.c_size_t(0)
+    # Les downlinks sont au plus une par uplink décodé : borne = nombre d'émissions.
+    c_dls = (_CDownlinkRecord * max(total_messages, 1))()
+    c_dl_count = ctypes.c_size_t(0)
+    if environment is None:
+        c_env_ref, keep = None, []
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+    if dl_ready_ns is not None and len(dl_ready_ns) != total_messages:
+        raise ValueError("dl_ready_ns : une valeur par émission")
+    if dl_ready_ns is None:
+        c_ready, ready_ptr, ready_count = None, None, 0
+    else:
+        c_ready = (ctypes.c_int64 * max(total_messages, 1))(*dl_ready_ns)
+        ready_ptr, ready_count = c_ready, total_messages
+    status = LIB.lsim_simulate_uplinks_multi_dl(
+        c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), ctypes.byref(c_rule),
+        c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
+        c_records, total_messages, ctypes.byref(c_record_count),
+        c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
+    del keep
+    if status != 0:
+        raise StatusError(status)
+    per = tuple(
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
+        for s in c_stats
+    )
+    network = NetworkCounters(c_tot.sent, c_tot.received, c_tot.duplicates,
+                              c_tot.lost_sensitivity, c_tot.lost_collision,
+                              c_tot.lost_gateway_busy, c_tot.airtime_ns)
+    per_gw = tuple(_gateway_rx(s) for s in c_gw_stats)
+    trace = tuple(
+        MultiTxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.receivers,
+                      r.best_gateway, r.best_rssi_dbm, r.outcome, r.decoded_mask,
+                      bool(r.join_request))
+        for r in c_records[:c_record_count.value])
+    dls = tuple(
+        DownlinkRecord(r.device_index, r.gateway_index, bool(r.data), r.t_open_ns, r.start_ns,
+                       r.end_ns, r.outcome, bool(r.join), r.rx_window)
+        for r in c_dls[:c_dl_count.value])
+    return MultiDownlinkResult(per_device=per, network=network, per_gateway=per_gw,
+                               trace=trace, downlinks=dls)
+
+
+def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
+                     propagation: Propagation,
+                     environment: Optional[Environment] = None) -> SimulationResult:
+    """Simule les liaisons montantes vers une passerelle et retourne les compteurs.
+
+    `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
+    plat et sans obstacle (résultat identique au modèle log-distance seul).
+    """
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    n = len(devices)
+    c_devs = _c_end_devices(devices)
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
@@ -320,11 +729,12 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         raise StatusError(status)
 
     per = tuple(
-        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns)
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
         for s in c_stats
     )
     tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
-                   c_tot.airtime_ns)
+                   c_tot.airtime_ns, c_tot.lost_gateway_busy)
     load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
                        c_tot.observation_ns, c_tot.gateway_utilization)
     dl_per = tuple(

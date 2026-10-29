@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "Problem": {
+      "additionalProperties": false,
+      "description": "Erreur au format problème (code stable, message lisible, champ éventuel).",
+      "properties": {
+        "code": {
+          "enum": [
+            "validation_error",
+            "not_found",
+            "limit_exceeded",
+            "terrain_not_allowed",
+            "run_failed",
+            "conflict",
+            "unsupported_region",
+            "unauthorized",
+            "rate_limited"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "message": {
+          "maxLength": 500,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Problem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "problems": {
+      "items": {
+        "$ref": "#/$defs/Problem"
+      },
+      "maxItems": 50,
+      "title": "Problems",
+      "type": "array"
+    },
+    "scenario_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scenario Sha256"
+    },
+    "valid": {
+      "title": "Valid",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "valid"
+  ],
+  "title": "ValidateResponse",
+  "type": "object"
+}

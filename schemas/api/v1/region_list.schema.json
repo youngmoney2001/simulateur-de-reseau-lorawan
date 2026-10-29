@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "RegionInfo": {
+      "additionalProperties": false,
+      "description": "Paramètres d'un plan régional, pour les panneaux de configuration (lecture seule).",
+      "properties": {
+        "data_rates": {
+          "items": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 16,
+          "title": "Data Rates",
+          "type": "array"
+        },
+        "max_payload_by_dr": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Max Payload By Dr",
+          "type": "object"
+        },
+        "name": {
+          "maxLength": 16,
+          "title": "Name",
+          "type": "string"
+        },
+        "rx2_datr": {
+          "maxLength": 16,
+          "title": "Rx2 Datr",
+          "type": "string"
+        },
+        "rx2_hz": {
+          "exclusiveMinimum": 0,
+          "title": "Rx2 Hz",
+          "type": "integer"
+        },
+        "sub_bands": {
+          "title": "Sub Bands",
+          "type": "boolean"
+        },
+        "uplink_channels_hz": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 72,
+          "title": "Uplink Channels Hz",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "uplink_channels_hz",
+        "data_rates",
+        "rx2_hz",
+        "rx2_datr",
+        "max_payload_by_dr",
+        "sub_bands"
+      ],
+      "title": "RegionInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "regions": {
+      "items": {
+        "$ref": "#/$defs/RegionInfo"
+      },
+      "maxItems": 16,
+      "title": "Regions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "regions"
+  ],
+  "title": "RegionList",
+  "type": "object"
+}

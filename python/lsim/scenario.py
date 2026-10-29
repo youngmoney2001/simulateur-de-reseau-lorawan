@@ -15,12 +15,14 @@ import hashlib
 import json
 import math
 import random
+import warnings
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lsim.materials import MATERIAL_NAMES, traversal_loss
 from lsim.environment import (
     MAX_OBSTACLES,
     Environment,
@@ -29,10 +31,13 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
+from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
+                                   rx_sensitivity_offset_db)
 
 SCHEMA_VERSION = 1
 MAX_DEVICES = 10_000
 MAX_TRANSMISSIONS = 5_000_000
+MAX_GATEWAYS = 64
 _NS_PER_S = 1_000_000_000
 
 
@@ -44,6 +49,35 @@ class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    # Multi-passerelles seulement : nom unique, profil du catalogue, relais mesh.
+    name: Optional[str] = Field(None, min_length=1, max_length=64)
+    profile: Optional[str] = Field(None, min_length=1, max_length=64)
+    mesh: bool = False
+
+
+class MeshModel(_Strict):
+    """Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau."""
+
+    border: str = Field(min_length=1, max_length=64)
+    spreading_factor: int = Field(9, ge=5, le=12)  # défaut : SF9/203 kHz (voir docs/USAGE.md)
+    bandwidth_khz: Literal[203, 406, 812, 1625] = 203
+    coding_rate: int = Field(1, ge=1, le=4)
+    # Taille relayée. « device » : trame LoRaWAN réelle du dispositif + enveloppe mesh
+    # (14 o en montant). « fixed » : `payload_bytes` pour toutes les trames (hypothèse).
+    frame_size: Literal["device", "fixed"] = "device"
+    payload_bytes: int = Field(32, ge=0, le=255)  # utilisé seulement si frame_size = fixed
+    capture_db: float = Field(6.0, ge=0.0, le=30.0)
+    max_hops: int = Field(8, ge=1, le=8)
+    # Suppression des doublons par identifiant de trame (défaut). `false` : chaque copie
+    # reçue par un relais est relayée, pour comparer.
+    suppress_duplicates: bool = True
+    # Attente de chaque relais avant de transmettre une copie, en temps d'antenne mesh
+    # (déterministe par relais et trame). 0 : pas d'attente, donc pas de suppression
+    # entre relais qui reçoivent la même trame au même instant.
+    relay_backoff_airtimes: int = Field(4, ge=0, le=64)
+    # Shadowing log-normal des liaisons entre passerelles mesh : un tirage par paire,
+    # réciproque, graine = propagation.shadowing_seed. 0 : liaisons déterministes.
+    shadowing_sigma_db: float = Field(0.0, ge=0.0, le=30.0)
 
 
 class PropagationModel(_Strict):
@@ -86,6 +120,9 @@ class GroupModel(_Strict):
     # le plus restrictif entre `duty_cycle` et la sous-bande du canal `channel_freq_hz`.
     region: Optional[str] = None
     channel_freq_hz: int = Field(868_100_000, gt=0)
+    # US915 / AU915 seulement : sous-bande 1 à 8 (8 canaux 125 kHz + 1 canal 500 kHz). Le canal
+    # `channel_freq_hz` doit appartenir à cette sous-bande.
+    sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
 
     @property
@@ -95,6 +132,20 @@ class GroupModel(_Strict):
         from lsim.regions import PROFILES
         limit = PROFILES[self.region].duty_cycle_limit(self.channel_freq_hz, self.tx_power_dbm)
         return self.duty_cycle if limit is None else min(self.duty_cycle, limit)
+
+    @model_validator(mode="after")
+    def _sub_band_consistent(self) -> "GroupModel":
+        if self.sub_band is None:
+            return self
+        from lsim.channel_mask import FAMILY, sub_band_channels
+        from lsim.plan import get_plan
+        if self.region not in FAMILY:
+            raise ValueError("sub_band : réservé aux régions US915 et AU915")
+        index = get_plan(self.region).channel_index(self.channel_freq_hz / 1_000_000)
+        if index not in sub_band_channels(self.sub_band):
+            raise ValueError(
+                f"{self.region} : canal {self.channel_freq_hz} Hz hors de la sous-bande {self.sub_band}")
+        return self
 
     @model_validator(mode="after")
     def _region_known_and_in_plan(self) -> "GroupModel":
@@ -144,12 +195,26 @@ class ObstacleModel(_Strict):
     x_max_m: float
     y_max_m: float
     height_m: float = Field(gt=0, le=1000)
+    # Soit `attenuation_db` (perte saisie), soit `material` + `thickness_m`
+    # (perte calculée par UIT-R P.2040-4 à la fréquence de la propagation).
     attenuation_db: float = Field(0.0, ge=0, le=200)
+    material: Optional[str] = Field(None, max_length=32)
+    thickness_m: Optional[float] = Field(None, gt=0, le=10)
 
     @model_validator(mode="after")
     def _box_not_empty(self) -> "ObstacleModel":
         if not (self.x_min_m < self.x_max_m and self.y_min_m < self.y_max_m):
             raise ValueError("emprise de l'obstacle vide (min doit être < max)")
+        if self.material is None:
+            if self.thickness_m is not None:
+                raise ValueError("thickness_m exige material")
+        else:
+            if self.thickness_m is None:
+                raise ValueError("material exige thickness_m")
+            if "attenuation_db" in self.model_fields_set:
+                raise ValueError("attenuation_db et material sont exclusifs")
+            if self.material not in MATERIAL_NAMES:
+                raise ValueError(f"matériau inconnu : {self.material!r}")
         return self
 
 
@@ -173,13 +238,33 @@ class EnvironmentModel(_Strict):
     obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
 
 
+class EnergyModel(_Strict):
+    """Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace)."""
+    profile: Literal["rak4631", "sx1262-stm32l072"]
+
+
+class MacModel(_Strict):
+    """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
+
+    Phase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période
+    d'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :
+    le bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.
+    """
+    link_check_every: int = Field(0, ge=0, le=1000)
+    device_status_every: int = Field(0, ge=0, le=1000)
+
+
 class ScenarioModel(_Strict):
     schema_version: Literal[1]
     name: str = Field(min_length=1, max_length=128)
     seed: int = Field(0, ge=0, le=2**32 - 1)
     gateway: GatewayModel = GatewayModel()
+    gateways: Optional[list[GatewayModel]] = Field(None, min_length=1, max_length=MAX_GATEWAYS)
+    mesh: Optional[MeshModel] = None
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
+    energy: Optional[EnergyModel] = None
+    mac: Optional[MacModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -187,6 +272,48 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.gateways is None:
+            if self.mesh is not None:
+                raise ValueError("mesh exige la liste « gateways » (plusieurs passerelles)")
+            if any(getattr(self.gateway, f) is not None for f in ("name", "profile")) or self.gateway.mesh:
+                raise ValueError("nom, profil et mesh d'une passerelle exigent « gateways »")
+        else:
+            if "gateway" in self.model_fields_set:
+                raise ValueError("utiliser « gateway » ou « gateways », pas les deux")
+            gw_names = [g.name for g in self.gateways]
+            if any(n is None for n in gw_names):
+                raise ValueError("chaque passerelle de « gateways » doit avoir un nom")
+            if len(set(gw_names)) != len(gw_names):
+                raise ValueError("les noms de passerelles doivent être uniques")
+            for g in self.gateways:
+                if g.profile is not None:
+                    try:
+                        prof = get_profile(g.profile)
+                    except KeyError:
+                        raise ValueError(f"profil inconnu : {g.profile!r}") from None
+                    if not can_simulate_radio(prof):
+                        raise ValueError(
+                            f"profil {g.profile!r} : hôte sans radio publiée, choisir un module "
+                            "radio (voir docs/USAGE.md)")
+                if g.mesh and (g.profile is None or not can_relay(get_profile(g.profile))):
+                    raise ValueError(f"passerelle {g.name!r} : mesh exige un profil à radio mesh documentée")
+            for g in self.gateways:
+                if g.mesh and g.profile is not None:
+                    prof = get_profile(g.profile)
+                    for grp in self.groups:
+                        if grp.region is not None and prof.access_bands and grp.region not in prof.access_bands:
+                            raise ValueError(
+                                f"passerelle {g.name!r} : profil {g.profile!r} sans accès {grp.region} "
+                                "(un relais doit recevoir les capteurs de sa région ; le module mesh seul "
+                                "ne suffit pas)")
+            if self.mesh is not None:
+                border = next((g for g in self.gateways if g.name == self.mesh.border), None)
+                if border is None:
+                    raise ValueError("mesh.border doit désigner une passerelle")
+                if not border.mesh:
+                    raise ValueError("la passerelle frontière doit avoir mesh: true")
+                if sum(1 for g in self.gateways if g.mesh) < 1:
+                    raise ValueError("au moins une passerelle doit avoir mesh: true")
         devices = sum(g.device_count for g in self.groups)
         if devices > MAX_DEVICES:
             raise ValueError(f"au plus {MAX_DEVICES} dispositifs (demandé : {devices})")
@@ -210,13 +337,41 @@ class Scenario:
             dumped.pop("environment", None)
         elif environment is not None and environment.terrain is not None:
             dumped["environment"]["terrain_sha256"] = environment.terrain.sha256
+        # Profil énergie absent : hash des scénarios antérieurs inchangé.
+        if model.energy is None:
+            dumped.pop("energy", None)
+        # Bloc MAC absent : hash des scénarios antérieurs inchangé.
+        if model.mac is None:
+            dumped.pop("mac", None)
+        # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
+        if model.gateways is None:
+            dumped.pop("gateways", None)
+        if model.mesh is None:
+            dumped.pop("mesh", None)
+        gw_dumps = ([dumped["gateway"]] if model.gateways is None else dumped.get("gateways", []))
+        for gw_dump in gw_dumps:
+            for key in ("name", "profile"):
+                if gw_dump.get(key) is None:
+                    gw_dump.pop(key, None)
+            if not gw_dump.get("mesh"):
+                gw_dump.pop("mesh", None)
+        if model.gateways is None:
+            dumped["gateway"] = gw_dumps[0]
         # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
         for group in dumped.get("groups", []):
             if group.get("duty_cycle") == 1.0:
                 group.pop("duty_cycle", None)
+            if group.get("sub_band") is None:
+                group.pop("sub_band", None)
             if group.get("region") is None:
                 group.pop("region", None)
                 group.pop("channel_freq_hz", None)
+        # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
+        for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
+            for ob in env_dump.get("obstacles", []):
+                if ob.get("material") is None:
+                    ob.pop("material", None)
+                    ob.pop("thickness_m", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
@@ -227,6 +382,11 @@ class Scenario:
     @property
     def name(self) -> str:
         return self.model.name
+
+    @property
+    def energy_profile(self) -> Optional[str]:
+        """Profil énergie déclaré dans le YAML, ou None."""
+        return self.model.energy.profile if self.model.energy is not None else None
 
     def deploy(self) -> tuple[list[EndDevice], list[str], list[int]]:
         """Retourne (dispositifs, nom de groupe par dispositif, index dans le groupe).
@@ -256,6 +416,22 @@ class Scenario:
         g = self.model.gateway
         return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
 
+    def gateway_models(self) -> list[GatewayModel]:
+        """Toutes les passerelles, dans l'ordre du fichier (une seule si « gateway »)."""
+        if self.model.gateways is not None:
+            return list(self.model.gateways)
+        return [self.model.gateway]
+
+    def gateways(self) -> list[Gateway]:
+        return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                        rx_sensitivity_offset_db=(rx_sensitivity_offset_db(get_profile(g.profile))
+                                                  if g.profile is not None else 0.0))
+                for g in self.gateway_models()]
+
+    @property
+    def is_multi_gateway(self) -> bool:
+        return self.model.gateways is not None
+
     def propagation(self) -> Propagation:
         p = self.model.propagation
         seed = p.shadowing_seed if p.shadowing_seed is not None else self.model.seed
@@ -277,7 +453,21 @@ def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
     return out
 
 
-def _build_environment(model: EnvironmentModel, base_dir: Path) -> Environment:
+def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float) -> float:
+    if o.material is None:
+        return o.attenuation_db
+    loss, extrapolated = traversal_loss(o.material, frequency_hz, o.thickness_m)
+    if extrapolated:
+        warnings.warn(
+            f"matériau {o.material} : fréquence {frequency_hz:g} Hz hors de la plage documentée "
+            "(UIT-R P.2040-4, Tableau 3)", stacklevel=3)
+    if loss > 200.0:
+        raise ValueError(f"atténuation calculée {loss:.1f} dB > 200 dB (matériau {o.material})")
+    return loss
+
+
+def _build_environment(model: EnvironmentModel, base_dir: Path,
+                       frequency_hz: float) -> Environment:
     terrain: Optional[Terrain] = None
     if model.terrain is not None:
         root = base_dir.resolve()
@@ -288,7 +478,8 @@ def _build_environment(model: EnvironmentModel, base_dir: Path) -> Environment:
             raise ValueError(f"fichier de relief introuvable : {model.terrain.path}")
         terrain = load_dem_csv(target)
     obstacles = tuple(
-        Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m, o.attenuation_db)
+        Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m,
+                 _obstacle_attenuation(o, frequency_hz))
         for o in model.obstacles)
     return Environment(terrain=terrain, obstacles=obstacles,
                        gateway_height_m=model.gateway_height_m,
@@ -314,5 +505,6 @@ def load_scenario(source: Union[str, Path]) -> Scenario:
     if not isinstance(data, dict):
         raise ValueError("le scénario doit être un mapping YAML")
     model = ScenarioModel.model_validate(data)
-    env = _build_environment(model.environment, base_dir) if model.environment else None
+    env = (_build_environment(model.environment, base_dir, model.propagation.frequency_hz)
+           if model.environment else None)
     return Scenario(model, env)

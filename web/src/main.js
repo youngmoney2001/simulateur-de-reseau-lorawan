@@ -16,11 +16,19 @@ import {
 // Ressources Cesium servies localement (public/cesium, copiées au démarrage).
 window.CESIUM_BASE_URL = "/cesium/";
 
-// Fond de carte OpenStreetMap. Pour un usage commercial intensif, utiliser un
-// fournisseur de tuiles sous contrat (la politique d'usage OSM le limite).
+// Fond de carte : Esri World Street Map (tuiles raster, sans clé d'API). Choix provisoire
+// d'un fournisseur gratuit : tuiles.openstreetmap.org refuse les requêtes de cette
+// application (politique d'usage OSM). Conditions à vérifier avant mise en production
+// commerciale : https://www.esri.com/en-us/legal/terms/full-master-agreement
+const BASEMAP_CREDIT =
+  "Basemap : Esri, HERE, Garmin, © OpenStreetMap contributors, et partenaires SIG";
 const viewer = new Cesium.Viewer("cesiumContainer", {
-  baseLayer: new Cesium.ImageryLayer(
-    new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" }),
+  // Fournisseur asynchrone (fromUrl) : le constructeur direct n'initialise pas ses ressources.
+  baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+    Cesium.ArcGisMapServerImageryProvider.fromUrl(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
+      { credit: new Cesium.Credit(BASEMAP_CREDIT) },
+    ),
   ),
   baseLayerPicker: false,
   geocoder: false,

@@ -1,0 +1,16 @@
+{
+  "additionalProperties": false,
+  "description": "Dépôt : seule la session est envoyée. Le navigateur n'envoie jamais de résultat.",
+  "properties": {
+    "session_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "title": "SubmitRequest",
+  "type": "object"
+}

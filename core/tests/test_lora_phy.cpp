@@ -63,7 +63,7 @@ void test_sensitivity_125khz_table() {
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, s)), 0);
     CHECK_NEAR(s, -123.0, 1e-9);
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw125kHz, s)), 0);
-    CHECK_NEAR(s, -137.0, 1e-9);
+    CHECK_NEAR(s, -136.0, 1e-9);
     // Sensibilité décroissante (plus négative) quand SF augmente.
     double prev = 0.0;
     receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz, prev);
@@ -75,12 +75,20 @@ void test_sensitivity_125khz_table() {
     }
 }
 
-void test_sensitivity_uncalibrated_bandwidths_refused() {
+void test_sensitivity_250_500_datasheet_values() {
     double s = 0.0;
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw250kHz, s)),
-             static_cast<int>(Status::UncalibratedSensitivity));
+             static_cast<int>(Status::Ok));
+    CHECK_EQ(static_cast<int>(s), -120);
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw250kHz, s)),
+             static_cast<int>(Status::Ok));
+    CHECK_EQ(static_cast<int>(s), -133);
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw500kHz, s)),
-             static_cast<int>(Status::UncalibratedSensitivity));
+             static_cast<int>(Status::Ok));
+    CHECK_EQ(static_cast<int>(s), -116);
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw500kHz, s)),
+             static_cast<int>(Status::Ok));
+    CHECK_EQ(static_cast<int>(s), -130);
     CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(13, Bandwidth::Bw125kHz, s)),
              static_cast<int>(Status::InvalidSpreadingFactor));
 }
@@ -113,6 +121,6 @@ void run_lora_phy_tests() {
     test_airtime_sf12_low_dr();
     test_airtime_monotonic();
     test_sensitivity_125khz_table();
-    test_sensitivity_uncalibrated_bandwidths_refused();
+    test_sensitivity_250_500_datasheet_values();
     test_rejects_invalid_inputs();
 }

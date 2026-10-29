@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "AttemptOut": {
+      "additionalProperties": false,
+      "description": "Une soumission journalisée : résultats uniquement. Aucune commande CLI, aucun secret.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "title": "At",
+          "type": "integer"
+        },
+        "exercise_id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+          "title": "Exercise Id",
+          "type": "string"
+        },
+        "hints_used": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Hints Used",
+          "type": "integer"
+        },
+        "max_score": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Score",
+          "type": "integer"
+        },
+        "number": {
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "passed": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Passed",
+          "type": "array"
+        },
+        "score": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "number",
+        "at",
+        "exercise_id",
+        "score",
+        "max_score",
+        "hints_used",
+        "passed"
+      ],
+      "title": "AttemptOut",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/AttemptOut"
+      },
+      "maxItems": 50,
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "AttemptList",
+  "type": "object"
+}

@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "ExerciseSummary": {
+      "additionalProperties": false,
+      "description": "Catalogue : énoncé et nombre d'indices, sans critères ni solution.",
+      "properties": {
+        "hints_available": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Hints Available",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "max_points": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Points",
+          "type": "integer"
+        },
+        "statement": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "statement",
+        "max_points",
+        "hints_available"
+      ],
+      "title": "ExerciseSummary",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ExerciseSummary"
+      },
+      "maxItems": 200,
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ExerciseList",
+  "type": "object"
+}

@@ -1,0 +1,232 @@
+{
+  "$defs": {
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "sensor",
+            "relay",
+            "border",
+            "server"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "sensor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensorSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "x_m": {
+          "maximum": 1000000,
+          "minimum": -1000000,
+          "title": "X M",
+          "type": "number"
+        },
+        "y_m": {
+          "maximum": 1000000,
+          "minimum": -1000000,
+          "title": "Y M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "x_m",
+        "y_m"
+      ],
+      "title": "Node",
+      "type": "object"
+    },
+    "NodeState": {
+      "additionalProperties": false,
+      "description": "État résumé d'un équipement : jamais de clé réelle (`keys` ne vaut que « ****** »).",
+      "properties": {
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "hostname": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Hostname",
+          "type": "string"
+        },
+        "keys": {
+          "anyOf": [
+            {
+              "const": "******",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keys"
+        },
+        "node_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "title": "Node Id",
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "maxLength": 16,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        }
+      },
+      "required": [
+        "node_id",
+        "hostname",
+        "configured"
+      ],
+      "title": "NodeState",
+      "type": "object"
+    },
+    "SensorSettings": {
+      "additionalProperties": false,
+      "description": "Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario.",
+      "properties": {
+        "channel_freq_hz": {
+          "anyOf": [
+            {
+              "maximum": 3000000000,
+              "minimum": 137000000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel Freq Hz"
+        },
+        "messages": {
+          "default": 1,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Messages",
+          "type": "integer"
+        },
+        "payload_bytes": {
+          "default": 10,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "period_s": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Period S",
+          "type": "number"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "enum": [
+                "EU868",
+                "US915",
+                "AU915",
+                "AS923",
+                "KR920",
+                "IN865",
+                "RU864"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "spreading_factor": {
+          "default": 7,
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "start_spread_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "Start Spread S",
+          "type": "number"
+        },
+        "tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 30.0,
+          "minimum": -10.0,
+          "title": "Tx Power Dbm",
+          "type": "number"
+        }
+      },
+      "title": "SensorSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "maxItems": 64,
+      "title": "Nodes",
+      "type": "array"
+    },
+    "session_id": {
+      "pattern": "^[A-Za-z0-9_-]{8,64}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "states": {
+      "items": {
+        "$ref": "#/$defs/NodeState"
+      },
+      "maxItems": 64,
+      "title": "States",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "nodes",
+    "states"
+  ],
+  "title": "SessionTopology",
+  "type": "object"
+}

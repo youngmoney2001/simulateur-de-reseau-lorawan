@@ -35,3 +35,46 @@
 
 - Usage : valeurs attendues des tests `core/tests/test_join.cpp` et `python/tests/test_join.py` (join-request, join-accept, MIC 1.0.x et 1.1, chiffrement du join-accept). Seules les valeurs numériques sont reprises.
 - Source : `pkg/crypto/join_messages_test.go`, licence Apache-2.0.
+
+## Jeu de données LoRaWAN en intérieur, Université de Siegen (paramètres de propagation)
+
+- Usage : paramètres ajustés des modèles de perte de parcours (LDPLM-MW, COST231-MWM, LDPLM-MW-EP) dans `python/lsim/reference/siegen_indoor_lorawan.json`. Le jeu brut n'est pas copié dans ce dépôt.
+- Auteurs : Nahshon Mokua Obiri, Kristof Van Laerhoven. Article : https://doi.org/10.1109/ACCESS.2025.3569164 (IEEE Access, vol. 13, 2025).
+- Jeu de données : https://doi.org/10.5281/zenodo.15349730 ; code : https://github.com/nahshonmokua/LoRaWAN-Indoor-PathLoss-Dataset-IEEEACCESS (commit `7fa0327c8ed65a5823f4923f6d62301fff69d935`).
+- Licence : CC BY 4.0 (section « License » du README du dépôt ; aucun fichier LICENSE séparé). Attribution requise dans tout produit qui reprend ces paramètres.
+
+## Données de consommation (valeurs numériques, aucun code copié)
+
+- Semtech SX1262 : datasheet (Rev. 1.2 et v2.1, copies publiques) : courants d'émission, réception LoRa 125 kHz 4,6 mA, veille « SLEEP warm start » 600 nA (configuration conservée ; source secondaire : copie de la datasheet Rev. 2.2). Utilisé dans `core/src/energy.cpp` (profil 1).
+- STM32L072xx : fiche technique ST (DocID027100), Stop 0,43 µA typ., « jusqu'à » 93 µA/MHz en Run. Utilisé dans `core/src/energy.cpp` (profil 1).
+- RAKwireless RAK4631 : documentation RAKwireless (tension 3,3 V nominale, courants Tx/Rx/veille module). Utilisé dans `core/src/energy.cpp` (profil 0).
+
+## Protocole passerelle Semtech UDP (GWMP v2)
+
+- Usage : format des messages PUSH_DATA, PULL_DATA, PULL_RESP, TX_ACK et de leurs champs JSON (`python/lsim/gwmp.py`). Seul le format des messages est repris ; aucun code source n'est copié.
+- Source : `PROTOCOL.TXT`, dépôt https://github.com/Lora-net/packet_forwarder (© 2013 Semtech, révision v1.4).
+- Licence du dépôt : BSD (conditions de redistribution du fichier LICENSE du dépôt).
+
+## cryptography (chiffrement au repos du serveur, extra `serve`)
+
+- Bibliothèque Python `cryptography` (PyCA), licence Apache-2.0 ou BSD-3-Clause, dépendance
+  optionnelle : utilisée pour AES-256-GCM (`python/lsim/sealed.py`). Aucun code copié.
+
+## Plans régionaux US902-928 (valeurs seulement)
+
+- Tableaux DR, charges maximales et règle RX1 extraits des Regional Parameters RP002 (LoRa
+  Alliance) et de la page The Things Network « US902-928 MHz Band ». Valeurs numériques
+  reprises, aucun texte copié. Source de référence : `python/lsim/us915.py`.
+
+## Protocole Basic Station (LNS)
+
+- Messages et champs décrits d'après la documentation publique « The LNS Protocol » (LoRa Basics
+  Station, doc.sm.tc). Aucun code copié ; la mise en œuvre WebSocket (RFC 6455) est écrite
+  à partir de la RFC, sans bibliothèque tierce. Source : `python/lsim/basicstation.py`,
+  `python/lsim/wsproto.py`.
+
+## Plan régional AU915-928 (valeurs seulement)
+
+- Canaux, débits, règle RX1 et charges maximales extraits des Regional Parameters RP002-1.0.2 et
+  RP002-1.0.3 (LoRa Alliance). Valeurs numériques reprises, aucun texte copié. Source de
+  référence : `python/lsim/au915.py`.

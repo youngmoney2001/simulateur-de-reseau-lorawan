@@ -1,0 +1,792 @@
+{
+  "$defs": {
+    "ApiScenario": {
+      "additionalProperties": false,
+      "description": "Scénario accepté par l'API : comme `ScenarioModel`, sans lecture de fichier serveur.",
+      "properties": {
+        "energy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnergyModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gateway": {
+          "$ref": "#/$defs/GatewayModel",
+          "default": {
+            "antenna_gain_dbi": 0.0,
+            "mesh": false,
+            "name": null,
+            "profile": null,
+            "x_m": 0.0,
+            "y_m": 0.0
+          }
+        },
+        "gateways": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GatewayModel"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateways"
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/GroupModel"
+          },
+          "minItems": 1,
+          "title": "Groups",
+          "type": "array"
+        },
+        "mac": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MacModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mesh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MeshModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "propagation": {
+          "$ref": "#/$defs/PropagationModel",
+          "default": {
+            "capture_threshold_db": 6.0,
+            "exponent": 2.7,
+            "frequency_hz": 868100000.0,
+            "reference_distance_m": 1.0,
+            "shadowing_seed": null,
+            "shadowing_sigma_db": 0.0
+          }
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "name",
+        "groups"
+      ],
+      "title": "ApiScenario",
+      "type": "object"
+    },
+    "DiskPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "center_x_m": {
+          "default": 0.0,
+          "title": "Center X M",
+          "type": "number"
+        },
+        "center_y_m": {
+          "default": 0.0,
+          "title": "Center Y M",
+          "type": "number"
+        },
+        "radius_m": {
+          "exclusiveMinimum": 0,
+          "title": "Radius M",
+          "type": "number"
+        },
+        "type": {
+          "const": "disk",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "radius_m"
+      ],
+      "title": "DiskPlacement",
+      "type": "object"
+    },
+    "EnergyModel": {
+      "additionalProperties": false,
+      "description": "Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace).",
+      "properties": {
+        "profile": {
+          "enum": [
+            "rak4631",
+            "sx1262-stm32l072"
+          ],
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "EnergyModel",
+      "type": "object"
+    },
+    "EnvironmentModel": {
+      "additionalProperties": false,
+      "properties": {
+        "device_height_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Device Height M",
+          "type": "number"
+        },
+        "gateway_height_m": {
+          "default": 15.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Gateway Height M",
+          "type": "number"
+        },
+        "obstacles": {
+          "items": {
+            "$ref": "#/$defs/ObstacleModel"
+          },
+          "maxItems": 10000,
+          "title": "Obstacles",
+          "type": "array"
+        },
+        "terrain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerrainModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "EnvironmentModel",
+      "type": "object"
+    },
+    "ExplicitPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "positions": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 1,
+          "title": "Positions",
+          "type": "array"
+        },
+        "type": {
+          "const": "explicit",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "positions"
+      ],
+      "title": "ExplicitPlacement",
+      "type": "object"
+    },
+    "GatewayModel": {
+      "additionalProperties": false,
+      "properties": {
+        "antenna_gain_dbi": {
+          "default": 0.0,
+          "title": "Antenna Gain Dbi",
+          "type": "number"
+        },
+        "mesh": {
+          "default": false,
+          "title": "Mesh",
+          "type": "boolean"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "x_m": {
+          "default": 0.0,
+          "title": "X M",
+          "type": "number"
+        },
+        "y_m": {
+          "default": 0.0,
+          "title": "Y M",
+          "type": "number"
+        }
+      },
+      "title": "GatewayModel",
+      "type": "object"
+    },
+    "GroupModel": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_freq_hz": {
+          "default": 868100000,
+          "exclusiveMinimum": 0,
+          "title": "Channel Freq Hz",
+          "type": "integer"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Count"
+        },
+        "duty_cycle": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1.0,
+          "title": "Duty Cycle",
+          "type": "number"
+        },
+        "messages": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Messages",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "payload_bytes": {
+          "default": 10,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "period_s": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "title": "Period S",
+          "type": "number"
+        },
+        "placement": {
+          "discriminator": {
+            "mapping": {
+              "disk": "#/$defs/DiskPlacement",
+              "explicit": "#/$defs/ExplicitPlacement"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DiskPlacement"
+            },
+            {
+              "$ref": "#/$defs/ExplicitPlacement"
+            }
+          ],
+          "title": "Placement"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "spreading_factor": {
+          "default": 7,
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "start_spread_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Start Spread S",
+          "type": "number"
+        },
+        "sub_band": {
+          "anyOf": [
+            {
+              "maximum": 8,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sub Band"
+        },
+        "tx_power_dbm": {
+          "default": 14.0,
+          "title": "Tx Power Dbm",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "placement"
+      ],
+      "title": "GroupModel",
+      "type": "object"
+    },
+    "MacModel": {
+      "additionalProperties": false,
+      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période\nd'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :\nle bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.",
+      "properties": {
+        "device_status_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Device Status Every",
+          "type": "integer"
+        },
+        "link_check_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Link Check Every",
+          "type": "integer"
+        }
+      },
+      "title": "MacModel",
+      "type": "object"
+    },
+    "MeshModel": {
+      "additionalProperties": false,
+      "description": "Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau.",
+      "properties": {
+        "bandwidth_khz": {
+          "default": 203,
+          "enum": [
+            203,
+            406,
+            812,
+            1625
+          ],
+          "title": "Bandwidth Khz",
+          "type": "integer"
+        },
+        "border": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Border",
+          "type": "string"
+        },
+        "capture_db": {
+          "default": 6.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Capture Db",
+          "type": "number"
+        },
+        "coding_rate": {
+          "default": 1,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Coding Rate",
+          "type": "integer"
+        },
+        "frame_size": {
+          "default": "device",
+          "enum": [
+            "device",
+            "fixed"
+          ],
+          "title": "Frame Size",
+          "type": "string"
+        },
+        "max_hops": {
+          "default": 8,
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Hops",
+          "type": "integer"
+        },
+        "payload_bytes": {
+          "default": 32,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "relay_backoff_airtimes": {
+          "default": 4,
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Relay Backoff Airtimes",
+          "type": "integer"
+        },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        },
+        "spreading_factor": {
+          "default": 9,
+          "maximum": 12,
+          "minimum": 5,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "suppress_duplicates": {
+          "default": true,
+          "title": "Suppress Duplicates",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "border"
+      ],
+      "title": "MeshModel",
+      "type": "object"
+    },
+    "ObstacleModel": {
+      "additionalProperties": false,
+      "properties": {
+        "attenuation_db": {
+          "default": 0.0,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Attenuation Db",
+          "type": "number"
+        },
+        "height_m": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Height M",
+          "type": "number"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "thickness_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thickness M"
+        },
+        "x_max_m": {
+          "title": "X Max M",
+          "type": "number"
+        },
+        "x_min_m": {
+          "title": "X Min M",
+          "type": "number"
+        },
+        "y_max_m": {
+          "title": "Y Max M",
+          "type": "number"
+        },
+        "y_min_m": {
+          "title": "Y Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min_m",
+        "y_min_m",
+        "x_max_m",
+        "y_max_m",
+        "height_m"
+      ],
+      "title": "ObstacleModel",
+      "type": "object"
+    },
+    "PropagationModel": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_threshold_db": {
+          "default": 6.0,
+          "minimum": 0,
+          "title": "Capture Threshold Db",
+          "type": "number"
+        },
+        "exponent": {
+          "default": 2.7,
+          "maximum": 6.0,
+          "minimum": 1.0,
+          "title": "Exponent",
+          "type": "number"
+        },
+        "frequency_hz": {
+          "default": 868100000.0,
+          "title": "Frequency Hz",
+          "type": "number"
+        },
+        "reference_distance_m": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Reference Distance M",
+          "type": "number"
+        },
+        "shadowing_seed": {
+          "anyOf": [
+            {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shadowing Seed"
+        },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        }
+      },
+      "title": "PropagationModel",
+      "type": "object"
+    },
+    "ProtocolOptionsIn": {
+      "additionalProperties": false,
+      "description": "Comportement applicatif des événements (hors moteur radio) : voir `lsim.trace_events`.",
+      "properties": {
+        "confirmed_uplinks": {
+          "default": false,
+          "title": "Confirmed Uplinks",
+          "type": "boolean"
+        },
+        "device_antenna_gain_dbi": {
+          "default": 0.0,
+          "maximum": 10.0,
+          "minimum": -10.0,
+          "title": "Device Antenna Gain Dbi",
+          "type": "number"
+        },
+        "device_rx_offset_db": {
+          "default": 0.0,
+          "maximum": 40.0,
+          "minimum": -30.0,
+          "title": "Device Rx Offset Db",
+          "type": "number"
+        },
+        "downlink_every": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Downlink Every",
+          "type": "integer"
+        },
+        "downlink_payload_bytes": {
+          "default": 10,
+          "maximum": 242,
+          "minimum": 0,
+          "title": "Downlink Payload Bytes",
+          "type": "integer"
+        },
+        "gateway_tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 27.0,
+          "minimum": -10.0,
+          "title": "Gateway Tx Power Dbm",
+          "type": "number"
+        },
+        "join": {
+          "default": false,
+          "title": "Join",
+          "type": "boolean"
+        }
+      },
+      "title": "ProtocolOptionsIn",
+      "type": "object"
+    },
+    "TerrainModel": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "type": {
+          "const": "dem_csv",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "title": "TerrainModel",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "energy_profile": {
+      "anyOf": [
+        {
+          "enum": [
+            "rak4631",
+            "sx1262-stm32l072"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Energy Profile"
+    },
+    "protocol": {
+      "$ref": "#/$defs/ProtocolOptionsIn",
+      "default": {
+        "confirmed_uplinks": false,
+        "device_antenna_gain_dbi": 0.0,
+        "device_rx_offset_db": 0.0,
+        "downlink_every": 0,
+        "downlink_payload_bytes": 10,
+        "gateway_tx_power_dbm": 14.0,
+        "join": false
+      }
+    },
+    "scenario": {
+      "$ref": "#/$defs/ApiScenario"
+    },
+    "terrain_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terrain Id"
+    }
+  },
+  "required": [
+    "scenario"
+  ],
+  "title": "RunCreate",
+  "type": "object"
+}

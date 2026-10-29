@@ -1,0 +1,216 @@
+// SPDX-License-Identifier: Apache-2.0
+// Fonctions C du relais mesh. Aucune exception ne traverse la frontière.
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+#include "lsim/c_api.h"
+#include "lsim/engine.hpp"
+#include "lsim/mesh.hpp"
+
+namespace {
+
+lsim::mesh::Radio to_radio(const lsim_mesh_radio* r) {
+    lsim::mesh::Radio out;
+    out.spreading_factor = r->spreading_factor;
+    out.coding_rate = r->coding_rate;
+    out.bandwidth_hz = r->bandwidth_hz;
+    out.payload_bytes = r->payload_bytes;
+    out.preamble_symbols = r->preamble_symbols;
+    out.capture_db = r->capture_db;
+    return out;
+}
+
+int32_t status_code(lsim::mesh::Status st) {
+    return st == lsim::mesh::Status::Ok
+               ? 0
+               : LSIM_STATUS_MESH_BASE + static_cast<int32_t>(st);
+}
+
+}  // namespace
+
+extern "C" {
+
+int32_t lsim_mesh_airtime_ns(const lsim_mesh_radio* radio, int64_t* out) {
+    if (radio == nullptr || out == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
+    try {
+        return status_code(lsim::mesh::airtime_ns(to_radio(radio), *out));
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_mesh_sensitivity_dbm(const lsim_mesh_radio* radio, int32_t* out) {
+    if (radio == nullptr || out == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
+    try {
+        return status_code(lsim::mesh::sensitivity_dbm(to_radio(radio), *out));
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+int32_t lsim_mesh_routes(const lsim_mesh_radio* radio, size_t node_count,
+                         const uint8_t* capable, const double* rssi_dbm,
+                         uint32_t border, uint32_t max_hops, int32_t* next) {
+    if (radio == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
+    try {
+        return status_code(lsim::mesh::routes(to_radio(radio), node_count, capable, rssi_dbm,
+                                              border, max_hops, next));
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+namespace {
+
+int32_t mesh_routed_impl(const lsim_mesh_radio* radio, size_t node_count,
+                         const uint8_t* capable, const double* rssi_dbm,
+                         const int32_t* next_by_dest, const uint32_t* dests, int suppress,
+                         int64_t backoff_window_ns, const lsim_mesh_frame* frames,
+                         size_t frame_count, lsim_mesh_delivery* out,
+                         lsim_mesh_summary* summary, std::vector<lsim::mesh::HopEvent>* log) {
+    if (radio == nullptr || summary == nullptr) return status_code(lsim::mesh::Status::InvalidInput);
+    try {
+        std::vector<lsim::mesh::Frame> in(frame_count);
+        for (size_t k = 0; k < frame_count; ++k) {
+            in[k].frame_id = frames[k].frame_id;
+            in[k].rx_node = frames[k].rx_node;
+            in[k].t_ns = frames[k].t_ns;
+            in[k].payload_bytes = frames[k].payload_bytes;
+        }
+        std::vector<lsim::mesh::Delivery> res(frame_count);
+        lsim::mesh::Summary sum;
+        const auto st = lsim::mesh::forward_routed(to_radio(radio), node_count, capable, rssi_dbm,
+                                                   next_by_dest, dests, suppress != 0,
+                                                   backoff_window_ns, in.data(), frame_count,
+                                                   res.data(), &sum, log);
+        if (st != lsim::mesh::Status::Ok) return status_code(st);
+        for (size_t k = 0; k < frame_count; ++k) {
+            out[k].frame_id = res[k].frame_id;
+            out[k].delivered = res[k].delivered;
+            out[k].loss = res[k].loss;
+            out[k].hops = res[k].hops;
+            out[k].copy_state = res[k].copy_state;
+            out[k].latency_ns = res[k].latency_ns;
+        }
+        summary->transmissions = sum.transmissions;
+        summary->suppressed = sum.suppressed;
+        summary->lost_collision = sum.lost_collision;
+        summary->lost_half_duplex = sum.lost_half_duplex;
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+// Une seule destination : `next` (ligne de la frontière) ; les autres lignes sont absentes.
+int32_t mesh_forward_impl(const lsim_mesh_radio* radio, size_t node_count,
+                          const uint8_t* capable, const double* rssi_dbm,
+                          const int32_t* next, uint32_t border, int suppress,
+                          int64_t backoff_window_ns, const lsim_mesh_frame* frames,
+                          size_t frame_count, lsim_mesh_delivery* out,
+                          lsim_mesh_summary* summary, std::vector<lsim::mesh::HopEvent>* log) {
+    if (next == nullptr || node_count == 0 || node_count > lsim::mesh::kMaxNodes ||
+        border >= node_count) {
+        return mesh_routed_impl(radio, node_count, capable, rssi_dbm, nullptr, nullptr, suppress,
+                                backoff_window_ns, frames, frame_count, out, summary, log);
+    }
+    std::vector<int32_t> by_dest(node_count * node_count, -1);
+    for (size_t i = 0; i < node_count; ++i) {
+        by_dest[static_cast<size_t>(border) * node_count + i] = next[i];
+    }
+    std::vector<uint32_t> dests(frame_count, border);
+    return mesh_routed_impl(radio, node_count, capable, rssi_dbm, by_dest.data(),
+                            frame_count > 0 ? dests.data() : nullptr, suppress,
+                            backoff_window_ns, frames, frame_count, out, summary, log);
+}
+
+}  // namespace
+
+int32_t lsim_mesh_forward(const lsim_mesh_radio* radio, size_t node_count,
+                          const uint8_t* capable, const double* rssi_dbm,
+                          const int32_t* next, uint32_t border, int suppress,
+                          int64_t backoff_window_ns, const lsim_mesh_frame* frames, size_t frame_count,
+                          lsim_mesh_delivery* out, lsim_mesh_summary* summary) {
+    return mesh_forward_impl(radio, node_count, capable, rssi_dbm, next, border, suppress,
+                             backoff_window_ns, frames, frame_count, out, summary, nullptr);
+}
+
+int32_t lsim_mesh_forward_log(const lsim_mesh_radio* radio, size_t node_count,
+                              const uint8_t* capable, const double* rssi_dbm,
+                              const int32_t* next, uint32_t border, int suppress,
+                              int64_t backoff_window_ns, const lsim_mesh_frame* frames,
+                              size_t frame_count, lsim_mesh_delivery* out,
+                              lsim_mesh_summary* summary, lsim_mesh_hop* hops,
+                              size_t hop_capacity, size_t* hop_count) {
+    if (hop_count == nullptr || (hops == nullptr && hop_capacity > 0)) {
+        return status_code(lsim::mesh::Status::InvalidInput);
+    }
+    *hop_count = 0;
+    std::vector<lsim::mesh::HopEvent> log;
+    const int32_t st = mesh_forward_impl(radio, node_count, capable, rssi_dbm, next, border,
+                                         suppress, backoff_window_ns, frames, frame_count, out,
+                                         summary, &log);
+    if (st != 0) return st;
+    *hop_count = log.size();
+    if (log.size() > hop_capacity) {
+        return status_code(lsim::mesh::Status::BufferTooSmall);
+    }
+    for (size_t k = 0; k < log.size(); ++k) {
+        hops[k].frame_id = log[k].frame_id;
+        hops[k].sender = log[k].sender;
+        hops[k].receiver = log[k].receiver;
+        hops[k].t_start_ns = log[k].t_start;
+        hops[k].t_end_ns = log[k].t_end;
+        hops[k].outcome = log[k].outcome;
+        hops[k].hop_index = log[k].hop_index;
+    }
+    return 0;
+}
+
+int32_t lsim_mesh_forward_routed_log(const lsim_mesh_radio* radio, size_t node_count,
+                                     const uint8_t* capable, const double* rssi_dbm,
+                                     const int32_t* next_by_dest, const uint32_t* dests,
+                                     int suppress, int64_t backoff_window_ns,
+                                     const lsim_mesh_frame* frames, size_t frame_count,
+                                     lsim_mesh_delivery* out, lsim_mesh_summary* summary,
+                                     lsim_mesh_hop* hops, size_t hop_capacity, size_t* hop_count) {
+    if (hop_count == nullptr || (hops == nullptr && hop_capacity > 0)) {
+        return status_code(lsim::mesh::Status::InvalidInput);
+    }
+    *hop_count = 0;
+    std::vector<lsim::mesh::HopEvent> log;
+    const int32_t st = mesh_routed_impl(radio, node_count, capable, rssi_dbm, next_by_dest, dests,
+                                        suppress, backoff_window_ns, frames, frame_count, out,
+                                        summary, &log);
+    if (st != 0) return st;
+    *hop_count = log.size();
+    if (log.size() > hop_capacity) {
+        return status_code(lsim::mesh::Status::BufferTooSmall);
+    }
+    for (size_t k = 0; k < log.size(); ++k) {
+        hops[k].frame_id = log[k].frame_id;
+        hops[k].sender = log[k].sender;
+        hops[k].receiver = log[k].receiver;
+        hops[k].t_start_ns = log[k].t_start;
+        hops[k].t_end_ns = log[k].t_end;
+        hops[k].outcome = log[k].outcome;
+        hops[k].hop_index = log[k].hop_index;
+    }
+    return 0;
+}
+
+}  // extern "C"
+
+int32_t lsim_shadowing_sample_db(uint64_t seed, uint32_t device_index, double sigma_db,
+                                 double* out) {
+    if (out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out = 0.0;
+    if (!(sigma_db >= 0.0) || sigma_db > lsim::sim::kMaxShadowingSigmaDb) {
+        return static_cast<int32_t>(lsim::lora::Status::InvalidParameter);
+    }
+    *out = lsim::sim::shadowing_sample_db(seed, device_index, sigma_db);
+    return 0;
+}
