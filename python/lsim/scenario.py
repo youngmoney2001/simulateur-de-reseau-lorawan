@@ -246,13 +246,16 @@ class EnergyModel(_Strict):
 class MacModel(_Strict):
     """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
 
-    Phase 1 (passerelle unique) :
-    - `link_check_every` : LinkCheckReq en FOpts de l'uplink de rang multiple de N ; reçue, elle
+    Phase 1 (passerelle unique), rangs 1-based des émissions du dispositif :
+    - `link_check_every` : LinkCheckReq (1 octet) dans l'uplink de rang multiple de N ; reçue, elle
       est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;
-    - `device_status_every` : DevStatusReq en FOpts d'un downlink de rang multiple de N, parmi les
-      downlinks émis (pas de downlink ajouté pour elle).
-    Les FOpts allongent le temps d'antenne des uplinks (moteur natif, 1 octet pour LinkCheckReq)
-    et des downlinks. Refusé avec plusieurs passerelles ou un mesh.
+    - `device_status_every` : DevStatusReq dans le downlink répondant à un uplink reçu de rang
+      multiple de N. Le dispositif répond par DevStatusAns (3 octets) dans son uplink suivant, si
+      la requête lui parvient. Cette réponse est réservée conservativement dans cet uplink
+      suivant : le temps d'antenne le compte, même si la requête n'est pas reçue.
+    Les octets réservés allongent le temps d'antenne des émissions concernées (moteur natif) ; les
+    octets émis effectivement n'apparaissent dans la trace qu'une fois confirmés.
+    Refusé avec plusieurs passerelles ou un mesh.
 
     Marge de LinkCheckAns (indicative, pas la marge SNR normative) :
         M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)
@@ -287,6 +290,12 @@ class ScenarioModel(_Strict):
             if self.gateways is not None or self.mesh is not None:
                 raise ValueError("commandes MAC : passerelle unique uniquement "
                                  "(pas de « gateways » ni de mesh)")
+            # Réservation maximale d'une émission : LinkCheckReq (1) + DevStatusAns (3).
+            extra = (1 if self.mac.link_check_every else 0) + (3 if self.mac.device_status_every else 0)
+            for g in self.groups:
+                if g.payload_bytes + extra > 255:
+                    raise ValueError(f"groupe {g.name!r} : charge de {g.payload_bytes} octets + "
+                                     f"{extra} octets MAC réservés dépasse 255")
         if self.gateways is None:
             if self.mesh is not None:
                 raise ValueError("mesh exige la liste « gateways » (plusieurs passerelles)")
@@ -409,7 +418,6 @@ class Scenario:
         Déterministe : l'ordre des groupes et des dispositifs est fixé par le fichier.
         """
         rng = random.Random(self.model.seed)
-        link_check = self.model.mac.link_check_every if self.model.mac is not None else 0
         devices: list[EndDevice] = []
         group_of: list[str] = []
         index_in_group: list[int] = []
@@ -423,7 +431,7 @@ class Scenario:
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
-                    duty_cycle=g.effective_duty_cycle, link_check_every=link_check))
+                    duty_cycle=g.effective_duty_cycle))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

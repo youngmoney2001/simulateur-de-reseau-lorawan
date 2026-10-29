@@ -643,49 +643,69 @@ void test_downlink_invariants_dense_traffic() {
     CHECK_EQ(ta.lost_sensitivity, tb.lost_sensitivity);
 }
 
-// LinkCheckReq en FOpts : l'émission de rang multiple de N (1-based) porte 1 octet de plus, donc
-// un temps d'antenne plus long ; les autres gardent la durée de la charge seule.
-void test_mac_link_check_airtime() {
+// Calendrier MAC : l'émission réservée de rang r porte extra_bytes de plus, dans son temps
+// d'antenne ; les autres gardent la durée de base. Le temps d'antenne total est la somme.
+void test_mac_reservations() {
     EndDeviceSpec d = device_at(100.0, 7, 0);
     d.period_ns = 1'000'000'000;
     d.messages = 4;
     d.payload_bytes = 12;  // SF7 : 12 -> 13 octets franchit un bloc de symboles (20 -> 25)
-    d.link_check_every = 2;
     DeviceStats per[1];
     SimulationStats totals;
-    std::vector<TxRecord> trace;
+    std::vector<TxRecord> base;
     CHECK_TRUE(simulate_uplinks(&d, 1, gateway(), PropagationSpec{}, per, totals, nullptr,
-                                &trace) == SimStatus::Ok);
+                                &base) == SimStatus::Ok);
+    const SimTime plain = base[0].end_ns - base[0].start_ns;
+
+    // Réservations aux rangs 2 et 4 (1 octet chacun) : durées 2 et 4 allongées.
+    const std::vector<MacReservation> res = {{0, 2, 1}, {0, 4, 1}};
+    std::vector<TxRecord> trace;
+    DeviceStats st[1];
+    SimulationStats tot;
+    CHECK_TRUE(simulate_uplinks(&d, 1, gateway(), PropagationSpec{}, st, tot, nullptr, &trace,
+                                nullptr, &res) == SimStatus::Ok);
     CHECK_EQ(trace.size(), std::size_t{4});
-    const SimTime plain = trace[0].end_ns - trace[0].start_ns;
     const SimTime with = trace[1].end_ns - trace[1].start_ns;
     CHECK_TRUE(with > plain);
-    CHECK_EQ(trace[2].end_ns - trace[2].start_ns, plain);   // rang 3 : sans FOpts
-    CHECK_EQ(trace[3].end_ns - trace[3].start_ns, with);    // rang 4 : LinkCheckReq
-    CHECK_EQ(per[0].airtime_ns, static_cast<std::uint64_t>(2 * plain + 2 * with));
-    CHECK_EQ(totals.airtime_ns, per[0].airtime_ns);
-    // Sans MAC : toutes les émissions gardent la durée de base.
-    EndDeviceSpec plain_dev = d;
-    plain_dev.link_check_every = 0;
-    std::vector<TxRecord> base;
-    CHECK_TRUE(simulate_uplinks(&plain_dev, 1, gateway(), PropagationSpec{}, per, totals, nullptr,
-                                &base) == SimStatus::Ok);
-    CHECK_EQ(base[1].end_ns - base[1].start_ns, plain);
-    // Charge de 255 octets : la trame allongée dépasserait la limite, refus explicite.
+    CHECK_EQ(trace[0].end_ns - trace[0].start_ns, plain);
+    CHECK_EQ(trace[2].end_ns - trace[2].start_ns, plain);
+    CHECK_EQ(trace[3].end_ns - trace[3].start_ns, with);
+    CHECK_EQ(st[0].airtime_ns, static_cast<std::uint64_t>(2 * plain + 2 * with));
+    CHECK_EQ(tot.airtime_ns, st[0].airtime_ns);
+
+    // Calendrier vide : identique au cas sans calendrier.
+    const std::vector<MacReservation> none;
+    std::vector<TxRecord> same;
+    DeviceStats st2[1];
+    SimulationStats tot2;
+    CHECK_TRUE(simulate_uplinks(&d, 1, gateway(), PropagationSpec{}, st2, tot2, nullptr, &same,
+                                nullptr, &none) == SimStatus::Ok);
+    CHECK_EQ(same[1].end_ns - same[1].start_ns, plain);
+
+    // Entrées invalides : rang hors plage, octets nuls ou hors FOpts, doublon, charge trop grande.
+    DeviceStats st3[1];
+    SimulationStats tot3;
+    const std::vector<std::vector<MacReservation>> bad = {
+        {{0, 5, 1}},          // rang > messages
+        {{0, 0, 1}},          // rang 0
+        {{0, 2, 0}},          // zéro octet
+        {{0, 2, 16}},         // au-delà de 15 octets de FOpts
+        {{1, 2, 1}},          // dispositif inexistant
+        {{0, 2, 1}, {0, 2, 3}},  // doublon
+    };
+    for (const auto& b : bad) {
+        CHECK_TRUE(simulate_uplinks(&d, 1, gateway(), PropagationSpec{}, st3, tot3, nullptr,
+                                    nullptr, nullptr, &b) == SimStatus::InvalidInput);
+    }
     EndDeviceSpec full = d;
-    full.payload_bytes = 255;
-    CHECK_TRUE(simulate_uplinks(&full, 1, gateway(), PropagationSpec{}, per, totals) ==
-               SimStatus::InvalidInput);
-    // Passerelles multiples : option refusée (non modélisée).
-    const GatewaySpec gws[1] = {gateway()};
-    GatewayRxStats gw[1];
-    NetworkStats net;
-    CHECK_TRUE(simulate_uplinks_multi(&d, 1, gws, 1, PropagationSpec{}, per, net, gw) ==
-               SimStatus::InvalidInput);
+    full.payload_bytes = 254;
+    const std::vector<MacReservation> over = {{0, 1, 2}};  // 256 octets
+    CHECK_TRUE(simulate_uplinks(&full, 1, gateway(), PropagationSpec{}, st3, tot3, nullptr,
+                                nullptr, nullptr, &over) == SimStatus::InvalidInput);
 }
 
 void run_engine_tests() {
-    test_mac_link_check_airtime();
+    test_mac_reservations();
     test_downlink_blocks_only_its_gateway();
     test_downlink_invariants_dense_traffic();
     test_multi_busy_is_per_gateway();

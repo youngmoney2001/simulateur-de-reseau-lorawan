@@ -82,17 +82,14 @@ def test_device_status_request_rides_on_every_second_downlink():
 
 
 def test_mac_fopts_decode_to_the_expected_commands():
-    # Vérifie le codage des FOpts de réponse, indépendamment de la trace.
+    # Codage des FOpts de descente, indépendant de la trace : (marge, DevStatusReq ?).
     from lsim.trace_events import _downlink_fopts
-    from lsim.mac_plan import MacSchedule
 
-    sched = MacSchedule(link_check_every=1, device_status_every=2)
-    assert decode_all(_downlink_fopts(sched, 1, 12), downlink=True) == [LinkCheckAns(12, 1)]
-    assert decode_all(_downlink_fopts(sched, 2, 12), downlink=True) == [
+    assert decode_all(_downlink_fopts(12, False), downlink=True) == [LinkCheckAns(12, 1)]
+    assert decode_all(_downlink_fopts(12, True), downlink=True) == [
         LinkCheckAns(12, 1), DevStatusReq()]
-    assert _downlink_fopts(sched, 1, None) == b""
-    with pytest.raises(ValueError):
-        MacSchedule(link_check_every=-1)
+    assert decode_all(_downlink_fopts(None, True), downlink=True) == [DevStatusReq()]
+    assert _downlink_fopts(None, False) == b""
 
 
 def test_mac_with_several_gateways_is_refused():
@@ -111,12 +108,15 @@ def test_mac_trace_is_reproducible():
     assert a.events == b.events
 
 
-def test_uplinks_carrying_link_check_req_are_longer_in_the_engine():
-    # Charge 12 octets, SF7 : 13 octets franchissent un bloc de symboles (20 -> 25) ; rang pair = FOpts.
+def test_reserved_bytes_lengthen_the_engine_airtime_at_their_rank():
+    # Charge 12 octets, SF7 : +1 octet MAC réservé au rang 2, 4, 6 (LinkCheckReq planifiée).
     from lsim.simulator import simulate_uplinks_trace
+    from lsim.trace_events import mac_reservations
     sc = _scenario({"link_check_every": 2})
     devices, _, _ = sc.deploy()
-    tr = simulate_uplinks_trace(devices, sc.gateway(), sc.propagation())
+    res = mac_reservations(sc, devices)
+    assert res == tuple((i, r, 1) for i in range(len(devices)) for r in (2, 4, 6))
+    tr = simulate_uplinks_trace(devices, sc.gateway(), sc.propagation(), reservations=res)
     by_dev = {}
     for r in tr.records:
         by_dev.setdefault(r.device_index, []).append(r)
@@ -127,6 +127,35 @@ def test_uplinks_carrying_link_check_req_are_longer_in_the_engine():
     # Le temps d'antenne compté par le moteur est la somme des émissions.
     for d, c in enumerate(tr.per_device):
         assert c.airtime_ns == sum(r.end_ns - r.start_ns for r in by_dev[d])
+
+
+def test_no_mac_means_no_reservation():
+    from lsim.trace_events import mac_reservations
+    sc = _scenario()
+    devices, _, _ = sc.deploy()
+    assert mac_reservations(sc, devices) == ()
+
+
+def test_run_scenario_with_mac_uses_the_reserved_airtime_and_is_reproducible():
+    from lsim.export import run_scenario
+    sc = _scenario({"link_check_every": 2})
+    a = run_scenario(sc, "rak4631")
+    b = run_scenario(sc, "rak4631")
+    assert a.totals == b.totals
+    assert [r.energy_per_message_j for r in a.rows] == [r.energy_per_message_j for r in b.rows]
+    plain = run_scenario(_scenario())
+    assert a.totals.airtime_ns > plain.totals.airtime_ns
+
+
+def test_energy_follows_the_counted_uplink_airtime():
+    from lsim.energy_report import device_energies_protocol
+    from lsim.simulator import EndDevice
+    devs = [EndDevice(payload_bytes=12, spreading_factor=7)]
+    small = device_energies_protocol(devs, [0], [8], "rak4631", [1_000_000_000])
+    big = device_energies_protocol(devs, [0], [8], "rak4631", [2_000_000_000])
+    assert small[0].energy_per_message_j < big[0].energy_per_message_j
+    with pytest.raises(ValueError):
+        device_energies_protocol(devs, [0], [8], "rak4631", [1, 2])
 
 
 def test_link_margin_is_rssi_above_threshold_minus_installation():
@@ -149,35 +178,16 @@ def test_link_margin_is_rssi_above_threshold_minus_installation():
 
 
 def test_installation_margin_is_reported_in_link_check_ans():
-    from lsim.mac import LinkCheckAns, decode_all
-    from lsim.trace_events import _downlink_fopts
     from lsim.mac_plan import MacSchedule
-    sched = MacSchedule(link_check_every=1, link_margin_installation_db=5)
-    assert decode_all(_downlink_fopts(sched, 1, 9), downlink=True) == [LinkCheckAns(9, 1)]
-
-
-def test_engine_airtime_feeds_the_uplink_energy():
-    from lsim.energy_report import device_energies_protocol, uplink_airtime_ns
-    from lsim.simulator import EndDevice
-    plain = EndDevice(payload_bytes=12, spreading_factor=7)
-    with_mac = EndDevice(payload_bytes=12, spreading_factor=7, link_check_every=4)
-    assert uplink_airtime_ns(plain) < uplink_airtime_ns(with_mac) < 2 * uplink_airtime_ns(plain)
-    devs = [with_mac]
-    base = device_energies_protocol(devs, [0], [8], "rak4631")
-    # Airtime réel compté : 6 émissions sans FOpts, 2 avec (rangs 4 et 8).
-    t_plain = uplink_airtime_ns(plain)
-    t_with = uplink_airtime_ns(EndDevice(payload_bytes=13, spreading_factor=7))
-    counted = device_energies_protocol(devs, [0], [8], "rak4631", [6 * t_plain + 2 * t_with])
-    assert counted[0].energy_per_message_j is not None and base[0].energy_per_message_j is not None
-
-
-def test_end_device_link_check_bounds():
-    from lsim.simulator import EndDevice
-    with pytest.raises(ValueError):
-        EndDevice(link_check_every=1001)
-    with pytest.raises(ValueError):
-        EndDevice(payload_bytes=255, link_check_every=1)
-    assert EndDevice(payload_bytes=254, link_check_every=1).link_check_every == 1
+    from lsim.radio import receiver_sensitivity_dbm
+    from lsim.simulator import TxRecord
+    from lsim.trace_events import _downlink_fopts, _link_margin_db
+    rec = TxRecord(0, 0, 1, 7, receiver_sensitivity_dbm(7, 125_000) + 10.4,
+                   TxRecord.OUTCOME_RECEIVED)
+    margin = _link_margin_db(rec, MacSchedule(link_check_every=1,
+                                              link_margin_installation_db=5)
+                             .link_margin_installation_db)
+    assert decode_all(_downlink_fopts(margin, False), downlink=True) == [LinkCheckAns(5, 1)]
 
 
 def test_mac_annotations_do_not_duplicate_frames_in_the_animation():

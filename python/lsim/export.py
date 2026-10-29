@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from lsim import __version__
-from lsim.energy_report import device_energies
+from lsim.energy_report import device_energies, device_energies_protocol
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.mesh_pass import mesh_pass
@@ -104,8 +104,19 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
                 if energy_profile is not None else None)
     if scenario.is_multi_gateway:
         return _run_multi(scenario, devices, groups, indices, energies, energy_profile)
-    result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
-                              scenario.environment)
+    # Calendrier MAC : la simulation trace porte les octets réservés dans le temps d'antenne.
+    # Sans MAC, le chemin historique est inchangé.
+    from lsim.trace_events import mac_reservations  # import local : évite un cycle
+    reservations = mac_reservations(scenario, devices)
+    if reservations:
+        result = simulate_trace_result(devices, scenario, reservations)
+        if energy_profile is not None:
+            energies = device_energies_protocol(
+                devices, [0] * len(devices), [c.sent for c in result.per_device], energy_profile,
+                [c.airtime_ns for c in result.per_device])
+    else:
+        result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
+                                  scenario.environment)
     rows = _rows(devices, groups, indices, energies, result.per_device, None)
     return RunResult(
         scenario_name=scenario.name,
@@ -116,6 +127,14 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
         gateway=result.gateway,
         energy_profile=energy_profile,
     )
+
+
+def simulate_trace_result(devices, scenario: Scenario, reservations):
+    """Simulation trace (compteurs par dispositif, totaux, passerelle) avec octets MAC réservés."""
+    from lsim.simulator import simulate_uplinks_trace
+    # Le cœur refuse au-delà de 200 000 émissions (statut 309) : erreur remontée, pas de troncature.
+    return simulate_uplinks_trace(devices, scenario.gateway(), scenario.propagation(),
+                                  scenario.environment, reservations=reservations)
 
 
 def _rows(devices, groups, indices, energies, per_device, delivered_by_device) -> tuple[DeviceRow, ...]:

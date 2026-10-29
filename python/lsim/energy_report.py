@@ -50,21 +50,6 @@ def _check_name(name: str) -> str:
     return name
 
 
-def uplink_airtime_ns(d: object) -> int:
-    """Airtime moyen d'un uplink du dispositif `d`, FOpts LinkCheckReq compris.
-
-    Le moteur allonge de 1 octet les uplinks de rang multiple de N (`link_check_every`) ; la
-    moyenne par message vaut donc `plain + (with_fopts - plain) / N`.
-    """
-    cfg = RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ)
-    plain = time_on_air_ns(cfg, d.payload_bytes)
-    period = getattr(d, "link_check_every", 0)
-    if not period:
-        return plain
-    with_fopts = time_on_air_ns(cfg, d.payload_bytes + 1)
-    return plain + round((with_fopts - plain) / period)
-
-
 def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[int],
                              sent: Sequence[int],
                              profile: str = DEFAULT_ENERGY_PROFILE,
@@ -76,8 +61,6 @@ def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[
     qu'il a reçus. Chaque message porte la part moyenne de ce airtime (`dl_airtime / sent`). Les
     fenêtres RX1/RX2 restent comptées par le modèle classe A ; seul le temps de réception effectif
     des trames descendantes s'ajoute. Sans downlink, le résultat égale `device_energies`.
-    `ul_airtime_ns[i]` (optionnel) : airtime total des uplinks émis, tel que compté par le moteur
-    (FOpts inclus) ; sinon l'airtime moyen de `uplink_airtime_ns`.
     """
     if not (len(devices) == len(dl_airtime_ns) == len(sent)):
         raise ValueError("devices, dl_airtime_ns et sent doivent avoir la même longueur")
@@ -87,9 +70,12 @@ def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[
     out = []
     for i, d in enumerate(devices):
         if ul_airtime_ns is not None and sent[i]:
+            # Temps d'antenne montant compté par le moteur (octets MAC réservés compris).
             airtime = ul_airtime_ns[i] // sent[i]
         else:
-            airtime = uplink_airtime_ns(d)
+            airtime = time_on_air_ns(
+                RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
+                d.payload_bytes)
         per_message = dl_airtime_ns[i] // sent[i] if sent[i] else 0
         try:
             r = device_energy_class_a(
@@ -110,7 +96,9 @@ def device_energies(devices: Sequence[object], profile: str = DEFAULT_ENERGY_PRO
     pid = ENERGY_PROFILES[_check_name(profile)]
     out = []
     for i, d in enumerate(devices):
-        airtime = uplink_airtime_ns(d)
+        airtime = time_on_air_ns(
+            RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
+            d.payload_bytes)
         try:
             r = device_energy_class_a(
                 tx_power_dbm=d.tx_power_dbm, bandwidth_hz=_BANDWIDTH_HZ,

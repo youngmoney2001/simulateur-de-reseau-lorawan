@@ -21,6 +21,7 @@ from lsim._native import (
     _CDownlinkStats,
     _CSimStats,
     _CInterval,
+    _CMacReservation,
     _CTxRecord,
     _CEndDevice,
     _CEnvironment,
@@ -104,7 +105,6 @@ class EndDevice:
     messages: int = 1
     duty_cycle: float = 1.0  # rapport cyclique maximal, ]0, 1] ; 1 = sans limite
     downlink: Optional[DownlinkRequests] = None  # requêtes de downlink (None = aucune)
-    link_check_every: int = 0  # LinkCheckReq (FOpts) au rang multiple de N ; 0 = sans MAC
 
     def __post_init__(self) -> None:
         if not 0.0 < self.duty_cycle <= 1.0:
@@ -122,10 +122,6 @@ class EndDevice:
             raise ValueError("period_ns doit être strictement positif")
         if self.messages < 1:
             raise ValueError("messages doit être au moins 1")
-        if not 0 <= self.link_check_every <= 1000:
-            raise ValueError("link_check_every doit être compris entre 0 et 1000")
-        if self.link_check_every and self.payload_bytes > 254:
-            raise ValueError("LinkCheckReq (1 octet de FOpts) exige une charge d'au plus 254 octets")
 
 
 @dataclass(frozen=True)
@@ -345,14 +341,14 @@ def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
         c.period_ns = d.period_ns
         c.messages = d.messages
         c.duty_cycle = d.duty_cycle
-        c.link_check_every = d.link_check_every
     return c_devs
 
 
 def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation: Propagation,
                            environment: Optional[Environment] = None,
-                           gateway_busy: Sequence[tuple[int, int]] = ()) -> TraceResult:
+                           gateway_busy: Sequence[tuple[int, int]] = (),
+                           reservations: Sequence[tuple[int, int, int]] = ()) -> TraceResult:
     """Comme `simulate_uplinks`, avec une entrée de trace par transmission.
 
     `gateway_busy` : périodes [début, fin) pendant lesquelles la passerelle émet (ns). Une trame
@@ -360,7 +356,19 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
 
     Les temps de la trace (début, fin) sont ceux du moteur, en nanosecondes. La trace
     est bornée par le cœur (statut 309 au-delà de 200 000 émissions).
+
+    `reservations` : triplets (index de dispositif, rang 1-based, octets MAC) réservés dans
+    l'émission correspondante ; ces octets allongent son temps d'antenne. Vide = sans MAC.
     """
+    if len(reservations) > MAX_TRACE_RECORDS:
+        raise ValueError("trop de réservations MAC")
+    c_res = None
+    if reservations:
+        c_res = (_CMacReservation * len(reservations))()
+        for k, (dev, rank, extra) in enumerate(reservations):
+            c_res[k].device_index = dev
+            c_res[k].rank = rank
+            c_res[k].extra_bytes = extra
     if len(gateway_busy) > MAX_TRACE_RECORDS:
         raise ValueError("trop de périodes d'émission passerelle")
     c_busy = None
@@ -392,10 +400,10 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     count = ctypes.c_size_t(0)
     records = (_CTxRecord * capacity)() if capacity else None
-    status = LIB.lsim_simulate_uplinks_trace(
+    status = LIB.lsim_simulate_uplinks_trace_v2(
         c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
         c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
-        c_busy, len(gateway_busy))
+        c_busy, len(gateway_busy), c_res, len(reservations))
     del keep
     if status != 0:
         raise StatusError(status)

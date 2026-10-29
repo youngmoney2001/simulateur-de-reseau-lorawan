@@ -85,14 +85,20 @@ struct EndDeviceSpec {
     // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
     double duty_cycle = 1.0;
     DownlinkPlan downlink;
-    // Commande MAC LinkCheckReq (1 octet en FOpts) dans chaque uplink de rang k multiple de N
-    // (rang 1-based ; 0 = désactivé). Les octets s'ajoutent à la trame : temps d'antenne plus long
-    // pour ces émissions. Passerelle unique seulement (refusé en multi-passerelles).
-    std::uint32_t link_check_every = 0;
 };
 
 // Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.
 inline constexpr double kMaxHorizonNs = 4.0e18;
+
+// Octets MAC réservés dans une émission : calendrier de rangs (passerelle unique). L'émission de
+// rang `rank` (1-based) du dispositif `device` est calculée avec payload_bytes + extra_bytes.
+// Réservation conservatrice : une émission réservée ne porte pas forcément ces octets (ex.
+// DevStatusAns, qui n'existe que si la requête est reçue).
+struct MacReservation {
+    std::uint32_t device = 0;
+    std::uint32_t rank = 1;
+    std::uint32_t extra_bytes = 0;  // 1..15 (FOpts)
+};
 
 struct GatewaySpec {
     Position position;
@@ -212,7 +218,8 @@ LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t de
                                     DeviceStats* per_device, SimulationStats& totals,
                                     const env::Environment* environment = nullptr,
                                     std::vector<TxRecord>* trace = nullptr,
-                                    const std::vector<Interval>* gateway_busy = nullptr);
+                                    const std::vector<Interval>* gateway_busy = nullptr,
+                                    const std::vector<MacReservation>* reservations = nullptr);
 
 // ------------------------------------------------------------- Plusieurs passerelles
 //

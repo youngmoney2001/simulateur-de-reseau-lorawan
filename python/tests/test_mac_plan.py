@@ -1,4 +1,4 @@
-"""Calendrier des commandes MAC (phase 1) : sens, périodes, encodage et bornes."""
+"""Calendrier MAC (phase 1) : règles par rang, réservations d'octets et encodage."""
 
 import pytest
 
@@ -6,55 +6,82 @@ from lsim import mac
 from lsim.mac import DevStatusReq, LinkCheckReq
 from lsim.mac_plan import (
     MacSchedule,
-    downlink_fopts,
-    downlink_requests,
-    uplink_extra_bytes,
+    device_status_request_due,
+    reserved_extra_bytes,
+    reservations,
     uplink_fopts,
     uplink_requests,
 )
 
 
-def test_disabled_schedule_requests_nothing():
+def test_disabled_schedule_requests_and_reserves_nothing():
     s = MacSchedule()
     assert not s.enabled
     assert all(uplink_requests(s, n) == [] for n in range(1, 50))
-    assert all(downlink_requests(s, n) == [] for n in range(1, 50))
-    assert all(uplink_extra_bytes(s, n) == 0 for n in range(1, 50))
+    assert all(not device_status_request_due(s, n) for n in range(1, 50))
+    assert all(reserved_extra_bytes(s, n) == 0 for n in range(1, 50))
+    assert reservations(s, 49) == []
 
 
 def test_link_check_every_three_uplinks():
     s = MacSchedule(link_check_every=3)
-    got = [n for n in range(1, 13) if uplink_requests(s, n)]
-    assert got == [3, 6, 9, 12]
+    assert [n for n in range(1, 13) if uplink_requests(s, n)] == [3, 6, 9, 12]
     assert uplink_requests(s, 3) == [LinkCheckReq()]
 
 
-def test_device_status_is_server_initiated_downlink_only():
+def test_device_status_request_is_decided_by_uplink_rank_not_by_uplink_content():
     s = MacSchedule(device_status_every=2)
-    assert [m for m in range(1, 7) if downlink_requests(s, m)] == [2, 4, 6]
-    # Jamais un DevStatusReq dans un uplink : le dispositif ne peut pas l'émettre.
+    assert [n for n in range(1, 9) if device_status_request_due(s, n)] == [2, 4, 6, 8]
+    # Jamais un DevStatusReq dans un uplink : c'est une commande de descente.
     assert all(uplink_requests(s, n) == [] for n in range(1, 20))
-    assert downlink_fopts(s, 2) == mac.encode(DevStatusReq())
+
+
+def test_link_check_reservation_is_certain_at_its_rank():
+    s = MacSchedule(link_check_every=4)
+    assert reserved_extra_bytes(s, 4) == 1
+    assert reserved_extra_bytes(s, 5) == 0
+    assert uplink_fopts(s, 4) == mac.encode(LinkCheckReq())
+
+
+def test_device_status_answer_is_reserved_conservatively_in_the_next_uplink():
+    # DevStatusAns = 3 octets, réservés dans l'uplink suivant chaque requête planifiée.
+    s = MacSchedule(device_status_every=3)
+    assert reserved_extra_bytes(s, 3) == 0          # la requête part après l'uplink 3, pas dedans
+    assert reserved_extra_bytes(s, 4) == 3          # réservation conservatrice dans l'uplink 4
+    assert reserved_extra_bytes(s, 5) == 0
+    assert reserved_extra_bytes(s, 1) == 0          # rang 1 : aucune requête précédente
+
+
+def test_both_reservations_add_up_and_stay_within_fopts():
+    s = MacSchedule(link_check_every=4, device_status_every=3)
+    assert reserved_extra_bytes(s, 4) == 1 + 3
+    # LinkCheckReq aux rangs 4 et 8 ; requêtes planifiées aux rangs 3 et 6 -> réponses réservées
+    # aux rangs 4 et 7. Rang 4 : 1 + 3 octets.
+    assert reservations(s, 8) == [(4, 4), (7, 3), (8, 1)]
+    # Dans tous les cas, la réservation tient dans les 15 octets de FOpts.
+    assert all(reserved_extra_bytes(s, n) <= 15 for n in range(1, 200))
+
+
+def test_reservations_list_matches_the_per_rank_rule():
+    s = MacSchedule(link_check_every=5, device_status_every=4)
+    got = reservations(s, 12)
+    assert got == [(r, reserved_extra_bytes(s, r)) for r in range(1, 13)
+                   if reserved_extra_bytes(s, r)]
 
 
 def test_uplink_fopts_decode_as_uplink_commands():
     s = MacSchedule(link_check_every=1)
     fopts = uplink_fopts(s, 1)
     assert mac.decode_all(fopts, downlink=False) == [LinkCheckReq()]
-    assert uplink_extra_bytes(s, 1) == len(fopts) == 1
 
 
-def test_downlink_fopts_decode_as_downlink_commands():
-    s = MacSchedule(device_status_every=1)
-    fopts = downlink_fopts(s, 1)
-    assert mac.decode_all(fopts, downlink=True) == [DevStatusReq()]
+def test_device_status_req_encodes_as_downlink_command():
+    assert mac.decode_all(mac.encode(DevStatusReq()), downlink=True) == [DevStatusReq()]
 
 
 def test_schedule_is_reproducible():
     s = MacSchedule(link_check_every=5, device_status_every=7)
-    first = [(uplink_fopts(s, n), downlink_fopts(s, n)) for n in range(1, 200)]
-    second = [(uplink_fopts(s, n), downlink_fopts(s, n)) for n in range(1, 200)]
-    assert first == second
+    assert reservations(s, 200) == reservations(s, 200)
 
 
 def test_bounds_and_input_types_are_refused():
@@ -65,6 +92,8 @@ def test_bounds_and_input_types_are_refused():
     with pytest.raises(ValueError):
         MacSchedule(link_check_every=True)
     with pytest.raises(ValueError):
+        MacSchedule(link_margin_installation_db=61)
+    with pytest.raises(ValueError):
         uplink_requests(MacSchedule(link_check_every=1), 0)
     with pytest.raises(ValueError):
-        downlink_requests(MacSchedule(device_status_every=1), 0)
+        reserved_extra_bytes(MacSchedule(device_status_every=1), 0)

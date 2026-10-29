@@ -247,7 +247,6 @@ class _CEndDevice(ctypes.Structure):
         ("period_ns", ctypes.c_int64),
         ("messages", ctypes.c_uint32),
         ("duty_cycle", ctypes.c_double),
-        ("link_check_every", ctypes.c_uint32),
     ]
 
 
@@ -323,6 +322,14 @@ class _CInterval(ctypes.Structure):
     _fields_ = [
         ("start_ns", ctypes.c_int64),
         ("end_ns", ctypes.c_int64),
+    ]
+
+
+class _CMacReservation(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("rank", ctypes.c_uint32),
+        ("extra_bytes", ctypes.c_uint32),
     ]
 
 
@@ -566,6 +573,15 @@ LIB.lsim_simulate_uplinks_trace.argtypes = [
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CInterval), ctypes.c_size_t]
+# Version 2 : calendrier de réservations MAC (octets comptés dans le temps d'antenne).
+LIB.lsim_simulate_uplinks_trace_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t]
 LIB.lsim_simulate_uplinks_multi.restype = ctypes.c_int32
 LIB.lsim_simulate_uplinks_multi.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,

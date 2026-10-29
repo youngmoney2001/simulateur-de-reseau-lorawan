@@ -300,7 +300,6 @@ typedef struct lsim_end_device {
     int64_t  period_ns;          /* > 0 */
     uint32_t messages;           /* >= 1 */
     double   duty_cycle;         /* ]0, 1] ; 1 = sans limite */
-    uint32_t link_check_every;   /* 0 = sans MAC ; N : LinkCheckReq (1 octet FOpts) au rang multiple de N ; passerelle unique */
 } lsim_end_device;
 
 typedef struct lsim_gateway {
@@ -413,6 +412,30 @@ LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, siz
                                              size_t record_capacity, size_t* record_count,
                                              const lsim_interval* gateway_busy,
                                              size_t gateway_busy_count);
+
+/* Calendrier MAC (version 2 de la trace) : octets MAC réservés dans des émissions, comptés dans
+ * le temps d'antenne. Réservation conservatrice : une émission réservée ne porte pas forcément
+ * ces octets. Un doublon (même dispositif, même rang), un rang hors de 1..messages, extra_bytes
+ * hors de 1..15 ou une charge dépassant 255 octets sont refusés. Sans réservation, identique à
+ * lsim_simulate_uplinks_trace. */
+typedef struct lsim_mac_reservation {
+    uint32_t device_index;       /* index dans devices */
+    uint32_t rank;               /* rang 1-based de l'émission du dispositif */
+    uint32_t extra_bytes;        /* 1..15 */
+} lsim_mac_reservation;
+
+LSIM_API int32_t lsim_simulate_uplinks_trace_v2(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count);
 
 /* ------------------------------------------- Plusieurs passerelles (uplinks)
  * Chaque passerelle reçoit les mêmes émissions ; le serveur déduplique (une livraison par

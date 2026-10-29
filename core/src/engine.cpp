@@ -34,11 +34,12 @@ bool overlap(const Tx& a, const Tx& b) {
     return a.start < b.end && b.start < a.end;
 }
 
-// Temps d'antenne de l'émission k (0-based) : plus long si elle porte LinkCheckReq (rang k+1).
-SimTime airtime_of(const EndDeviceSpec& d, SimTime plain, SimTime with_fopts, std::uint32_t k) {
-    const std::uint32_t rank = k + 1;
-    return (d.link_check_every > 0 && rank % d.link_check_every == 0) ? with_fopts : plain;
-}
+// Temps d'antenne réservés : table par émission (dispositif, rang) construite à partir du
+// calendrier. Vide si aucune réservation : le temps d'antenne est alors constant par dispositif.
+struct ReservedAirtime {
+    std::vector<std::size_t> offset;    // premier indice de chaque dispositif dans `air`
+    std::vector<SimTime> air;           // temps d'antenne par émission (dispositif, rang)
+};
 
 SimStatus validate_device(const EndDeviceSpec& d) {
     if (!finite(d.position.x_m) || !finite(d.position.y_m) || !finite(d.tx_power_dbm)) {
@@ -48,9 +49,6 @@ SimStatus validate_device(const EndDeviceSpec& d) {
         return SimStatus::InvalidInput;
     }
     if (d.payload_bytes > 255) {
-        return SimStatus::InvalidInput;
-    }
-    if (d.link_check_every > 1000 || (d.link_check_every > 0 && d.payload_bytes > 254)) {
         return SimStatus::InvalidInput;
     }
     if (d.period_ns <= 0 || d.start_offset_ns < 0 || d.messages == 0) {
@@ -160,7 +158,8 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
                            const GatewaySpec& gateway, const PropagationSpec& prop,
                            DeviceStats* per_device, SimulationStats& totals,
                            const env::Environment* environment, std::vector<TxRecord>* trace,
-                           const std::vector<Interval>* gateway_busy) {
+                           const std::vector<Interval>* gateway_busy,
+                           const std::vector<MacReservation>* reservations) {
     totals = SimulationStats{};
     if (trace != nullptr) trace->clear();
     // Périodes d'émission passerelle : triées et fusionnées (intervalles disjoints, triés).
@@ -213,7 +212,6 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
 
     // Précalcul par dispositif : airtime, RSSI à la passerelle, sensibilité.
     std::vector<SimTime> airtime(device_count);
-    std::vector<SimTime> airtime_fopts(device_count);  // émission portant LinkCheckReq
     std::vector<double> rssi(device_count);
     std::vector<double> sensitivity(device_count);
     std::uint64_t total_tx = 0;
@@ -241,15 +239,6 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             return SimStatus::InvalidInput;
         }
         airtime[i] = at.nanoseconds;
-        airtime_fopts[i] = airtime[i];
-        if (d.link_check_every > 0) {
-            // LinkCheckReq : 1 octet en FOpts, dans l'en-tête de la trame (PHYPayload).
-            const lora::AirtimeResult atf = lora::time_on_air(rc, d.payload_bytes + 1);
-            if (atf.status != lora::Status::Ok) {
-                return SimStatus::InvalidInput;
-            }
-            airtime_fopts[i] = atf.nanoseconds;
-        }
 
         // Distance minimale : d0 (évite les pertes négatives à très courte portée).
         const double dx = d.position.x_m - gateway.position.x_m;
@@ -293,6 +282,56 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     }
     if (total_dl > kMaxDownlinkRequests) return SimStatus::TooManyDownlinks;
 
+    // Calendrier MAC : temps d'antenne par émission (dispositif, rang), octets réservés compris.
+    ReservedAirtime reserved;
+    const bool has_reservations = reservations != nullptr && !reservations->empty();
+    if (has_reservations) {
+        reserved.offset.assign(device_count + 1, 0);
+        for (std::size_t i = 0; i < device_count; ++i) {
+            reserved.offset[i + 1] = reserved.offset[i] + devices[i].messages;
+        }
+        std::vector<std::uint8_t> extra(reserved.offset[device_count], 0);
+        for (const MacReservation& r : *reservations) {
+            if (r.device >= device_count || r.rank < 1 || r.rank > devices[r.device].messages ||
+                r.extra_bytes < 1 || r.extra_bytes > 15) {
+                return SimStatus::InvalidInput;
+            }
+            std::uint8_t& slot = extra[reserved.offset[r.device] + r.rank - 1];
+            if (slot != 0) {
+                return SimStatus::InvalidInput;  // deux réservations pour une même émission
+            }
+            slot = static_cast<std::uint8_t>(r.extra_bytes);
+        }
+        reserved.air.assign(extra.size(), 0);
+        for (std::size_t i = 0; i < device_count; ++i) {
+            const EndDeviceSpec& d = devices[i];
+            lora::RadioConfig rc;
+            rc.spreading_factor = d.spreading_factor;
+            rc.bandwidth = lora::Bandwidth::Bw125kHz;
+            rc.coding_rate = 1;
+            rc.low_data_rate_optimize = lora::low_data_rate_required(d.spreading_factor, rc.bandwidth);
+            for (std::uint32_t k = 0; k < d.messages; ++k) {
+                const std::size_t idx = reserved.offset[i] + k;
+                if (extra[idx] == 0) {
+                    reserved.air[idx] = airtime[i];
+                    continue;
+                }
+                const std::uint32_t bytes = d.payload_bytes + extra[idx];
+                if (bytes > 255) {
+                    return SimStatus::InvalidInput;
+                }
+                const lora::AirtimeResult at = lora::time_on_air(rc, bytes);
+                if (at.status != lora::Status::Ok) {
+                    return SimStatus::InvalidInput;
+                }
+                reserved.air[idx] = at.nanoseconds;
+            }
+        }
+    }
+    const auto air_of = [&](std::size_t i, std::uint32_t k) -> SimTime {
+        return has_reservations ? reserved.air[reserved.offset[i] + k] : airtime[i];
+    };
+
     // Ordonnancement des émissions dans la file bornée.
     EventQueue queue(static_cast<std::size_t>(total_tx));
     for (std::size_t i = 0; i < device_count; ++i) {
@@ -307,7 +346,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             if (nominal_d > kMaxHorizonNs) {
                 return SimStatus::InvalidInput;
             }
-            const SimTime air_k = airtime_of(d, airtime[i], airtime_fopts[i], k);
+            const SimTime air_k = air_of(i, k);
             SimTime t = static_cast<SimTime>(nominal_d);
             if (k > 0 && off_factor > 0.0) {
                 const double earliest_d = static_cast<double>(prev_end) +
@@ -329,8 +368,8 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     std::vector<Tx> txs;
     txs.reserve(static_cast<std::size_t>(total_tx));
     SimTime max_airtime = 0;
-    // Les émissions d'un dispositif sont extraites dans l'ordre de ses messages (débuts stricts-
-    // ment croissants) : le compteur par dispositif donne le rang de l'émission.
+    // Les débuts d'un dispositif sont strictement croissants : le compteur par dispositif donne le
+    // rang (k) de l'émission extraite.
     std::vector<std::uint32_t> popped(device_count, 0);
     Event ev;
     while (queue.pop(ev)) {
@@ -338,7 +377,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             continue;
         }
         const std::uint32_t i = ev.target;
-        const SimTime air = airtime_of(devices[i], airtime[i], airtime_fopts[i], popped[i]++);
+        const SimTime air = air_of(i, popped[i]++);
         Tx t;
         t.start = ev.time;
         t.end = ev.time + air;
@@ -566,7 +605,6 @@ static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_
         const EndDeviceSpec& d = devices[i];
         const SimStatus ds = validate_device(d);
         if (ds != SimStatus::Ok) return ds;
-        if (d.link_check_every != 0) return SimStatus::InvalidInput;  // passerelle unique seulement
 
         lora::RadioConfig rc;
         rc.spreading_factor = d.spreading_factor;

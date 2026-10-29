@@ -320,7 +320,6 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
-            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -422,7 +421,8 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
                         const lsim_gateway* gateway, const lsim_propagation* prop,
                         const lsim_environment* env, lsim_device_stats* per_device,
                         lsim_sim_stats* totals, std::vector<lsim::sim::TxRecord>* trace,
-                        const std::vector<lsim::sim::Interval>* busy = nullptr) {
+                        const std::vector<lsim::sim::Interval>* busy = nullptr,
+                        const std::vector<lsim::sim::MacReservation>* reservations = nullptr) {
     try {
         std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
         for (size_t i = 0; i < device_count; ++i) {
@@ -432,7 +432,6 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
-            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -467,7 +466,8 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         lsim::sim::SimulationStats tot;
         const auto st = lsim::sim::simulate_uplinks(specs.data(), device_count, g, p,
                                                     stats.data(), tot,
-                                                    env != nullptr ? &e : nullptr, trace, busy);
+                                                    env != nullptr ? &e : nullptr, trace, busy,
+                                                    reservations);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }
@@ -526,9 +526,24 @@ int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t devic
                                     size_t record_capacity, size_t* record_count,
                                     const lsim_interval* gateway_busy,
                                     size_t gateway_busy_count) {
+    return lsim_simulate_uplinks_trace_v2(devices, device_count, gateway, prop, env, per_device,
+                                          totals, records, record_capacity, record_count,
+                                          gateway_busy, gateway_busy_count, nullptr, 0);
+}
+
+int32_t lsim_simulate_uplinks_trace_v2(const lsim_end_device* devices, size_t device_count,
+                                       const lsim_gateway* gateway, const lsim_propagation* prop,
+                                       const lsim_environment* env, lsim_device_stats* per_device,
+                                       lsim_sim_stats* totals, lsim_tx_record* records,
+                                       size_t record_capacity, size_t* record_count,
+                                       const lsim_interval* gateway_busy,
+                                       size_t gateway_busy_count,
+                                       const lsim_mac_reservation* reservations,
+                                       size_t reservation_count) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
-        (gateway_busy_count > 0 && gateway_busy == nullptr)) {
+        (gateway_busy_count > 0 && gateway_busy == nullptr) ||
+        (reservation_count > 0 && reservations == nullptr)) {
         return static_cast<int32_t>(lsim::lora::Status::NullOutput);
     }
     *record_count = 0;
@@ -551,9 +566,15 @@ int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t devic
         return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceTooLarge);
     }
     try {
+        std::vector<lsim::sim::MacReservation> res(reservation_count);
+        for (size_t k = 0; k < reservation_count; ++k) {
+            res[k].device = reservations[k].device_index;
+            res[k].rank = reservations[k].rank;
+            res[k].extra_bytes = reservations[k].extra_bytes;
+        }
         std::vector<lsim::sim::TxRecord> trace;
         const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
-                                           totals, &trace, &busy);
+                                           totals, &trace, &busy, &res);
         if (st != 0) {
             return st;
         }
@@ -598,7 +619,6 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
-            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -933,7 +953,6 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
-            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;
@@ -1070,7 +1089,6 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             s.position.y_m = d.y_m;
             s.spreading_factor = d.spreading_factor;
             s.payload_bytes = d.payload_bytes;
-            s.link_check_every = d.link_check_every;
             s.tx_power_dbm = d.tx_power_dbm;
             s.start_offset_ns = d.start_offset_ns;
             s.period_ns = d.period_ns;

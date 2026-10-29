@@ -48,7 +48,8 @@ from lsim.scenario import Scenario
 from lsim.mesh import MESH_ENVELOPE_DOWN_BYTES, MESH_ENVELOPE_UP_BYTES
 from lsim import mac as lsim_mac
 from lsim.mac import DevStatusReq, LinkCheckAns, LinkCheckReq
-from lsim.mac_plan import MacSchedule, downlink_requests, uplink_requests
+from lsim import mac_plan
+from lsim.mac_plan import MacSchedule, device_status_request_due, uplink_requests
 from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
@@ -162,6 +163,7 @@ class _Job:
     device_missed: bool   # le dispositif émet pendant sa fenêtre RX1
     fopts: bytes = b""    # commandes MAC en FOpts du downlink (LinkCheckAns, DevStatusReq)
     link_margin: int = 0  # marge rapportée par LinkCheckAns (dB, si présente)
+    carries_ds: bool = False  # le downlink porte DevStatusReq (réponse attendue si reçue)
 
 
 def _dev(i: int) -> str:
@@ -296,8 +298,10 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
                    mac: Optional[MacSchedule] = None) -> list[_Job]:
     """Une réponse attendue par uplink reçu, dans l'ordre de la trace (un seul downlink par uplink).
 
-    Avec `mac` : un LinkCheckReq reçu est acquitté par un LinkCheckAns (downlink dédié s'il n'y
-    en a pas déjà un) ; un DevStatusReq périodique est placé dans les FOpts des downlinks émis.
+    Avec `mac` :
+    - un LinkCheckReq reçu est acquitté par un LinkCheckAns (downlink dédié s'il n'y en a pas) ;
+    - un uplink reçu de rang multiple de `device_status_every` porte une DevStatusReq (downlink
+      dédié s'il n'y en a pas). Elle est décidée par le rang, pas par le dispositif.
     Les FOpts allongent la trame, donc le temps d'antenne du downlink.
     """
     if options.downlink_every < 0:
@@ -316,7 +320,6 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
     ranks = _mac_ranks(records)
     jobs: list[_Job] = []
     accepted: dict[int, int] = defaultdict(int)
-    sent: dict[int, int] = defaultdict(int)  # downlinks émis par dispositif (rang 1-based)
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
@@ -325,14 +328,16 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             continue
 
         margin: Optional[int] = None
+        carries_ds = False
         if is_join:
             t_open = r.end_ns + JOIN_ACCEPT_DELAY1_NS
             kind, content = "join_accept", "delivered"
-            airtime = _downlink_airtime_ns(radio, JOIN_ACCEPT_BYTES)
+            base = JOIN_ACCEPT_BYTES
             fopts = b""
         else:
             accepted[d] += 1
             wants_answer = mac is not None and LinkCheckReq() in uplink_requests(mac, ranks[i])
+            carries_ds = mac is not None and device_status_request_due(mac, ranks[i])
             if wants_answer:
                 margin = _link_margin_db(r, mac.link_margin_installation_db)
             queued = options.downlink_every > 0 and accepted[d] % options.downlink_every == 0
@@ -346,12 +351,14 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             elif wants_answer:
                 kind, content = "mac_answer", "delivered"
                 base = ACK_FRAME_BYTES
+            elif carries_ds:
+                kind, content = "downlink", "delivered"  # downlink MAC seul
+                base = ACK_FRAME_BYTES
             else:
                 continue
             t_open = r.end_ns + RECEIVE_DELAY1_NS
-            fopts = _downlink_fopts(mac, sent[d] + 1, margin)
-            airtime = _downlink_airtime_ns(radio, base + len(fopts))
-            sent[d] += 1
+            fopts = _downlink_fopts(margin, carries_ds)
+        airtime = _downlink_airtime_ns(radio, base + len(fopts))
 
         nxt = next_start.get(i)
         jobs.append(_Job(
@@ -359,20 +366,19 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             rx1_hz=radio.rx1_hz,
             received=_received_by_device(r, radio, options),
             device_missed=nxt is not None and nxt < t_open + RX1_WINDOW_NS,
-            fopts=fopts, link_margin=margin or 0,
+            fopts=fopts, link_margin=margin or 0, carries_ds=carries_ds,
         ))
     return jobs
 
 
-def _downlink_fopts(mac: Optional[MacSchedule], rank: int, margin: Optional[int]) -> bytes:
-    """FOpts du downlink de rang `rank` : LinkCheckAns (si `margin` n'est pas None) puis, selon la
-    période, DevStatusReq. Ordre CID croissant ; jamais tronqué (15 octets au plus)."""
-    if mac is None:
-        return b""
+def _downlink_fopts(margin: Optional[int], carries_ds: bool) -> bytes:
+    """FOpts d'un downlink : LinkCheckAns (si `margin` n'est pas None), puis DevStatusReq (si
+    `carries_ds`). Ordre CID croissant ; jamais tronqué (15 octets au plus)."""
     cmds: list = []
     if margin is not None:
         cmds.append(LinkCheckAns(margin, 1))
-    cmds.extend(downlink_requests(mac, rank))
+    if carries_ds:
+        cmds.append(DevStatusReq())
     fopts = b""
     for cmd in cmds:
         fopts = lsim_mac.append_fopts(fopts, cmd)
@@ -408,6 +414,22 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
 
     job_of = {job.record: k for k, job in enumerate(jobs)}
     ranks = _mac_ranks(records)
+    # DevStatusAns : émise dans l'uplink suivant une DevStatusReq reçue. Confirmée seulement si
+    # cet uplink est lui-même reçu par la passerelle ; sinon elle n'apparaît pas dans la trace.
+    next_of: dict[int, int] = {}
+    last_of: dict[int, int] = {}
+    for i, r in enumerate(records):
+        prev = last_of.get(r.device_index)
+        if prev is not None:
+            next_of[prev] = i
+        last_of[r.device_index] = i
+    ds_answer_at: set[int] = set()
+    for k, job in enumerate(jobs):
+        if not job.carries_ds or starts[k] is None or job.device_missed or not job.received:
+            continue
+        j = next_of.get(job.record)
+        if j is not None and not roles[j] and records[j].outcome == TxRecord.OUTCOME_RECEIVED:
+            ds_answer_at.add(j)
     for i, r in enumerate(records):
         d = r.device_index
         radio = radios[d]
@@ -423,6 +445,8 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
             for cmd in uplink_requests(mac, ranks[i]):
                 # Annotation : la trame est déjà dessinée par l'événement uplink ; pas de saut dupliqué.
                 add(r.start_ns, "mac_request", d, [], _MAC_NAME[type(cmd)])
+        if i in ds_answer_at:
+            add(r.start_ns, "mac_answer", d, [], "DevStatusAns")
 
         k = job_of.get(i)
         if k is None:
@@ -445,11 +469,12 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         else:
             down = [down_hop]
         add(start, job.kind, d, down, job.content if ok else "lost_sensitivity")
-        # Commandes MAC portées par un downlink reçu (un job `mac_answer` est déjà l'événement
-        # `mac_answer` lui-même). Un downlink perdu n'apporte ni réponse ni requête.
-        if ok and job.fopts and job.kind != "mac_answer":
+        # Commandes MAC portées par un downlink reçu. Un job `mac_answer` est déjà l'événement de
+        # sa réponse LinkCheckAns ; une DevStatusReq est toujours annotée. Un downlink perdu
+        # n'apporte ni réponse ni requête.
+        if ok and job.fopts:
             for cmd in lsim_mac.decode_all(job.fopts, downlink=True):
-                if isinstance(cmd, LinkCheckAns):
+                if isinstance(cmd, LinkCheckAns) and job.kind != "mac_answer":
                     add(start, "mac_answer", d, [], "delivered")
                 elif isinstance(cmd, DevStatusReq):
                     add(start, "mac_request", d, [], "DevStatusReq")
@@ -500,6 +525,22 @@ def _schedule_of(scenario: Scenario) -> Optional[MacSchedule]:
                        link_margin_installation_db=m.link_margin_installation_db)
 
 
+def mac_reservations(scenario: Scenario, devices) -> tuple[tuple[int, int, int], ...]:
+    """Calendrier des octets MAC réservés : triplets (index de dispositif, rang, octets).
+
+    Calculé avant la simulation, à partir du scénario seul : même scénario, mêmes réservations. Les
+    réservations sont conservatrices (voir `lsim.mac_plan`).
+    """
+    schedule = _schedule_of(scenario)
+    if schedule is None:
+        return ()
+    out = []
+    for i, d in enumerate(devices):
+        for rank, extra in mac_plan.reservations(schedule, d.messages):
+            out.append((i, rank, extra))
+    return tuple(out)
+
+
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
     """Déploie le scénario et calcule la trace cohérente avec les émissions de la passerelle.
 
@@ -513,12 +554,13 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     radios = device_radios(scenario)
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
     mac = _schedule_of(scenario)
+    reservations = mac_reservations(scenario, devices)
 
     busy: list[tuple[int, int]] = []
     joined: dict[int, int] = {}
     for _ in range(MAX_ITERATIONS):
         result = simulate_uplinks_trace(devices, gateway, propagation, environment,
-                                        gateway_busy=busy)
+                                        gateway_busy=busy, reservations=reservations)
         roles, jobs, starts, new_busy, new_joined = _plan(result.records, radios, options, joined,
                                                           mac)
         if new_busy == busy and new_joined == joined:
