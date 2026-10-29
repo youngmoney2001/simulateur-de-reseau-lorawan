@@ -78,6 +78,13 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
   - Duty cycle (corrigé) : limite réglementaire par index (sous-bande la plus restrictive à la PIRE de
     l'index, combinée au duty cycle du groupe), puis `min` avec DutyCycleReq. Repos après une émission =
     airtime de l'émission terminée × (1/D − 1). DutyCycleReq ne peut pas relever la limite réglementaire.
+  - Décision de convention (validée par le propriétaire) : la convention cible du simulateur est le repos
+    calculé sur l'airtime de l'émission terminée. Étapes : (1) test de divergence
+    (`test_duty_convention_differs_from_start_airtime`, cas où un uplink plus long porte une réponse MAC) ;
+    (2) empreintes historiques conservées tant que la migration n'est pas validée ; (3) contrat ABI versionné
+    et schémas de configuration ; (4) commandes MAC restantes ; (5) migration explicite du chemin historique,
+    avec validation des changements de trace et régénération des empreintes. Ne pas garder deux conventions
+    sans les documenter.
   - Divergence connue : le chemin sans commande (scénarios sans `link_adr` ni `duty_cycle_exponent`, dont
     les empreintes sont figées) garde l'ancienne convention, où le repos utilise l'airtime de l'émission
     qui démarre. Les deux conventions ne sont pas équivalentes quand D < 1. Migrer le chemin historique

@@ -199,6 +199,38 @@ void test_duty_cycle_spacing_after_apply() {
     CHECK_EQ(res.uplinks.size(), std::size_t{40});
 }
 
+void test_duty_convention_differs_from_start_airtime() {
+    // Même scénario que le test d'espacement : après DutyCycleAns, l'uplink 1 est plus long
+    // (octets MAC). Convention cible (airtime terminé) : le repos suit l'émission terminée. La
+    // convention historique (airtime de l'émission qui démarre) donnerait un autre repos ; ce test
+    // exige que les deux diffèrent sur ce cas, pour que la migration reste visible.
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 4 * kS, 40)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 4;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    int differs = 0;
+    for (std::size_t k = 0; k + 1 < res.uplinks.size(); ++k) {
+        const LoopUplink& prev = res.uplinks[k];
+        const LoopUplink& next = res.uplinks[k + 1];
+        const SimTime air_prev = prev.end_ns - prev.start_ns;
+        const SimTime air_next = next.end_ns - next.start_ns;
+        const SimTime gap = next.start_ns - prev.end_ns;
+        const bool cible = gap >= 15 * air_prev;
+        const bool historique = gap >= 15 * air_next;
+        CHECK_TRUE(cible);  // la cible est respectée partout
+        if (cible && !historique) ++differs;
+    }
+    CHECK_TRUE(differs >= 1);  // au moins un repos où la convention historique serait violée
+}
+
 void test_retry_after_device_missed_rx1() {
     // Classe A : le dispositif émet toutes les 1,5 s, donc chaque uplink tombe dans la RX1 de
     // l'uplink précédent (fin + 1 s à fin + 2 s). Les descentes sont perdues, la commande
@@ -239,6 +271,7 @@ void run_closed_loop_tests() {
     test_no_command_parity_with_causal();
     test_plan_max_eirp_caps_index_zero();
     test_regulatory_limit_applies_without_command();
+    test_duty_convention_differs_from_start_airtime();
     test_adr_converges_to_sf7();
     test_duty_cycle_spacing_after_apply();
     test_retry_after_device_missed_rx1();
