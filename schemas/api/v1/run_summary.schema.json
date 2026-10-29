@@ -34,6 +34,70 @@
       "title": "GatewayLoadOut",
       "type": "object"
     },
+    "GatewayReportOut": {
+      "additionalProperties": false,
+      "description": "Passerelle d'un run multi-passerelles : trames reçues et charge de réception.",
+      "properties": {
+        "audible_frames": {
+          "minimum": 0,
+          "title": "Audible Frames",
+          "type": "integer"
+        },
+        "busy_ns": {
+          "minimum": 0,
+          "title": "Busy Ns",
+          "type": "integer"
+        },
+        "lost_collision": {
+          "minimum": 0,
+          "title": "Lost Collision",
+          "type": "integer"
+        },
+        "lost_gateway_busy": {
+          "minimum": 0,
+          "title": "Lost Gateway Busy",
+          "type": "integer"
+        },
+        "lost_sensitivity": {
+          "minimum": 0,
+          "title": "Lost Sensitivity",
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 64,
+          "title": "Name",
+          "type": "string"
+        },
+        "observation_ns": {
+          "minimum": 0,
+          "title": "Observation Ns",
+          "type": "integer"
+        },
+        "peak_concurrent": {
+          "minimum": 0,
+          "title": "Peak Concurrent",
+          "type": "integer"
+        },
+        "received": {
+          "minimum": 0,
+          "title": "Received",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "received",
+        "lost_sensitivity",
+        "lost_collision",
+        "lost_gateway_busy",
+        "audible_frames",
+        "busy_ns",
+        "peak_concurrent",
+        "observation_ns"
+      ],
+      "title": "GatewayReportOut",
+      "type": "object"
+    },
     "Totals": {
       "additionalProperties": false,
       "properties": {
@@ -81,6 +145,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent\ndepuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent).",
   "properties": {
     "energy_profile": {
       "anyOf": [
@@ -95,7 +160,31 @@
       "title": "Energy Profile"
     },
     "gateway": {
-      "$ref": "#/$defs/GatewayLoadOut"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GatewayLoadOut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "gateways": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/GatewayReportOut"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateways"
     },
     "pdr": {
       "anyOf": [
@@ -134,8 +223,7 @@
     "run_id",
     "scenario_sha256",
     "seed",
-    "totals",
-    "gateway"
+    "totals"
   ],
   "title": "RunSummary",
   "type": "object"

@@ -99,14 +99,26 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
 La route `events` est exposée (v1). Sa trace provient de `lsim.trace_events.build_trace`, et le
 serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier le run.
 
-**Limites de la v1 (implémentation)** :
-- scénarios **mono-passerelle** seulement : multi-passerelles, mesh et `environment` (relief,
-  obstacles) sont refusés à la création avec `validation_error`, et non calculés à tort ;
-- runs **en mémoire** du processus : perdus au redémarrage ; 20 runs par jeton, 200 au total ;
-  une seule file de calcul (16 en attente, 4 actifs par jeton) ;
-- pas de limite de débit par jeton (exigée au §6, non implémentée) ;
-- pas de TLS dans le serveur : le relais HTTPS est requis hors machine de confiance ;
-- erreur interne : code `run_failed`, message générique, sans trace.
+**Périmètre de la v1 (implémentation)** :
+- Scénarios **mono** et **multi-passerelles**, et environnement **à obstacles** (sans relief). Totaux,
+  compteurs par dispositif, charges et événements viennent d'un seul calcul natif par run
+  (`build_trace`, ou `build_multi_trace` en multi) ; le serveur vérifie que la somme des compteurs par
+  dispositif égale les totaux avant de publier (sinon `run_failed`).
+- Refusés explicitement (`validation_error`, jamais calculés à tort) : **mesh** ; **join** en
+  multi-passerelles (non modélisé) ; **energy_profile** avec options protocole ou multi-passerelles
+  (les pertes dues aux downlinks changeraient l'énergie non modélisée).
+- **Relief** (`terrain`) : `terrain_not_allowed` tant que le catalogue serveur n'existe pas.
+- Résumé : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. C'est une dérogation à
+  l'additivité : `gateway` n'est plus obligatoire dans `run_summary`, parce qu'un run multi n'a pas de
+  charge mono-passerelle. Les clients mono ne voient aucun changement.
+- Runs **persistés** dans une base SQLite (`--runs-db`, mode WAL). Un run encore en file ou en cours
+  au redémarrage passe à `failed` (« interrompu au redémarrage »). 20 runs par jeton, 200 au total.
+  Une seule file de calcul (16 en attente, 4 actifs par jeton).
+- **Débit** : seau à jetons par propriétaire, 120 requêtes par minute soutenues, rafale de 60. Au-delà :
+  429 `rate_limited` avec `Retry-After`.
+- **TLS** : `--tls-cert` et `--tls-key` (TLS 1.2 minimum). `serve` refuse de démarrer sur une adresse
+  non locale sans TLS. Le certificat est fourni par l'exploitant.
+- Erreur interne : code `run_failed`, message générique, sans trace.
 
 ## 5. Erreurs
 
@@ -126,13 +138,14 @@ Corps `Problem` :
 | `conflict` | 409 | résumé demandé avant la fin, annulation d'un run terminé |
 | `run_failed` | 500 (dans `RunStatus.problem`) | échec pendant le calcul |
 | `unauthorized` | 401 | jeton absent, invalide ou révoqué |
+| `rate_limited` | 429 | trop de requêtes pour ce jeton (en-tête `Retry-After`) |
 
 ## 6. Sécurité (exigences de mise en œuvre)
 
 - Validation côté serveur de toute entrée, y compris les champs déjà validés côté navigateur.
 - YAML : `yaml.safe_load` uniquement (déjà le cas dans `lsim.scenario`).
 - Pas de chemin de fichier venant du client ; le catalogue de reliefs est un répertoire serveur fixe.
-- Limite de débit et file bornée par jeton.
+- Limite de débit (120 par minute, rafale 60) et file bornée par jeton : implémentées en v1.
 - Authentification par **jeton d'accès** (choix utilisateur) :
   - en-tête `Authorization: Bearer <jeton>` sur toutes les routes sauf la santé ;
   - jeton aléatoire d'au moins 256 bits (`secrets.token_urlsafe(32)`), émis hors de l'API
@@ -143,7 +156,7 @@ Corps `Problem` :
   - révocation immédiate, et date d'expiration optionnelle ;
   - un jeton ne donne accès qu'aux runs qu'il a créés (contrôle par propriétaire) ;
   - HTTPS obligatoire hors machine de confiance (le jeton circule dans l'en-tête).
-  Tant que le serveur n'existe pas, l'API n'écoute que sur une machine de confiance.
+  Le serveur refuse une adresse non locale sans TLS (`--tls-cert`, `--tls-key`).
 - En-têtes : CORS désactivé (même origine), `Content-Security-Policy` stricte côté `web/`.
 
 ## 7. Régions et configuration
@@ -165,8 +178,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 
 1. Catalogue de reliefs (décision utilisateur ; données MNT à vérifier avant intégration).
 2. Exposer `events` à partir de `lsim.trace_events` (pagination par `seq`).
-3. ~~Implémenter le serveur~~ : fait (v1, voir ci-dessus). Reste : limite de débit, persistance
-   des runs, TLS ou relais documenté.
+3. ~~Implémenter le serveur~~ : fait (v1). Reste : mesh (trace par saut, à concevoir) ; relief
+   (catalogue serveur, décision utilisateur) ; join en multi-passerelles.
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.
 
 ## Relais mesh et passerelles multiples (scénario)

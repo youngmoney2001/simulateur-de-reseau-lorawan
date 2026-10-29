@@ -47,8 +47,10 @@ from lsim.scenario import Scenario
 from lsim.simulator import (
     MAX_TRACE_RECORDS,
     Counters,
+    DownlinkRule,
     GatewayLoad,
     TxRecord,
+    simulate_multi_downlinks,
     simulate_uplinks_trace,
 )
 
@@ -389,3 +391,100 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     raise RuntimeError(
         f"pas de point fixe entre trames montantes et émissions passerelle "
         f"après {MAX_ITERATIONS} itérations")
+
+
+# --- Passerelles multiples -------------------------------------------------------------------
+
+_MULTI_UPLINK_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "received",
+                         3: "lost_gateway_busy"}
+_MULTI_HOP_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "delivered", 3: "not_listened"}
+_MULTI_DOWNLINK_OUTCOME = {0: "delivered", 1: "lost_sensitivity", 2: "gateway_busy",
+                           3: "device_transmitting"}
+
+
+@dataclass(frozen=True)
+class MultiTraceRun:
+    """Trace multi-passerelles : totaux et charges issus du même calcul natif que les événements."""
+
+    per_device: tuple[Counters, ...]
+    totals: Counters
+    per_gateway: tuple  # GatewayRxCounters, dans l'ordre de `gateway_names`
+    gateway_names: tuple[str, ...]
+    events: tuple[ProtocolEvent, ...]
+
+
+def _finite_or_none(x: float) -> Optional[float]:
+    return float(x) if x == x and abs(x) != float("inf") else None
+
+
+def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
+    """Trace des passerelles multiples (déduplication serveur, downlinks par la meilleure passerelle).
+
+    Limites : le join n'est pas modélisé (refusé ici) ; le mesh n'est pas couvert (refusé en amont).
+    Les totaux, les compteurs par dispositif et la charge par passerelle viennent du même appel
+    natif (`simulate_multi_downlinks`) que les événements : ils concordent par construction.
+    """
+    if options.join:
+        raise ValueError("join : non modélisé en multi-passerelles")
+    devices, _group_of, _indices = scenario.deploy()
+    if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    radios = device_radios(scenario)
+    models = scenario.gateway_models()
+    names = tuple(g.name for g in models)
+    gateways = scenario.gateways()
+    rule = DownlinkRule(ack_uplinks=options.confirmed_uplinks, every=options.downlink_every,
+                        payload_bytes=options.downlink_payload_bytes,
+                        gateway_tx_power_dbm=options.gateway_tx_power_dbm,
+                        device_antenna_gain_dbi=options.device_antenna_gain_dbi,
+                        device_rx_offset_db=options.device_rx_offset_db)
+    result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
+                                      scenario.environment)
+    pending: list[tuple[int, int, str, int, int, tuple[HopEvent, ...], str]] = []
+
+    def add(t: int, kind: str, device: int, gw: int, hops: list[HopEvent], outcome: str) -> None:
+        pending.append((t, len(pending), kind, device, gw, tuple(hops), outcome))
+
+    for r in result.trace:
+        d = r.device_index
+        radio = radios[d]
+        best = r.best_gateway
+        to_id = f"gw:{names[best]}" if best >= 0 else "gw:none"
+        hops = [HopEvent(_dev(d), to_id, r.start_ns, radio.freq_hz, radio.dr,
+                         _finite_or_none(r.best_rssi_dbm), _MULTI_HOP_OUTCOME[r.outcome])]
+        if r.outcome == 2 and best >= 0:
+            hops.append(HopEvent(to_id, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
+        add(r.start_ns, "uplink", d, max(best, 0), hops, _MULTI_UPLINK_OUTCOME[r.outcome])
+
+    for dl in result.downlinks:
+        d, g = dl.device_index, dl.gateway_index
+        radio = radios[d]
+        gw_id = f"gw:{names[g]}"
+        kind = "downlink" if dl.data else "ack"
+        if dl.outcome in (2, 3):
+            hop = HopEvent(gw_id, _dev(d), dl.t_open_ns, radio.rx1_hz, None, None, "not_listened")
+            add(dl.t_open_ns, "rx_window_missed", d, g, [hop], _MULTI_DOWNLINK_OUTCOME[dl.outcome])
+            continue
+        start = dl.start_ns
+        ok = dl.outcome == 0
+        hop = HopEvent(gw_id, _dev(d), start, radio.rx1_hz, None, None,
+                       "delivered" if ok else "lost_sensitivity")
+        if ok:
+            outcome = "data" if dl.data else "ack_only"
+        else:
+            outcome = "lost_sensitivity"
+        add(start, kind, d, g, [hop], outcome)
+
+    if len(pending) > MAX_EVENTS:
+        raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")
+    pending.sort(key=lambda e: (e[0], e[1]))
+    events = tuple(
+        ProtocolEvent(seq=k, t_ns=t, kind=kind, device_index=d, gateway_index=g,
+                      hops=hops, outcome=outcome)
+        for k, (t, _order, kind, d, g, hops, outcome) in enumerate(pending)
+    )
+    net = result.network
+    totals = Counters(net.sent, net.received, net.lost_sensitivity, net.lost_collision,
+                      net.airtime_ns, net.lost_gateway_busy)
+    return MultiTraceRun(per_device=result.per_device, totals=totals,
+                         per_gateway=result.per_gateway, gateway_names=names, events=events)

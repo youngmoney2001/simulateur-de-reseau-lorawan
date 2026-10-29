@@ -151,12 +151,13 @@ def test_terrain_in_scenario_is_refused_with_its_code(api):
     assert body["problems"][0]["code"] == "terrain_not_allowed"
 
 
-def test_multi_gateway_and_mesh_are_refused_explicitly(api):
+def test_mesh_is_refused_explicitly(api):
     d = _scenario()
     d.pop("gateway")
     d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0}, {"name": "b", "x_m": 500, "y_m": 0}]
+    d["mesh"] = {"border": "a"}
     status, body = api.call("POST", "/api/v1/runs", {"scenario": d})
-    assert status == 422 and "multi-passerelles" in body["message"]
+    assert status == 422 and "mesh" in body["message"]
 
 
 def test_unknown_route_and_bad_run_id_are_404(api):
@@ -329,13 +330,13 @@ def test_run_is_reproducible_for_the_same_scenario(finished_run):
 def gate(monkeypatch):
     """Bloque le premier calcul jusqu'à `gate.set()` : tests de file et de conflit déterministes."""
     release = threading.Event()
-    original = srv.run_scenario
+    original = srv.build_trace
 
     def blocked(*args, **kwargs):
         release.wait(60)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(srv, "run_scenario", blocked)
+    monkeypatch.setattr(srv, "build_trace", blocked)
     yield release
     release.set()
 
@@ -402,9 +403,234 @@ def test_failed_run_reports_a_problem_without_trace(api, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("secret /home/user/clé.bin")
 
-    monkeypatch.setattr(srv, "run_scenario", boom)
+    monkeypatch.setattr(srv, "build_trace", boom)
     status, body = api.call("POST", "/api/v1/runs", {"scenario": _scenario()})
     done = _wait_done(api, body["run_id"])
     assert done["state"] == "failed"
     assert done["problem"]["code"] == "run_failed"
     assert "secret" not in json.dumps(done) and "/home" not in json.dumps(done)
+
+
+def _wait_finished(api, rid, token=None):
+    return _wait_done(api, rid, token=token)
+
+
+def test_multi_gateway_run_reports_per_gateway_and_totals_match(api):
+    d = _scenario(count=200, messages=5)
+    d.pop("gateway")
+    d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+                     {"name": "b", "x_m": 2500, "y_m": 0, "antenna_gain_dbi": 2.15}]
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": {
+        "confirmed_uplinks": True, "downlink_every": 1}})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    RunSummary.model_validate(summary)
+    assert "gateway" not in summary and [g["name"] for g in summary["gateways"]] == ["a", "b"]
+    _, devices = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    sent = sum(x["sent"] for x in devices["items"])
+    recv = sum(x["received"] for x in devices["items"])
+    assert sent == summary["totals"]["sent"] and recv == summary["totals"]["received"]
+    _, page = api.call("GET", f"/api/v1/runs/{rid}/events?limit=500")
+    total_up = 0
+    cursor = 0
+    while cursor is not None:
+        _, page = api.call("GET", f"/api/v1/runs/{rid}/events?limit=500&cursor={cursor}")
+        total_up += sum(1 for e in page["items"] if e["kind"] == "uplink"
+                        and e["outcome"] == "received")
+        cursor = page["next_cursor"]
+    assert total_up == summary["totals"]["received"]
+
+
+def test_protocol_run_totals_agree_with_events(api):
+    """Régression : avec downlinks, les totaux de `run_scenario` divergeaient de la trace."""
+    d = _scenario(count=300, messages=10)
+    d["groups"][0]["placement"]["radius_m"] = 3000
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": {
+        "confirmed_uplinks": True, "downlink_every": 1}})
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    total_up = 0
+    cursor = 0
+    while cursor is not None:
+        _, page = api.call("GET", f"/api/v1/runs/{rid}/events?limit=500&cursor={cursor}")
+        total_up += sum(1 for e in page["items"] if e["kind"] == "uplink"
+                        and e["outcome"] == "received")
+        cursor = page["next_cursor"]
+    assert total_up == summary["totals"]["received"]
+    assert summary["totals"]["lost_gateway_busy"] >= 0
+
+
+def test_obstacles_are_accepted_and_terrain_is_refused(api):
+    env = {"obstacles": [{"x_min_m": 100, "y_min_m": -50, "x_max_m": 120, "y_max_m": 50,
+                          "height_m": 20, "attenuation_db": 15}]}
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": _scenario(environment=env)})
+    assert status == 202
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    status, body = api.call("POST", "/api/v1/runs", {"scenario": _scenario(
+        environment={"terrain": {"type": "dem_csv", "path": "relief.csv"}})})
+    assert status == 422 and body["code"] == "terrain_not_allowed"
+
+
+def test_energy_is_refused_with_protocol_or_multi(api):
+    status, body = api.call("POST", "/api/v1/runs", {
+        "scenario": _scenario(), "energy_profile": "rak4631",
+        "protocol": {"downlink_every": 2}})
+    assert status == 422 and body["field"] == "energy_profile"
+    status, created = api.call("POST", "/api/v1/runs", {
+        "scenario": _scenario(), "energy_profile": "rak4631"})
+    assert status == 202
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{created['run_id']}/summary")
+    assert summary["energy_profile"] == "rak4631"
+
+
+def test_join_is_refused_in_multi_gateway(api):
+    d = _scenario()
+    d.pop("gateway")
+    d["gateways"] = [{"name": "a", "x_m": 0, "y_m": 0}]
+    status, body = api.call("POST", "/api/v1/runs", {"scenario": d, "protocol": {"join": True}})
+    assert status == 422 and body["field"] == "protocol.join"
+
+
+def test_runs_survive_a_restart_and_interrupted_ones_fail(tmp_path):
+    tokens = tmp_path / "t.json"
+    token = srv.TokenStore(tokens).issue("alice")
+    db = str(tmp_path / "runs.sqlite3")
+    server = srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    _, created = _raw_call(port, token, "POST", "/api/v1/runs", {"scenario": _scenario()})
+    rid = created["run_id"]
+    deadline = time.time() + 120
+    while _raw_call(port, token, "GET", f"/api/v1/runs/{rid}")[1]["state"] != "done":
+        assert time.time() < deadline
+        time.sleep(0.05)
+    server.shutdown()
+    server.server_close()
+    server.service.close()
+    server.service._store.close()
+
+    server2 = srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    threading.Thread(target=server2.serve_forever, daemon=True).start()
+    try:
+        port2 = server2.server_address[1]
+        status, summary = _raw_call(port2, token, "GET", f"/api/v1/runs/{rid}/summary")
+        assert status == 200 and summary["totals"]["sent"] > 0
+    finally:
+        server2.shutdown()
+        server2.server_close()
+        server2.service.close()
+        server2.service._store.close()
+
+    # Un run encore en file au moment de l'arrêt est marqué interrompu au redémarrage.
+    store = srv.RunStore(db)
+    store.insert_run("interruptedrun1", "alice", 1, "0" * 64, 0)
+    store.close()
+    server3 = srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    threading.Thread(target=server3.serve_forever, daemon=True).start()
+    try:
+        status, st = _raw_call(server3.server_address[1], token, "GET",
+                               "/api/v1/runs/interruptedrun1")
+        assert status == 200 and st["state"] == "failed"
+        assert st["problem"]["code"] == "run_failed"
+    finally:
+        server3.shutdown()
+        server3.server_close()
+        server3.service.close()
+        server3.service._store.close()
+
+
+def test_rate_limit_answers_429_with_retry_after(tmp_path):
+    tokens = tmp_path / "t.json"
+    token = srv.TokenStore(tokens).issue("alice")
+    server = srv.make_server("127.0.0.1", 0, tokens)
+    server.service.limiter = srv.RateLimiter(per_minute=60, burst=2)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        codes = [_raw_call(port, token, "GET", "/api/v1/regions")[0] for _ in range(3)]
+        assert codes == [200, 200, 429]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/api/v1/regions", headers={"Authorization": "Bearer " + token})
+        resp = conn.getresponse()
+        body = json.loads(resp.read())
+        assert resp.status == 429 and body["code"] == "rate_limited"
+        assert int(resp.getheader("Retry-After")) >= 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.service.close()
+
+
+def test_rate_limiter_refills_over_time():
+    now = [0.0]
+    lim = srv.RateLimiter(per_minute=60, burst=1, clock=lambda: now[0])
+    assert lim.take("a") is None
+    assert lim.take("a") is not None
+    now[0] += 1.0
+    assert lim.take("a") is None
+    assert lim.take("b") is None  # compteurs par propriétaire
+
+
+def _self_signed(tmp):
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1")), x509.DNSName("localhost")]),
+                critical=False)
+            .sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp / "cert.pem", tmp / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                           serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    return cert_path, key_path
+
+
+def test_tls_serves_https_and_refuses_plain_http_clients(tmp_path):
+    import ssl
+    cert, key = _self_signed(tmp_path)
+    tokens = tmp_path / "t.json"
+    token = srv.TokenStore(tokens).issue("alice")
+    server = srv.make_server("127.0.0.1", 0, tokens, tls=srv.make_tls_context(cert, key))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        ctx = ssl.create_default_context(cafile=str(cert))
+        conn = http.client.HTTPSConnection("127.0.0.1", port, context=ctx, timeout=10)
+        conn.request("GET", "/api/v1/regions", headers={"Authorization": "Bearer " + token})
+        resp = conn.getresponse()
+        assert resp.status == 200
+        resp.read()
+        conn.close()
+        # Un client en clair ne doit obtenir aucune réponse de l'API.
+        plain = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        with pytest.raises(Exception):
+            plain.request("GET", "/api/v1/health")
+            plain.getresponse().read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.service.close()
+
+
+def test_serve_refuses_plain_http_outside_loopback(tmp_path):
+    tokens = tmp_path / "t.json"
+    with pytest.raises(SystemExit):
+        srv.main(["serve", "--tokens", str(tokens), "--runs-db", ":memory:",
+                  "--host", "0.0.0.0", "--port", "0"])

@@ -33,7 +33,7 @@ ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
 RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
     "validation_error", "not_found", "limit_exceeded", "terrain_not_allowed",
-    "run_failed", "conflict", "unsupported_region", "unauthorized",
+    "run_failed", "conflict", "unsupported_region", "unauthorized", "rate_limited",
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
@@ -133,14 +133,38 @@ class DeviceRowOut(_Strict):
     average_current_ua: Optional[float] = None
 
 
+class GatewayReportOut(_Strict):
+    """Passerelle d'un run multi-passerelles : trames reçues et charge de réception."""
+
+    name: str = Field(max_length=64)
+    received: int = Field(ge=0)
+    lost_sensitivity: int = Field(ge=0)
+    lost_collision: int = Field(ge=0)
+    lost_gateway_busy: int = Field(ge=0)
+    audible_frames: int = Field(ge=0)
+    busy_ns: int = Field(ge=0)
+    peak_concurrent: int = Field(ge=0)
+    observation_ns: int = Field(ge=0)
+
+
 class RunSummary(_Strict):
+    """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
+    depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
+
     run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
     scenario_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     seed: int = Field(ge=0)
     totals: Totals
     pdr: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    gateway: GatewayLoadOut
+    gateway: Optional[GatewayLoadOut] = None
+    gateways: Optional[list[GatewayReportOut]] = Field(default=None, max_length=64)
     energy_profile: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_load_shape(self) -> "RunSummary":
+        if (self.gateway is None) == (self.gateways is None):
+            raise ValueError("exactement un de gateway ou gateways")
+        return self
 
 
 class DevicePage(_Strict):

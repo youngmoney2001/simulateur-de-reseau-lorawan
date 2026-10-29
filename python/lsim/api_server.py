@@ -1,34 +1,41 @@
 """Serveur HTTP de l'API v1 (contrat : `docs/API_CONTRACT.md`, formes : `lsim.api_contract`).
 
-Bibliothèque standard uniquement. Un calcul à la fois (file bornée) dans un fil dédié ; les
-requêtes HTTP sont traitées en parallèle. Les runs vivent en mémoire de ce processus : ils
-disparaissent au redémarrage (limite v1, documentée).
+Bibliothèque standard uniquement (plus `cryptography` pour émettre un certificat de test hors de ce
+module). Un calcul à la fois (file bornée) dans un fil dédié ; les requêtes HTTP sont traitées en
+parallèle. Les runs sont stockés dans une base SQLite (WAL) : ils survivent au redémarrage ; un run
+interrompu par un arrêt est marqué `failed`.
 
-Périmètre v1 (refus explicite, code `validation_error`) : scénarios multi-passerelles, mesh,
-environnement (relief, obstacles). `build_trace` ne lit que la première passerelle : servir ces
-scénarios donnerait une trace fausse sans erreur visible.
+Totaux, compteurs par dispositif, charges et événements viennent d'un seul calcul par run
+(`build_trace` en mono-passerelle, `build_multi_trace` en multi-passerelles) : ils concordent par
+construction, et le serveur vérifie la somme des compteurs par dispositif avant de publier.
+
+Périmètre : mono et multi-passerelles, environnement à obstacles (sans relief). Refusés
+explicitement (`validation_error`) : mesh, join en multi-passerelles, énergie avec options
+protocole ou multi-passerelles. Relief (`terrain`) : `terrain_not_allowed` (catalogue à venir).
 
 Jetons : `python -m lsim.api_server issue-token --tokens FICHIER --owner NOM` affiche le jeton une
-seule fois ; le fichier ne contient que son SHA-256. Le serveur écoute sur 127.0.0.1 par défaut :
-hors machine de confiance, il faut un relais HTTPS (le jeton circule dans l'en-tête).
+seule fois ; le fichier ne contient que son SHA-256. `serve` refuse de démarrer sur une adresse
+non locale sans `--tls-cert` et `--tls-key` (le jeton circule dans l'en-tête).
 """
 
 from __future__ import annotations
 
 import argparse
-import bisect
 import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import queue
 import re
 import secrets
+import ssl
+import sqlite3
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -38,12 +45,12 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, DevicePage, DeviceRowOut,
-    GatewayLoadOut, Problem, RunCreate, RunStatus, RunSummary, Totals, TracePage, TraceEvent,
-    ValidateRequest, ValidateResponse, list_regions,
+    GatewayLoadOut, GatewayReportOut, Problem, RunCreate, RunStatus, RunSummary, Totals, TracePage,
+    TraceEvent, ValidateRequest, ValidateResponse, list_regions,
 )
-from lsim.export import RunResult, run_scenario
-from lsim.scenario import Scenario
-from lsim.trace_events import ProtocolOptions, TraceRun, build_trace
+from lsim.export import run_scenario
+from lsim.scenario import Scenario, _build_environment
+from lsim.trace_events import ProtocolOptions, build_multi_trace, build_trace
 
 log = logging.getLogger("lsim.api")
 
@@ -52,18 +59,35 @@ MAX_RUNS_TOTAL = 200
 MAX_QUEUE = 16
 MAX_ACTIVE_PER_OWNER = 4
 DEFAULT_PAGE = 100
+DEFAULT_RATE_PER_MIN = 120      # requêtes authentifiées soutenues, par jeton
+DEFAULT_RATE_BURST = 60         # rafale tolérée
 _RUN_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _TERMINAL = ("done", "failed", "cancelled")
+_LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str, field: Optional[str] = None) -> None:
+    def __init__(self, status: int, code: str, message: str, field: Optional[str] = None,
+                 headers: Optional[dict[str, str]] = None) -> None:
         super().__init__(message)
         self.status, self.code, self.message, self.field = status, code, message, field
+        self.headers = headers or {}
 
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _problem(code: str, message: str, field_name: Optional[str] = None) -> dict[str, Any]:
+    return Problem(code=code, message=message, field=field_name).model_dump(exclude_none=True)
+
+
+def _validation_error(exc: ValidationError) -> ApiError:
+    err = exc.errors()[0]
+    loc = ".".join(str(p) for p in err.get("loc", ()))
+    msg = str(err.get("msg", "invalide"))
+    code = "terrain_not_allowed" if "terrain" in msg.lower() else "validation_error"
+    return ApiError(422, code, f"{loc} : {msg}" if loc else msg, loc or None)
 
 
 # --- Jetons ------------------------------------------------------------------------------------
@@ -144,165 +168,341 @@ class TokenStore:
             return owner
 
 
+# --- Limite de débit ---------------------------------------------------------------------------
+
+class RateLimiter:
+    """Seau à jetons par propriétaire : `burst` requêtes d'un coup, puis `per_minute` par minute."""
+
+    def __init__(self, per_minute: int = DEFAULT_RATE_PER_MIN, burst: int = DEFAULT_RATE_BURST,
+                 clock=time.monotonic) -> None:
+        if per_minute <= 0 or burst <= 0:
+            raise ValueError("débit et rafale strictement positifs")
+        self._rate = per_minute / 60.0
+        self._burst = float(burst)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._state: dict[str, tuple[float, float]] = {}
+
+    def take(self, owner: str) -> Optional[float]:
+        """None si la requête passe ; sinon, secondes avant la prochaine requête possible."""
+        with self._lock:
+            now = self._clock()
+            tokens, last = self._state.get(owner, (self._burst, now))
+            tokens = min(self._burst, tokens + (now - last) * self._rate)
+            if tokens >= 1.0:
+                self._state[owner] = (tokens - 1.0, now)
+                return None
+            self._state[owner] = (tokens, now)
+            return (1.0 - tokens) / self._rate
+
+
+# --- Stockage des runs (SQLite) ----------------------------------------------------------------
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    state TEXT NOT NULL,
+    progress REAL NOT NULL,
+    scenario_sha256 TEXT,
+    seed INTEGER NOT NULL,
+    trace_events INTEGER,
+    problem TEXT,
+    summary TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS runs_owner ON runs(owner);
+CREATE TABLE IF NOT EXISTS devices (
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    PRIMARY KEY (run_id, idx)
+);
+CREATE TABLE IF NOT EXISTS events (
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq)
+);
+"""
+
+
+class RunStore:
+    """Persistance des runs. Non thread-safe : appelé uniquement sous le verrou de `RunService`."""
+
+    def __init__(self, path: str) -> None:
+        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        if path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = FULL")
+        self._conn.executescript(_SCHEMA)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def _tx(self):
+        conn = self._conn
+
+        class _Tx:
+            def __enter__(self):
+                conn.execute("BEGIN IMMEDIATE")
+
+            def __exit__(self, exc_type, *_):
+                conn.execute("ROLLBACK" if exc_type else "COMMIT")
+                return False
+        return _Tx()
+
+    @staticmethod
+    def _row(r: tuple) -> dict[str, Any]:
+        keys = ("run_id", "owner", "state", "progress", "scenario_sha256", "seed",
+                "trace_events", "problem", "summary", "created_at")
+        out = dict(zip(keys, r))
+        out["problem"] = json.loads(out["problem"]) if out["problem"] else None
+        out["summary"] = json.loads(out["summary"]) if out["summary"] else None
+        return out
+
+    _COLS = ("run_id, owner, state, progress, scenario_sha256, seed, trace_events, problem, "
+             "summary, created_at")
+
+    def insert_run(self, run_id: str, owner: str, seed: int, sha: str, created_at: int) -> None:
+        self._conn.execute(
+            "INSERT INTO runs (run_id, owner, state, progress, scenario_sha256, seed, created_at)"
+            " VALUES (?, ?, 'queued', 0.0, ?, ?, ?)", (run_id, owner, sha, seed, created_at))
+
+    def get_run(self, run_id: str) -> Optional[dict[str, Any]]:
+        r = self._conn.execute(f"SELECT {self._COLS} FROM runs WHERE run_id = ?",
+                               (run_id,)).fetchone()
+        return self._row(r) if r else None
+
+    def owner_runs(self, owner: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            f"SELECT {self._COLS} FROM runs WHERE owner = ? ORDER BY rowid", (owner,)).fetchall()
+        return [self._row(r) for r in rows]
+
+    def all_runs(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(f"SELECT {self._COLS} FROM runs ORDER BY rowid").fetchall()
+        return [self._row(r) for r in rows]
+
+    def set_state(self, run_id: str, state: str, progress: Optional[float] = None,
+                  problem: Optional[dict[str, Any]] = None) -> None:
+        self._conn.execute(
+            "UPDATE runs SET state = ?, progress = COALESCE(?, progress), problem = ? "
+            "WHERE run_id = ?",
+            (state, progress, json.dumps(problem) if problem else None, run_id))
+
+    def delete_run(self, run_id: str) -> None:
+        self._conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+
+    def save_done(self, run_id: str, summary: dict[str, Any], devices: list[dict[str, Any]],
+                  events: list[dict[str, Any]]) -> None:
+        with self._tx():
+            self._conn.executemany(
+                "INSERT INTO devices (run_id, idx, body) VALUES (?, ?, ?)",
+                [(run_id, d["device_index"], json.dumps(d, ensure_ascii=False)) for d in devices])
+            self._conn.executemany(
+                "INSERT INTO events (run_id, seq, body) VALUES (?, ?, ?)",
+                [(run_id, e["seq"], json.dumps(e, ensure_ascii=False, allow_nan=False))
+                 for e in events])
+            self._conn.execute(
+                "UPDATE runs SET state = 'done', progress = 1.0, summary = ?, trace_events = ? "
+                "WHERE run_id = ?",
+                (json.dumps(summary, ensure_ascii=False), len(events), run_id))
+
+    def devices_page(self, run_id: str, cursor: int, limit: int) -> tuple[list, Optional[int]]:
+        rows = self._conn.execute(
+            "SELECT idx, body FROM devices WHERE run_id = ? AND idx >= ? ORDER BY idx LIMIT ?",
+            (run_id, cursor, limit + 1)).fetchall()
+        nxt = rows[limit][0] if len(rows) > limit else None
+        return [json.loads(b) for _, b in rows[:limit]], nxt
+
+    def events_page(self, run_id: str, cursor: int, limit: int) -> tuple[list, Optional[int]]:
+        rows = self._conn.execute(
+            "SELECT seq, body FROM events WHERE run_id = ? AND seq >= ? ORDER BY seq LIMIT ?",
+            (run_id, cursor, limit + 1)).fetchall()
+        nxt = rows[limit][0] if len(rows) > limit else None
+        return [json.loads(b) for _, b in rows[:limit]], nxt
+
+
 # --- Runs --------------------------------------------------------------------------------------
 
 @dataclass
-class Run:
-    run_id: str
-    owner: str
-    state: str = "queued"
-    progress: float = 0.0
-    scenario_sha256: Optional[str] = None
-    seed: int = 0
-    trace_events: Optional[int] = None
-    problem: Optional[dict[str, Any]] = None
-    cancel: bool = False
-    summary: Optional[dict[str, Any]] = None
-    devices: list[dict[str, Any]] = field(default_factory=list)
-    event_seqs: list[int] = field(default_factory=list)
-    events: list[dict[str, Any]] = field(default_factory=list)
-    scenario: Optional[Scenario] = None
-    options: Optional[ProtocolOptions] = None
-    energy_profile: Optional[str] = None
+class _Job:
+    scenario: Scenario
+    options: ProtocolOptions
+    energy_profile: Optional[str]
+    multi: bool
 
 
-def _problem(code: str, message: str, field_name: Optional[str] = None) -> dict[str, Any]:
-    return Problem(code=code, message=message, field=field_name).model_dump(exclude_none=True)
-
-
-def _check_scenario_supported(model: Any) -> None:
-    if model.gateways is not None or model.mesh is not None:
+def _check_request(req: RunCreate) -> None:
+    model = req.scenario
+    if model.mesh is not None:
         raise ApiError(422, "validation_error",
-                       "multi-passerelles et mesh : non exposés par l'API v1 (voir docs/USAGE.md)")
+                       "mesh : non exposé par l'API v1 (voir docs/API_CONTRACT.md)")
+    multi = model.gateways is not None
+    protocol = req.protocol
+    protocol_active = protocol.join or protocol.confirmed_uplinks or protocol.downlink_every > 0
+    if multi and protocol.join:
+        raise ApiError(422, "validation_error",
+                       "protocole.join : non modélisé en multi-passerelles", "protocol.join")
+    if req.energy_profile is not None and (multi or protocol_active):
+        raise ApiError(422, "validation_error",
+                       "energy_profile : seulement en mono-passerelle, sans options protocole",
+                       "energy_profile")
+
+
+def _build_scenario(model: Any) -> Scenario:
+    env = None
     if model.environment is not None:
-        raise ApiError(422, "validation_error",
-                       "environnement (relief, obstacles) : non exposé par l'API v1")
+        env = _build_environment(model.environment, Path("."), model.propagation.frequency_hz)
+    return Scenario(model, environment=env)
 
 
-def _totals_out(c: Any) -> Totals:
-    return Totals(sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
-                  lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
-                  lost_gateway_busy=c.lost_gateway_busy)
-
-
-def _summary_dict(run_id: str, result: RunResult) -> dict[str, Any]:
-    if result.gateway is None:
-        raise RuntimeError("charge passerelle absente en mono-passerelle")
-    g = result.gateway
-    return RunSummary(
-        run_id=run_id, scenario_sha256=result.scenario_sha256, seed=result.seed,
-        totals=_totals_out(result.totals), pdr=result.pdr,
-        gateway=GatewayLoadOut(busy_ns=g.busy_ns, peak_concurrent=g.peak_concurrent,
-                               observation_ns=g.observation_ns, utilization=g.utilization),
-        energy_profile=result.energy_profile,
-    ).model_dump(exclude_none=True)
-
-
-def _devices_list(result: RunResult) -> list[dict[str, Any]]:
-    out = []
-    for r in result.rows:
-        out.append(DeviceRowOut(
-            device_index=r.device_index, group=r.group, index_in_group=r.index_in_group,
-            x_m=r.x_m, y_m=r.y_m, spreading_factor=r.spreading_factor, sent=r.sent,
-            received=r.received, lost_sensitivity=r.lost_sensitivity,
-            lost_collision=r.lost_collision, airtime_ns=r.airtime_ns,
-            energy_per_message_j=r.energy_per_message_j,
-            average_current_ua=r.average_current_ua,
-        ).model_dump(exclude_none=True))
-    return out
-
-
-def _events_list(trace: TraceRun) -> list[dict[str, Any]]:
-    out = []
-    for ev in trace.events:
-        out.append(TraceEvent(
-            seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
-            gateway_index=ev.gateway_index, outcome=ev.outcome,
-            hops=[{"from_id": h.from_id, "to_id": h.to_id, "t_ns": h.t_ns, "freq_hz": h.freq_hz,
-                   "dr": h.dr, "rssi_dbm": h.rssi_dbm, "outcome": h.outcome}
-                  for h in ev.hops],
-        ).model_dump(exclude_none=True))
-    return out
+def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
+                 energy_profile: Optional[str]) -> dict[str, Any]:
+    body = dict(
+        run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
+        totals=Totals(sent=totals.sent, received=totals.received,
+                      lost_sensitivity=totals.lost_sensitivity,
+                      lost_collision=totals.lost_collision, airtime_ns=totals.airtime_ns,
+                      lost_gateway_busy=totals.lost_gateway_busy).model_dump(),
+        pdr=(totals.received / totals.sent) if totals.sent else None,
+        energy_profile=energy_profile,
+    )
+    if gateways is None:
+        body["gateway"] = GatewayLoadOut(
+            busy_ns=gateway_load.busy_ns, peak_concurrent=gateway_load.peak_concurrent,
+            observation_ns=gateway_load.observation_ns,
+            utilization=gateway_load.utilization).model_dump()
+    else:
+        body["gateways"] = gateways
+    return RunSummary(**body).model_dump(exclude_none=True)
 
 
 class RunService:
-    """Files de calcul et état des runs. Un seul calcul à la fois."""
+    """Files de calcul et état des runs. Un seul calcul à la fois ; état sous un verrou unique."""
 
-    def __init__(self, max_queue: int = MAX_QUEUE) -> None:
-        self._lock = threading.Lock()
-        self._runs: dict[str, Run] = {}
+    def __init__(self, store: RunStore, max_queue: int = MAX_QUEUE,
+                 limiter: Optional[RateLimiter] = None) -> None:
+        self._lock = threading.RLock()
+        self._store = store
+        self.limiter = limiter or RateLimiter()
         self._queue: "queue.Queue[str]" = queue.Queue(maxsize=max_queue)
+        self._pending: dict[str, _Job] = {}
+        self._cancelled: set[str] = set()
         self._stopping = threading.Event()
+        with self._lock:
+            for r in self._store.all_runs():
+                if r["state"] in ("queued", "running"):
+                    self._store.set_state(r["run_id"], "failed",
+                                          problem=_problem("run_failed",
+                                                           "interrompu au redémarrage"))
         self._worker = threading.Thread(target=self._loop, name="lsim-run-worker", daemon=True)
         self._worker.start()
 
     def close(self) -> None:
         self._stopping.set()
-        self._worker.join(timeout=5)
+        self._worker.join(timeout=10)
 
-    def create(self, owner: str, body: dict[str, Any]) -> Run:
+    # Création ---------------------------------------------------------------------------------
+
+    def create(self, owner: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
             req = RunCreate.model_validate(body)
         except ValidationError as exc:
             raise _validation_error(exc) from None
-        _check_scenario_supported(req.scenario)
+        _check_request(req)
         try:
-            scenario = Scenario(req.scenario)
+            scenario = _build_scenario(req.scenario)
         except ValueError as exc:
             raise ApiError(422, "validation_error", str(exc)) from None
+        job = _Job(scenario=scenario, options=ProtocolOptions(**req.protocol.model_dump()),
+                   energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
         with self._lock:
-            owned = [r for r in self._runs.values() if r.owner == owner]
-            active = [r for r in owned if r.state not in _TERMINAL]
-            if len(active) >= MAX_ACTIVE_PER_OWNER:
+            owned = self._store.owner_runs(owner)
+            if sum(1 for r in owned if r["state"] not in _TERMINAL) >= MAX_ACTIVE_PER_OWNER:
                 raise ApiError(422, "limit_exceeded", "trop de runs en cours pour ce jeton")
-            if len(owned) >= MAX_RUNS_PER_OWNER:
-                self._evict_oldest_terminal(owned, MAX_RUNS_PER_OWNER)
-            if len(self._runs) >= MAX_RUNS_TOTAL:
-                self._evict_oldest_terminal(list(self._runs.values()), MAX_RUNS_TOTAL)
-            if len(self._runs) >= MAX_RUNS_TOTAL:
+            if self._queue.full():
+                raise ApiError(422, "limit_exceeded", "file de calcul pleine")
+            if len(owned) >= MAX_RUNS_PER_OWNER and not self._evict(owned, MAX_RUNS_PER_OWNER):
+                raise ApiError(422, "limit_exceeded", "trop de runs pour ce jeton")
+            everything = self._store.all_runs()
+            if len(everything) >= MAX_RUNS_TOTAL and not self._evict(everything, MAX_RUNS_TOTAL):
                 raise ApiError(422, "limit_exceeded", "capacité de runs atteinte")
-            run = Run(run_id=secrets.token_urlsafe(16), owner=owner, seed=scenario.model.seed,
-                      scenario_sha256=scenario.sha256, scenario=scenario,
-                      options=ProtocolOptions(**req.protocol.model_dump()),
-                      energy_profile=req.energy_profile)
-            try:
-                self._queue.put_nowait(run.run_id)
-            except queue.Full:
-                raise ApiError(422, "limit_exceeded", "file de calcul pleine") from None
-            self._runs[run.run_id] = run
-            return run
+            run_id = secrets.token_urlsafe(16)
+            self._store.insert_run(run_id, owner, scenario.model.seed, scenario.sha256,
+                                   int(time.time()))
+            self._pending[run_id] = job
+            self._queue.put_nowait(run_id)
+            return self._status(self._store.get_run(run_id))
 
-    def _evict_oldest_terminal(self, runs: list[Run], limit: int) -> None:
-        terminal = [r for r in runs if r.state in _TERMINAL]
-        for r in terminal[: max(0, len(runs) - limit + 1)]:
-            self._runs.pop(r.run_id, None)
+    def _evict(self, runs: list[dict[str, Any]], limit: int) -> bool:
+        """Supprime les runs terminés les plus anciens pour passer sous `limit`. False si impossible."""
+        excess = len(runs) - limit + 1
+        terminal = [r for r in runs if r["state"] in _TERMINAL]
+        if len(terminal) < excess:
+            return False
+        for r in terminal[:excess]:
+            self._store.delete_run(r["run_id"])
+        return True
 
-    def get(self, owner: str, run_id: str) -> Run:
+    # Lecture et suppression ------------------------------------------------------------------
+
+    def _owned(self, owner: str, run_id: str) -> dict[str, Any]:
         if not _RUN_ID.match(run_id):
             raise ApiError(404, "not_found", "run inconnu")
-        with self._lock:
-            run = self._runs.get(run_id)
-        if run is None or run.owner != owner:
+        row = self._store.get_run(run_id)
+        if row is None or row["owner"] != owner:
             raise ApiError(404, "not_found", "run inconnu")
-        return run
+        return row
 
-    def status(self, run: Run) -> dict[str, Any]:
+    @staticmethod
+    def _status(row: dict[str, Any]) -> dict[str, Any]:
+        return RunStatus(
+            run_id=row["run_id"], state=row["state"], progress=row["progress"],
+            scenario_sha256=row["scenario_sha256"], trace_events=row["trace_events"],
+            problem=Problem(**row["problem"]) if row["problem"] else None,
+        ).model_dump(exclude_none=True)
+
+    def status(self, owner: str, run_id: str) -> dict[str, Any]:
         with self._lock:
-            return RunStatus(
-                run_id=run.run_id, state=run.state, progress=run.progress,
-                scenario_sha256=run.scenario_sha256, trace_events=run.trace_events,
-                problem=Problem(**run.problem) if run.problem else None,
-            ).model_dump(exclude_none=True)
+            return self._status(self._owned(owner, run_id))
 
     def cancel_or_delete(self, owner: str, run_id: str) -> None:
-        run = self.get(owner, run_id)
         with self._lock:
-            if run.state in _TERMINAL:
-                self._runs.pop(run_id, None)
+            row = self._owned(owner, run_id)
+            if row["state"] in _TERMINAL:
+                self._store.delete_run(run_id)
+            elif row["state"] == "queued":
+                self._cancelled.add(run_id)
+                self._pending.pop(run_id, None)
+                self._store.set_state(run_id, "cancelled")
             else:
-                run.cancel = True
-                if run.state == "queued":
-                    run.state = "cancelled"
+                self._cancelled.add(run_id)
+
+    def _done(self, owner: str, run_id: str) -> dict[str, Any]:
+        row = self._owned(owner, run_id)
+        if row["state"] != "done":
+            raise ApiError(409, "conflict", "run non terminé avec succès")
+        return row
+
+    def summary(self, owner: str, run_id: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._done(owner, run_id)["summary"])
+
+    def devices_page(self, owner: str, run_id: str, cursor: int, limit: int) -> dict[str, Any]:
+        with self._lock:
+            self._done(owner, run_id)
+            items, nxt = self._store.devices_page(run_id, cursor, limit)
+        return DevicePage(items=items, next_cursor=nxt).model_dump()
+
+    def events_page(self, owner: str, run_id: str, cursor: int, limit: int) -> dict[str, Any]:
+        with self._lock:
+            self._done(owner, run_id)
+            items, nxt = self._store.events_page(run_id, cursor, limit)
+        return TracePage(items=items, next_cursor=nxt).model_dump()
+
+    # Calcul -----------------------------------------------------------------------------------
 
     def _loop(self) -> None:
         while not self._stopping.is_set():
@@ -311,102 +511,98 @@ class RunService:
             except queue.Empty:
                 continue
             with self._lock:
-                run = self._runs.get(run_id)
-                if run is None or run.cancel:
-                    if run is not None:
-                        run.state = "cancelled"
+                job = self._pending.pop(run_id, None)
+                if job is None or run_id in self._cancelled:
+                    self._cancelled.discard(run_id)
+                    self._store.set_state(run_id, "cancelled")
                     continue
-                run.state = "running"
+                self._store.set_state(run_id, "running", progress=0.0)
             try:
-                self._compute(run)
+                payload = self._compute(run_id, job)
             except ApiError as exc:
-                self._fail(run, exc.code, exc.message)
+                self._fail(run_id, exc.code, exc.message)
             except ValueError as exc:
                 msg = str(exc)
-                if "trace limitée" in msg:
-                    self._fail(run, "limit_exceeded", msg)
+                if "trace limitée" in msg or "trop d'événements" in msg:
+                    self._fail(run_id, "limit_exceeded", msg)
                 else:
-                    log.error("run %s : valeur refusée", run.run_id, exc_info=True)
-                    self._fail(run, "run_failed", "échec du calcul")
+                    log.error("run %s : valeur refusée", run_id, exc_info=True)
+                    self._fail(run_id, "run_failed", "échec du calcul")
             except Exception:
-                log.error("run %s : échec", run.run_id, exc_info=True)
-                self._fail(run, "run_failed", "échec du calcul")
+                log.error("run %s : échec", run_id, exc_info=True)
+                self._fail(run_id, "run_failed", "échec du calcul")
+            else:
+                with self._lock:
+                    if run_id in self._cancelled:
+                        self._cancelled.discard(run_id)
+                        self._store.set_state(run_id, "cancelled")
+                    else:
+                        self._store.save_done(run_id, payload["summary"], payload["devices"],
+                                              payload["events"])
 
-    def _fail(self, run: Run, code: str, message: str) -> None:
+    def _fail(self, run_id: str, code: str, message: str) -> None:
         with self._lock:
-            run.problem = _problem(code, message)
-            run.state = "failed"
-            run.scenario = None
+            self._cancelled.discard(run_id)
+            self._store.set_state(run_id, "failed", problem=_problem(code, message))
 
-    def _compute(self, run: Run) -> None:
-        assert run.scenario is not None and run.options is not None
-        result = run_scenario(run.scenario, energy_profile=run.energy_profile)
-        self._set_progress(run, 0.5)
-        if run.cancel:
-            return self._cancel(run)
-        trace = build_trace(run.scenario, run.options)
-        if len(trace.events) > MAX_TRACE_EVENTS_PER_RUN:
+    def _compute(self, run_id: str, job: _Job) -> dict[str, Any]:
+        scenario = job.scenario
+        devices, group_of, index_in_group = scenario.deploy()
+        energy_rows: dict[int, Any] = {}
+        if job.multi:
+            mt = build_multi_trace(scenario, job.options)
+            totals, per_device, events = mt.totals, mt.per_device, mt.events
+            gateway_load, gateways = None, [
+                GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
+                                 lost_collision=g.lost_collision,
+                                 lost_gateway_busy=g.lost_gateway_busy,
+                                 audible_frames=g.audible_frames, busy_ns=g.busy_ns,
+                                 peak_concurrent=g.peak_concurrent,
+                                 observation_ns=g.observation_ns).model_dump()
+                for name, g in zip(mt.gateway_names, mt.per_gateway)]
+        else:
+            tr = build_trace(scenario, job.options)
+            totals, per_device, events = tr.totals, tr.per_device, tr.events
+            gateway_load, gateways = tr.gateway, None
+        self._set(run_id, 0.7)
+        if job.energy_profile is not None:
+            res = run_scenario(scenario, energy_profile=job.energy_profile)
+            energy_rows = {r.device_index: r for r in res.rows}
+        if len(events) > MAX_TRACE_EVENTS_PER_RUN:
             raise ApiError(422, "limit_exceeded", "événements au-delà de la borne du run")
-        if trace.totals.sent != result.totals.sent or trace.totals.received != result.totals.received:
-            raise RuntimeError("trace et totaux ne concordent pas")
-        events = _events_list(trace)
-        devices = _devices_list(result)
-        summary = _summary_dict(run.run_id, result)
+
+        rows = []
+        for i, (dev, c) in enumerate(zip(devices, per_device)):
+            e = energy_rows.get(i)
+            rows.append(DeviceRowOut(
+                device_index=i, group=group_of[i], index_in_group=index_in_group[i],
+                x_m=dev.x_m, y_m=dev.y_m, spreading_factor=dev.spreading_factor,
+                sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
+                lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
+                energy_per_message_j=getattr(e, "energy_per_message_j", None),
+                average_current_ua=getattr(e, "average_current_ua", None),
+            ).model_dump(exclude_none=True))
+        # Invariant : la somme des compteurs par dispositif égale les totaux publiés.
+        if (sum(r["sent"] for r in rows) != totals.sent
+                or sum(r["received"] for r in rows) != totals.received):
+            raise RuntimeError("compteurs par dispositif et totaux ne concordent pas")
+        events_out = []
+        for ev in events:
+            events_out.append(TraceEvent(
+                seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
+                gateway_index=ev.gateway_index, outcome=ev.outcome,
+                hops=[{"from_id": h.from_id, "to_id": h.to_id, "t_ns": h.t_ns,
+                       "freq_hz": h.freq_hz, "dr": h.dr, "rssi_dbm": h.rssi_dbm,
+                       "outcome": h.outcome} for h in ev.hops],
+            ).model_dump(exclude_none=True))
+        summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
+                               job.energy_profile)
+        self._set(run_id, 0.95)
+        return {"summary": summary, "devices": rows, "events": events_out}
+
+    def _set(self, run_id: str, progress: float) -> None:
         with self._lock:
-            if run.cancel:
-                run.state = "cancelled"
-                run.scenario = None
-                return
-            run.summary = summary
-            run.devices = devices
-            run.events = events
-            run.event_seqs = [e["seq"] for e in events]
-            run.trace_events = len(events)
-            run.progress = 1.0
-            run.state = "done"
-            run.scenario = None
-            run.options = None
-
-    def _cancel(self, run: Run) -> None:
-        with self._lock:
-            run.state = "cancelled"
-            run.scenario = None
-
-    def _set_progress(self, run: Run, value: float) -> None:
-        with self._lock:
-            run.progress = value
-
-    def summary(self, run: Run) -> dict[str, Any]:
-        with self._lock:
-            if run.state != "done" or run.summary is None:
-                raise ApiError(409, "conflict", "run non terminé avec succès")
-            return dict(run.summary)
-
-    def devices_page(self, run: Run, cursor: int, limit: int) -> dict[str, Any]:
-        with self._lock:
-            if run.state != "done":
-                raise ApiError(409, "conflict", "run non terminé avec succès")
-            items = run.devices[cursor:cursor + limit]
-            nxt = cursor + limit if cursor + limit < len(run.devices) else None
-        return DevicePage(items=items, next_cursor=nxt).model_dump()  # next_cursor : null en fin
-
-    def events_page(self, run: Run, cursor: int, limit: int) -> dict[str, Any]:
-        with self._lock:
-            if run.state != "done":
-                raise ApiError(409, "conflict", "run non terminé avec succès")
-            start = bisect.bisect_left(run.event_seqs, cursor)
-            end = min(start + limit, len(run.events))
-            items = run.events[start:end]
-            nxt = run.event_seqs[end] if end < len(run.events) else None
-        return TracePage(items=items, next_cursor=nxt).model_dump()  # next_cursor : null en fin
-
-
-def _validation_error(exc: ValidationError) -> ApiError:
-    err = exc.errors()[0]
-    loc = ".".join(str(p) for p in err.get("loc", ()))
-    msg = str(err.get("msg", "invalide"))
-    code = "terrain_not_allowed" if "terrain" in msg.lower() else "validation_error"
-    return ApiError(422, code, f"{loc} : {msg}" if loc else msg, loc or None)
+            self._store.set_state(run_id, "running", progress=progress)
 
 
 def _page_params(query: dict[str, list[str]]) -> tuple[int, int]:
@@ -421,22 +617,44 @@ def _page_params(query: dict[str, list[str]]) -> tuple[int, int]:
     return one("cursor", 0, 0, 10**9), one("limit", DEFAULT_PAGE, 1, MAX_PAGE_SIZE)
 
 
+def _refuse_constant(name: str) -> None:
+    raise ValueError(f"constante JSON refusée : {name}")
+
+
 # --- HTTP --------------------------------------------------------------------------------------
 
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService) -> None:
+    def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
+                 tls_context: Optional[ssl.SSLContext] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
+        self._tls = tls_context
+
+    def get_request(self):
+        sock, addr = super().get_request()
+        if self._tls is not None:
+            # Poignée de main dans le fil de la requête (`_Handler.setup`), pas dans la boucle d'accept.
+            sock = self._tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+        return sock, addr
+
+    def handle_error(self, request, client_address) -> None:  # pas de trace vers le client
+        log.debug("connexion refusée ou interrompue", exc_info=True)
 
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "lsim-api"
     sys_version = ""
+    timeout = 30  # délai par opération : limite les connexions bloquées
+
+    def setup(self) -> None:
+        super().setup()
+        if isinstance(self.request, ssl.SSLSocket):
+            self.request.do_handshake()
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - signature imposée
         return  # pas de journal d'accès : les en-têtes contiennent des jetons
@@ -457,23 +675,29 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(405, _problem("validation_error", "méthode non autorisée"))
 
     def _handle(self, method: str) -> None:
+        headers: dict[str, str] = {}
         try:
             status, body = self._route(method)
         except ApiError as exc:
             status, body = exc.status, _problem(exc.code, exc.message, exc.field)
+            headers = exc.headers
         except Exception:
             log.error("erreur interne", exc_info=True)
             status, body = 500, _problem("run_failed", "erreur interne")
-        self._send(status, body)
+        self._send(status, body, headers)
 
-    def _send(self, status: int, body: Optional[dict[str, Any]]) -> None:
-        data = b"" if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    def _send(self, status: int, body: Optional[dict[str, Any]],
+              headers: Optional[dict[str, str]] = None) -> None:
+        data = b"" if body is None else json.dumps(body, ensure_ascii=False,
+                                                    allow_nan=False).encode("utf-8")
         if status >= 400:
             # Corps éventuellement non lu (erreur avant lecture) : pas de réutilisation du socket.
             self.close_connection = True
         self.send_response(status)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         if body is not None:
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -519,32 +743,34 @@ class _Handler(BaseHTTPRequestHandler):
         rest = path[len(base) + 1:]
         owner = self._owner()
         svc: RunService = self.server.service  # type: ignore[attr-defined]
+        retry = svc.limiter.take(owner)
+        if retry is not None:
+            raise ApiError(429, "rate_limited", "trop de requêtes",
+                           headers={"Retry-After": str(max(1, math.ceil(retry)))})
 
         if method == "GET" and rest == "regions":
             return 200, list_regions().model_dump()
         if method == "POST" and rest == "scenarios/validate":
             return 200, self._validate()
         if method == "POST" and rest == "runs":
-            run = svc.create(owner, self._json_body())
-            return 202, svc.status(run)
+            return 202, svc.create(owner, self._json_body())
 
         m = re.fullmatch(r"runs/([^/]+)(?:/(summary|devices|events))?", rest)
         if m is None:
             raise ApiError(404, "not_found", "route inconnue")
-        run = svc.get(owner, m.group(1))
-        action = m.group(2)
+        run_id, action = m.group(1), m.group(2)
         if method == "GET" and action is None:
-            return 200, svc.status(run)
+            return 200, svc.status(owner, run_id)
         if method == "DELETE" and action is None:
-            svc.cancel_or_delete(owner, m.group(1))
+            svc.cancel_or_delete(owner, run_id)
             return 204, None
         if method == "GET" and action == "summary":
-            return 200, svc.summary(run)
+            return 200, svc.summary(owner, run_id)
         if method == "GET" and action in ("devices", "events"):
             cursor, limit = _page_params(query)
             if action == "devices":
-                return 200, svc.devices_page(run, cursor, limit)
-            return 200, svc.events_page(run, cursor, limit)
+                return 200, svc.devices_page(owner, run_id, cursor, limit)
+            return 200, svc.events_page(owner, run_id, cursor, limit)
         raise ApiError(404, "not_found", "route inconnue")
 
     def _validate(self) -> dict[str, Any]:
@@ -556,8 +782,8 @@ class _Handler(BaseHTTPRequestHandler):
                 Problem(code=err.code, message=err.message, field=err.field),
             ]).model_dump(exclude_none=True)
         try:
-            _check_scenario_supported(req.scenario)
-            scenario = Scenario(req.scenario)
+            _check_request(RunCreate(scenario=req.scenario))
+            scenario = _build_scenario(req.scenario)
         except (ApiError, ValueError) as exc:
             code = exc.code if isinstance(exc, ApiError) else "validation_error"
             msg = exc.message if isinstance(exc, ApiError) else str(exc)
@@ -567,12 +793,19 @@ class _Handler(BaseHTTPRequestHandler):
             exclude_none=True)
 
 
-def _refuse_constant(name: str) -> None:
-    raise ValueError(f"constante JSON refusée : {name}")
+def make_tls_context(cert: Path, key: Path) -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    return ctx
 
 
-def make_server(host: str, port: int, tokens_path: Path, max_queue: int = MAX_QUEUE) -> ApiServer:
-    return ApiServer((host, port), TokenStore(tokens_path), RunService(max_queue))
+def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":memory:",
+                max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
+                tls: Optional[ssl.SSLContext] = None) -> ApiServer:
+    service = RunService(RunStore(runs_db), max_queue=max_queue,
+                         limiter=RateLimiter(per_minute=rate_per_min))
+    return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -587,21 +820,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_revoke.add_argument("--owner", required=True)
     p_serve = sub.add_parser("serve", help="démarre le serveur")
     p_serve.add_argument("--tokens", required=True, type=Path)
+    p_serve.add_argument("--runs-db", required=True, help="fichier SQLite des runs")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8765)
+    p_serve.add_argument("--tls-cert", type=Path, default=None)
+    p_serve.add_argument("--tls-key", type=Path, default=None)
+    p_serve.add_argument("--rate-per-minute", type=int, default=DEFAULT_RATE_PER_MIN)
     args = parser.parse_args(argv)
 
     if args.cmd == "issue-token":
-        token = TokenStore(args.tokens).issue(args.owner, args.expires_at)
-        print(token)
+        print(TokenStore(args.tokens).issue(args.owner, args.expires_at))
         return 0
     if args.cmd == "revoke":
-        n = TokenStore(args.tokens).revoke(args.owner)
-        print(f"{n} jeton(s) révoqué(s)")
+        print(f"{TokenStore(args.tokens).revoke(args.owner)} jeton(s) révoqué(s)")
         return 0
+
+    if (args.tls_cert is None) != (args.tls_key is None):
+        parser.error("--tls-cert et --tls-key vont ensemble")
+    if args.host not in _LOOPBACK and args.tls_cert is None:
+        parser.error("adresse non locale sans TLS : fournir --tls-cert et --tls-key")
+    tls = make_tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    server = make_server(args.host, args.port, args.tokens)
-    log.info("API %s sur %s:%d", API_VERSION, args.host, args.port)
+    server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
+                         rate_per_min=args.rate_per_minute, tls=tls)
+    scheme = "https" if tls else "http"
+    log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -609,6 +852,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         server.server_close()
         server.service.close()
+        server.service._store.close()
     return 0
 
 

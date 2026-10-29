@@ -13,7 +13,8 @@
             "run_failed",
             "conflict",
             "unsupported_region",
-            "unauthorized"
+            "unauthorized",
+            "rate_limited"
           ],
           "title": "Code",
           "type": "string"
