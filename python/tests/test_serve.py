@@ -68,7 +68,7 @@ def test_net_id_is_sent_little_endian(tmp_path, monkeypatch):
     monkeypatch.setenv(DATA_ENV, "11" * 32)
     captured = {}
 
-    def fake_build(db, keys, net_id, plan):
+    def fake_build(db, keys, net_id, plan, *_sub_band):
         captured["net_id"] = net_id
         raise SystemExit(0)
     monkeypatch.setattr(serve, "build_handler", fake_build)

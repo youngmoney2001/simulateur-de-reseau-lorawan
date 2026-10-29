@@ -36,6 +36,7 @@ from typing import Any, Callable, Optional
 
 from lsim import wsproto
 from lsim.gwmp import Rxpk
+from lsim.channel_mask import FAMILY as SUB_BAND_PLANS
 from lsim.plan import Plan
 from lsim.uplink import Delivery, Outcome
 from lsim.wsproto import CLOSE_PROTOCOL, HttpError, WsConnection, WsError
@@ -172,8 +173,12 @@ def uplink_to_rxpk(msg: dict, plan: Plan) -> tuple[Rxpk, int, int]:
 
 # --- Configuration de la passerelle ---------------------------------------------------------
 
-def sx1301_conf(channels_hz: tuple[int, ...]) -> dict:
-    """Un concentrateur, 8 canaux : radio_0 au centre des canaux, IF = canal - centre."""
+def sx1301_conf(channels_hz: tuple[int, ...], channel_500_hz: Optional[int] = None) -> dict:
+    """Un concentrateur : 8 canaux 125 kHz sur radio_0 (IF = canal - centre).
+
+    `channel_500_hz` (sous-bande US915/AU915) : canal 500 kHz DR4 sur radio_1, chan_Lora_std
+    (bandwidth 500000 et spread_factor 8 acceptés par sx1301v2conf.c).
+    """
     block = tuple(channels_hz[:8])
     if not block:
         raise ValueError("aucun canal montant")
@@ -188,6 +193,10 @@ def sx1301_conf(channels_hz: tuple[int, ...]) -> dict:
         "chan_Lora_std": {"enable": False, "radio": 0, "if": 0,
                           "bandwidth": 125_000, "spread_factor": 7},
     }
+    if channel_500_hz is not None:
+        conf["radio_1"] = {"enable": True, "freq": channel_500_hz}
+        conf["chan_Lora_std"] = {"enable": True, "radio": 1, "if": 0,
+                                 "bandwidth": 500_000, "spread_factor": 8}
     for index in range(8):
         if index < len(block):
             conf[f"chan_multiSF_{index}"] = {"enable": True, "radio": 0, "if": ifs[index]}
@@ -196,8 +205,21 @@ def sx1301_conf(channels_hz: tuple[int, ...]) -> dict:
     return conf
 
 
-def router_config(plan: Plan, net_id: int, hwspec: str) -> dict:
+def gateway_channels(plan: Plan, sub_band: int) -> tuple[tuple[int, ...], Optional[int]]:
+    """Canaux 125 kHz et canal 500 kHz annoncés. US915/AU915 : sous-bande ; autres : 8 premiers."""
+    freqs = plan.uplink_channels_hz()
+    if plan.name not in SUB_BAND_PLANS:
+        return tuple(freqs[:8]), None
+    from lsim.channel_mask import sub_band_channels
+    indexes = sorted(sub_band_channels(sub_band))
+    block = tuple(freqs[i] for i in indexes if i < 64)
+    channel_500 = next((freqs[i] for i in indexes if i >= 64), None)
+    return block, channel_500
+
+
+def router_config(plan: Plan, net_id: int, hwspec: str, sub_band: int = 1) -> dict:
     lo, hi = plan.freq_range_hz()
+    block, channel_500 = gateway_channels(plan, sub_band)
     return {
         "msgtype": "router_config",
         "NetID": [net_id],
@@ -208,7 +230,7 @@ def router_config(plan: Plan, net_id: int, hwspec: str) -> dict:
         "hwspec": hwspec,
         "freq_range": [lo, hi],
         "DRs": [list(row) for row in plan.dr_table()],
-        "sx1301_conf": [sx1301_conf(plan.uplink_channels_hz())],
+        "sx1301_conf": [sx1301_conf(block, channel_500)],
         "nocca": False,
         "nodc": False,
         "nodwell": False,
@@ -274,6 +296,7 @@ class BasicStationServer:
     def __init__(self, handler, plan: Plan, *, net_id: int, uri: str,
                  muxs_eui: bytes = bytes(7) + b"\x01",
                  hwspec: str = DEFAULT_HWSPEC,
+                 sub_band: int = 1,
                  executor: Optional[Executor] = None,
                  max_connections: int = DEFAULT_MAX_CONNECTIONS,
                  idle_timeout_s: float = DEFAULT_IDLE_TIMEOUT_S,
@@ -284,6 +307,7 @@ class BasicStationServer:
         self._uri = uri
         self._muxs = muxs_eui
         self._hwspec = hwspec
+        self._sub_band = sub_band
         self._executor = executor
         self._max_connections = max_connections
         self._idle = idle_timeout_s
@@ -371,7 +395,7 @@ class BasicStationServer:
         log.info("passerelle connectée : modèle %s, station %s, protocole %s",
                  _safe_text(version.get("model")), _safe_text(version.get("station")),
                  version.get("protocol") if isinstance(version.get("protocol"), int) else "?")
-        await conn.send_text(json.dumps(router_config(self._plan, self._net_id, self._hwspec)))
+        await conn.send_text(json.dumps(router_config(self._plan, self._net_id, self._hwspec, self._sub_band)))
         pending: set[asyncio.Task] = set()
         while True:
             text = await conn.recv_text()

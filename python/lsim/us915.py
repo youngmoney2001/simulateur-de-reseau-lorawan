@@ -16,8 +16,8 @@ Charges N (sans FOpts, compatibles répéteur, TTN US902-928) : DR0 11, DR1 53, 
 DR4 222, DR8 53, DR9 129, DR10 à DR13 222. La file est bornée par la plus petite N des fenêtres
 RX1 atteignables (DR10 à DR13) : 222 octets.
 
-Sous-bandes et règle LinkADRReq (ChMaskCntl) : `lsim.channel_mask`. Non implémenté : LR-FHSS (DR5, DR6) ;
-émission de LinkADRReq par le serveur (à faire).
+Sous-bandes et règle LinkADRReq (ChMaskCntl) : `lsim.channel_mask`, émission par `lsim.serve`.
+Non implémenté : LR-FHSS (DR5, DR6).
 Le dispositif rejoint sur les 72 canaux par défaut sans CFList : c'est la règle de ce serveur.
 """
 

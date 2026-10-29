@@ -23,7 +23,9 @@ le clôt. Sans acquittement, il est considéré non reçu et n'est pas renvoyé 
 Retransmission d'un uplink confirmé déjà accepté (delta 0, MIC valide) : ACK seul renvoyé,
 sans nouvelle livraison ni changement d'état. Un uplink non confirmé répété est rejeté.
 
-Limites : FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés ; les
+Commandes MAC : une commande mise en file avec FPort 0 (`Transaction.enqueue`) est émise en
+FOpts d'un downlink sans FPort. Les FOpts montants ne sont pas interprétés ici (le journal les
+décode) ; FPending et ADR ne sont pas interprétés. Les
 charges de FPort > 0 sans AppKey ne sont pas déchiffrables et ne sont pas livrées.
 """
 
@@ -182,6 +184,10 @@ def _build_downlink(rxpk: Rxpk, rec, rx1: tuple[float, str], ack_for: Optional[i
     """Chiffre et signe le downlink, sans rien persister. RX1 : tmst + 1 s, canal et débit du plan."""
     fport = send.fport if send is not None else None
     payload = send.payload if send is not None else b""
+    fopts = b""
+    if send is not None and send.fport == 0:
+        # Commande MAC en file (FPort 0 interne) : transportée dans FOpts, sans FPort ni charge.
+        fopts, fport, payload = send.payload, None, b""
     if len(payload) > max_payload:
         # Impossible par construction : la file refuse les charges au-dessus de queue_payload_max.
         raise ValueError("charge en file au-delà de la limite du plan")
@@ -190,7 +196,7 @@ def _build_downlink(rxpk: Rxpk, rec, rx1: tuple[float, str], ack_for: Optional[i
     confirmed = bool(send is not None and send.confirmed)
     frame = UplinkFrame(
         dev_addr=rec.dev_addr, fcnt=counter & 0xFFFF, payload=payload, fport=fport,
-        confirmed=confirmed, ack=ack_for is not None)
+        confirmed=confirmed, ack=ack_for is not None, fopts=fopts)
     wire_dl = seal_downlink(frame, rec.keys, DownlinkContext(
         conf_fcnt=(ack_for & 0xFFFF) if ack_for is not None else 0,
         nfcnt32=rec.nfcnt_down, afcnt32=rec.afcnt_down))

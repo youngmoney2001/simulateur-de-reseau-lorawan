@@ -24,12 +24,15 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
+from lsim import mac
 from lsim.basicstation import DEFAULT_HWSPEC, BasicStationServer, make_ssl_context, start_basicstation_server
+from lsim.channel_mask import FAMILY, link_adr_for_sub_band
 from lsim.gwmp_server import JoinUplinkHandler, start_server
 from lsim.join_server import DeviceKeys, JoinServer
-from lsim.join_store import DurableJoinStore
+from lsim.join_store import DurableJoinStore, QueueFullError
+from lsim.lora import StatusError
 from lsim.plan import Plan, get_plan
 from lsim.uplink import DataUplinkHandler, Delivery, UplinkRouter
 
@@ -82,15 +85,55 @@ def open_store(db_path: Path) -> DurableJoinStore:
                             data_key=_hex(data_hex, 32, DATA_ENV))
 
 
+def effective_sub_band(plan: Plan, sub_band: Optional[int]) -> Optional[int]:
+    """Sous-bande servie : US915/AU915 seulement (défaut 1) ; None pour les autres plans."""
+    if plan.name not in FAMILY:
+        if sub_band is not None:
+            raise ValueError("--sub-band ne concerne que US915 et AU915")
+        return None
+    from lsim.channel_mask import sub_band_channels
+    value = 1 if sub_band is None else sub_band
+    sub_band_channels(value)              # lève ValueError si hors 1..8
+    return value
+
+
+def link_adr_payload(plan: Plan, sub_band: int) -> bytes:
+    """LinkADRReq (5 octets) qui restreint le dispositif à la sous-bande de la passerelle.
+
+    DataRate et TXPower à 15 (champ ignoré), NbTrans 0 (inchangé) ; seul le masque change.
+    """
+    if plan.name not in FAMILY:
+        raise ValueError(f"LinkADRReq de sous-bande non défini pour {plan.name}")
+    ch_mask, cntl = link_adr_for_sub_band(sub_band)
+    return mac.encode(mac.LinkAdrReq(data_rate=15, tx_power=15, ch_mask=ch_mask,
+                                     ch_mask_cntl=cntl, nb_trans=0))
+
+
 def build_handler(store: DurableJoinStore, keys: dict[bytes, DeviceKeys], net_id: bytes,
-                  plan: Plan) -> UplinkRouter:
+                  plan: Plan, sub_band: Optional[int] = None) -> UplinkRouter:
     def provider(dev_eui: bytes) -> DeviceKeys:
         try:
             return keys[dev_eui]
         except KeyError:
             raise KeyError("dispositif inconnu") from None
 
-    join_server = JoinServer(store, net_id, provider, dl_settings=plan.dl_settings)
+    sub_band = effective_sub_band(plan, sub_band)
+    on_join: Optional[Callable[[object, bytes], None]] = None
+    if sub_band is not None:
+        command = link_adr_payload(plan, sub_band)
+
+        def queue_command(tx, dev_eui: bytes) -> None:
+            # Mise en file dans la transaction de jointure : une jointure ne peut pas être
+            # acceptée sans sa commande. Si la file est pleine, la jointure réussit quand même.
+            try:
+                tx.enqueue(dev_eui, 0, False, command)
+            except QueueFullError:
+                logging.getLogger("lsim.serve").warning(
+                    "file pleine : LinkADRReq de sous-bande %d non mis en file", sub_band)
+
+        on_join = queue_command
+
+    join_server = JoinServer(store, net_id, provider, dl_settings=plan.dl_settings, on_join=on_join)
     return UplinkRouter(JoinUplinkHandler(join_server, plan), DataUplinkHandler(store, plan))
 
 
@@ -114,7 +157,8 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 def run_basicstation(host: str, port: int, db_path: Path, keys_path: Path, net_id_hex: str,
                      region: str, uri: str, tls_cert: Optional[str] = None,
-                     tls_key: Optional[str] = None, hwspec: str = DEFAULT_HWSPEC) -> int:
+                     tls_key: Optional[str] = None, hwspec: str = DEFAULT_HWSPEC,
+                     sub_band: Optional[int] = None) -> int:
     """Passerelles Basic Station (WebSocket). `uri` : adresse publique annoncée aux passerelles."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     log = logging.getLogger("lsim.serve")
@@ -129,9 +173,11 @@ def run_basicstation(host: str, port: int, db_path: Path, keys_path: Path, net_i
     net_id = _hex(net_id_hex, 3, "NetID")
     keys = load_keys_file(keys_path)
     plan = get_plan(region)
-    handler = build_handler(open_store(db_path), keys, net_id[::-1], plan)
+    sub_band = effective_sub_band(plan, sub_band)
+    handler = build_handler(open_store(db_path), keys, net_id[::-1], plan, sub_band)
     ssl_context = make_ssl_context(tls_cert, tls_key) if tls_cert else None
     server = BasicStationServer(handler, plan, net_id=int.from_bytes(net_id, "big"), uri=uri,
+                                sub_band=sub_band or 1,
                                 hwspec=hwspec, on_delivery=_log_delivery)
 
     async def main() -> None:
@@ -151,8 +197,24 @@ def run_basicstation(host: str, port: int, db_path: Path, keys_path: Path, net_i
     return 0
 
 
+def _mac_answers(fopts: bytes) -> list:
+    """Commandes MAC montantes décodées (FOpts) ; une trame mal formée ne compte pas."""
+    try:
+        return mac.decode_all(fopts, downlink=False) if fopts else []
+    except (ValueError, StatusError):
+        return []
+
+
 def _log_delivery(delivery: Delivery) -> None:
     """Journal d'une livraison : sans contenu applicatif (seulement la taille)."""
+    for answer in _mac_answers(delivery.fopts):
+        if isinstance(answer, mac.LinkAdrAns):
+            ok = answer.channel_mask_ack and answer.data_rate_ack and answer.power_ack
+            logging.getLogger("lsim.serve").log(
+                logging.INFO if ok else logging.WARNING,
+                "LinkADRAns dispositif %s : masque %s, débit %s, puissance %s",
+                delivery.dev_eui[::-1].hex(), answer.channel_mask_ack,
+                answer.data_rate_ack, answer.power_ack)
     if delivery.payload is None:
         content = "non déchiffrée" if delivery.fport else "aucune"
     else:
@@ -165,15 +227,17 @@ def _log_delivery(delivery: Delivery) -> None:
 
 
 def run(host: str, port: int, db_path: Path, keys_path: Path, net_id_hex: str,
-        region: str = DEFAULT_REGION) -> int:
+        region: str = DEFAULT_REGION, sub_band: Optional[int] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     # NetID écrit comme valeur (poids fort d'abord, ex. 000013) ; sur l'air, les champs
     # multi-octets sont en petit-boutiste (LoRaWAN 1.1 §4.3 : « little endian »).
     net_id = _hex(net_id_hex, 3, "NetID")[::-1]
     keys = load_keys_file(keys_path)
     plan = get_plan(region)
-    handler = build_handler(open_store(db_path), keys, net_id, plan)
-    logging.getLogger("lsim.serve").info("plan régional : %s", plan.name)
+    sub_band = effective_sub_band(plan, sub_band)
+    handler = build_handler(open_store(db_path), keys, net_id, plan, sub_band)
+    logging.getLogger("lsim.serve").info("plan régional : %s%s", plan.name,
+                                         "" if sub_band is None else f", sous-bande {sub_band}")
 
     async def main() -> None:
         transport, protocol = await start_server(handler, host, port, on_delivery=_log_delivery)

@@ -73,7 +73,8 @@ class JoinServer:
     """Serveur de jointure au-dessus d'un `DurableJoinStore`."""
 
     def __init__(self, store: DurableJoinStore, net_id: bytes, key_provider: KeyProvider,
-                 dl_settings: int = _DL_SETTINGS_OPTNEG, rx_delay: int = 1) -> None:
+                 dl_settings: int = _DL_SETTINGS_OPTNEG, rx_delay: int = 1,
+                 on_join: Optional[Callable[[object, bytes], None]] = None) -> None:
         if not isinstance(net_id, (bytes, bytearray)) or len(net_id) != 3:
             raise ValueError("net_id doit faire 3 octets (ordre de transmission)")
         if not 0 <= dl_settings <= 255 or not 0 <= rx_delay <= 255:
@@ -84,6 +85,8 @@ class JoinServer:
         self._keys = key_provider
         self._dl_settings = dl_settings
         self._rx_delay = rx_delay
+        # Appelé dans la transaction de jointure, après persistance de la session (DevEUI).
+        self._on_join = on_join
 
     def handle_join_request(self, wire: bytes) -> JoinOutcome:
         """Accepte une join-request ; lève StatusError (MIC, rejeu) ou KeyError (dispositif inconnu)."""
@@ -109,6 +112,8 @@ class JoinServer:
                 keys.nwk_key, keys.app_key or bytes(16), join_nonce_wire, req.join_eui,
                 req.dev_nonce)
             tx.put_session(req.dev_eui, dev_addr, session, has_app_key=keys.app_key is not None)
+            if self._on_join is not None:
+                self._on_join(tx, req.dev_eui)
         return JoinOutcome(dev_eui=req.dev_eui, join_eui=req.join_eui, dev_nonce=req.dev_nonce,
                            join_nonce=join_nonce, dev_addr=dev_addr, accept_wire=accept)
 

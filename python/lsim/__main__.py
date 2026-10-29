@@ -59,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")
     srv.add_argument("--region", default="EU868", choices=["EU868", "US915", "AU915"],
                      help="plan régional des données et des fenêtres RX1 (défaut : %(default)s)")
+    srv.add_argument("--sub-band", type=int, default=None,
+                     help="US915/AU915 : sous-bande 1 à 8 de la passerelle (défaut 1). Le serveur "
+                          "envoie un LinkADRReq à chaque jointure et la passerelle annonce ces canaux")
     dl = sub.add_parser("downlink", help="mettre un downlink en file pour un dispositif")
     dl.add_argument("--db", required=True, help="base SQLite du registre de jointure")
     dl.add_argument("--dev-eui", required=True, help="DevEUI, 8 octets en hexadécimal (ordre d'affichage TTN)")
@@ -100,11 +103,11 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--uri requis pour basicstation")
                 return run_basicstation(args.host, args.port or DEFAULT_PORT_WS, Path(args.db),
                                         Path(args.keys), args.net_id, args.region, args.uri,
-                                        args.tls_cert, args.tls_key, args.hwspec)
+                                        args.tls_cert, args.tls_key, args.hwspec, args.sub_band)
             if args.uri is not None or args.tls_cert or args.tls_key:
                 raise ValueError("--uri et TLS ne concernent que --transport basicstation")
             return serve_run(args.host, args.port or DEFAULT_PORT, Path(args.db), Path(args.keys),
-                             args.net_id, args.region)
+                             args.net_id, args.region, args.sub_band)
         except (ValueError, OSError) as exc:
             print(f"erreur : {exc}", file=sys.stderr)
             return 2

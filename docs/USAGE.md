@@ -129,7 +129,8 @@ Limites des trames de données :
 - Une seule copie est traitée : avec plusieurs passerelles, les copies suivantes sont rejetées comme rejeu.
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
 - Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
-- US915 et AU915 : le groupe de scénario peut porter `sub_band` (1 à 8) ; son canal doit alors appartenir à la sous-bande. La règle LinkADRReq (ChMaskCntl 0 à 7) est dans `lsim.channel_mask`. Le serveur n'émet pas encore de LinkADRReq : un dispositif réel rejoint sur les 72 canaux, sans CFList, et une passerelle 8 canaux ne l'entend que s'il est restreint à sa sous-bande. LR-FHSS non implémenté.
+- US915 et AU915 : le groupe de scénario peut porter `sub_band` (1 à 8) ; son canal doit alors appartenir à la sous-bande. Règle LinkADRReq (ChMaskCntl 0 à 7) dans `lsim.channel_mask`.
+- Sous-bande de la passerelle (`lsim serve --region US915|AU915 --sub-band N`, défaut 1) : la passerelle Basic Station annonce les 8 canaux 125 kHz et le canal 500 kHz de la sous-bande (radio_0, radio_1 pour le 500 kHz). À chaque jointure, le serveur met en file un LinkADRReq (ChMaskCntl 5, DataRate et TXPower ignorés) qui restreint le dispositif à cette sous-bande ; il part avec le premier downlink, en FOpts. Limites : la commande n'est envoyée qu'une fois (pas de renvoi si le dispositif ne l'acquitte pas) ; le LinkADRAns est journalisé, sans nouvelle tentative ; une passerelle Semtech UDP se configure côté passerelle, le serveur ne fait que le LinkADRReq. LR-FHSS non implémenté.
 - AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
@@ -172,7 +173,7 @@ file. Exemple : le DevEUI affiché `08-07-06-05-04-03-02-01` s'écrit `080706050
 
 **Limites** : authentification des passerelles seulement par TLS (pas de certificat client ni de
 jeton) ; `router` en format ID6 non accepté (EUI ou entier seulement) ; un seul concentrateur et
-seulement les 8 premiers canaux montants du plan (pas de sous-bandes par LinkADRReq, pas de
+seulement les 8 canaux 125 kHz de la sous-bande choisie (`--sub-band`, défaut 1 pour US915 et AU915 ; les 8 premiers canaux pour EU868). Le canal 500 kHz de la sous-bande est aussi annoncé. Pas de
 LR-FHSS) ; pas de beacon, de Class B/C ni de `rmtsh` ; formats EUI et MIC (petit-boutiste) validés
 conformes aux vecteurs de test officiels de Basic Station (`selftest_lora.c`) ; reste à confirmer
 sur une passerelle réelle (non disponible pour ces essais).
