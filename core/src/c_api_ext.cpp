@@ -831,6 +831,7 @@ int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
         if (mac_counters != nullptr) {
             mac_counters->enqueued = res.mac.enqueued;
             mac_counters->dispatched = res.mac.dispatched;
+            mac_counters->delivered = res.mac.delivered;
             mac_counters->dispatch_lost = res.mac.dispatch_lost;
             mac_counters->deferred = res.mac.deferred;
             mac_counters->expired = res.mac.expired;

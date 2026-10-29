@@ -1106,8 +1106,9 @@ typedef struct lsim_loop_mac {
 /* Compteurs de la file MAC (v2). Invariant : enqueued = dispatched + expired + pending_at_end. */
 typedef struct lsim_loop_mac_counters {
     uint64_t enqueued;
-    uint64_t dispatched;
-    uint64_t dispatch_lost;          /* parmi les dispatched, descentes non reçues */
+    uint64_t dispatched;             /* placées dans une descente planifiée */
+    uint64_t delivered;              /* parmi elles, descentes reçues par le dispositif */
+    uint64_t dispatch_lost;          /* parmi elles, descentes non reçues */
     uint64_t deferred;               /* reports : une commande non tenue dans les FOpts d'un uplink */
     uint64_t expired;
     uint64_t pending_at_end;

@@ -5,6 +5,8 @@ from collections import Counter
 import pytest
 from pydantic import ValidationError
 
+from lsim import mac_plan
+from lsim.closed_loop import OUTCOME_CODES
 from lsim.mac_loop import closed_loop_applies, loop_regions
 from lsim.regions import power_table
 from lsim.scenario import load_scenario
@@ -199,3 +201,89 @@ def test_queue_defers_and_expires_when_foptions_overflow():
     assert tr.totals.sent == sum(d.messages for d in sc.deploy()[0])
     # Les commandes de la file ne sont pas transmises deux fois : aucune descente n'est reçue ici.
     assert not any(e.kind == "mac_answer" and e.outcome == "delivered" for e in tr.events)
+
+
+# --- Validation de la file : charge réaliste, invariants, parité d'ABI, déterminisme ---
+
+LOAD = """schema_version: 1
+name: charge reelle
+seed: 5
+gateway: {x_m: 0, y_m: 0, antenna_gain_dbi: 2.15}
+groups:
+  - name: g
+    count: %(count)d
+    placement: {type: disk, radius_m: %(radius)d}
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 40
+    start_spread_s: 60
+    region: EU868
+mac:
+  link_adr: true
+  duty_cycle_exponent: 2
+  link_check_every: 1
+  device_status_every: 1
+  device_time_every: 1
+"""
+
+
+def _load(count: int, radius: int):
+    return load_scenario(LOAD % {"count": count, "radius": radius})
+
+
+@pytest.mark.parametrize("count,radius,offset", [(8, 9000, 10.0), (20, 12000, 10.0)])
+def test_queue_invariants_under_realistic_load(count, radius, offset):
+    """Charge réelle : commandes au-delà de 15 octets, descentes perdues, uplinks porteurs perdus,
+    expirations. Les invariants de la file et de la comptabilité d'octets tiennent."""
+    sc = _load(count, radius)
+    tr = build_trace(sc, ProtocolOptions(device_rx_offset_db=offset))
+    q = tr.mac_queue
+    assert q.enqueued == q.dispatched + q.expired + q.pending_at_end
+    assert q.dispatched == q.delivered + q.dispatch_lost
+    assert q.deferred >= q.expired
+    assert q.dispatch_lost > 0 and q.delivered > 0 and q.expired > 0
+    # Uplinks porteurs perdus présents : la file ne reçoit que les uplinks reçus.
+    assert any(r.outcome != OUTCOME_CODES["received"] for r in tr.records)
+    # Octets : la réservation DevStatusAns se répartit entre émise et non utilisée ; chaque réponse
+    # confirmée est une DevStatusAns émise.
+    b = tr.mac_bytes
+    assert b.sent_ds_bytes + b.unused_reserved_ds_bytes == b.reserved_ds_bytes
+    assert b.confirmed_ds_answers * mac_plan.DEVICE_STATUS_ANS_BYTES <= b.sent_ds_bytes
+    assert tr.totals.sent == sum(d.messages for d in sc.deploy()[0])
+
+
+def test_queue_counters_are_deterministic():
+    sc = _load(8, 9000)
+    a = build_trace(sc, ProtocolOptions(device_rx_offset_db=10.0))
+    b = build_trace(sc, ProtocolOptions(device_rx_offset_db=10.0))
+    assert a.mac_queue == b.mac_queue
+    assert a.mac_bytes == b.mac_bytes
+    assert a.records == b.records
+    assert a.events == b.events
+
+
+def test_abi_v1_and_v2_agree_without_mac_commands(monkeypatch):
+    """Sans commande MAC, l'ABI v1 (historique) et v2 donnent les mêmes uplinks, descentes et
+    événements. La v2 ne fournit ni file ni octets MAC à zéro commande."""
+    import lsim.closed_loop as cl
+    from lsim.trace_events import build_trace_closed_loop
+
+    # Bloc `mac:` présent mais sans commande : la boucle fermée tourne, la calendrier est vide.
+    plain = _scenario("mac:\n  link_adr: false\n")
+    v2 = build_trace_closed_loop(plain, ProtocolOptions())
+    original = cl.simulate_closed_loop
+
+    def v1(*args, **kwargs):
+        kwargs.pop("mac", None)
+        return original(*args, abi=1, **kwargs)
+
+    monkeypatch.setattr(cl, "simulate_closed_loop", v1)
+    legacy = build_trace_closed_loop(plain, ProtocolOptions())
+    assert legacy.records == v2.records
+    assert legacy.per_device == v2.per_device
+    assert legacy.totals == v2.totals
+    assert legacy.events == v2.events
+    assert v2.mac_queue is not None and v2.mac_queue.enqueued == 0
+    assert legacy.mac_queue is None

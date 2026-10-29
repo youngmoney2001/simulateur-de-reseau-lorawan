@@ -281,12 +281,35 @@ struct LoopOptions {
     std::uint8_t mac_max_deferrals = kLoopMacMaxDeferrals;
 };
 
-// Compteurs de la file MAC. Invariant : enqueued = dispatched + expired + pending_at_end.
-// `dispatched` : commandes placées dans une descente (livrée ou non) ; `dispatch_lost` : parmi
-// elles, celles dont la descente n'a pas été reçue (pas de nouvel essai pour ces réponses).
+// États d'une commande ponctuelle de la file. Transitions :
+//   Queued (mise en file à un uplink reçu) -> Dispatched (placée dans la descente planifiée)
+//   Dispatched -> Delivered (la descente est reçue par le dispositif) | Lost (non reçue : pas de
+//   créneau passerelle dans RX1, émission du dispositif pendant RX1, ou RSSI insuffisant)
+//   Queued -> Expired (après `mac_max_deferrals` + 1 reports) ; Queued à la fin : pending_at_end.
+// Une commande n'est placée dans une descente qu'une fois : aucune retransmission.
+enum class LoopMacState : std::uint8_t { Queued = 0, Dispatched = 1, Delivered = 2, Lost = 3, Expired = 4 };
+
+struct LoopMacItem {
+    std::uint32_t device = 0;
+    std::uint8_t cmd = 0;            // kLoopCmdLinkCheck, kLoopCmdDeviceTime ou kLoopCmdDevStatus
+    std::uint32_t uplink = 0;        // uplink dont la réception a créé la commande (indice dans uplinks)
+    std::uint8_t deferrals = 0;      // reports subis
+    LoopMacState state = LoopMacState::Queued;
+    std::int64_t downlink = -1;      // descente qui la porte (indice dans downlinks), -1 si aucune
+};
+
+// Compteurs de la file MAC. Invariants (vérifiés par les tests) :
+//   enqueued = dispatched + expired + pending_at_end ;
+//   dispatched = delivered + dispatch_lost ;
+//   deferred = somme des reports de toutes les commandes (dispatched, expirées, en attente).
+// `dispatched` : commandes placées dans une descente PLANIFIÉE (pas forcément émise ni reçue) ;
+// `delivered` : parmi elles, celles dont la descente est reçue par le dispositif ;
+// `dispatch_lost` : parmi elles, celles dont la descente n'est pas reçue. Une commande perdue
+// n'est pas reportée : la réponse ou la requête ponctuelle n'est pas retransmise.
 struct LoopMacQueueStats {
     std::uint64_t enqueued = 0;
     std::uint64_t dispatched = 0;
+    std::uint64_t delivered = 0;
     std::uint64_t dispatch_lost = 0;
     std::uint64_t deferred = 0;      // reports (une commande reportée à chaque uplink où elle ne tient pas)
     std::uint64_t expired = 0;
@@ -334,6 +357,7 @@ struct LoopResult {
     std::vector<LoopDownlink> downlinks;
     std::vector<Interval> gateway_busy;       // émissions passerelle planifiées (ordre croissant)
     LoopMacQueueStats mac;                    // file MAC (commandes ponctuelles)
+    std::vector<LoopMacItem> mac_items;       // journal de la file : une entrée par commande mise en file
 };
 
 // `radios` : un paramètre radio par dispositif (le SF RX1 suit le SF montant courant).

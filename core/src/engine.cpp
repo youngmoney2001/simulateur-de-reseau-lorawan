@@ -1328,6 +1328,7 @@ struct LoopQueued {
     std::uint8_t cmd = 0;        // kLoopCmdLinkCheck, kLoopCmdDeviceTime ou kLoopCmdDevStatus
     std::uint8_t bytes = 0;      // taille en FOpts
     std::uint8_t deferrals = 0;  // reports subis
+    std::uint32_t id = 0;        // indice dans LoopResult::mac_items
 };
 
 struct LoopServer {
@@ -1534,6 +1535,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
 
     // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
     LoopMacQueueStats qs;
+    std::vector<std::vector<std::uint32_t>> dl_items;  // commandes de la file par descente
     const auto on_received = [&](std::size_t a) -> void {
         const Tx& ta = txs[a];
         const std::uint32_t d = ta.device;
@@ -1606,28 +1608,41 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         }
         // Commandes ponctuelles du calendrier pour cet uplink (rang 1-based), mises en file.
         const std::uint8_t mf = mac_flags[mac_off[d] + ta.rank - 1];
-        const auto enqueue = [&sv, &qs](std::uint8_t cmd, std::uint8_t bytes) {
-            sv.queue.push_back(LoopQueued{cmd, bytes, 0});
+        const auto enqueue = [&](std::uint8_t cmd, std::uint8_t bytes) {
+            const auto id = static_cast<std::uint32_t>(out.mac_items.size());
+            out.mac_items.push_back(LoopMacItem{d, cmd, static_cast<std::uint32_t>(a), 0,
+                                                LoopMacState::Queued, -1});
+            sv.queue.push_back(LoopQueued{cmd, bytes, 0, id});
             ++qs.enqueued;
         };
         if ((mf & kLoopMacLinkCheck) != 0) enqueue(kLoopCmdLinkCheck, 3);
         if ((mf & kLoopMacDeviceTime) != 0) enqueue(kLoopCmdDeviceTime, 6);
         if ((mf & kLoopMacDevStatus) != 0) enqueue(kLoopCmdDevStatus, 1);
-        // FIFO : une commande qui tient part dans cette descente ; sinon elle est reportée, et
-        // expire après `mac_max_deferrals` reports. Rien ne se tronque.
+        // Ordre de service : les commandes les plus reportées d'abord, puis ordre d'arrivée
+        // (tri stable). Une commande qui tient part dans cette descente ; sinon elle est reportée,
+        // et expire après `mac_max_deferrals` reports. Rien ne se tronque.
+        std::stable_sort(sv.queue.begin(), sv.queue.end(),
+                         [](const LoopQueued& x, const LoopQueued& y) { return x.deferrals > y.deferrals; });
         std::uint8_t carried = 0;
+        std::vector<std::uint32_t> carried_ids;
         for (auto it = sv.queue.begin(); it != sv.queue.end();) {
+            LoopMacItem& mi = out.mac_items[it->id];
             if (it->bytes <= budget) {
                 budget -= it->bytes;
                 cmds |= it->cmd;
                 ++carried;
+                carried_ids.push_back(it->id);
                 ++qs.dispatched;
+                mi.state = LoopMacState::Dispatched;
+                mi.downlink = static_cast<std::int64_t>(dls.size());  // la descente est ajoutée plus bas
                 it = sv.queue.erase(it);
             } else {
                 ++qs.deferred;
                 ++it->deferrals;
+                mi.deferrals = it->deferrals;
                 if (it->deferrals > options.mac_max_deferrals) {
                     ++qs.expired;
+                    mi.state = LoopMacState::Expired;
                     it = sv.queue.erase(it);
                 } else {
                     ++it;
@@ -1660,6 +1675,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         dl.kind = kind;
         dl.commands = cmds;
         dl.queued = carried;
+        dl_items.push_back(std::move(carried_ids));
         dl.t_open = t_open;
         dl.start_ns = scheduled ? start : -1;
         dl.air_ns = air;
@@ -1816,7 +1832,17 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
                 }
                 dl.delivered = ok;
-                if (!ok) qs.dispatch_lost += dl.queued;
+                {
+                    const std::vector<std::uint32_t>& ids = dl_items[ev.index];
+                    for (const std::uint32_t id : ids) {
+                        out.mac_items[id].state = ok ? LoopMacState::Delivered : LoopMacState::Lost;
+                    }
+                    if (ok) {
+                        qs.delivered += ids.size();
+                    } else {
+                        qs.dispatch_lost += ids.size();
+                    }
+                }
                 if (ok && (dl.commands & kLoopCmdDevStatus) != 0) {
                     dev[dl.device].ds_pending = true;  // DevStatusAns portée par l'uplink suivant
                 }

@@ -69,8 +69,9 @@ class _CLoopMac(ctypes.Structure):
 
 class _CMacCounters(ctypes.Structure):
     _fields_ = [("enqueued", ctypes.c_uint64), ("dispatched", ctypes.c_uint64),
-                ("dispatch_lost", ctypes.c_uint64), ("deferred", ctypes.c_uint64),
-                ("expired", ctypes.c_uint64), ("pending_at_end", ctypes.c_uint64)]
+                ("delivered", ctypes.c_uint64), ("dispatch_lost", ctypes.c_uint64),
+                ("deferred", ctypes.c_uint64), ("expired", ctypes.c_uint64),
+                ("pending_at_end", ctypes.c_uint64)]
 
 
 class _CLoopUplink(ctypes.Structure):
@@ -88,6 +89,19 @@ class _CLoopDownlink(ctypes.Structure):
                 ("device_missed", ctypes.c_uint8), ("delivered", ctypes.c_uint8),
                 ("req_dr", ctypes.c_uint8), ("req_power_index", ctypes.c_uint8)]
 
+
+# ABI v1 (sans calendrier MAC ni compteurs) : conservée, appelée seulement pour la vérification
+# de compatibilité (`abi=1`, scénarios sans commande MAC).
+LIB.lsim_simulate_closed_loop_v1.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v1.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CPlanDevice),
+    ctypes.POINTER(_CLoopRegion), ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation),
+    ctypes.POINTER(_CEnvironment), ctypes.POINTER(_CLoopOptions), ctypes.POINTER(_CDeviceStats),
+    ctypes.POINTER(_CSimStats), ctypes.POINTER(_CLoopUplink), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CLoopDownlink), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
 
 LIB.lsim_simulate_closed_loop_v2.restype = ctypes.c_int32
 LIB.lsim_simulate_closed_loop_v2.argtypes = [
@@ -178,12 +192,14 @@ class LoopDownlink:
 
 @dataclass(frozen=True)
 class MacQueueCounters:
-    """Compteurs de la file MAC (commandes ponctuelles). enqueued = dispatched + expired +
-    pending_at_end. `dispatch_lost` : parmi les dispatched, descentes non reçues (pas de nouvel essai).
-    `deferred` : reports, une par uplink reçu où la commande ne tient pas dans les FOpts."""
+    """Compteurs de la file MAC (commandes ponctuelles). Invariants : enqueued = dispatched +
+    expired + pending_at_end ; dispatched = delivered + dispatch_lost ; deferred = reports cumulés.
+    `dispatched` : placées dans une descente planifiée ; `delivered` : parmi elles, descentes reçues ;
+    `dispatch_lost` : parmi elles, descentes non reçues (pas de retransmission)."""
 
     enqueued: int
     dispatched: int
+    delivered: int
     dispatch_lost: int
     deferred: int
     expired: int
@@ -221,7 +237,7 @@ class LoopOutcome:
     uplinks: tuple[LoopUplink, ...]
     downlinks: tuple[LoopDownlink, ...]
     busy: tuple[tuple[int, int], ...]
-    mac_queue: MacQueueCounters
+    mac_queue: Optional[MacQueueCounters]  # None en ABI v1
 
 
 _OUTCOMES = {0: "lost_sensitivity", 1: "lost_collision", 2: "received", 3: "lost_gateway_busy"}
@@ -230,7 +246,7 @@ OUTCOME_CODES = {v: k for k, v in _OUTCOMES.items()}
 
 def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, radios: Sequence,
                          regions: Sequence[LoopRegion], options: LoopOptions,
-                         mac: Sequence[MacSlot] = ()) -> LoopOutcome:
+                         mac: Sequence[MacSlot] = (), abi: int = 2) -> LoopOutcome:
     """Boucle fermée S2 en une seule exécution native. Lève `StatusError` si le cœur refuse l'entrée.
 
     `devices`, `radios` et `regions` : un élément par dispositif, même ordre. `regions` n'est lu
@@ -306,11 +322,23 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
     n_dls = ctypes.c_size_t(0)
     n_busy = ctypes.c_size_t(0)
     c_mq = _CMacCounters()
-    status = LIB.lsim_simulate_closed_loop_v2(
-        c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
-        ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
-        c_mac if mac else None, len(mac), c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
-        c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy), ctypes.byref(c_mq))
+    if abi == 1:
+        if mac:
+            raise ValueError("ABI v1 : pas de calendrier MAC")
+        status = LIB.lsim_simulate_closed_loop_v1(
+            c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
+            ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
+            c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
+            c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy))
+    elif abi == 2:
+        status = LIB.lsim_simulate_closed_loop_v2(
+            c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
+            ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
+            c_mac if mac else None, len(mac), c_stats if n else None, ctypes.byref(c_tot),
+            c_ups, cap, ctypes.byref(n_ups), c_dls, cap, ctypes.byref(n_dls), c_busy, cap,
+            ctypes.byref(n_busy), ctypes.byref(c_mq))
+    else:
+        raise ValueError("ABI inconnue")
     del keep
     if status != 0:
         raise StatusError(status)
@@ -332,6 +360,7 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
                      bool(d.delivered), d.req_dr, d.req_power_index)
         for d in c_dls[:n_dls.value])
     busy = tuple((c_busy[k].start_ns, c_busy[k].end_ns) for k in range(n_busy.value))
-    mq = MacQueueCounters(c_mq.enqueued, c_mq.dispatched, c_mq.dispatch_lost, c_mq.deferred,
-                          c_mq.expired, c_mq.pending_at_end)
+    # ABI v1 : pas de compteurs de file (absence, et non zéro).
+    mq = (MacQueueCounters(c_mq.enqueued, c_mq.dispatched, c_mq.delivered, c_mq.dispatch_lost,
+                           c_mq.deferred, c_mq.expired, c_mq.pending_at_end) if abi == 2 else None)
     return LoopOutcome(per, tot, load, ups, dls, busy, mq)

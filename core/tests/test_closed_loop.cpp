@@ -401,9 +401,178 @@ void test_mac_queue_zero_deferrals_expires_at_once() {
     CHECK_EQ(res.mac.enqueued, res.mac.dispatched + res.mac.expired + res.mac.pending_at_end);
 }
 
+
+// Validation de la file : vérifie le cycle de vie de chaque commande (journal mac_items) et les
+// invariants des compteurs, sur une charge réaliste (plusieurs dispositifs, descentes perdues,
+// uplinks porteurs perdus, expirations).
+void check_mac_lifecycle(const LoopResult& res, std::uint32_t max_deferrals) {
+    const LoopMacQueueStats& q = res.mac;
+    // Invariants de comptage.
+    CHECK_EQ(q.enqueued, q.dispatched + q.expired + q.pending_at_end);
+    CHECK_EQ(q.dispatched, q.delivered + q.dispatch_lost);
+    CHECK_TRUE(q.deferred >= q.expired);
+    CHECK_EQ(static_cast<std::uint64_t>(res.mac_items.size()), q.enqueued);
+    std::uint64_t sum_def = 0;
+    std::uint64_t n_delivered = 0, n_lost = 0, n_expired = 0, n_queued = 0, n_dispatched = 0;
+    for (const LoopMacItem& it : res.mac_items) {
+        sum_def += it.deferrals;
+        // Une commande est portée par une descente de même type, et une seule.
+        switch (it.state) {
+            case LoopMacState::Queued:
+                ++n_queued;
+                CHECK_EQ(it.downlink, std::int64_t{-1});
+                CHECK_TRUE(it.deferrals <= max_deferrals);  // jamais au-delà de la borne
+                break;
+            case LoopMacState::Expired:
+                ++n_expired;
+                CHECK_EQ(it.downlink, std::int64_t{-1});
+                CHECK_EQ(static_cast<int>(it.deferrals), static_cast<int>(max_deferrals) + 1);
+                break;
+            case LoopMacState::Delivered:
+            case LoopMacState::Lost: {
+                ++n_dispatched;
+                if (it.state == LoopMacState::Delivered) ++n_delivered;
+                else ++n_lost;
+                CHECK_TRUE(it.downlink >= 0);
+                if (it.downlink < 0) break;
+                const LoopDownlink& dl = res.downlinks[static_cast<std::size_t>(it.downlink)];
+                CHECK_EQ(dl.delivered, it.state == LoopMacState::Delivered);
+                CHECK_TRUE((dl.commands & it.cmd) != 0);
+                CHECK_TRUE(it.deferrals <= max_deferrals);
+                break;
+            }
+            case LoopMacState::Dispatched:
+                CHECK_TRUE(false);  // état transitoire : aucun en fin de simulation
+                break;
+        }
+        // Une commande n'est créée que par un uplink reçu : un uplink perdu ne porte rien.
+        CHECK_TRUE(res.uplinks[it.uplink].outcome == TxOutcome::Received);
+    }
+    CHECK_EQ(sum_def, q.deferred);
+    CHECK_EQ(n_dispatched, q.dispatched);
+    CHECK_EQ(n_delivered, q.delivered);
+    CHECK_EQ(n_lost, q.dispatch_lost);
+    CHECK_EQ(n_expired, q.expired);
+    CHECK_EQ(n_queued, q.pending_at_end);
+}
+
+// Charge réaliste : 8 dispositifs, SF mixtes, uplinks toutes les 3 s, RX1 décalée (pertes de
+// descentes) et commandes au-delà de 15 octets ensemble (LinkADR, DutyCycle, LC, DT, DS).
+void run_mixed_load(double rx_offset_db, LoopResult& res) {
+    constexpr std::size_t kDevices = 8;
+    const std::uint32_t messages = 40;
+    std::vector<EndDeviceSpec> d;
+    lsim::plan::DeviceRadio rv[kDevices];
+    LoopRegion regions[kDevices];
+    for (std::size_t k = 0; k < kDevices; ++k) {
+        d.push_back(dev(1000.0 + 1500.0 * static_cast<double>(k), static_cast<std::uint8_t>(7 + k % 3),
+                        static_cast<SimTime>(k) * 700'000'000, 3 * kS, messages));
+        rv[k] = radio();
+        regions[k] = region();
+    }
+    std::vector<LoopMacSlot> slots;
+    for (std::uint32_t k = 0; k < kDevices; ++k) {
+        for (std::uint32_t r = 1; r <= messages; ++r) {
+            slots.push_back(LoopMacSlot{k, r, 0, static_cast<std::uint8_t>(
+                                                     kLoopMacLinkCheck | kLoopMacDeviceTime | kLoopMacDevStatus)});
+        }
+    }
+    DeviceStats st[kDevices];
+    SimulationStats tot;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 2;
+    opt.protocol.device_rx_offset_db = rx_offset_db;
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d.data(), kDevices, rv, regions, GatewaySpec{},
+                                                   PropagationSpec{}, nullptr, opt, st, tot, res)),
+             0);
+}
+
+void test_mac_queue_lifecycle_under_mixed_load() {
+    LoopResult res;
+    run_mixed_load(5.0, res);
+    CHECK_TRUE(res.mac.enqueued > 0);
+    CHECK_TRUE(res.mac.delivered > 0);      // descentes reçues
+    CHECK_TRUE(res.mac.dispatch_lost > 0);  // descentes non reçues
+    CHECK_TRUE(res.mac.expired > 0);        // expirations
+    CHECK_TRUE(res.mac.pending_at_end > 0); // commandes encore en file à la fin
+    CHECK_TRUE(res.mac.deferred > res.mac.expired);
+    std::size_t lost_carriers = 0;
+    for (const LoopUplink& u : res.uplinks) lost_carriers += u.outcome != TxOutcome::Received;
+    CHECK_TRUE(lost_carriers > 0);          // uplinks porteurs perdus : aucune commande créée
+    check_mac_lifecycle(res, 3);
+}
+
+// Charge soutenue sans aucune descente reçue, un seul dispositif : LinkADR et DutyCycle restent
+// en attente, LinkCheck, DeviceTime et DevStatus arrivent à chaque uplink. Équité : chaque type
+// est dispatché au moins une fois, et aucune commande n'attend au-delà de `mac_max_deferrals`.
+void test_mac_queue_fairness_bounded_wait() {
+    const std::uint32_t messages = 80;
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, messages)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    std::vector<LoopMacSlot> slots;
+    for (std::uint32_t r = 1; r <= messages; ++r) {
+        slots.push_back(LoopMacSlot{0, r, 0, static_cast<std::uint8_t>(kLoopMacLinkCheck |
+                                                                       kLoopMacDeviceTime |
+                                                                       kLoopMacDevStatus)});
+    }
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 2;
+    opt.protocol.device_rx_offset_db = 200.0;
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    check_mac_lifecycle(res, opt.mac_max_deferrals);
+    // Chaque type est dispatché au moins une fois (aucun n'est exclu par les autres).
+    bool lc = false, dt = false, ds = false;
+    for (const LoopMacItem& it : res.mac_items) {
+        if (it.downlink < 0) continue;
+        lc = lc || it.cmd == kLoopCmdLinkCheck;
+        dt = dt || it.cmd == kLoopCmdDeviceTime;
+        ds = ds || it.cmd == kLoopCmdDevStatus;
+    }
+    CHECK_TRUE(lc && dt && ds);
+    // Les commandes à état sont servies en priorité : DutyCycleReq et LinkADRReq ne sont pas
+    // dans la file et ne sont jamais expirées.
+    CHECK_TRUE(res.mac.expired > 0);
+    CHECK_TRUE(res.mac.dispatched > 0);
+}
+
+// Pas de retransmission : une commande perdue n'est jamais replacée dans une autre descente.
+// Chaque commande dispatchée porte un seul indice de descente, et les descentes perdues
+// ne portent que des commandes en état Lost.
+void test_mac_no_retransmission_of_lost_answers() {
+    LoopResult res;
+    run_mixed_load(15.0, res);
+    check_mac_lifecycle(res, 3);
+    CHECK_TRUE(res.mac.dispatch_lost > 0);
+    std::uint64_t in_lost_downlinks = 0;
+    for (const LoopMacItem& it : res.mac_items) {
+        if (it.downlink >= 0 && !res.downlinks[static_cast<std::size_t>(it.downlink)].delivered) {
+            CHECK_TRUE(it.state == LoopMacState::Lost);
+            ++in_lost_downlinks;
+        }
+    }
+    CHECK_EQ(in_lost_downlinks, res.mac.dispatch_lost);
+}
+
 }  // namespace
 
 void run_closed_loop_tests() {
+    test_mac_queue_lifecycle_under_mixed_load();
+    test_mac_queue_fairness_bounded_wait();
+    test_mac_no_retransmission_of_lost_answers();
     test_no_command_parity_with_causal();
     test_plan_max_eirp_caps_index_zero();
     test_regulatory_limit_applies_without_command();
