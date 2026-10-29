@@ -61,7 +61,8 @@ def test_catalogue_lists_exercises_without_criteria_or_solution(api):
     for ex in study_exercises.EXERCISES:
         assert all(c.label not in text for c in ex.criteria)
         item = next(i for i in body["items"] if i["id"] == ex.id)
-        assert item["max_points"] == ex.max_points and item["hints_available"] == 0
+        assert item["max_points"] == ex.max_points
+        assert item["hints_available"] == len(ex.hints) == 2
 
 
 def test_catalogue_needs_a_token(api):
@@ -135,7 +136,8 @@ def test_mesh_criteria_read_the_relay_configuration(api):
     sid = out["session_id"]
     _cli(api, sid, "relais-1", "en", "conf t", "int mesh 0", "mode relay", "max-hops 3", "end")
     _, body = _submit(api, "relais-deux-sauts", sid)
-    assert _points(body) == {"mode": True, "sauts": False} and body["score"] == 10
+    assert _points(body) == {"mode": True, "sauts": False, "lien": False}
+    assert body["score"] == 10 and body["max_score"] == 30
     _cli(api, sid, "relais-1", "conf t", "int mesh 0", "max-hops 2", "end")
     _, body = _submit(api, "relais-deux-sauts", sid)
     assert body["score"] == 20
@@ -190,3 +192,144 @@ def test_submit_carries_only_the_session_id(api):
     for extra in ({"score": 20}, {"criteria": []}, {"hints_used": 0}):
         status, _ = _submit(api, "eu868-passerelle", out["session_id"], extra=extra)
         assert status == 422
+
+
+# --- Liens et latence observés dans un vrai run mesh ------------------------------------------
+
+from test_api_server import _mesh_scenario  # noqa: E402
+
+
+@pytest.fixture()
+def mesh_run(api):
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": _mesh_scenario(count=200)})
+    assert status == 202
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    return created["run_id"]
+
+
+def _link(api, sid, run_id, links):
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/simulation",
+                            {"run_id": run_id, "links": links})
+    assert status == 200, body
+    return body
+
+
+def test_relay_exercise_reaches_full_score_with_an_observed_mesh_link(api, mesh_run):
+    _, out = _session(api, exercise="relais-deux-sauts")
+    sid = out["session_id"]
+    _cli(api, sid, "relais-1", "en", "conf t", "int mesh 0", "mode relay", "max-hops 2", "end")
+    _link(api, sid, mesh_run, [{"node_id": "frontiere", "gateway": "frontiere"},
+                               {"node_id": "relais-1", "gateway": "relais"}])
+    _, body = _submit(api, "relais-deux-sauts", sid)
+    assert _points(body)["lien"] is True and body["score"] == 30
+
+
+def test_mesh_link_is_refused_when_the_relay_is_not_linked(api, mesh_run):
+    _, out = _session(api, exercise="relais-deux-sauts")
+    sid = out["session_id"]
+    _cli(api, sid, "relais-1", "en", "conf t", "int mesh 0", "mode relay", "max-hops 2", "end")
+    _link(api, sid, mesh_run, [{"node_id": "frontiere", "gateway": "frontiere"}])
+    _, body = _submit(api, "relais-deux-sauts", sid)
+    assert _points(body)["lien"] is False
+
+
+def test_latency_exercise_reads_the_border_p95_of_the_real_run(api, mesh_run):
+    _, out = _session(api, exercise="latence-frontiere")
+    sid = out["session_id"]
+    _, body = _submit(api, "latence-frontiere", sid)
+    assert body["score"] == 0                      # rien n'est lié : aucune mesure
+    _link(api, sid, mesh_run, [{"node_id": "frontiere", "gateway": "frontiere"}])
+    _, body = _submit(api, "latence-frontiere", sid)
+    assert _points(body) == {"latence": True} and body["score"] == 20
+
+
+# --- Indices et pénalités --------------------------------------------------------------------
+
+def test_hints_are_revealed_one_at_a_time_and_cost_points(api):
+    _, out = _session(api, exercise="eu868-passerelle")
+    sid = out["session_id"]
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                            {"exercise_id": "eu868-passerelle"})
+    assert status == 200 and body["number"] == 1 and body["penalty"] == 2
+    assert body["text"].startswith("Le plan régional")
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "region EU868", "end")
+    _, res = _submit(api, "eu868-passerelle", sid)
+    assert res["hints_used"] == 1 and res["score"] == 10 - 2
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                            {"exercise_id": "eu868-passerelle"})
+    assert status == 200 and body["number"] == 2
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                            {"exercise_id": "eu868-passerelle"})
+    assert status == 409                           # plus d'indice
+    _cli(api, sid, "frontiere", "conf t", "lorawan server 10.0.0.5 up-port 1700 down-port 1701",
+         "end")
+    _, res = _submit(api, "eu868-passerelle", sid)
+    assert res["hints_used"] == 2 and res["score"] == 20 - 4
+
+
+def test_penalty_never_takes_the_score_below_zero(api):
+    _, out = _session(api, exercise="eu868-passerelle")
+    sid = out["session_id"]
+    for _ in range(2):
+        api.call("POST", f"/api/v1/sessions/{sid}/hints", {"exercise_id": "eu868-passerelle"})
+    _, res = _submit(api, "eu868-passerelle", sid)
+    assert res["score"] == 0 and res["hints_used"] == 2
+
+
+def test_hint_refusals(api):
+    _, out = _session(api, exercise="eu868-passerelle")
+    sid = out["session_id"]
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                            {"exercise_id": "us915-sous-bande"})
+    assert status == 422 and body["field"] == "exercise_id"
+    status, _ = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                         {"exercise_id": "inconnu-000"})
+    assert status == 404
+    status, _ = api.call("POST", f"/api/v1/sessions/{sid}/hints",
+                         {"exercise_id": "eu868-passerelle"}, token=api.bob)
+    assert status == 404
+
+
+# --- Journal des tentatives ------------------------------------------------------------------
+
+def test_attempts_log_results_only_and_never_commands(api):
+    _, out = _session(api, exercise="eu868-passerelle")
+    sid = out["session_id"]
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "region EU868", "end")
+    _submit(api, "eu868-passerelle", sid)
+    _cli(api, sid, "frontiere", "conf t", "lorawan server 10.0.0.5 up-port 1700 down-port 1701", "end")
+    _submit(api, "eu868-passerelle", sid)
+    status, body = api.call("GET", f"/api/v1/sessions/{sid}/attempts")
+    assert status == 200
+    items = body["items"]
+    assert [i["number"] for i in items] == [1, 2]
+    assert items[0]["passed"] == ["region"] and items[1]["passed"] == ["region", "serveur"]
+    assert items[1]["score"] == 20 and items[1]["max_score"] == 20
+    for item in items:
+        assert set(item) == {"number", "at", "exercise_id", "score", "max_score",
+                             "hints_used", "passed"}
+    text = json.dumps(body, ensure_ascii=False)
+    assert "region EU868" not in text and "10.0.0.5" not in text and "conf t" not in text
+
+
+def test_attempts_are_private_to_their_session_and_owner(api):
+    _, out = _session(api, exercise="eu868-passerelle")
+    sid = out["session_id"]
+    _submit(api, "eu868-passerelle", sid)
+    status, _ = api.call("GET", f"/api/v1/sessions/{sid}/attempts", token=api.bob)
+    assert status == 404
+    _, out2 = _session(api, exercise="eu868-passerelle")
+    _, body = api.call("GET", f"/api/v1/sessions/{out2['session_id']}/attempts")
+    assert body["items"] == []
+
+
+def test_run_summary_publishes_latency_and_observed_mesh_links(api, mesh_run):
+    from lsim.api_contract import RunSummary
+    _, summary = api.call("GET", f"/api/v1/runs/{mesh_run}/summary")
+    RunSummary.model_validate(summary)
+    gw = {g["name"]: g for g in summary["gateways"]}
+    assert gw["frontiere"]["latency_samples"] > 0
+    assert gw["frontiere"]["latency_p95_ms"] >= gw["frontiere"]["latency_p50_ms"] > 0
+    assert gw["frontiere"]["mesh_inbound"] == [
+        {"from_gateway": "relais", "delivered": gw["frontiere"]["mesh_inbound"][0]["delivered"]}]
+    assert "mesh_inbound" not in gw["ip"] and gw["relais"]["latency_samples"] == 0

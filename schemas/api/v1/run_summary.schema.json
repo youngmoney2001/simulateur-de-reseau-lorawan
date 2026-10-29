@@ -48,6 +48,38 @@
           "title": "Busy Ns",
           "type": "integer"
         },
+        "latency_p50_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency P50 Ms"
+        },
+        "latency_p95_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency P95 Ms"
+        },
+        "latency_samples": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Latency Samples",
+          "type": "integer"
+        },
         "lost_collision": {
           "minimum": 0,
           "title": "Lost Collision",
@@ -75,6 +107,22 @@
           ],
           "default": null,
           "title": "Mesh Busy Ns"
+        },
+        "mesh_inbound": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/MeshInboundOut"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Inbound"
         },
         "mesh_lost_collision": {
           "anyOf": [
@@ -161,6 +209,28 @@
         "observation_ns"
       ],
       "title": "GatewayReportOut",
+      "type": "object"
+    },
+    "MeshInboundOut": {
+      "additionalProperties": false,
+      "description": "Lien mesh observé : sauts livrés depuis `from_gateway` vers cette passerelle.",
+      "properties": {
+        "delivered": {
+          "minimum": 0,
+          "title": "Delivered",
+          "type": "integer"
+        },
+        "from_gateway": {
+          "maxLength": 64,
+          "title": "From Gateway",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_gateway",
+        "delivered"
+      ],
+      "title": "MeshInboundOut",
       "type": "object"
     },
     "Totals": {

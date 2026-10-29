@@ -3,6 +3,20 @@
 ## 0.1.0 (non publiée)
 
 
+### Panneau d'étude : critères de connectivité et de latence, indices, journal (servis)
+- **Critères** : `_mesh_inbound(node, from_node)` (lien mesh observé entre deux passerelles liées, via `mesh_inbound` du résumé) et `_latency_p95_at_most(node, 300 ms)` (latence p95 remise au LNS).
+- **Indices** : `POST /api/v1/sessions/{id}/hints`. Deux par exercice ; chaque indice révélé retire `HINT_PENALTY` = 2 points, plancher 0. Plus d'indice : 409 ; exercice différent : 422 ; exercice ou session d'un autre compte : 404.
+- **Journal** : `GET /api/v1/sessions/{id}/attempts` (50 au plus par session ; numéro, instant, exercice, score, indices, réussite). Aucune commande CLI, aucun secret.
+- **Publication** : les schémas du panneau sont dans `schemas/api/v1` (généré par `api_contract`). Le dossier `schemas/api/study-draft/` est supprimé et `study_contract` n'écrit plus de fichiers.
+- Tests : `test_study_exercises.py` (23), `test_study_contract.py` (6), `test_study_api.py`, `test_study_cli.py`.
+
+### Métriques par passerelle dans le résumé de run (`trace_metrics.py`)
+- Par passerelle : `latency_samples`, `latency_p50_ms`, `latency_p95_ms` (uplinks de donnée remis au LNS, de l'émission à la remise), et `mesh_inbound` (sauts mesh livrés par émetteur). Champs optionnels dans `GatewayReportOut`.
+- Tests : `test_trace_metrics.py` (9), plus un test de publication dans `test_study_exercises.py`.
+
+### Correction de la trace des uplinks relayés (`trace_events.py`)
+- **Changement de comportement** : pour un uplink livré par le mesh, le saut NS part de la passerelle frontière à `fin + border_delay` et non plus de la fin de réception du premier relais. L'attribution va à l'émetteur réel (`_direct_deliverer`). Un relais ne livre jamais en direct. Les latences issues de la trace changent donc pour ces uplinks.
+
 ### Panneau d'étude : exercices notés et liaison explicite (servis)
 - `GET /api/v1/exercises` (catalogue sans critères ni solution) et `POST /api/v1/exercises/{id}/submit` (le client n'envoie que `session_id`; le serveur note l'état qu'il détient).
 - Trois exercices : EU868, relais à deux sauts, US915 sous-bande 2 avec réception. Aucun indice servi (`hints_available: 0`).

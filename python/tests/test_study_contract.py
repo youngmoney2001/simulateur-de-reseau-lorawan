@@ -1,22 +1,27 @@
-"""Contrat du panneau d'étude (brouillon) : schémas reproductibles et règles de sécurité des types."""
+"""Contrat du panneau d'étude : schémas publiés dans `v1` et règles de sécurité des types."""
 
+import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from lsim import api_contract
 from lsim import study_contract as sc
 
-SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schemas" / "api" / "study-draft"
+V1_DIR = Path(__file__).resolve().parents[2] / "schemas" / "api" / "v1"
 
 
-def test_committed_study_schemas_match_the_code(tmp_path):
-    written = sc.write_schemas(tmp_path)
-    assert len(written) == len(sc._MODELS)
-    for path in written:
-        committed = SCHEMA_DIR / path.name
-        assert committed.exists(), f"schéma absent du dépôt : {path.name}"
-        assert committed.read_text(encoding="utf-8") == path.read_text(encoding="utf-8"), path.name
+def test_study_schemas_are_published_in_v1_and_match_the_code():
+    generated = sc.schemas()
+    assert generated, "aucun schéma du panneau"
+    for name, schema in generated.items():
+        path = V1_DIR / f"{name}.schema.json"
+        assert path.exists(), f"schéma du panneau absent de v1 : {path.name}"
+        assert json.loads(path.read_text(encoding="utf-8")) == json.loads(json.dumps(schema)), (
+            path.name)
+    published = api_contract.schemas()
+    assert set(generated) <= set(published)
 
 
 def test_submit_request_cannot_carry_a_result():

@@ -150,63 +150,64 @@ Exemples (indicatifs) :
 3. Corriger un plan régional incohérent entre capteur et passerelle.
 4. Choisir une sous-bande US915 pour éviter une collision avec un autre groupe.
 
-## 7. Contrat d'API à ajouter (brouillon de formes, routes non implémentées)
+## 7. Contrat d'API du panneau d'étude (servi sous `/api/v1`)
 
-Formes des données : `python/lsim/study_contract.py`, schémas dans `schemas/api/study-draft/`
-(séparés de `v1` tant qu'aucune route n'est servie). Décisions prises dans ce brouillon :
-
-- `POST /api/v1/sessions` (ajouté) : crée une session, optionnellement liée à un exercice.
-- Une commande CLI cible un équipement (`node_id`) : une session contient plusieurs équipements.
-- Le dépôt d'exercice n'envoie que `session_id` ; le serveur note l'état qu'il détient.
-- Score : somme des critères réussis, moins les indices (borné à 0).
-- Clés : seule la valeur `"******"` est exprimable en sortie.
-
-**Servi (`python/lsim/study_session.py`, `study_exercises.py`, routes dans `api_server`)** :
-création de session, topologie, CLI, liaison à une simulation terminée, catalogue et soumission
-d'exercices. Décisions prises à l'implémentation :
-
-- Sessions **en mémoire** : perdues au redémarrage. Expiration après 4 h **d'inactivité** (chaque
-  accès prolonge la vie). 8 sessions par compte, 256 au total ; ces deux limites sont appliquées
-  sous le même verrou que la création (test de concurrence). 429 `limit_exceeded` au-delà.
-- Identifiant d'équipement : motif `^[a-z][a-z0-9-]{0,31}$` (chaîne stable choisie par
-  l'étudiant ou l'exercice). Il sert aussi de nom d'hôte CLI, d'où l'absence de `_`.
-- `nodes` : liste vide autorisée (topologie vide). Doublons refusés (422), pas dédupliqués en
-  silence. Avec un `exercise_id`, la topologie vient de l'exercice et `nodes` doit être vide.
-- Les équipements appartiennent à leur session : aucun n'est partagé, donc pas de contrôle de droits
-  par équipement à faire.
-- **Liaison explicite** : `POST /sessions/{id}/simulation` reçoit `links: [{node_id, gateway}]`.
-  Le run ne porte que des noms de passerelle (uniques), sans identifiant stable : ajouter un
-  identifiant au scénario modifierait le schéma `v1`, ce qui n'est pas fait. Un nom ne lie donc
-  rien par lui-même. Chaque association est validée avant toute modification ; une erreur ne lie
-  rien partiellement. Équipements et passerelles ne sont associés qu'une fois.
-- `show lorawan counters` et `show mesh counters` lisent les compteurs de la passerelle associée
-  (`GatewayReportOut`). Les `show` non alimentés par le moteur ne sont pas dans la grammaire.
-- Ligne de commande : une seule ligne (422 sinon). `exit` au niveau utilisateur redémarre la
-  console en mode utilisateur (message dans la sortie).
-
-**Exercices** (`study_exercises.py`, catalogue côté serveur) : trois exercices (EU868, relais à deux
-sauts, US915 sous-bande 2 avec réception). Le catalogue public ne donne que l'énoncé, le total de
-points et `hints_available: 0`. Barème : critères de configuration (région, sous-bande, serveur,
-mode mesh, sauts) et un critère de simulation (au moins une trame reçue, sur un run lié). La note
-est la somme des critères réussis ; aucun indice n'est servi, donc aucune pénalité. Le client
-n'envoie que `session_id` (un champ `score` ou `criteria` est refusé en 422). Une session ne se note
-que pour son propre exercice.
-
-Restent ouverts : critères de connectivité et de latence (absents du moteur exposé) ; route de
-demande d'indice et barème d'un indice ; journalisation des tentatives (sans secrets) ; mise
-en cache ou persistance des sessions.
+Formes des données : `python/lsim/study_contract.py`. Schémas publiés dans `schemas/api/v1`
+(`study_*.schema.json`), avec le reste du contrat : le dossier `study-draft` n'existe plus, le panneau
+est public.
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
-| POST | `/api/v1/sessions` | Crée une session avec ses équipements (`nodes`) — servi |
-| POST | `/api/v1/sessions/{id}/simulation` | Lie une simulation terminée (`run_id`) — servi |
-| POST | `/api/v1/sessions/{id}/cli` | Exécute une commande dans un mode ; réponse : sortie et nouveau mode — servi |
-| GET | `/api/v1/sessions/{id}/topology` | État de la topologie et des configurations (secrets masqués) — servi |
-| GET | `/api/v1/exercises` | Catalogue des exercices (sans solution ni critères détaillés) |
-| POST | `/api/v1/exercises/{id}/submit` | Dépose la configuration de l'étudiant ; le serveur note et renvoie le détail des critères |
+| POST | `/api/v1/sessions` | Crée une session : `nodes` (topologie) ou `exercise_id` (topologie de l'exercice) |
+| GET | `/api/v1/sessions/{id}/topology` | Équipements et états (hostname, région, configuré ; jamais de clé) |
+| POST | `/api/v1/sessions/{id}/cli` | Exécute une ligne CLI sur un équipement ; réponse : sortie, mode, erreur |
+| POST | `/api/v1/sessions/{id}/simulation` | Lie un run terminé : `run_id` et `links: [{node_id, gateway}]` |
+| POST | `/api/v1/sessions/{id}/hints` | Révèle le prochain indice de l'exercice (`exercise_id`) |
+| GET | `/api/v1/sessions/{id}/attempts` | Journal des soumissions de la session (résultats seulement) |
+| GET | `/api/v1/exercises` | Catalogue : énoncé, total de points, nombre d'indices |
+| POST | `/api/v1/exercises/{id}/submit` | Note la session (`session_id` seul) ; réponse : score et critères |
 
-Chaque session est liée à un utilisateur et protégée par le jeton prévu (authentification à
-implémenter, voir `docs/API_CONTRACT.md`). Les tentatives sont journalisées sans secrets.
+Décisions (implémentées) :
+
+- **Sessions en mémoire** : perdues au redémarrage. Expiration après 4 h **d'inactivité** (chaque accès
+  prolonge la vie). 8 sessions par compte, 256 au total ; ces limites sont appliquées sous le verrou de
+  la création (test de concurrence). 429 `limit_exceeded` au-delà.
+- **Propriété** : toute session, et tout équipement qu'elle contient, appartient à un seul compte. Un
+  autre compte reçoit 404 (« inconnue »), jamais 403.
+- **Identifiant d'équipement** : motif `^[a-z][a-z0-9-]{0,31}$`, chaîne stable (aussi nom d'hôte CLI,
+  d'où l'absence de `_`). `nodes` vide autorisé ; doublons refusés (422), pas dédupliqués en silence.
+  Avec un `exercise_id`, la topologie vient de l'exercice et `nodes` doit être vide.
+- **Liaison explicite** : le run ne porte que des noms de passerelle (uniques), sans identifiant stable ;
+  ajouter un identifiant au scénario modifierait le schéma `v1`, ce qui n'est pas fait. Un nom ne lie
+  donc rien par lui-même. Chaque association est validée avant toute modification : une erreur ne lie
+  rien partiellement. Un équipement et une passerelle ne sont associés qu'une fois.
+- **CLI** : une seule ligne (422 sinon). `exit` au niveau utilisateur redémarre la console en mode
+  utilisateur (message dans la sortie). `show lorawan counters` et `show mesh counters` lisent la
+  passerelle associée ; les `show` non alimentés par le moteur ne sont pas dans la grammaire.
+- **Exercices** : trois exercices (EU868 ; relais à deux sauts avec lien mesh observé ; US915 sous-bande
+  2 avec réception ; latence p95 de la frontière). Le public ne voit que l'énoncé, le total de points et
+  le nombre d'indices. Critères : configuration (région, sous-bande, serveur, mode mesh, sauts) et
+  simulation liée (trames reçues, lien mesh observé, latence p95). Le client n'envoie que `session_id` ;
+  un champ `score` ou `criteria` est refusé (422). Une session ne se note que pour son exercice.
+- **Indices** : deux par exercice, révélés un à un. Chaque indice révélé retire `HINT_PENALTY` = 2 points
+  à la note, plancher 0. Plus d'indice : 409.
+- **Journal** : chaque soumission ajoute une tentative (50 au plus par session) : numéro, instant,
+  exercice, score, nombre d'indices, critères réussis. Aucune commande CLI, aucun secret.
+
+Indicateurs de latence et de lien mesh (`lsim/trace_metrics.py`, publiés dans le résumé du run par
+passerelle) :
+
+- `latency_p50_ms`, `latency_p95_ms`, `latency_samples` : uplinks de donnée remis au LNS par la
+  passerelle, de l'émission à la remise (saut mesh inclus). Rang le plus proche ; absents sans mesure.
+- `mesh_inbound` : sauts mesh livrés depuis chaque émetteur (les copies supprimées ne comptent pas).
+
+Restent ouverts :
+
+- journal persistant (au-delà de la session) ;
+- seuils des exercices (le seuil de latence de 300 ms est un paramètre à valider par l'auteur) ;
+- **construction d'un scénario depuis la topologie de session** : aujourd'hui le run se décrit à part et
+  se lie par association ;
+- interface graphique (`web/`, phases 5 à 7 de la §8).
 
 ## 8. Phasage proposé
 

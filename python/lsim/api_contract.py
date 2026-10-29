@@ -152,6 +152,13 @@ class DeviceRowOut(_Strict):
     average_current_ua: Optional[float] = None
 
 
+class MeshInboundOut(_Strict):
+    """Lien mesh observé : sauts livrés depuis `from_gateway` vers cette passerelle."""
+
+    from_gateway: str = Field(max_length=64)
+    delivered: int = Field(ge=0)
+
+
 class GatewayReportOut(_Strict):
     """Passerelle d'un run multi-passerelles : trames reçues et charge de réception."""
 
@@ -172,6 +179,12 @@ class GatewayReportOut(_Strict):
     mesh_lost_collision: Optional[int] = Field(default=None, ge=0)
     mesh_lost_half_duplex: Optional[int] = Field(default=None, ge=0)
     mesh_suppressed: Optional[int] = Field(default=None, ge=0)
+    # Indicateurs de trace (absents si aucune mesure). Latence : uplinks de donnée remis au LNS
+    # par cette passerelle, de l'émission à la remise au LNS (saut mesh inclus).
+    latency_samples: int = Field(0, ge=0)
+    latency_p50_ms: Optional[float] = Field(default=None, ge=0)
+    latency_p95_ms: Optional[float] = Field(default=None, ge=0)
+    mesh_inbound: Optional[list[MeshInboundOut]] = Field(default=None, max_length=64)
 
 
 class RunSummary(_Strict):
@@ -268,6 +281,8 @@ def list_regions() -> RegionList:
 
 # --- Schémas publiés --------------------------------------------------------------------------
 
+from lsim.study_contract import MODELS as _STUDY_MODELS  # noqa: E402
+
 _MODELS = {
     "scenario_input": ApiScenario,
     "validate_request": ValidateRequest,
@@ -281,6 +296,7 @@ _MODELS = {
     "problem": Problem,
     "region_list": RegionList,
     "terrain_list": TerrainList,
+    **_STUDY_MODELS,
 }
 
 

@@ -644,6 +644,18 @@ def _mesh_loads(models, mesh) -> tuple[Optional[MeshLoad], ...]:
     return tuple(MeshLoad(*counts[g.name]) if g.mesh else None for g in models)
 
 
+def _direct_deliverer(decoded_mask: int, models, border: str) -> Optional[int]:
+    """Index de la passerelle qui remet directement une trame décodée (None si aucune)."""
+    decoders = [g for g in range(len(models)) if (decoded_mask >> g) & 1]
+    for g in decoders:
+        if models[g].name == border:
+            return g
+    for g in decoders:
+        if not models[g].mesh:
+            return g
+    return None
+
+
 def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
     """Trace des passerelles multiples (déduplication serveur, downlinks par la meilleure passerelle).
 
@@ -728,8 +740,17 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                          _finite_or_none(r.best_rssi_dbm), _MULTI_HOP_OUTCOME[r.outcome])]
         outcome = _MULTI_UPLINK_OUTCOME[r.outcome]
         if mesh is not None and r.outcome == 2:
-            if i_rec in delivered:
-                hops.append(HopEvent(to_id, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
+            if i_rec in delivered and i_rec in mesh.via_mesh_frames:
+                # Remise par la frontière, après le délai de la copie utile (saut mesh inclus).
+                arrival = r.end_ns + mesh.border_delay_ns.get(i_rec, 0)
+                hops.append(HopEvent(f"gw:{scenario.model.mesh.border}", "ns", arrival,
+                                     radio.freq_hz, radio.dr, None, "delivered"))
+            elif i_rec in delivered:
+                # Remise directe : la passerelle qui remet est la frontière si elle a décodé,
+                # sinon une passerelle à backhaul IP (le « meilleur » RSSI peut être un relais).
+                deliverer = _direct_deliverer(r.decoded_mask, models, scenario.model.mesh.border)
+                src = f"gw:{names[deliverer]}" if deliverer is not None else to_id
+                hops.append(HopEvent(src, "ns", r.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
             else:
                 outcome = "lost_mesh"
         elif r.outcome == 2 and best >= 0:

@@ -55,7 +55,10 @@ from lsim.api_contract import (
 )
 from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
-from lsim.study_contract import CliRequest, SessionCreate, SimulationBind, SubmitRequest
+from lsim.trace_metrics import gateway_metrics, report_fields
+from lsim.study_contract import (
+    CliRequest, HintRequest, SessionCreate, SimulationBind, SubmitRequest,
+)
 from lsim.study_session import StudyError, StudyService
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
@@ -619,6 +622,7 @@ class RunService:
             totals, per_device, events = mt.totals, mt.per_device, mt.events
             mesh_lost_total, mesh_lost_by_device = mt.lost_mesh, mt.lost_mesh_by_device
             loads = mt.mesh_loads if mt.mesh_loads is not None else [None] * len(mt.gateway_names)
+            metrics = gateway_metrics(events, mt.gateway_names)
             gateway_load, gateways = None, [
                 GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
                                  lost_collision=g.lost_collision,
@@ -626,7 +630,8 @@ class RunService:
                                  audible_frames=g.audible_frames, busy_ns=g.busy_ns,
                                  peak_concurrent=g.peak_concurrent,
                                  observation_ns=g.observation_ns,
-                                 **_mesh_report_fields(ml)).model_dump(exclude_none=True)
+                                 **_mesh_report_fields(ml),
+                                 **report_fields(metrics[name])).model_dump(exclude_none=True)
                 for name, g, ml in zip(mt.gateway_names, mt.per_gateway, loads)]
         else:
             tr = build_trace(scenario, job.options)
@@ -853,9 +858,15 @@ class _Handler(BaseHTTPRequestHandler):
             result = self._study(lambda: study.submit(owner, exercise_id, req.session_id))
             return 200, result.model_dump()
 
-        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation)", rest)
+        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation|hints|attempts)", rest)
         if m is not None:
             sid, action = m.group(1), m.group(2)
+            if method == "GET" and action == "attempts":
+                return 200, self._study(lambda: study.attempts(owner, sid)).model_dump()
+            if method == "POST" and action == "hints":
+                req = self._parse_body(HintRequest)
+                return 200, self._study(
+                    lambda: study.hint(owner, sid, req.exercise_id)).model_dump()
             if method == "GET" and action == "topology":
                 return 200, self._study(lambda: study.topology(owner, sid)).model_dump()
             if method == "POST" and action == "cli":

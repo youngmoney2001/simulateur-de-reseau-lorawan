@@ -148,7 +148,7 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   `mesh_lost_collision`, `mesh_lost_half_duplex`, `mesh_suppressed`, comptés sur le relais émetteur
   (uplink et descente additionnés). Absents hors mesh. Montant et descente partagent une passe mesh
   (temps d'antenne, suppression, attente). Repli RX2 : une descente que la passerelle ne peut servir
-  en RX1 tente RX2 (fin + 2 s, SF `rx2_sf` du plan) ; la fréquence RX2 n'est pas modélisée. Limite :
+  en RX1 tente RX2 (ouverte à fin + 2 s, soit 1 s après RX1, fenêtre de 1 s ; SF `rx2_sf`) ; la fréquence RX2 n'est pas modélisée. Limite :
   une trame mesh est bornée à 255 o : charge descendante > 227 o ou charge montante relayée > 228 o refusée à la création (422). Les compteurs `gateways` (reçues, collisions d'accès) sont
   ceux du décodage à l'accès.
 - **Résumé** : `gateway` (mono) **ou** `gateways` (multi), exactement un des deux. Historique du contrat :
@@ -217,10 +217,21 @@ DNONLY), la fréquence et le débit RX2 et les charges N par DR. Ce sont les val
 régionaux (`python/lsim/*.py`), avec leurs limites documentées dans `docs/USAGE.md`. Le panneau de
 configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 
+## 7 bis. Panneau d'étude et métriques par passerelle
+
+Routes servies sous `/api/v1` (détail, règles et limites : `docs/STUDY_PANEL_SPEC.md` §7) :
+`POST /sessions`, `GET /sessions/{id}/topology`, `POST /sessions/{id}/cli`,
+`POST /sessions/{id}/simulation` (liaison explicite `links`), `POST /sessions/{id}/hints`,
+`GET /sessions/{id}/attempts`, `GET /exercises`, `POST /exercises/{id}/submit`.
+Les schémas sont dans `schemas/api/v1` (`study_*.schema.json`). Les sessions sont en mémoire
+(4 h d'inactivité, 8 par compte, 256 au total) ; un autre compte reçoit 404.
+
+Le résumé d'un run (`run_summary`) donne, par passerelle, `latency_samples`, `latency_p50_ms`,
+`latency_p95_ms` (absents sans mesure) et `mesh_inbound` (sauts mesh livrés par émetteur). Ces champs
+sont optionnels : un run sans mesh ne les porte pas.
+
 ## 8. Ce qui n'est pas dans le contrat v1
 
-- Mode exercices et vérification automatique (demande de l'utilisateur, à définir après la v1 de
-  l'animation) ;
 - rendu 3D en gros plan, tuiles cartographiques sous contrat (point C, hors protocole) ;
 - multi-utilisateurs et comptes ;
 - modification d'un run en cours.

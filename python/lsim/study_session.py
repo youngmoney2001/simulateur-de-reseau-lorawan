@@ -16,13 +16,15 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from lsim import study_cli, study_exercises
 from lsim.study_contract import (
-    CliError, CliRequest, CliResponse, CriterionResult, NodeState, SessionCreate, SessionOut,
-    SessionTopology, SimulationBind, SimulationBound, SubmitResult,
+    AttemptList, AttemptOut, CliError, CliRequest, CliResponse, CriterionResult, HintOut,
+    NodeState, SessionCreate, SessionOut, SessionTopology, SimulationBind, SimulationBound,
+    SubmitResult,
 )
 
 SESSION_TTL_S = 4 * 3600
@@ -30,6 +32,7 @@ MAX_SESSIONS_PER_OWNER = 8
 MAX_SESSIONS_TOTAL = 256
 MAX_OUTPUT = 8000
 CLI_NODE_KINDS = ("relay", "border")
+MAX_ATTEMPTS = 50                  # journal borné par session (les plus anciennes sont retirées)
 
 
 class StudyError(Exception):
@@ -47,11 +50,16 @@ class _Study:
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
     run_id: Optional[str] = None
+    hints_revealed: dict = field(default_factory=dict)   # exercice -> nombre d'indices révélés
+    attempts: deque = field(default_factory=lambda: deque(maxlen=MAX_ATTEMPTS))
+    attempt_count: int = 0
 
 
 class StudyService:
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
-        self._clock = clock
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic,
+                 wall_clock: Callable[[], float] = time.time) -> None:
+        self._clock = clock                 # durée de vie des sessions (monotone)
+        self._wall = wall_clock             # horodatage du journal
         self._lock = threading.Lock()
         self._sessions: dict[str, _Study] = {}
 
@@ -183,23 +191,61 @@ class StudyService:
 
     # Exercices ----------------------------------------------------------------------------------
 
-    def submit(self, owner: str, exercise_id: str, sid: str) -> SubmitResult:
-        """Note la session pour l'exercice. Seul l'état détenu par le serveur est évalué."""
+    @staticmethod
+    def _exercise_for_session(st: _Study, exercise_id: str, field_name: str):
         exercise = study_exercises.get(exercise_id)
         if exercise is None:
             raise StudyError(404, "not_found", "exercice inconnu")
+        if st.exercise_id != exercise_id:
+            raise StudyError(422, "validation_error",
+                             "session non liée à cet exercice", field_name)
+        return exercise
+
+    def hint(self, owner: str, sid: str, exercise_id: str) -> HintOut:
+        """Révèle l'indice suivant de l'exercice lié à la session. Chaque indice coûte des points."""
         with self._lock:
             st = self._get_locked(owner, sid)
-            if st.exercise_id != exercise_id:
-                raise StudyError(422, "validation_error",
-                                 "session non liée à cet exercice", "session_id")
+            exercise = self._exercise_for_session(st, exercise_id, "exercise_id")
+            used = st.hints_revealed.get(exercise_id, 0)
+            if used >= len(exercise.hints):
+                raise StudyError(409, "conflict", "plus d'indice disponible pour cet exercice")
+            st.hints_revealed[exercise_id] = used + 1
+        return HintOut(exercise_id=exercise_id, number=used + 1,
+                       text=exercise.hints[used], penalty=study_exercises.HINT_PENALTY)
+
+    def submit(self, owner: str, exercise_id: str, sid: str) -> SubmitResult:
+        """Note la session pour l'exercice. Seul l'état détenu par le serveur est évalué.
+
+        Chaque indice révélé retire `HINT_PENALTY` points (plancher 0). La tentative est
+        journalisée avec ses résultats seulement : ni commande CLI, ni secret.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            exercise = self._exercise_for_session(st, exercise_id, "session_id")
             state = study_exercises.State(
                 configs={nid: cli.config.copy() for nid, cli in st.cli.items()},
                 reports={nid: dict(r) for nid, r in st.reports.items()})
+            hints_used = st.hints_revealed.get(exercise_id, 0)
         graded = study_exercises.grade(exercise, state)
         criteria = [CriterionResult(id=c.id, label=c.label, passed=ok,
                                     points=c.points if ok else 0, max_points=c.points)
                     for c, ok in graded]
-        score = sum(c.points for c in criteria)       # indices : aucun, donc pas de pénalité
-        return SubmitResult(exercise_id=exercise_id, score=max(0, score),
-                            max_score=exercise.max_points, hints_used=0, criteria=criteria)
+        score = max(0, sum(c.points for c in criteria)
+                    - hints_used * study_exercises.HINT_PENALTY)
+        result = SubmitResult(exercise_id=exercise_id, score=score,
+                              max_score=exercise.max_points, hints_used=hints_used,
+                              criteria=criteria)
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            st.attempt_count += 1
+            st.attempts.append(AttemptOut(
+                number=st.attempt_count, at=int(self._wall()), exercise_id=exercise_id,
+                score=score, max_score=exercise.max_points, hints_used=hints_used,
+                passed=[c.id for c in criteria if c.passed]))
+        return result
+
+    def attempts(self, owner: str, sid: str) -> AttemptList:
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            items = list(st.attempts)
+        return AttemptList(items=items)

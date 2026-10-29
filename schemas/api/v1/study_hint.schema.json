@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "exercise_id": {
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "title": "Exercise Id",
+      "type": "string"
+    },
+    "number": {
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Number",
+      "type": "integer"
+    },
+    "penalty": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Penalty",
+      "type": "integer"
+    },
+    "text": {
+      "maxLength": 400,
+      "minLength": 1,
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "exercise_id",
+    "number",
+    "text",
+    "penalty"
+  ],
+  "title": "HintOut",
+  "type": "object"
+}

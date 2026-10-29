@@ -1,20 +1,17 @@
-"""Contrat du panneau d'étude (brouillon, `docs/STUDY_PANEL_SPEC.md` §7) : formes des données.
+"""Contrat du panneau d'étude (`docs/STUDY_PANEL_SPEC.md` §6-7) : formes des données.
 
-Servi pour les sessions, la CLI, la topologie et la liaison à une simulation (`api_server`) ; les
-exercices ne sont pas encore servis. Les schémas sont dans `schemas/api/study-draft/`, séparés de
-`schemas/api/v1` tant que la version n'est pas figée. Règles de sécurité portées
-par les types :
+Servi sous `/api/v1` (sessions, CLI, topologie, liaison, exercices, indices, journal) ; les schémas
+sont publiés dans `schemas/api/v1` par `python -m lsim.api_contract schemas/api/v1`. Règles de
+sécurité portées par les types :
 
 - une clé ou un secret ne s'exprime que par la valeur `"******"` (aucune clé réelle en sortie) ;
 - la soumission d'un exercice ne porte aucun résultat : le serveur note l'état qu'il détient ;
-- le catalogue d'exercices ne contient ni critères détaillés ni solution ;
+- le catalogue d'exercices ne contient ni critères détaillés, ni solution, ni texte d'indice ;
 - toutes les tailles sont bornées (commandes, sorties, nombre d'équipements, critères).
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -140,6 +137,35 @@ class CriterionResult(_Strict):
     max_points: int = Field(ge=0, le=1000)
 
 
+class HintRequest(_Strict):
+    """Demande du prochain indice de l'exercice lié à la session (un indice par demande)."""
+
+    exercise_id: str = Field(pattern=EXERCISE_PATTERN)
+
+
+class HintOut(_Strict):
+    exercise_id: str = Field(pattern=EXERCISE_PATTERN)
+    number: int = Field(ge=1, le=10)      # rang de l'indice, à partir de 1
+    text: str = Field(min_length=1, max_length=400)
+    penalty: int = Field(ge=0, le=100)    # points retirés à la note par cet indice
+
+
+class AttemptOut(_Strict):
+    """Une soumission journalisée : résultats uniquement. Aucune commande CLI, aucun secret."""
+
+    number: int = Field(ge=1)              # rang de la tentative dans la session
+    at: int = Field(ge=0)                  # instant de la soumission, secondes depuis l'époque
+    exercise_id: str = Field(pattern=EXERCISE_PATTERN)
+    score: int = Field(ge=0, le=1000)
+    max_score: int = Field(ge=1, le=1000)
+    hints_used: int = Field(ge=0, le=10)
+    passed: list[str] = Field(max_length=50)   # identifiants des critères réussis
+
+
+class AttemptList(_Strict):
+    items: list[AttemptOut] = Field(max_length=50)
+
+
 class SubmitResult(_Strict):
     exercise_id: str = Field(pattern=EXERCISE_PATTERN)
     score: int = Field(ge=0, le=1000)     # somme des critères réussis, moins les indices
@@ -148,7 +174,7 @@ class SubmitResult(_Strict):
     criteria: list[CriterionResult] = Field(max_length=50)
 
 
-_MODELS: dict[str, type[BaseModel]] = {
+MODELS: dict[str, type[BaseModel]] = {
     "study_session_create": SessionCreate,
     "study_session": SessionOut,
     "study_cli_request": CliRequest,
@@ -159,27 +185,11 @@ _MODELS: dict[str, type[BaseModel]] = {
     "study_submit_result": SubmitResult,
     "study_simulation_bind": SimulationBind,
     "study_simulation_bound": SimulationBound,
+    "study_hint_request": HintRequest,
+    "study_hint": HintOut,
+    "study_attempt_list": AttemptList,
 }
 
 
 def schemas() -> dict[str, dict]:
-    return {name: model.model_json_schema() for name, model in _MODELS.items()}
-
-
-def write_schemas(directory: Path) -> list[Path]:
-    directory.mkdir(parents=True, exist_ok=True)
-    written = []
-    for name, schema in sorted(schemas().items()):
-        path = directory / f"{name}.schema.json"
-        path.write_text(json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
-        written.append(path)
-    return written
-
-
-if __name__ == "__main__":  # python -m lsim.study_contract <dossier>
-    import sys
-
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("schemas/api/study-draft")
-    for p in write_schemas(target):
-        print(p)
+    return {name: model.model_json_schema() for name, model in MODELS.items()}

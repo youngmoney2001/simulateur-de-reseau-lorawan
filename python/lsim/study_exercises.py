@@ -4,10 +4,14 @@ Les critères et la solution restent côté serveur : le catalogue public ne don
 total de points et le nombre d'indices. La note est calculée sur l'état que la session détient
 (configurations CLI et compteurs du run lié) ; le client n'envoie jamais de résultat.
 
-Vérifications disponibles : paramètres de configuration (région, sous-bande, serveur, mode mesh,
-nombre de sauts) et une trame reçue par une passerelle dans le run lié. Une vérification de
-connectivité ou de latence n'est pas encore disponible : elle ne figure donc pas au catalogue.
-Les indices ne sont pas servis : `hints_available` vaut 0 (§7, point ouvert).
+Vérifications disponibles :
+- configuration (région, sous-bande, serveur, mode mesh, nombre de sauts) ;
+- simulation liée : trames reçues, lien mesh observé entre deux passerelles, latence p95 remise
+  au LNS par une passerelle (indicateurs publiés dans le résumé du run, `trace_metrics`).
+
+Indices : chaque exercice en a deux, révélés un à un à la demande. Chaque indice révélé retire
+`HINT_PENALTY` points de la note (plancher 0). Le texte d'un indice ne quitte le serveur qu'à la
+demande.
 """
 
 from __future__ import annotations
@@ -17,6 +21,9 @@ from typing import Callable, Optional
 
 from lsim.study_cli import GatewayConfig
 from lsim.study_contract import ExerciseList, ExerciseSummary, Node
+
+
+HINT_PENALTY = 2   # points retirés par indice révélé (§6, barème)
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class Exercise:
     statement: str
     start_nodes: tuple
     criteria: tuple
+    hints: tuple = ()
 
     @property
     def max_points(self) -> int:
@@ -84,6 +92,29 @@ def _received_at_least(node: str, count: int) -> Callable[[State], bool]:
     return check
 
 
+def _mesh_inbound(node: str, from_node: str) -> Callable[[State], bool]:
+    """La passerelle liée à `node` a reçu par le mesh au moins une trame de la passerelle liée à
+    `from_node`. Les liens du run sont nommés par passerelle : on passe par la liaison."""
+
+    def check(st: State) -> bool:
+        report, source = st.reports.get(node), st.reports.get(from_node)
+        if report is None or source is None:
+            return False
+        return any(link["from_gateway"] == source["name"] and link["delivered"] >= 1
+                   for link in report.get("mesh_inbound", []))
+
+    return check
+
+
+def _latency_p95_at_most(node: str, limit_ms: float) -> Callable[[State], bool]:
+    def check(st: State) -> bool:
+        report = st.reports.get(node)
+        p95 = None if report is None else report.get("latency_p95_ms")
+        return p95 is not None and p95 <= limit_ms
+
+    return check
+
+
 def _node(id_: str, kind: str, name: str, x: float, y: float) -> Node:
     return Node(id=id_, kind=kind, name=name, x_m=x, y_m=y)
 
@@ -101,18 +132,26 @@ EXERCISES: tuple[Exercise, ...] = (
             Criterion("serveur", "Serveur réseau 10.0.0.5, ports 1700 et 1701", 10,
                       _lorawan_server("frontiere", "10.0.0.5", 1700, 1701)),
         ),
+        hints=("Le plan régional se règle sur l'interface lora : cherchez la commande « region ».",
+               "La commande « lorawan server » prend l'adresse, puis « up-port » et « down-port »."),
     ),
     Exercise(
         id="relais-deux-sauts",
         title="Ajouter un relais à deux sauts au plus",
-        statement=("Configurez le relais relais-1 en mode relay, avec au plus deux sauts."),
+        statement=("Configurez le relais relais-1 en mode relay, avec au plus deux sauts. Liez une "
+                   "simulation : la frontière doit recevoir par le mesh des trames de relais-1."),
         start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
                      _node("relais-1", "relay", "Relais 1", 1200, 0)),
         criteria=(
             Criterion("mode", "Relais en mode relay", 10, _mesh_mode("relais-1", "relay")),
             Criterion("sauts", "Au plus 2 sauts sur le relais", 10,
                       _max_hops_at_most("relais-1", 2)),
+            Criterion("lien", "Lien mesh observé : relais-1 vers la frontière", 10,
+                      _mesh_inbound("frontiere", "relais-1")),
         ),
+        hints=("Le mode relais et le nombre de sauts se règlent sur l'interface mesh (« int mesh 0 »).",
+               "Le lien n'apparaît dans le run que si relais-1 relaie vers la frontière : vérifiez "
+               "que les deux équipements sont liés à leurs passerelles."),
     ),
     Exercise(
         id="us915-sous-bande",
@@ -127,6 +166,23 @@ EXERCISES: tuple[Exercise, ...] = (
             Criterion("reception", "Au moins une trame reçue par la frontière", 10,
                       _received_at_least("frontiere", 1)),
         ),
+        hints=("La sous-bande ne s'applique qu'aux plans US915 et AU915.",
+               "La réception se lit dans le run : liez la frontière à la passerelle du même nom."),
+    ),
+    Exercise(
+        id="latence-frontiere",
+        title="Mesurer la latence de remise au LNS",
+        statement=("Liez une simulation d'un réseau avec relais : la latence p95 des uplinks remis "
+                   "au LNS par la frontière doit être au plus 300 ms."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     _node("relais-1", "relay", "Relais 1", 1200, 0)),
+        criteria=(
+            Criterion("latence", "Latence p95 de la frontière <= 300 ms", 20,
+                      _latency_p95_at_most("frontiere", 300.0)),
+        ),
+        hints=("La latence est publiée par passerelle dans le résumé du run.",
+               "Une trame relayée ajoute le délai du mesh : elle pèse sur le p95 seulement si elles "
+               "sont assez nombreuses."),
     ),
 )
 
@@ -141,7 +197,7 @@ def get(exercise_id: str) -> Optional[Exercise]:
 def listing() -> ExerciseList:
     return ExerciseList(items=[
         ExerciseSummary(id=e.id, title=e.title, statement=e.statement,
-                        max_points=e.max_points, hints_available=0)
+                        max_points=e.max_points, hints_available=len(e.hints))
         for e in EXERCISES
     ])
 
