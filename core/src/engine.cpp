@@ -144,8 +144,9 @@ bool EventQueue::pop(Event& out) {
 SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                            const GatewaySpec& gateway, const PropagationSpec& prop,
                            DeviceStats* per_device, SimulationStats& totals,
-                           const env::Environment* environment) {
+                           const env::Environment* environment, std::vector<TxRecord>* trace) {
     totals = SimulationStats{};
+    if (trace != nullptr) trace->clear();
     if (device_count > kMaxEndDevices) {
         return SimStatus::TooManyDevices;
     }
@@ -334,42 +335,48 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     }
 
     // Évaluation : sensibilité, puis collision avec capture.
+    if (trace != nullptr) trace->reserve(txs.size());
     for (std::size_t a = 0; a < txs.size(); ++a) {
         const Tx& ta = txs[a];
         DeviceStats& st = per_device[ta.device];
+        TxOutcome outcome = TxOutcome::LostSensitivity;
 
         if (ta.rssi_dbm < sensitivity[ta.device]) {
             ++st.lost_sensitivity;
             ++totals.lost_sensitivity;
-            continue;
-        }
-
-        // Interférence maximale parmi les émissions simultanées de même SF.
-        bool interfered = false;
-        double max_interf = -1e300;
-        auto consider = [&](const Tx& tb) {
-            if (tb.sf == ta.sf && overlap(ta, tb)) {
-                interfered = true;
-                max_interf = std::max(max_interf, tb.rssi_dbm);
-            }
-        };
-        for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
-            consider(txs[b]);
-        }
-        for (std::size_t b = a; b-- > 0;) {
-            if (txs[b].start + max_airtime <= ta.start) {
-                break;  // plus aucune émission antérieure ne peut chevaucher
-            }
-            consider(txs[b]);
-        }
-
-        const bool captured = !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
-        if (captured) {
-            ++st.received;
-            ++totals.received;
         } else {
-            ++st.lost_collision;
-            ++totals.lost_collision;
+            // Interférence maximale parmi les émissions simultanées de même SF.
+            bool interfered = false;
+            double max_interf = -1e300;
+            auto consider = [&](const Tx& tb) {
+                if (tb.sf == ta.sf && overlap(ta, tb)) {
+                    interfered = true;
+                    max_interf = std::max(max_interf, tb.rssi_dbm);
+                }
+            };
+            for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
+                consider(txs[b]);
+            }
+            for (std::size_t b = a; b-- > 0;) {
+                if (txs[b].start + max_airtime <= ta.start) {
+                    break;  // plus aucune émission antérieure ne peut chevaucher
+                }
+                consider(txs[b]);
+            }
+
+            const bool captured = !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
+            if (captured) {
+                ++st.received;
+                ++totals.received;
+                outcome = TxOutcome::Received;
+            } else {
+                ++st.lost_collision;
+                ++totals.lost_collision;
+                outcome = TxOutcome::LostCollision;
+            }
+        }
+        if (trace != nullptr) {
+            trace->push_back(TxRecord{ta.device, ta.start, ta.end, ta.sf, ta.rssi_dbm, outcome});
         }
     }
 

@@ -28,7 +28,7 @@ cd python && python -m lsim.api_contract ../schemas/api/v1
 |---|---|---|---|
 | GET | `/api/v1/regions` | Plans régionaux (lecture seule) : canaux, débits, RX2, charges N | `RegionList` |
 | POST | `/api/v1/scenarios/validate` | Valide un scénario sans lancer de calcul | `ValidateResponse` (`valid`, `scenario_sha256`, `problems`) |
-| POST | `/api/v1/runs` | Crée un run (file d'attente) | 202 + `RunStatus` (`state: queued`) |
+| POST | `/api/v1/runs` | Crée un run (file d'attente), options `protocol` incluses | 202 + `RunStatus` (`state: queued`) |
 | GET | `/api/v1/runs/{run_id}` | État, avancement, erreur éventuelle | `RunStatus` |
 | GET | `/api/v1/runs/{run_id}/summary` | Totaux, PDR, charge passerelle (run terminé) | `RunSummary`, 409 tant que non terminé |
 | GET | `/api/v1/runs/{run_id}/devices?cursor=` | Lignes par dispositif, paginées | `DevicePage` |
@@ -61,17 +61,27 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   `rssi_dbm`, `outcome`). Le journal affiche ces sauts dans l'ordre.
 - Ordre : `seq` strictement croissant, `t_ns` non décroissant.
 
-**Point bloquant (à traiter avant l'étape 3)** : aujourd'hui, le moteur natif ne renvoie que des
-compteurs par dispositif (`Counters`, `GatewayLoad`) ; il n'exporte pas une trace par trame. Les
-join-accept, ACK et downlinks sont traités par la couche Python (`lsim.uplink`, `lsim.join_server`)
-sur des paquets un par un. Il faut donc :
-1. exporter une trace par transmission depuis le cœur (file d'événements, déjà interne) ;
-2. produire les événements de jointure, ACK et downlink à partir de la couche protocole, avec le
-   même `t_ns` que le moteur.
+**Trace par transmission (implémentée côté Python, pas encore exposée par HTTP).**
 
-Tant que ces deux points ne sont pas faits, `events` renvoie 409 `run_failed` ou une liste vide
-signalée dans `RunStatus`, et l'animation n'est pas disponible. Les totaux (`summary`, `devices`)
-sont déjà disponibles.
+- Le cœur natif renvoie une entrée par émission (`lsim_simulate_uplinks_trace`) : début, fin,
+  SF, RSSI, issue (`lost_sensitivity`, `lost_collision`, `received`). Les compteurs sont ceux du
+  même appel, donc trace et totaux concordent. Borne : 200 000 émissions par run (statut 309).
+- `lsim.trace_events` dérive les événements à partir de cette trace, avec les temporisations du
+  protocole et le même `t_ns` que le moteur :
+  - join-request : issue de l'émission ; join-accept à fin + 5 s (`JOIN_ACCEPT_DELAY1`) ;
+  - uplink accepté (passerelle) : fenêtre RX1 à fin + 1 s (`RECEIVE_DELAY1`) ;
+  - downlink : un seul par uplink accepté (comme `lsim.uplink`) ; `downlink` si une charge est en
+    file (`downlink_every`), sinon `ack` si l'uplink est confirmé ;
+  - demi-duplex : si le dispositif émet encore pendant sa fenêtre RX1, l'événement est
+    `rx_window_missed` (issue `not_listened`), sans retransmission.
+- Limites assumées : la réception des downlinks par le dispositif n'est pas simulée (saut
+  `sent`) ; le backhaul passerelle → serveur est sans perte (`delivered`) ; le duplex de la
+  passerelle n'est pas modélisé. Une seule passerelle.
+- Options applicatives dans `RunCreate.protocol` : `join`, `confirmed_uplinks`, `downlink_every`
+  (par défaut : aucune, donc seuls uplinks et pertes).
+
+Tant que la route `events` n'existe pas, l'animation n'est pas disponible côté navigateur ; les
+totaux (`summary`, `devices`) le sont.
 
 ## 5. Erreurs
 
@@ -90,15 +100,25 @@ Corps `Problem` :
 | `not_found` | 404 | `run_id` inconnu ou supprimé |
 | `conflict` | 409 | résumé demandé avant la fin, annulation d'un run terminé |
 | `run_failed` | 500 (dans `RunStatus.problem`) | échec pendant le calcul |
+| `unauthorized` | 401 | jeton absent, invalide ou révoqué |
 
 ## 6. Sécurité (exigences de mise en œuvre)
 
 - Validation côté serveur de toute entrée, y compris les champs déjà validés côté navigateur.
 - YAML : `yaml.safe_load` uniquement (déjà le cas dans `lsim.scenario`).
 - Pas de chemin de fichier venant du client ; le catalogue de reliefs est un répertoire serveur fixe.
-- Limite de débit et file bornée par utilisateur (à définir avec l'authentification).
-- Authentification : **non définie**. Tant qu'elle ne l'est pas, l'API n'écoute que sur une
-  machine de confiance. Un déploiement multi-utilisateurs exige un choix (jeton, session, SSO).
+- Limite de débit et file bornée par jeton.
+- Authentification par **jeton d'accès** (choix utilisateur) :
+  - en-tête `Authorization: Bearer <jeton>` sur toutes les routes sauf la santé ;
+  - jeton aléatoire d'au moins 256 bits (`secrets.token_urlsafe(32)`), émis hors de l'API
+    (commande d'administration), affiché une seule fois ;
+  - en base, seul le SHA-256 du jeton est stocké ; jamais le jeton en clair, ni dans les journaux ;
+  - comparaison en temps constant (`hmac.compare_digest`) ;
+  - jeton absent ou invalide : 401 `unauthorized`, sans indiquer lequel ;
+  - révocation immédiate, et date d'expiration optionnelle ;
+  - un jeton ne donne accès qu'aux runs qu'il a créés (contrôle par propriétaire) ;
+  - HTTPS obligatoire hors machine de confiance (le jeton circule dans l'en-tête).
+  Tant que le serveur n'existe pas, l'API n'écoute que sur une machine de confiance.
 - En-têtes : CORS désactivé (même origine), `Content-Security-Policy` stricte côté `web/`.
 
 ## 7. Régions et configuration
@@ -118,8 +138,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 
 ## 9. Prochaines étapes
 
-1. Trancher l'authentification et le catalogue de reliefs (décision utilisateur).
-2. Exporter la trace par transmission du cœur natif et la couche protocole (voir §4).
+1. Catalogue de reliefs (décision utilisateur ; données MNT à vérifier avant intégration).
+2. Exposer `events` à partir de `lsim.trace_events` (pagination par `seq`).
 3. Implémenter le serveur (`python/lsim/api_server.py`) selon ce contrat, avec tests de
    contrat (chaque réponse validée par son schéma).
 4. Construire `web/` contre le contrat, sans appel à une route qui n'existe pas dans `docs/`.

@@ -10,7 +10,8 @@
         "terrain_not_allowed",
         "run_failed",
         "conflict",
-        "unsupported_region"
+        "unsupported_region",
+        "unauthorized"
       ],
       "title": "Code",
       "type": "string"

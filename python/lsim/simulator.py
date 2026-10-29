@@ -19,6 +19,7 @@ from lsim._native import (
     _CDownlinkPlan,
     _CDownlinkStats,
     _CSimStats,
+    _CTxRecord,
     _CEndDevice,
     _CEnvironment,
     _CGateway,
@@ -29,6 +30,7 @@ from lsim.environment import Environment
 from lsim.lora import StatusError
 
 MAX_END_DEVICES = 10_000
+MAX_TRACE_RECORDS = 200_000  # borne de trace (cœur : statut 309)
 MAX_DOWNLINKS_PER_DEVICE = 100_000
 MAX_RX_WINDOW_NS = 10_000_000_000
 MAX_PERIODICITY = 7
@@ -258,18 +260,34 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
     return tuple(out)
 
 
-def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
-                     propagation: Propagation,
-                     environment: Optional[Environment] = None) -> SimulationResult:
-    """Simule les liaisons montantes vers une passerelle et retourne les compteurs.
+@dataclass(frozen=True)
+class TxRecord:
+    """Une transmission de la trace native. outcome : 0 sous sensibilité, 1 collision, 2 reçue."""
 
-    `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
-    plat et sans obstacle (résultat identique au modèle log-distance seul).
-    """
-    if len(devices) > MAX_END_DEVICES:
-        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
-    n = len(devices)
-    c_devs = (_CEndDevice * n)()
+    device_index: int
+    start_ns: int
+    end_ns: int
+    spreading_factor: int
+    rssi_dbm: float
+    outcome: int
+
+    OUTCOME_LOST_SENSITIVITY = 0
+    OUTCOME_LOST_COLLISION = 1
+    OUTCOME_RECEIVED = 2
+
+
+@dataclass(frozen=True)
+class TraceResult:
+    """Compteurs et trace par transmission, produits par le même appel natif."""
+
+    per_device: tuple[Counters, ...]
+    totals: Counters
+    gateway: GatewayLoad
+    records: tuple[TxRecord, ...]
+
+
+def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
+    c_devs = (_CEndDevice * len(devices))()
     for i, d in enumerate(devices):
         c = c_devs[i]
         c.x_m = d.x_m
@@ -281,7 +299,74 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         c.period_ns = d.period_ns
         c.messages = d.messages
         c.duty_cycle = d.duty_cycle
+    return c_devs
 
+
+def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
+                           propagation: Propagation,
+                           environment: Optional[Environment] = None) -> TraceResult:
+    """Comme `simulate_uplinks`, avec une entrée de trace par transmission.
+
+    Les temps de la trace (début, fin) sont ceux du moteur, en nanosecondes. La trace
+    est bornée par le cœur (statut 309 au-delà de 200 000 émissions).
+    """
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    n = len(devices)
+    c_devs = _c_end_devices(devices)
+    c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
+    c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
+                           propagation.exponent, propagation.capture_threshold_db,
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+    c_stats = (_CDeviceStats * n)()
+    c_tot = _CSimStats()
+    keep: list[object] = []
+    if environment is None:
+        c_env_ref = None
+    else:
+        c_env_struct, keep = _c_environment(environment)
+        c_env_ref = ctypes.byref(c_env_struct)
+
+    # Taille requise : le cœur la renvoie en cas de tampon insuffisant (statut 308).
+    capacity = sum(d.messages for d in devices)
+    if capacity > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    count = ctypes.c_size_t(0)
+    records = (_CTxRecord * capacity)() if capacity else None
+    status = LIB.lsim_simulate_uplinks_trace(
+        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
+        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count))
+    del keep
+    if status != 0:
+        raise StatusError(status)
+
+    per = tuple(
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns)
+        for s in c_stats
+    )
+    tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
+                   c_tot.airtime_ns)
+    load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
+                       c_tot.observation_ns, c_tot.gateway_utilization)
+    trace = tuple(
+        TxRecord(r.device_index, r.start_ns, r.end_ns, r.spreading_factor, r.rssi_dbm, r.outcome)
+        for r in (records[:count.value] if records is not None else ())
+    )
+    return TraceResult(per, tot, load, trace)
+
+
+def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
+                     propagation: Propagation,
+                     environment: Optional[Environment] = None) -> SimulationResult:
+    """Simule les liaisons montantes vers une passerelle et retourne les compteurs.
+
+    `environment` optionnel : relief et obstacles. Sans environnement, le terrain est
+    plat et sans obstacle (résultat identique au modèle log-distance seul).
+    """
+    if len(devices) > MAX_END_DEVICES:
+        raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
+    n = len(devices)
+    c_devs = _c_end_devices(devices)
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,

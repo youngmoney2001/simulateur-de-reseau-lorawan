@@ -473,6 +473,31 @@
       "title": "PropagationModel",
       "type": "object"
     },
+    "ProtocolOptionsIn": {
+      "additionalProperties": false,
+      "description": "Comportement applicatif des événements (hors moteur radio) : voir `lsim.trace_events`.",
+      "properties": {
+        "confirmed_uplinks": {
+          "default": false,
+          "title": "Confirmed Uplinks",
+          "type": "boolean"
+        },
+        "downlink_every": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Downlink Every",
+          "type": "integer"
+        },
+        "join": {
+          "default": false,
+          "title": "Join",
+          "type": "boolean"
+        }
+      },
+      "title": "ProtocolOptionsIn",
+      "type": "object"
+    },
     "TerrainModel": {
       "additionalProperties": false,
       "properties": {
@@ -513,6 +538,14 @@
       ],
       "default": null,
       "title": "Energy Profile"
+    },
+    "protocol": {
+      "$ref": "#/$defs/ProtocolOptionsIn",
+      "default": {
+        "confirmed_uplinks": false,
+        "downlink_every": 0,
+        "join": false
+      }
     },
     "scenario": {
       "$ref": "#/$defs/ApiScenario"

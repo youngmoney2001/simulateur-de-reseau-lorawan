@@ -32,6 +32,8 @@ _NAMES = {
     305: "environnement invalide (relief ou obstacles)",
     306: "environnement : travail de calcul trop grand (dispositifs x obstacles)",
     307: "trop de requêtes de downlink (limite 5 000 000)",
+    308: "tampon de trace trop petit (taille requise dans record_count)",
+    309: "trace trop grande (limite 200 000 émissions par simulation)",
     # 400..449 : jointure OTAA
     401: "join : longueur de message invalide",
     402: "join : type de message (MHDR) inattendu",

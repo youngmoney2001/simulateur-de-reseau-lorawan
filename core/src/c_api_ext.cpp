@@ -411,20 +411,13 @@ int32_t build_environment(const lsim_environment* in, lsim::env::ElevationGrid& 
 
 }  // namespace
 
-int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_count,
-                                  const lsim_gateway* gateway, const lsim_propagation* prop,
-                                  const lsim_environment* env,
-                                  lsim_device_stats* per_device, lsim_sim_stats* totals) {
-    if (env == nullptr) {
-        return lsim_simulate_uplinks(devices, device_count, gateway, prop, per_device, totals);
-    }
-    if (gateway == nullptr || prop == nullptr || totals == nullptr ||
-        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
-        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
-    }
-    if (device_count > lsim::sim::kMaxEndDevices) {
-        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
-    }
+namespace {
+
+// Conversion des entrées C, appel du moteur et recopie des compteurs. `trace` optionnel.
+int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
+                        const lsim_gateway* gateway, const lsim_propagation* prop,
+                        const lsim_environment* env, lsim_device_stats* per_device,
+                        lsim_sim_stats* totals, std::vector<lsim::sim::TxRecord>* trace) {
     try {
         std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
         for (size_t i = 0; i < device_count; ++i) {
@@ -456,15 +449,18 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
         lsim::env::ElevationGrid grid;
         std::vector<lsim::env::Obstacle> obstacles;
         lsim::env::Environment e;
-        const int32_t built = build_environment(env, grid, obstacles, e);
-        if (built != 0) {
-            return built;
+        if (env != nullptr) {
+            const int32_t built = build_environment(env, grid, obstacles, e);
+            if (built != 0) {
+                return built;
+            }
         }
 
         std::vector<lsim::sim::DeviceStats> stats(device_count);
         lsim::sim::SimulationStats tot;
         const auto st = lsim::sim::simulate_uplinks(specs.data(), device_count, g, p,
-                                                    stats.data(), tot, &e);
+                                                    stats.data(), tot,
+                                                    env != nullptr ? &e : nullptr, trace);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }
@@ -483,6 +479,74 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
             per_device[i].airtime_ns = stats[i].airtime_ns;
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+}  // namespace
+
+int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_count,
+                                  const lsim_gateway* gateway, const lsim_propagation* prop,
+                                  const lsim_environment* env,
+                                  lsim_device_stats* per_device, lsim_sim_stats* totals) {
+    if (env == nullptr) {
+        return lsim_simulate_uplinks(devices, device_count, gateway, prop, per_device, totals);
+    }
+    if (gateway == nullptr || prop == nullptr || totals == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    return run_uplinks_env(devices, device_count, gateway, prop, env, per_device, totals, nullptr);
+}
+
+// Trace par transmission : borne de sortie (le contrat d'API limite les événements par run).
+constexpr std::uint64_t kMaxTraceRecords = 200'000;
+
+int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t device_count,
+                                    const lsim_gateway* gateway, const lsim_propagation* prop,
+                                    const lsim_environment* env, lsim_device_stats* per_device,
+                                    lsim_sim_stats* totals, lsim_tx_record* records,
+                                    size_t record_capacity, size_t* record_count) {
+    if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *record_count = 0;
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    std::uint64_t planned = 0;
+    for (size_t i = 0; i < device_count; ++i) {
+        planned += devices[i].messages;
+    }
+    if (planned > kMaxTraceRecords) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceTooLarge);
+    }
+    try {
+        std::vector<lsim::sim::TxRecord> trace;
+        const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
+                                           totals, &trace);
+        if (st != 0) {
+            return st;
+        }
+        *record_count = trace.size();
+        if (trace.size() > record_capacity) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceBufferTooSmall);
+        }
+        for (size_t k = 0; k < trace.size(); ++k) {
+            const lsim::sim::TxRecord& t = trace[k];
+            records[k].device_index = t.device;
+            records[k].start_ns = t.start_ns;
+            records[k].end_ns = t.end_ns;
+            records[k].spreading_factor = t.spreading_factor;
+            records[k].rssi_dbm = t.rssi_dbm;
+            records[k].outcome = static_cast<uint8_t>(t.outcome);
         }
         return 0;
     } catch (...) {

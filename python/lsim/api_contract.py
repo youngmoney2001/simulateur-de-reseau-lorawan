@@ -33,7 +33,7 @@ ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
 RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
     "validation_error", "not_found", "limit_exceeded", "terrain_not_allowed",
-    "run_failed", "conflict", "unsupported_region",
+    "run_failed", "conflict", "unsupported_region", "unauthorized",
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
@@ -74,9 +74,18 @@ class ValidateResponse(_Strict):
     problems: list[Problem] = Field(default_factory=list, max_length=50)
 
 
+class ProtocolOptionsIn(_Strict):
+    """Comportement applicatif des événements (hors moteur radio) : voir `lsim.trace_events`."""
+
+    join: bool = False                 # première émission de chaque dispositif = join-request
+    confirmed_uplinks: bool = False    # uplinks de données confirmés (ACK attendu)
+    downlink_every: int = Field(0, ge=0, le=10_000)  # 0 : aucune charge ; N : une par N uplinks
+
+
 class RunCreate(_Strict):
     scenario: ApiScenario
     energy_profile: Optional[Literal["rak4631", "sx1262-stm32l072"]] = None
+    protocol: ProtocolOptionsIn = ProtocolOptionsIn()
 
 
 class RunStatus(_Strict):

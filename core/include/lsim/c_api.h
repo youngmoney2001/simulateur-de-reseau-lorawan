@@ -364,6 +364,28 @@ LSIM_API int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_
                                            lsim_device_stats* per_device,
                                            lsim_sim_stats* totals);
 
+/* Trace par transmission (même moteur, mêmes temps que les compteurs). Une entrée par
+ * émission, dans l'ordre temporel. records : capacité record_capacity ; record_count reçoit
+ * le nombre réel. Si la capacité est insuffisante : statut 308 (LSIM_STATUS_SIM_BASE + 8)
+ * et record_count indique la taille requise. Borne : 200 000 émissions par appel (statut 309).
+ * outcome : 0 sous la sensibilité, 1 collision, 2 reçue. env NULL = terrain plat. */
+typedef struct lsim_tx_record {
+    uint32_t device_index;
+    int64_t  start_ns;
+    int64_t  end_ns;
+    uint8_t  spreading_factor;
+    double   rssi_dbm;
+    uint8_t  outcome;
+} lsim_tx_record;
+
+LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t device_count,
+                                             const lsim_gateway* gateway,
+                                             const lsim_propagation* prop,
+                                             const lsim_environment* env,
+                                             lsim_device_stats* per_device,
+                                             lsim_sim_stats* totals, lsim_tx_record* records,
+                                             size_t record_capacity, size_t* record_count);
+
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).
  * device_class : 0 A, 1 B, 2 C. Latence = début de la première fenêtre utilisable moins

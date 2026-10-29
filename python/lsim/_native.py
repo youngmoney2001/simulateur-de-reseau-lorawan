@@ -315,6 +315,17 @@ class _CSimStats(ctypes.Structure):
     ]
 
 
+class _CTxRecord(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("start_ns", ctypes.c_int64),
+        ("end_ns", ctypes.c_int64),
+        ("spreading_factor", ctypes.c_uint8),
+        ("rssi_dbm", ctypes.c_double),
+        ("outcome", ctypes.c_uint8),
+    ]
+
+
 class _CJoinRequest(ctypes.Structure):
     _fields_ = [
         ("join_eui", ctypes.c_uint8 * 8),
@@ -470,6 +481,12 @@ LIB.lsim_simulate_downlinks_env.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CDownlinkStats), ctypes.POINTER(_CDownlinkStats)]
+LIB.lsim_simulate_uplinks_trace.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,

@@ -161,14 +161,36 @@ enum class SimStatus : std::int32_t {
     InvalidEnvironment = 5,
     EnvironmentWorkLimit = 6,
     TooManyDownlinks = 7,
+    TraceBufferTooSmall = 8,
+    TraceTooLarge = 9,
+};
+
+// Issue d'une transmission, telle que calculée par le moteur.
+enum class TxOutcome : std::uint8_t {
+    LostSensitivity = 0,  // RSSI sous la sensibilité du SF
+    LostCollision = 1,    // détruite par une collision non capturée
+    Received = 2,         // reçue par la passerelle
+};
+
+// Une transmission de la trace, dans l'ordre temporel (début, puis ordre de file).
+// Les temps sont ceux du moteur : même horloge pour toute la trace et les événements.
+struct TxRecord {
+    std::uint32_t device = 0;
+    SimTime start_ns = 0;
+    SimTime end_ns = 0;
+    std::uint8_t spreading_factor = 7;
+    double rssi_dbm = 0.0;
+    TxOutcome outcome = TxOutcome::LostSensitivity;
 };
 
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
 // `environment` optionnel : relief et obstacles (nullptr = terrain plat sans obstacle).
+// `trace` optionnel : reçoit une entrée par transmission, dans l'ordre temporel (vidé puis rempli).
 LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                                     const GatewaySpec& gateway, const PropagationSpec& prop,
                                     DeviceStats* per_device, SimulationStats& totals,
-                                    const env::Environment* environment = nullptr);
+                                    const env::Environment* environment = nullptr,
+                                    std::vector<TxRecord>* trace = nullptr);
 
 }  // namespace lsim::sim

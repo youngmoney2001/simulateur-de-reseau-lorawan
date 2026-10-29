@@ -298,9 +298,53 @@ void test_duty_cycle_invalid_inputs() {
     }
 }
 
+// La trace reprend exactement les issues des compteurs, dans l'ordre temporel.
+void test_trace_matches_counters() {
+    std::vector<EndDeviceSpec> devs;
+    for (int i = 0; i < 6; ++i) {
+        EndDeviceSpec d = device_at(100.0 * i, 7, 0);
+        d.start_offset_ns = static_cast<SimTime>(i) * 2'000'000;  // chevauchements partiels
+        d.period_ns = 1'000'000'000;
+        d.messages = 3;
+        devs.push_back(d);
+    }
+    devs[5].position.x_m = 9.0e5;  // trop loin : sous la sensibilité
+    std::vector<DeviceStats> per(devs.size());
+    SimulationStats tot;
+    std::vector<TxRecord> trace;
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per.data(), tot, nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(trace.size(), static_cast<std::size_t>(tot.sent));
+
+    std::uint64_t rec = 0, col = 0, sens = 0;
+    for (std::size_t k = 0; k < trace.size(); ++k) {
+        const TxRecord& t = trace[k];
+        CHECK_TRUE(t.end_ns > t.start_ns);
+        if (k > 0) CHECK_TRUE(trace[k - 1].start_ns <= t.start_ns);
+        if (t.outcome == TxOutcome::Received) ++rec;
+        else if (t.outcome == TxOutcome::LostCollision) ++col;
+        else ++sens;
+    }
+    CHECK_EQ(rec, tot.received);
+    CHECK_EQ(col, tot.lost_collision);
+    CHECK_EQ(sens, tot.lost_sensitivity);
+
+    // Sans trace : mêmes compteurs, et le vecteur de trace est vidé.
+    SimulationStats tot2;
+    std::vector<DeviceStats> per2(devs.size());
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per2.data(), tot2) == SimStatus::Ok);
+    CHECK_EQ(tot2.received, tot.received);
+    trace.push_back(TxRecord{});
+    CHECK_TRUE(simulate_uplinks(devs.data(), devs.size(), gateway(), PropagationSpec{},
+                                per2.data(), tot2, nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(trace.size(), static_cast<std::size_t>(tot2.sent));
+}
+
 }  // namespace
 
 void run_engine_tests() {
+    test_trace_matches_counters();
     test_duty_cycle_spacing();
     test_duty_cycle_invalid_inputs();
     test_gateway_load_metrics();
