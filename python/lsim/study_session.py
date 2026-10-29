@@ -29,8 +29,8 @@ from lsim import study_cli, study_exercises
 from lsim.study_compile import CompileError, Compiled, compile_session
 from lsim.study_contract import (
     MAX_NODES, AttemptList, AttemptOut, CliError, CliRequest, CliResponse, CriterionResult,
-    GatewayLink, HintOut, Node, NodeState, SensorSettings, SessionCreate, SessionOut,
-    SessionTopology, SimulationBind, SimulationBound, SubmitResult,
+    GatewayLink, HintOut, Node, NodeState, Position, SensorSettings, SessionCreate, SessionList,
+    SessionOut, SessionSummary, SessionTopology, SimulationBind, SimulationBound, SubmitResult,
 )
 from lsim.study_store import StudyStore
 
@@ -238,6 +238,34 @@ class StudyService:
             st.cli[node.id] = study_cli.new_session(node.id)
             self._save(sid, st)
             return self._topology_locked(sid, st)
+
+    def move_node(self, owner: str, sid: str, node_id: str, pos: Position) -> SessionTopology:
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            node = st.nodes.get(node_id)
+            if node is None:
+                raise StudyError(404, "not_found", "équipement inconnu dans cette session")
+            st.nodes[node_id] = node.model_copy(update={"x_m": pos.x_m, "y_m": pos.y_m})
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
+
+    def list_sessions(self, owner: str) -> SessionList:
+        """Sessions du compte, les plus récentes d'abord. Jamais celles d'un autre compte."""
+        with self._lock:
+            self._purge_locked()
+            now = self._clock()
+            mine = [(sid, st) for sid, st in self._sessions.items() if st.owner == owner]
+            mine.sort(key=lambda item: item[1].last_used, reverse=True)
+            return SessionList(items=[
+                SessionSummary(session_id=sid, exercise_id=st.exercise_id,
+                               nodes=len(st.nodes), idle_s=max(0, int(now - st.last_used)))
+                for sid, st in mine])
+
+    def delete_session(self, owner: str, sid: str) -> None:
+        with self._lock:
+            self._get_locked(owner, sid)            # 404 si inconnue ou d'un autre compte
+            del self._sessions[sid]
+            self._store.delete_session(sid)
 
     def remove_node(self, owner: str, sid: str, node_id: str) -> None:
         with self._lock:

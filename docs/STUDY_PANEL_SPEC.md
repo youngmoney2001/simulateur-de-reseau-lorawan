@@ -159,6 +159,9 @@ est public.
 | Méthode | Chemin | Rôle |
 |---|---|---|
 | POST | `/api/v1/sessions` | Crée une session : `nodes` (topologie) ou `exercise_id` (topologie de l'exercice) |
+| GET | `/api/v1/sessions` | Sessions du compte (`SessionList` : identifiant, exercice, nombre d'équipements, inactivité) ; jamais celles d'un autre compte |
+| DELETE | `/api/v1/sessions/{id}` | Supprime la session, sa topologie et son journal (204) ; 404 pour un autre compte |
+| POST | `/api/v1/sessions/{id}/nodes/{node_id}/position` | Déplace un équipement sur le plan (`Position`, en mètres) ; la configuration est conservée |
 | GET | `/api/v1/sessions/{id}/topology` | Équipements et états (hostname, région, configuré ; jamais de clé) |
 | POST | `/api/v1/sessions/{id}/cli` | Exécute une ligne CLI sur un équipement ; réponse : sortie, mode, erreur |
 | POST | `/api/v1/sessions/{id}/nodes` | Ajoute un équipement à la topologie (`Node`, `sensor` optionnel) |

@@ -136,3 +136,21 @@ def test_the_api_keeps_sessions_across_a_server_restart(tmp_path):
         status, out = api.call("POST", f"/api/v1/sessions/{sid}/cli",
                                {"node_id": "frontiere", "command": "show version"})
         assert status == 200 and out["mode"] == "privileged"
+
+
+def test_a_second_server_on_the_same_database_is_refused_until_the_first_closes(tmp_path):
+    """Deux processus sur une même base divergeraient (sessions tenues en mémoire) : refusé."""
+    from lsim import api_server as srv
+    tokens = tmp_path / "tokens.json"
+    srv.TokenStore(tokens).issue("alice")
+    db = str(tmp_path / "runs.sqlite")
+    first = srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    with pytest.raises(RuntimeError, match="déjà utilisée"):
+        srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    first.server_close()
+    first.service.close()
+    first.study.close()
+    second = srv.make_server("127.0.0.1", 0, tokens, runs_db=db)
+    second.server_close()
+    second.service.close()
+    second.study.close()

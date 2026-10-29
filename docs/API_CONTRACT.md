@@ -220,7 +220,8 @@ configuration du navigateur n'invente aucune valeur : il lit cette réponse.
 ## 7 bis. Panneau d'étude et métriques par passerelle
 
 Routes servies sous `/api/v1` (détail, règles et limites : `docs/STUDY_PANEL_SPEC.md` §7) :
-`POST /sessions`, `GET /sessions/{id}/topology`, `POST /sessions/{id}/nodes`,
+`POST /sessions`, `GET /sessions`, `DELETE /sessions/{id}`, `GET /sessions/{id}/topology`,
+`POST /sessions/{id}/nodes`, `POST /sessions/{id}/nodes/{node_id}/position`,
 `DELETE /sessions/{id}/nodes/{node_id}`, `POST /sessions/{id}/nodes/{node_id}/sensor`,
 `POST /sessions/{id}/cli`, `POST /sessions/{id}/simulate` (compile la session et crée le run),
 `POST /sessions/{id}/simulation` (liaison : `links` explicite, ou celle de `simulate`),
@@ -229,6 +230,8 @@ Routes servies sous `/api/v1` (détail, règles et limites : `docs/STUDY_PANEL_S
 Les schémas sont dans `schemas/api/v1` (`study_*.schema.json`). Les sessions sont persistées dans le
 fichier des runs (`--runs-db`) et survivent au redémarrage ; 4 h d'inactivité, 8 par compte,
 256 au total ; un autre compte reçoit 404.
+Le fichier des runs est tenu par un seul serveur : un second processus sur le même fichier est refusé
+(verrou `<fichier>.lock`, `flock`, libéré à la fermeture).
 
 Le résumé d'un run (`run_summary`) donne, par passerelle, `latency_samples`, `latency_p50_ms`,
 `latency_p95_ms` (absents sans mesure) et `mesh_inbound` (sauts mesh livrés par émetteur). Ces champs

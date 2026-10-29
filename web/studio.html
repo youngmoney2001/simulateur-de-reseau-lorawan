@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Studio LoRaWAN — simulateur d'étude</title>
+    <link rel="stylesheet" href="/src/studio/studio.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <strong>Studio LoRaWAN</strong>
+      <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
+      <button id="connect" type="button">Se connecter</button>
+      <label>Session <select id="session-select"></select></label>
+      <button id="new-session" type="button">Nouvelle session</button>
+      <label>Exercice <select id="exercise-start"></select></label>
+      <button id="start-exercise" type="button">Démarrer</button>
+      <button id="delete-session" type="button" class="danger">Supprimer la session</button>
+      <span id="session-meta" class="muted"></span>
+    </header>
+    <div id="flash" role="alert" class="flash" hidden></div>
+
+    <main class="layout">
+      <aside class="palette panel">
+        <h2>Ajouter un équipement</h2>
+        <form id="add-form">
+          <label>Identifiant <input name="id" placeholder="gw-nord" required /></label>
+          <label>Nom <input name="name" placeholder="Passerelle nord" /></label>
+          <label>Type
+            <select name="kind">
+              <option value="border">Passerelle frontière</option>
+              <option value="relay">Passerelle relais</option>
+              <option value="sensor">Capteur</option>
+              <option value="server">Serveur</option>
+            </select>
+          </label>
+          <div class="row">
+            <label>x (m) <input name="x_m" type="number" step="any" value="0" /></label>
+            <label>y (m) <input name="y_m" type="number" step="any" value="0" /></label>
+          </div>
+          <button type="submit">Ajouter</button>
+        </form>
+        <p class="hint">Glissez un équipement sur le plan pour le déplacer.</p>
+      </aside>
+
+      <section class="plan panel">
+        <h2>Plan</h2>
+        <svg id="plan" viewBox="0 0 800 520" role="img" aria-label="Plan du réseau"></svg>
+        <p id="empty-plan" class="muted" hidden>Aucun équipement : ajoutez une passerelle frontière, puis des capteurs.</p>
+      </section>
+
+      <aside class="device panel">
+        <h2 id="device-title">Aucun équipement sélectionné</h2>
+        <div id="device-body"></div>
+      </aside>
+    </main>
+
+    <section class="bottom">
+      <div class="panel sim">
+        <h2>Simulation</h2>
+        <form id="sim-form" class="row">
+          <label>Graine <input id="seed" type="number" min="0" max="4294967295" value="1" /></label>
+          <button type="submit" id="simulate">Simuler</button>
+        </form>
+        <p id="sim-status" class="muted"></p>
+        <ul id="sim-notes" class="notes"></ul>
+        <table id="sim-results" hidden>
+          <thead>
+            <tr><th>Passerelle</th><th>Reçues</th><th>Pertes</th><th>Latence p95</th><th>Relais mesh</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel exercise">
+        <h2>Exercice</h2>
+        <p id="ex-title" class="strong"></p>
+        <p id="ex-statement" class="statement"></p>
+        <div class="row">
+          <button type="button" id="hint" disabled>Indice</button>
+          <button type="button" id="submit" disabled>Noter</button>
+        </div>
+        <ol id="ex-hints" class="notes"></ol>
+        <div id="ex-result"></div>
+        <h3>Tentatives</h3>
+        <ol id="ex-attempts" class="notes"></ol>
+      </div>
+    </section>
+
+    <script type="module" src="/src/studio/main.js"></script>
+  </body>
+</html>

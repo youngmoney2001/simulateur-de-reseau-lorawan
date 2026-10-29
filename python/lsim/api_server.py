@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fcntl
 import hashlib
 import hmac
 import json
@@ -57,8 +58,8 @@ from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
-    CliRequest, GatewayLink, HintRequest, Node, SensorSettings, SessionCreate, SimulateOut,
-    SimulateRequest, SimulationBind, SubmitRequest,
+    CliRequest, GatewayLink, HintRequest, Node, Position, SensorSettings, SessionCreate,
+    SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
@@ -710,18 +711,48 @@ def _refuse_constant(name: str) -> None:
 
 # --- HTTP --------------------------------------------------------------------------------------
 
+class DatabaseLock:
+    """Verrou exclusif d'un fichier de base : un seul processus serveur par base.
+
+    Les sessions d'étude sont tenues en mémoire et écrites en base : deux processus sur la même base
+    divergeraient. Le verrou (flock, libéré à la fermeture du processus) l'interdit.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._path = db_path + ".lock"
+        self._fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(self._fd)
+            raise RuntimeError(f"base {db_path} déjà utilisée par un autre serveur") from None
+
+    def release(self) -> None:
+        if self._fd is not None:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None
+
+
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
                  tls_context: Optional[ssl.SSLContext] = None,
-                 study: Optional[StudyService] = None) -> None:
+                 study: Optional[StudyService] = None,
+                 db_lock: Optional[DatabaseLock] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
         self.study = study if study is not None else StudyService()
         self._tls = tls_context
+        self._db_lock = db_lock
+
+    def server_close(self) -> None:
+        super().server_close()
+        if self._db_lock is not None:
+            self._db_lock.release()
 
     def get_request(self):
         sock, addr = super().get_request()
@@ -846,13 +877,19 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and rest == "runs":
             return 202, svc.create(owner, self._json_body())
         study: StudyService = self.server.study  # type: ignore[attr-defined]
-        m = re.fullmatch(r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor)?)?", rest)
+        m = re.fullmatch(r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/position)?)?", rest)
         if m is not None:
             return self._nodes(method, study, owner, m.group(1), m.group(2), m.group(3))
         if method == "POST" and rest == "sessions":
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))
             return 201, created.model_dump(exclude_none=True)
+        if method == "GET" and rest == "sessions":
+            return 200, study.list_sessions(owner).model_dump()
+        m = re.fullmatch(r"sessions/([^/]+)", rest)
+        if m is not None and method == "DELETE":
+            self._study(lambda: study.delete_session(owner, m.group(1)))
+            return 204, None
 
         if method == "GET" and rest == "exercises":
             return 200, study_exercises.listing().model_dump()
@@ -912,6 +949,10 @@ class _Handler(BaseHTTPRequestHandler):
                 req = self._parse_body(Node)
                 return 201, self._study(lambda: study.add_node(owner, sid, req)).model_dump()
             raise ApiError(404, "not_found", "route inconnue")
+        if sensor == "/position" and method == "POST":
+            req = self._parse_body(Position)
+            return 200, self._study(
+                lambda: study.move_node(owner, sid, node_id, req)).model_dump()
         if sensor is not None and method == "POST":      # remplace les réglages (pas de PUT)
             req = self._parse_body(SensorSettings)
             return 200, self._study(
@@ -982,12 +1023,18 @@ def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":mem
                 max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
                 tls: Optional[ssl.SSLContext] = None,
                 terrain_dir: Optional[Path] = None) -> ApiServer:
-    service = RunService(RunStore(runs_db), max_queue=max_queue,
-                         limiter=RateLimiter(per_minute=rate_per_min),
-                         terrains=TerrainCatalog(terrain_dir))
-    study = StudyService(store=StudyStore(runs_db))
-    return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
-                     study=study)
+    lock = DatabaseLock(runs_db) if runs_db != ":memory:" else None
+    try:
+        service = RunService(RunStore(runs_db), max_queue=max_queue,
+                             limiter=RateLimiter(per_minute=rate_per_min),
+                             terrains=TerrainCatalog(terrain_dir))
+        study = StudyService(store=StudyStore(runs_db))
+        return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
+                         study=study, db_lock=lock)
+    except BaseException:
+        if lock is not None:
+            lock.release()
+        raise
 
 
 def main(argv: Optional[list[str]] = None) -> int:

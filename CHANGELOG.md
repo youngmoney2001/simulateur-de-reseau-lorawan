@@ -3,6 +3,13 @@
 ## 0.1.0 (non publiée)
 
 
+### Studio web (`web/studio.html`) et verrou de base
+- **Interface** : page `web/studio.html` (Vite, à côté de la carte de résultats `index.html`, inchangée). Plan éditable (ajout, glisser-déposer, retrait), console CLI par équipement (historique aux flèches, erreur au caret), réglages capteur avec validation côté studio et serveur, simulation avec résultats par passerelle (compteurs, latence p95, relais mesh), exercices (énoncé, indices avec pénalité, notation, journal), sessions multiples (liste, nouvelle session, suppression).
+- **API ajoutée** : `GET /api/v1/sessions` (sessions du compte), `DELETE /api/v1/sessions/{id}` (204), `POST /api/v1/sessions/{id}/nodes/{node_id}/position` (`Position`). Schémas `study_session_list` et `study_position` régénérés.
+- **Verrou de base** : `make_server` prend un verrou exclusif `<runs-db>.lock` (flock) ; un second serveur sur le même fichier est refusé avec `RuntimeError`. Libéré à `server_close`.
+- **Limite connue** : les indices révélés ne sont pas relus au rechargement de la page (le serveur applique la pénalité, l'interface ne la réaffiche que dans l'onglet courant).
+- Tests : `web/tests/studio-modules.test.mjs` (8, `npm test`), `web/tests/e2e/studio.e2e.mjs` (navigateur Chromium réel contre l'API, `npm run test:e2e`), `test_study_persistence.py` (+1, verrou), `test_study_simulate.py` (+2, déplacement et liste/suppression).
+
 ### Panneau d'étude : simulation d'une session, topologie éditable, persistance (servis)
 - **Simulation depuis la session** : `POST /api/v1/sessions/{id}/simulate` compile la topologie et les configurations CLI en scénario (`lsim/study_compile.py`) et crée le run par le chemin de `POST /runs` (mêmes validations). La réponse donne `run_id`, `links` et `notes`. La liaison au résultat est automatique à la fin du run : `POST /sessions/{id}/simulation` sans `links` lie les passerelles du run compilé.
 - **Réglages capteur** : `Node.sensor` (SF, charge, puissance, période, messages, départ, plan, canal). Ils sont les paramètres d'un groupe de simulation nommé comme le capteur.

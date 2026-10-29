@@ -1,0 +1,24 @@
+{
+  "additionalProperties": false,
+  "description": "Position d'un équipement sur le plan, en mètres.",
+  "properties": {
+    "x_m": {
+      "maximum": 1000000,
+      "minimum": -1000000,
+      "title": "X M",
+      "type": "number"
+    },
+    "y_m": {
+      "maximum": 1000000,
+      "minimum": -1000000,
+      "title": "Y M",
+      "type": "number"
+    }
+  },
+  "required": [
+    "x_m",
+    "y_m"
+  ],
+  "title": "Position",
+  "type": "object"
+}

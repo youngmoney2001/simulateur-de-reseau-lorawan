@@ -9,12 +9,14 @@
     "prepare-cesium": "node scripts/copy-cesium.mjs",
     "dev": "node scripts/check-no-remote-ion.mjs && npm run prepare-cesium && vite",
     "build": "node scripts/check-no-remote-ion.mjs && npm run prepare-cesium && vite build",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e": "node tests/e2e/studio.e2e.mjs"
   },
   "dependencies": {
     "cesium": "^1.146.0"
   },
   "devDependencies": {
+    "puppeteer-core": "^24.43.1",
     "vite": "^8.3.5"
   }
 }

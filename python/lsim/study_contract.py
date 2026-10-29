@@ -146,6 +146,24 @@ class SimulationBound(_Strict):
     unlinked: list[str] = Field(max_length=MAX_NODES)
 
 
+class Position(_Strict):
+    """Position d'un équipement sur le plan, en mètres."""
+
+    x_m: float = Field(ge=-1_000_000, le=1_000_000)
+    y_m: float = Field(ge=-1_000_000, le=1_000_000)
+
+
+class SessionSummary(_Strict):
+    session_id: str = Field(pattern=SESSION_PATTERN)
+    exercise_id: Optional[str] = Field(default=None, pattern=EXERCISE_PATTERN)
+    nodes: int = Field(ge=0, le=MAX_NODES)
+    idle_s: int = Field(ge=0)              # secondes depuis la dernière activité
+
+
+class SessionList(_Strict):
+    items: list[SessionSummary] = Field(max_length=8)   # au plus 8 par compte
+
+
 class SessionTopology(_Strict):
     session_id: str = Field(pattern=SESSION_PATTERN)
     nodes: list[Node] = Field(max_length=MAX_NODES)
@@ -231,6 +249,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_simulate_request": SimulateRequest,
     "study_simulate": SimulateOut,
     "study_sensor": SensorSettings,
+    "study_position": Position,
+    "study_session_list": SessionList,
     "study_hint_request": HintRequest,
     "study_hint": HintOut,
     "study_attempt_list": AttemptList,

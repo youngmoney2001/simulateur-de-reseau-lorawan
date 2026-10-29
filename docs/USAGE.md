@@ -266,6 +266,20 @@ paire (pas de variation dans le temps).
 
 Exemple : `examples/mesh_relais_quartier.yaml`.
 
+## 5septies. Studio web (panneau d'étude)
+
+Lancer l'API (un seul serveur par fichier de runs) puis le studio :
+
+```bash
+python -m lsim.api_server issue-token --tokens tokens.json --owner alice     # jeton affiché une fois
+python -m lsim.api_server serve --tokens tokens.json --runs-db runs.sqlite --port 8765
+cd web && npm ci && LSIM_API_URL=http://127.0.0.1:8765 npx vite --port 5173  # page /studio.html
+```
+
+Le studio appelle `/api` (proxy Vite vers `LSIM_API_URL`). Le jeton est saisi dans la page ; il reste
+dans l'onglet et n'apparaît jamais dans une URL. Tests : `npm test` (modules) et `npm run test:e2e`
+(Chromium réel ; variables `CHROME_PATH`, `LSIM_LIBRARY`, `PYTHON`).
+
 ## 6. Limites connues
 
 Voir `docs/ROADMAP.md`. Points notables pour l'usage :

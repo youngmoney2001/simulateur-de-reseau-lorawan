@@ -254,3 +254,36 @@ def test_a_payload_too_large_for_the_mesh_is_refused_at_simulation_creation(api)
     status, body = _simulate(api, sid)
     assert status == 422, body
     assert body["field"] and "mesh" in body["message"].lower()
+
+
+# --- Plan, liste et suppression des sessions -------------------------------------------------
+
+def test_a_node_moves_on_the_plan_and_keeps_its_configuration(api):
+    sid = _session(api, nodes=[_border()])
+    _cli(api, sid, "frontiere", "enable", "configure terminal", "hostname gw-nord", "end")
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/nodes/frontiere/position",
+                           {"x_m": 120.5, "y_m": -40})
+    assert status == 200
+    node = out["nodes"][0]
+    assert (node["x_m"], node["y_m"]) == (120.5, -40.0)
+    assert out["states"][0]["hostname"] == "gw-nord"
+
+
+def test_sessions_are_listed_per_owner_and_can_be_deleted(api):
+    first = _session(api, nodes=[_border()])
+    second = _session(api, exercise="eu868-passerelle")
+    status, out = api.call("GET", "/api/v1/sessions")
+    assert status == 200
+    ids = [item["session_id"] for item in out["items"]]
+    assert ids[0] == second and first in ids
+    assert {i["session_id"]: i["nodes"] for i in out["items"]}[first] == 1
+    bob_status, bob = api.call("GET", "/api/v1/sessions", token=api.bob)
+    assert bob_status == 200 and bob["items"] == []
+    status, _ = api.call("DELETE", f"/api/v1/sessions/{first}", token=api.bob)
+    assert status == 404
+    status, _ = api.call("DELETE", f"/api/v1/sessions/{first}")
+    assert status == 204
+    status, out = api.call("GET", "/api/v1/sessions")
+    assert first not in [item["session_id"] for item in out["items"]]
+    status, _ = api.call("GET", f"/api/v1/sessions/{first}/topology")
+    assert status == 404
