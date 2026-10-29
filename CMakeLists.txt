@@ -86,6 +86,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_crypto.cpp
         core/tests/test_secure_frame.cpp
         core/tests/test_engine.cpp
+        core/tests/test_closed_loop.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp
         core/tests/test_mac_commands.cpp

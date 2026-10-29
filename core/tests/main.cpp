@@ -10,6 +10,7 @@ void run_lorawan_frame_tests();
 void run_crypto_tests();
 void run_secure_frame_tests();
 void run_engine_tests();
+void run_closed_loop_tests();
 void run_c_api_tests();
 void run_join_tests();
 void run_environment_tests();
@@ -36,6 +37,7 @@ int main() {
     run_crypto_tests();
     run_secure_frame_tests();
     run_engine_tests();
+    run_closed_loop_tests();
     run_c_api_tests();
     run_join_tests();
     run_environment_tests();

@@ -1069,6 +1069,73 @@ LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t 
                                         lsim_interval* busy, size_t busy_capacity,
                                         size_t* busy_count);
 
+/* ------------------------------------------- Boucle fermée : commandes MAC LinkADR et DutyCycle (S2)
+ * Passerelle unique, sans jointure ni autre commande MAC. Voir lsim/engine.hpp (LoopOptions).
+ * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (une table
+ * régionale par dispositif, lue seulement si adr != 0). Sorties : uplinks (ordre des débuts),
+ * descentes créées (ordre de création) et occupation passerelle (ordre croissant). Capacités :
+ * au moins le nombre total d'émissions pour uplinks ; au moins le nombre d'uplinks pour les
+ * descentes et l'occupation. Statut 0, code moteur (LSIM_STATUS_SIM_BASE + n), code planification
+ * (LSIM_STATUS_PLAN_BASE + n) pour des options ou radios invalides, ou LSIM_STATUS_PLAN_BASE + 4
+ * si une capacité est insuffisante. */
+typedef struct lsim_loop_region {
+    uint8_t dr_sf[16];               /* SF du débit i ; 0 = indisponible */
+    uint8_t max_dr;
+    uint8_t max_tx_power_index;      /* index 0 = puissance initiale du dispositif */
+    int32_t power_step_tenth_db;     /* 1..100 */
+} lsim_loop_region;
+
+typedef struct lsim_loop_options {
+    lsim_plan_options protocol;      /* acquittements, descentes de données, puissances passerelle */
+    uint8_t adr;                     /* LinkADRReq */
+    int32_t installation_margin_tenth_db; /* -300..300 */
+    uint8_t duty_cycle;              /* DutyCycleReq, une fois, au premier uplink reçu */
+    uint8_t duty_cycle_exponent;     /* 0..15 : rapport cyclique 1 / 2^k */
+} lsim_loop_options;
+
+typedef struct lsim_loop_uplink {
+    uint32_t device_index;
+    int64_t start_ns;
+    int64_t end_ns;
+    uint8_t spreading_factor;
+    int8_t dr;                       /* -1 : pas de table régionale */
+    uint8_t power_index;
+    double rssi_dbm;
+    uint8_t outcome;                 /* code TxOutcome du moteur */
+    uint8_t answer_mask;             /* bit 0 LinkADRAns, bit 1 DutyCycleAns (portées) */
+    uint8_t answer_ok;               /* bit 0 débit acquitté, bit 1 puissance acquittée */
+} lsim_loop_uplink;
+
+typedef struct lsim_loop_downlink {
+    uint32_t uplink_index;           /* indice dans uplinks */
+    uint32_t device_index;
+    uint8_t kind;                    /* 1 ACK, 2 donnée, 3 MAC seul */
+    uint8_t commands;                /* bit 0 LinkADRReq, bit 1 DutyCycleReq */
+    int64_t t_open_ns;
+    int64_t start_ns;                /* -1 : pas de créneau passerelle dans la RX1 */
+    int64_t air_ns;
+    uint8_t device_missed;           /* le dispositif émet pendant la RX1 */
+    uint8_t delivered;               /* reçue : commandes appliquées */
+    uint8_t req_dr;                  /* LinkADRReq : débit */
+    uint8_t req_power_index;         /* LinkADRReq : index de puissance */
+} lsim_loop_downlink;
+
+LSIM_API int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count);
+
 /* ------------------------------------------- Boucle fermée causale (v1, S1)
  * Passerelle unique, sans commande MAC ni jointure. Les descentes sont planifiées au fil de
  * l'eau (fin de chaque trame reçue) : une seule exécution, sans point fixe. radios : device_count

@@ -1,6 +1,6 @@
 # Boucle fermée dans le moteur : plan de refonte (MAC phase 2 : LinkADR, DutyCycle)
 
-Statut : **décisions prises, implémentation non commencée.**
+Statut : **S0 et S1 faits ; S2 fait pour le périmètre « passerelle unique, sans jointure ni MAC » (LinkADRReq et DutyCycleReq).**
 
 ## Décisions du propriétaire
 1. **Unification** : les descentes sont gérées dans le moteur natif, en une seule exécution.
@@ -52,11 +52,36 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
     Tests : `test_downlink_plan.cpp` (planificateur incrémental), `test_downlink_plan_parity.py`
     (sans `skip`).
   - Non porté : jointure, MAC (S2), mesh et multi-passerelles.
-- **S2 : commandes en boucle fermée** : LinkADRReq et DutyCycleReq émises par le serveur,
-  appliquées (SF, puissance, duty cycle) à partir de l'émission suivant leur réception.
-  LinkADRAns/DutyCycleAns : réservation conservatrice dans l'uplink suivant la commande ; l'octet
-  n'est compté comme émis qu'après confirmation. Critère : déterminisme, trace distinguant
-  planifié et effectif.
+  - Erreur RX1 : une bande RX1 hors `{125, 250, 500}` kHz ou un SF RX1 hors 7..12 est signalée par
+    `InvalidRadio` (planificateur, `plan_downlinks`, `lsim_plan_downlinks_v1`, chemin causal), et non plus
+    par un code générique. Commit `d361f12`. Constat S1 résolu.
+- **S2 : commandes en boucle fermée** : fait pour la passerelle unique, sans jointure ni autre commande MAC.
+  - Moteur : `simulate_closed_loop` (`core/src/engine.cpp`, déclarations dans `engine.hpp`). Une seule
+    exécution : une file d'événements (Check, Apply, Start, End) traite les émissions dans l'ordre temporel.
+    À l'ordre des débuts et fins près, les règles sont celles du chemin causal.
+  - Serveur : LinkADRReq décidé par `lorawan::adr::decide()` sur les 20 dernières trames reçues (SNR borné à
+    ±50 dB, bruit −117 dBm à 125 kHz, NF 6 dB). Puissance : index de 0 à 7, pas de `power_step_tenth_db`.
+    LinkADR est atomique : appliqué seulement si débit et puissance sont tous deux acquittés ; sinon refusé
+    en bloc, sans nouvel essai. DutyCycleReq : `min(régional, 1/2^k)`, envoyé une fois au premier uplink
+    reçu, puis répété jusqu'à DutyCycleAns.
+  - Classe A : une descente est perdue si le dispositif émet pendant RX1 (`device_missed`, décidé par un
+    événement Check à t_open + 1 s, avant les débuts simultanés). La commande est retentée au prochain
+    uplink reçu ; l'émission suivante n'est pas retardée. Une descente est livrée seulement si elle a un
+    créneau passerelle dans RX1, si le dispositif n'émet pas pendant RX1 et si son RSSI atteint la sensibilité
+    RX1 (plus `device_rx_offset_db`).
+  - Application : `max(t_open + 1 s, début + airtime)` pour une descente livrée. Réponse confirmée seulement si
+    l'uplink qui la porte est reçu.
+  - Hypothèses (non normatives, à valider) : pas de table de puissance dans le plan (2 dB par index) ;
+    cycle de service calculé avec l'airtime de l'émission qui démarre, comme le chemin planifié existant.
+  - API C : `lsim_simulate_closed_loop_v1` (statuts moteur 300+ et planification 950+). Pont Python :
+    `python/lsim/closed_loop.py`.
+  - Preuves : `core/tests/test_closed_loop.cpp` (parité sans commande avec le chemin causal, convergence
+    ADR de SF12 à SF7, espacement du cycle de service après application, nouvel essai après RX1 manquée) ;
+    `python/tests/test_closed_loop.py`. Invariants : empreintes `d2cb0fac…` (run) et `ed126d7f…` (trace)
+    inchangées. Tests C++ et ASan/UBSan verts.
+  - Non branché : le bloc `mac:` du scénario YAML et `build_trace` n'utilisent pas encore la boucle fermée
+    (le point fixe Python reste en place pour ces chemins). Non porté : jointure, mesh, multi-passerelles,
+    autres commandes MAC (configuration radio, classes).
 - **S3 : contrat** : ABI versionnée (v3 des fonctions de trace), schémas régénérés, journal web.
 - **S4 : mesh et multi-passerelles** : hors périmètre initial ; refusés avec commandes actives
   tant qu'ils ne sont pas portés.

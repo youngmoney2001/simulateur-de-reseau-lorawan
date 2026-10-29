@@ -684,6 +684,187 @@ int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t d
     }
 }
 
+int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t device_count,
+                                     const lsim_plan_device* radios, const lsim_loop_region* regions,
+                                     const lsim_gateway* gateway, const lsim_propagation* prop,
+                                     const lsim_environment* env, const lsim_loop_options* options,
+                                     lsim_device_stats* per_device, lsim_sim_stats* totals,
+                                     lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                     size_t* uplink_count, lsim_loop_downlink* downlinks,
+                                     size_t downlink_capacity, size_t* downlink_count,
+                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+    if (gateway == nullptr || prop == nullptr || totals == nullptr || options == nullptr ||
+        uplink_count == nullptr || downlink_count == nullptr || busy_count == nullptr ||
+        (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) ||
+        (options->adr != 0 && device_count > 0 && regions == nullptr)) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *uplink_count = 0;
+    *downlink_count = 0;
+    *busy_count = 0;
+    if (device_count > lsim::sim::kMaxEndDevices) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
+    }
+    std::uint64_t planned = 0;
+    for (size_t i = 0; i < device_count; ++i) {
+        planned += devices[i].messages;
+    }
+    if (planned > kMaxTraceRecords) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceTooLarge);
+    }
+    try {
+        std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
+        for (size_t i = 0; i < device_count; ++i) {
+            const lsim_end_device& d = devices[i];
+            lsim::sim::EndDeviceSpec& s = specs[i];
+            s.position.x_m = d.x_m;
+            s.position.y_m = d.y_m;
+            s.spreading_factor = d.spreading_factor;
+            s.payload_bytes = d.payload_bytes;
+            s.tx_power_dbm = d.tx_power_dbm;
+            s.start_offset_ns = d.start_offset_ns;
+            s.period_ns = d.period_ns;
+            s.messages = d.messages;
+            s.duty_cycle = d.duty_cycle;
+        }
+        std::vector<lsim::plan::DeviceRadio> rv(device_count);
+        for (size_t i = 0; i < device_count; ++i) {
+            const lsim_plan_device& d = radios[i];
+            lsim::plan::DeviceRadio& r = rv[i];
+            r.freq_hz = d.freq_hz;
+            r.dr = d.dr;
+            r.rx1_hz = d.rx1_hz;
+            r.tx_power_dbm = d.tx_power_dbm;
+            r.rx1_sf = d.rx1_sf;
+            r.rx1_bw_hz = d.rx1_bw_hz;
+        }
+        std::vector<lsim::sim::LoopRegion> rg(device_count);
+        for (size_t i = 0; i < device_count && regions != nullptr; ++i) {
+            for (size_t k = 0; k < 16; ++k) rg[i].dr_sf[k] = regions[i].dr_sf[k];
+            rg[i].max_dr = regions[i].max_dr;
+            rg[i].max_tx_power_index = regions[i].max_tx_power_index;
+            rg[i].power_step_tenth_db = regions[i].power_step_tenth_db;
+        }
+
+        lsim::sim::LoopOptions lo;
+        const lsim_plan_options& po = options->protocol;
+        lo.protocol.confirmed_uplinks = po.confirmed_uplinks != 0;
+        lo.protocol.downlink_every = po.downlink_every;
+        lo.protocol.downlink_payload_bytes = po.downlink_payload_bytes;
+        lo.protocol.gateway_tx_power_dbm = po.gateway_tx_power_dbm;
+        lo.protocol.device_antenna_gain_dbi = po.device_antenna_gain_dbi;
+        lo.protocol.device_rx_offset_db = po.device_rx_offset_db;
+        lo.adr = options->adr != 0;
+        lo.installation_margin_tenth_db = options->installation_margin_tenth_db;
+        lo.duty_cycle = options->duty_cycle != 0;
+        lo.duty_cycle_exponent = options->duty_cycle_exponent;
+
+        // Options et radios validées avant simulation (mêmes codes que lsim_plan_downlinks_v1).
+        const lsim::plan::DownlinkScheduler probe(rv, lo.protocol);
+        if (probe.status() != lsim::plan::PlanStatus::Ok) {
+            return LSIM_STATUS_PLAN_BASE + static_cast<int32_t>(probe.status());
+        }
+
+        lsim::sim::GatewaySpec g;
+        g.position.x_m = gateway->x_m;
+        g.position.y_m = gateway->y_m;
+        g.antenna_gain_dbi = gateway->antenna_gain_dbi;
+        g.rx_sensitivity_offset_db = gateway->rx_sensitivity_offset_db;
+        lsim::sim::PropagationSpec p;
+        p.frequency_hz = prop->frequency_hz;
+        p.reference_distance_m = prop->reference_distance_m;
+        p.exponent = prop->exponent;
+        p.capture_threshold_db = prop->capture_threshold_db;
+        p.shadowing_sigma_db = prop->shadowing_sigma_db;
+        p.shadowing_seed = prop->shadowing_seed;
+
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        if (env != nullptr) {
+            const int32_t built = build_environment(env, grid, obstacles, e);
+            if (built != 0) {
+                return built;
+            }
+        }
+
+        std::vector<lsim::sim::DeviceStats> stats(device_count);
+        lsim::sim::SimulationStats tot;
+        lsim::sim::LoopResult res;
+        const auto st = lsim::sim::simulate_closed_loop(
+            specs.data(), device_count, rv.data(), rg.data(), g, p,
+            env != nullptr ? &e : nullptr, lo, stats.data(), tot, res);
+        if (st != lsim::sim::SimStatus::Ok) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
+        }
+        for (size_t i = 0; i < device_count; ++i) {
+            per_device[i].sent = stats[i].sent;
+            per_device[i].received = stats[i].received;
+            per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
+            per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].airtime_ns = stats[i].airtime_ns;
+            per_device[i].lost_gateway_busy = stats[i].lost_gateway_busy;
+        }
+        *totals = lsim_sim_stats{};
+        totals->sent = tot.sent;
+        totals->received = tot.received;
+        totals->lost_sensitivity = tot.lost_sensitivity;
+        totals->lost_collision = tot.lost_collision;
+        totals->airtime_ns = tot.airtime_ns;
+        totals->lost_gateway_busy = tot.lost_gateway_busy;
+        totals->gateway_busy_ns = tot.gateway_busy_ns;
+        totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
+        totals->observation_ns = tot.observation_ns;
+        totals->gateway_utilization = tot.gateway_utilization;
+
+        *uplink_count = res.uplinks.size();
+        *downlink_count = res.downlinks.size();
+        *busy_count = res.gateway_busy.size();
+        if (res.uplinks.size() > uplink_capacity) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TraceBufferTooSmall);
+        }
+        if (res.downlinks.size() > downlink_capacity || res.gateway_busy.size() > busy_capacity) {
+            return LSIM_STATUS_PLAN_BASE + 4;
+        }
+        for (size_t k = 0; k < res.uplinks.size(); ++k) {
+            const lsim::sim::LoopUplink& u = res.uplinks[k];
+            lsim_loop_uplink& o = uplinks[k];
+            o.device_index = u.device;
+            o.start_ns = u.start_ns;
+            o.end_ns = u.end_ns;
+            o.spreading_factor = u.spreading_factor;
+            o.dr = u.dr;
+            o.power_index = u.power_index;
+            o.rssi_dbm = u.rssi_dbm;
+            o.outcome = static_cast<uint8_t>(u.outcome);
+            o.answer_mask = u.answer_mask;
+            o.answer_ok = u.answer_ok;
+        }
+        for (size_t k = 0; k < res.downlinks.size(); ++k) {
+            const lsim::sim::LoopDownlink& d = res.downlinks[k];
+            lsim_loop_downlink& o = downlinks[k];
+            o.uplink_index = d.uplink;
+            o.device_index = d.device;
+            o.kind = d.kind;
+            o.commands = d.commands;
+            o.t_open_ns = d.t_open;
+            o.start_ns = d.start_ns;
+            o.air_ns = d.air_ns;
+            o.device_missed = d.device_missed ? 1 : 0;
+            o.delivered = d.delivered ? 1 : 0;
+            o.req_dr = d.req_dr;
+            o.req_power_index = d.req_power_index;
+        }
+        for (size_t k = 0; k < res.gateway_busy.size(); ++k) {
+            busy[k].start_ns = res.gateway_busy[k].start;
+            busy[k].end_ns = res.gateway_busy[k].end;
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
 int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_downlink_plan* plans,
                                     size_t device_count, const lsim_gateway* gateway,
                                     const lsim_propagation* prop, const lsim_environment* env,

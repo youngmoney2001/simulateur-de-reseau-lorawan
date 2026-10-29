@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: Apache-2.0
+// Boucle fermée (S2) : parité sans commande avec le chemin causal, convergence ADR,
+// espacement du rapport cyclique, nouvel essai après perte pendant RX1.
+#include <cstdint>
+#include <vector>
+
+#include "check.hpp"
+#include "lsim/engine.hpp"
+
+namespace {
+
+using namespace lsim::sim;
+
+constexpr SimTime kS = 1'000'000'000;
+
+EndDeviceSpec dev(double x_m, std::uint8_t sf, SimTime offset_ns, SimTime period_ns,
+                  std::uint32_t messages) {
+    EndDeviceSpec d;
+    d.position.x_m = x_m;
+    d.spreading_factor = sf;
+    d.payload_bytes = 10;
+    d.tx_power_dbm = 14.0;
+    d.start_offset_ns = offset_ns;
+    d.period_ns = period_ns;
+    d.messages = messages;
+    d.duty_cycle = 1.0;
+    return d;
+}
+
+lsim::plan::DeviceRadio radio() {
+    lsim::plan::DeviceRadio r;
+    r.freq_hz = 868'100'000;
+    r.rx1_hz = 868'100'000;
+    r.tx_power_dbm = 14.0;
+    r.rx1_bw_hz = 125'000;
+    return r;
+}
+
+// Table régionale à débits décroissants SF12..SF7 ; puissance initiale = index 0.
+LoopRegion region() {
+    LoopRegion r;
+    for (std::size_t i = 0; i < 6; ++i) {
+        r.dr_sf[i] = static_cast<std::uint8_t>(12 - i);
+    }
+    r.max_dr = 5;
+    r.max_tx_power_index = 7;
+    r.power_step_tenth_db = 20;
+    return r;
+}
+
+void test_no_command_parity_with_causal() {
+    const EndDeviceSpec d[] = {dev(100.0, 7, 0, 30 * kS, 20), dev(2500.0, 9, 3 * kS, 30 * kS, 20),
+                               dev(900.0, 7, 7 * kS, 30 * kS, 20)};
+    lsim::plan::DeviceRadio rv[3] = {radio(), radio(), radio()};
+    DeviceStats causal_stats[3];
+    DeviceStats loop_stats[3];
+    SimulationStats causal_tot;
+    SimulationStats loop_tot;
+
+    CausalDownlinks cd;
+    cd.radios.assign(rv, rv + 3);
+    std::vector<lsim::plan::Interval> busy;
+    cd.busy_out = &busy;
+    CHECK_EQ(static_cast<int>(simulate_uplinks(d, 3, GatewaySpec{}, PropagationSpec{}, causal_stats,
+                                               causal_tot, nullptr, nullptr, nullptr, nullptr, &cd)),
+             0);
+
+    LoopRegion regions[3] = {region(), region(), region()};
+    LoopResult res;
+    LoopOptions opt;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 3, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, loop_stats, loop_tot, res)),
+             0);
+    CHECK_EQ(res.downlinks.size(), std::size_t{0});
+    CHECK_EQ(res.uplinks.size(), std::size_t{60});
+    CHECK_EQ(loop_tot.sent, causal_tot.sent);
+    CHECK_EQ(loop_tot.received, causal_tot.received);
+    CHECK_EQ(loop_tot.lost_sensitivity, causal_tot.lost_sensitivity);
+    CHECK_EQ(loop_tot.lost_collision, causal_tot.lost_collision);
+    CHECK_EQ(loop_tot.lost_gateway_busy, causal_tot.lost_gateway_busy);
+    for (int i = 0; i < 3; ++i) {
+        CHECK_EQ(loop_stats[i].sent, causal_stats[i].sent);
+        CHECK_EQ(loop_stats[i].received, causal_stats[i].received);
+        CHECK_EQ(loop_stats[i].lost_collision, causal_stats[i].lost_collision);
+    }
+}
+
+void test_adr_converges_to_sf7() {
+    // Dispositif proche de la passerelle, débit initial SF12 : l'ADR doit descendre à SF7.
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 300)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{300});
+    CHECK_EQ(res.uplinks.back().spreading_factor, std::uint8_t{7});
+    bool adr_delivered = false;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if ((dl.commands & kLoopCmdLinkAdr) != 0 && dl.delivered) adr_delivered = true;
+    }
+    CHECK_TRUE(adr_delivered);
+}
+
+void test_duty_cycle_spacing_after_apply() {
+    // 1/16 : après l'application, deux débuts consécutifs sont séparés d'au moins 16 fois l'airtime.
+    // SF12 et période de 4 s : la RX1 reste libre (aucune émission pendant [fin+1 s, fin+2 s]) et
+    // le rapport cyclique, plus contraignant que la période, décale les émissions suivantes.
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 4 * kS, 40)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 4;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    SimTime apply = -1;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if ((dl.commands & kLoopCmdDutyCycle) != 0 && dl.delivered) {
+            const SimTime end = dl.start_ns >= 0 ? dl.start_ns + dl.air_ns : dl.t_open;
+            const SimTime a = std::max(dl.t_open + kS, end);
+            if (apply < 0 || a < apply) apply = a;
+        }
+    }
+    CHECK_TRUE(apply > 0);
+    int checked = 0;
+    // Convention du moteur (identique au chemin planifié) : le début suivant est au plus tôt à
+    // fin_précédente + airtime_suivant * (1/rapport - 1), soit 15 airtimes pour 1/16.
+    for (std::size_t k = 0; k + 1 < res.uplinks.size(); ++k) {
+        const LoopUplink& next = res.uplinks[k + 1];
+        if (next.start_ns < apply) continue;
+        const SimTime air = next.end_ns - next.start_ns;
+        CHECK_TRUE(next.start_ns - res.uplinks[k].end_ns >= 15 * air);
+        ++checked;
+    }
+    CHECK_TRUE(checked > 10);
+    CHECK_EQ(res.uplinks.size(), std::size_t{40});
+}
+
+void test_retry_after_device_missed_rx1() {
+    // Classe A : le dispositif émet toutes les 1,5 s, donc chaque uplink tombe dans la RX1 de
+    // l'uplink précédent (fin + 1 s à fin + 2 s). Les descentes sont perdues, la commande
+    // DutyCycleReq est retentée à chaque uplink reçu, et aucune émission n'est retardée.
+    const EndDeviceSpec d[] = {dev(10.0, 7, 0, 3 * kS / 2, 5)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.duty_cycle = true;
+    opt.duty_cycle_exponent = 2;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{5});
+    for (std::size_t k = 0; k < res.uplinks.size() && k < 5; ++k) {
+        CHECK_EQ(res.uplinks[k].start_ns, SimTime(k) * 3 * kS / 2);
+    }
+    CHECK_EQ(res.downlinks.size(), std::size_t{5});
+    if (res.downlinks.size() != 5) return;
+    // Les quatre premières descentes sont perdues (émission du dispositif pendant la RX1)...
+    for (std::size_t k = 0; k < 4; ++k) {
+        CHECK_TRUE(res.downlinks[k].device_missed);
+        CHECK_TRUE(!res.downlinks[k].delivered);
+        CHECK_TRUE((res.downlinks[k].commands & kLoopCmdDutyCycle) != 0);  // retentée
+    }
+    // ...la dernière, sans émission pendant la RX1, livre la commande.
+    CHECK_TRUE(!res.downlinks[4].device_missed);
+    CHECK_TRUE(res.downlinks[4].delivered);
+    CHECK_TRUE((res.downlinks[4].commands & kLoopCmdDutyCycle) != 0);
+}
+
+}  // namespace
+
+void run_closed_loop_tests() {
+    test_no_command_parity_with_causal();
+    test_adr_converges_to_sf7();
+    test_duty_cycle_spacing_after_apply();
+    test_retry_after_device_missed_rx1();
+}

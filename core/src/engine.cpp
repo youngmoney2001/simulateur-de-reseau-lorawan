@@ -7,7 +7,9 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <queue>
 
+#include "lsim/adr.hpp"
 #include "lsim/class_b.hpp"
 #include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
@@ -1262,6 +1264,569 @@ SimStatus simulate_uplinks_multi_downlinks(
         // Ordre d'ouverture RX1 (ordre de fin = ordre d'ouverture, car RX1 = fin + 1 s).
         *downlinks = std::move(dls);
     }
+    return SimStatus::Ok;
+}
+
+// ---------------------------------------------------------------- Boucle fermée (S2)
+
+namespace {
+
+constexpr double kNoiseFloorDbmBw125 = -117.0;  // -174 + 10 log10(125 kHz) + NF 6 dB
+constexpr double kMaxLoopSnrDb = 50.0;          // bornes du cœur ADR : -500..500 dixièmes de dB
+constexpr std::size_t kLoopHistory = lorawan::adr::kMaxSamples;
+constexpr SimTime kLoopRxDelayNs = 1'000'000'000;   // RECEIVE_DELAY1
+constexpr SimTime kLoopRx1WindowNs = 1'000'000'000;
+constexpr std::uint32_t kLoopAckBytes = 12;         // MHDR, DevAddr, FCtrl, FCnt, MIC
+constexpr std::uint32_t kLoopDataOverheadBytes = 13;
+constexpr std::uint8_t kLoopIgnoreField = 15;       // LinkADRReq : champ « ignorer »
+constexpr int kLoopAnsAdrBits = 3;                  // bits 0 (débit) et 1 (puissance) de answer_ok
+constexpr int kLoopRankCheck = 0;                   // fermeture RX1 et application : avant les émissions
+constexpr int kLoopRankStart = 1;
+constexpr int kLoopRankEnd = 2;
+
+enum class LoopKind : std::uint8_t { Check, Apply, Start, End };
+
+struct LoopEvent {
+    SimTime t = 0;
+    int rank = kLoopRankStart;
+    std::uint64_t seq = 0;
+    LoopKind kind = LoopKind::Start;
+    std::uint32_t device = 0;   // Start
+    std::uint32_t index = 0;    // End : indice d'émission ; Check, Apply : indice de descente
+    std::uint8_t cmd = 0;       // Apply : kLoopCmdLinkAdr ou kLoopCmdDutyCycle
+};
+
+struct LoopLater {
+    bool operator()(const LoopEvent& a, const LoopEvent& b) const {
+        if (a.t != b.t) return a.t > b.t;
+        if (a.rank != b.rank) return a.rank > b.rank;
+        return a.seq > b.seq;
+    }
+};
+
+// État d'un dispositif (côté équipement).
+struct LoopDevice {
+    std::uint8_t sf = 7;
+    std::int8_t dr = -1;
+    std::uint8_t power_index = 0;
+    double duty = 1.0;
+    std::uint32_t next_k = 0;      // rang de la prochaine émission
+    SimTime prev_end = 0;
+    bool has_prev = false;
+    std::int64_t last_tx = -1;     // indice de la dernière émission démarrée
+    std::uint8_t answer_mask = 0;  // réponses MAC à porter dans la prochaine émission
+    std::uint8_t answer_ok = 0;
+};
+
+// État du serveur pour un dispositif : état confirmé et commandes en attente.
+struct LoopServer {
+    std::vector<std::int32_t> snr;   // dixièmes de dB, 20 au plus
+    std::uint8_t dr = 0;
+    std::uint8_t power_index = 0;
+    bool adr_pending = false;
+    std::uint8_t pend_dr = 0;
+    std::uint8_t pend_power = 0;
+    bool adr_refused = false;
+    std::uint8_t duty_state = 0;     // 0 : rien à faire ; 1 : DutyCycleReq en attente ; 2 : acquittée
+    std::uint64_t accepted = 0;      // uplinks reçus
+};
+
+// Temps d'antenne d'un uplink à 125 kHz (CR 4/5, en-tête explicite), en ns.
+bool uplink_airtime(std::uint8_t sf, std::uint32_t bytes, SimTime& out) {
+    lora::RadioConfig rc;
+    rc.spreading_factor = sf;
+    rc.bandwidth = lora::Bandwidth::Bw125kHz;
+    rc.coding_rate = 1;
+    rc.low_data_rate_optimize = lora::low_data_rate_required(sf, rc.bandwidth);
+    const lora::AirtimeResult at = lora::time_on_air(rc, bytes);
+    if (at.status != lora::Status::Ok) return false;
+    out = at.nanoseconds;
+    return true;
+}
+
+// Octets MAC portés par un uplink : LinkADRAns (2), DutyCycleAns (1).
+std::uint32_t answer_octets(std::uint8_t mask) {
+    return static_cast<std::uint32_t>(((mask & 1U) != 0 ? 2U : 0U) + ((mask & 2U) != 0 ? 1U : 0U));
+}
+
+}  // namespace
+
+SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_count,
+                               const plan::DeviceRadio* radios, const LoopRegion* regions,
+                               const GatewaySpec& gateway, const PropagationSpec& prop,
+                               const env::Environment* environment, const LoopOptions& options,
+                               DeviceStats* per_device, SimulationStats& totals, LoopResult& out) {
+    totals = SimulationStats{};
+    out = LoopResult{};
+    if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
+    if (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) {
+        return SimStatus::InvalidInput;
+    }
+    if (options.adr && device_count > 0 && regions == nullptr) return SimStatus::InvalidInput;
+    const SimStatus gs = validate_inputs(gateway, prop);
+    if (gs != SimStatus::Ok) return gs;
+    const env::Environment no_environment{};
+    const env::Environment& envr = environment != nullptr ? *environment : no_environment;
+    if (environment != nullptr) {
+        if (env::validate_environment(envr) != env::EnvStatus::Ok) return SimStatus::InvalidEnvironment;
+        const std::uint64_t checks = static_cast<std::uint64_t>(device_count) * envr.obstacle_count;
+        if (checks > env::kMaxObstacleChecks) return SimStatus::EnvironmentWorkLimit;
+    }
+    if (options.duty_cycle && options.duty_cycle_exponent > 15) return SimStatus::InvalidInput;
+    if (options.installation_margin_tenth_db < -300 || options.installation_margin_tenth_db > 300) {
+        return SimStatus::InvalidInput;
+    }
+    {
+        const std::vector<plan::DeviceRadio> rv(radios, radios + device_count);
+        if (plan::DownlinkScheduler(rv, options.protocol).status() != plan::PlanStatus::Ok) {
+            return SimStatus::InvalidInput;
+        }
+    }
+
+    const std::size_t n = device_count;
+    std::vector<LoopDevice> dev(n);
+    std::vector<LoopServer> srv(n);
+    std::vector<double> path_loss(n), shadow(n), step_db(n, 0.0);
+    std::uint64_t total_tx = 0;
+    radio::LogDistanceModel model;
+    model.frequency_hz = prop.frequency_hz;
+    model.reference_distance_m = prop.reference_distance_m;
+    model.exponent = prop.exponent;
+    for (std::size_t i = 0; i < n; ++i) {
+        const EndDeviceSpec& d = devices[i];
+        if (validate_device(d) != SimStatus::Ok) return SimStatus::InvalidInput;
+        if (d.downlink.count > 0) return SimStatus::InvalidInput;  // descentes de l'API v1 : hors boucle
+        per_device[i] = DeviceStats{};
+        per_device[i].sent = d.messages;
+        dev[i].sf = d.spreading_factor;
+        dev[i].duty = d.duty_cycle;
+        if (options.adr) {
+            const LoopRegion& rg = regions[i];
+            if (rg.max_dr > 15 || rg.max_tx_power_index > 15 || rg.power_step_tenth_db < 1 ||
+                rg.power_step_tenth_db > 100) {
+                return SimStatus::InvalidInput;
+            }
+            int found = -1;
+            for (std::uint8_t j = 0; j <= rg.max_dr; ++j) {
+                if (rg.dr_sf[j] == d.spreading_factor) {
+                    found = j;
+                    break;
+                }
+            }
+            if (found < 0) return SimStatus::InvalidInput;  // SF du dispositif absent de la table
+            dev[i].dr = static_cast<std::int8_t>(found);
+            step_db[i] = rg.power_step_tenth_db / 10.0;
+            srv[i].dr = static_cast<std::uint8_t>(found);
+        }
+        // Gain de liaison : même calcul que `simulate_uplinks` (ordre des opérations conservé).
+        const double dx = d.position.x_m - gateway.position.x_m;
+        const double dy = d.position.y_m - gateway.position.y_m;
+        const double dist = std::max(std::hypot(dx, dy), prop.reference_distance_m);
+        if (environment != nullptr) {
+            env::PathLoss pl{};
+            if (env::path_loss_db(model, d.position.x_m, d.position.y_m, gateway.position.x_m,
+                                  gateway.position.y_m, envr, pl) != env::EnvStatus::Ok) {
+                return SimStatus::InvalidEnvironment;
+            }
+            path_loss[i] = pl.total_db;
+        } else {
+            const radio::BudgetResult pl = radio::log_distance_path_loss_db(model, dist);
+            if (pl.status != lora::Status::Ok) return SimStatus::InvalidInput;
+            path_loss[i] = pl.value;
+        }
+        shadow[i] = shadowing_sample_db(prop.shadowing_seed, static_cast<std::uint32_t>(i),
+                                        prop.shadowing_sigma_db);
+        total_tx += d.messages;
+        if (total_tx > kMaxTransmissions) return SimStatus::TooManyTransmissions;
+    }
+    // Sensibilité par SF (125 kHz), et borne du temps d'antenne (recherche arrière).
+    double sensitivity_by_sf[13] = {};
+    for (std::uint8_t sf = 7; sf <= 12; ++sf) {
+        if (lora::receiver_sensitivity_dbm(sf, lora::Bandwidth::Bw125kHz, sensitivity_by_sf[sf]) !=
+            lora::Status::Ok) {
+            return SimStatus::InvalidInput;
+        }
+    }
+    SimTime max_airtime = 0;
+    if (!uplink_airtime(12, 255, max_airtime)) return SimStatus::InvalidInput;
+
+    const auto tx_dbm = [&](std::size_t i, std::uint8_t power_index) {
+        return devices[i].tx_power_dbm - static_cast<double>(power_index) * step_db[i];
+    };
+    const auto rssi_of = [&](std::size_t i, std::uint8_t power_index) {
+        return tx_dbm(i, power_index) + gateway.antenna_gain_dbi - path_loss[i] - shadow[i];
+    };
+    // Instant de début de la k-ième émission nominale ; false si hors horizon.
+    const auto nominal = [&](std::size_t i, std::uint32_t k, SimTime& out_t) {
+        const double d = static_cast<double>(devices[i].start_offset_ns) +
+                         static_cast<double>(k) * static_cast<double>(devices[i].period_ns);
+        if (d > kMaxHorizonNs) return false;
+        out_t = static_cast<SimTime>(d);
+        return true;
+    };
+
+    std::priority_queue<LoopEvent, std::vector<LoopEvent>, LoopLater> q;
+    std::uint64_t seq = 0;
+    SimStatus status = SimStatus::Ok;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (devices[i].messages == 0) continue;
+        SimTime t0 = 0;
+        if (!nominal(i, 0, t0)) return SimStatus::InvalidInput;
+        q.push(LoopEvent{t0, kLoopRankStart, seq++, LoopKind::Start, static_cast<std::uint32_t>(i), 0, 0});
+    }
+
+    // Émissions (dans l'ordre des débuts), issues et réponses MAC portées.
+    std::vector<Tx> txs;
+    std::vector<TxOutcome> outcome;
+    std::vector<std::uint8_t> powers, masks, oks;
+    std::vector<std::int8_t> drs;
+    std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
+    std::vector<Interval> busy;         // émissions passerelle planifiées (croissantes, disjointes)
+    bool any_busy = false;
+    SimTime busy_until = 0;
+    std::vector<LoopDownlink>& dls = out.downlinks;
+    const auto transmitting = [&busy](SimTime start, SimTime end) {
+        auto it = std::lower_bound(busy.begin(), busy.end(), start,
+                                   [](const Interval& b, SimTime s) { return b.end <= s; });
+        return it != busy.end() && it->start < end;
+    };
+
+    // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
+    const auto on_received = [&](std::size_t a) -> void {
+        const Tx& ta = txs[a];
+        const std::uint32_t d = ta.device;
+        LoopServer& sv = srv[d];
+        const std::uint8_t mask = masks[a];
+        const std::uint8_t ok = oks[a];
+        // Réponses : confirmées seulement parce que cet uplink est reçu.
+        if ((mask & 1U) != 0 && sv.adr_pending) {
+            if ((ok & kLoopAnsAdrBits) == kLoopAnsAdrBits) {
+                sv.dr = sv.pend_dr;
+                sv.power_index = sv.pend_power;
+            } else {
+                sv.adr_refused = true;  // réponse négative : configuration refusée, pas de nouvel essai
+            }
+            sv.adr_pending = false;
+        }
+        if ((mask & 2U) != 0 && sv.duty_state == 1) sv.duty_state = 2;
+
+        if (options.adr) {
+            const LoopRegion& rg = regions[d];
+            const double snr = std::clamp(ta.rssi_dbm - kNoiseFloorDbmBw125, -kMaxLoopSnrDb, kMaxLoopSnrDb);
+            sv.snr.push_back(static_cast<std::int32_t>(std::lround(snr * 10.0)));
+            if (sv.snr.size() > kLoopHistory) sv.snr.erase(sv.snr.begin());
+            if (sv.snr.size() == kLoopHistory && !sv.adr_pending && !sv.adr_refused) {
+                lorawan::adr::Input in{};
+                for (std::size_t k = 0; k < sv.snr.size(); ++k) in.snr_tenth_db[k] = sv.snr[k];
+                in.n_samples = sv.snr.size();
+                in.dr = sv.dr;
+                in.dr_sf = rg.dr_sf;
+                in.min_dr = 0;
+                in.max_dr = rg.max_dr;
+                in.tx_power_index = sv.power_index;
+                in.max_tx_power_index = rg.max_tx_power_index;
+                in.power_step_tenth_db = rg.power_step_tenth_db;
+                in.installation_margin_tenth_db = options.installation_margin_tenth_db;
+                lorawan::adr::Output o{};
+                if (lorawan::adr::decide(in, o) != lorawan::adr::AdrStatus::Ok) {
+                    status = SimStatus::InvalidInput;
+                    return;
+                }
+                if (o.dr != sv.dr || o.tx_power_index != sv.power_index) {
+                    sv.adr_pending = true;
+                    sv.pend_dr = o.dr;
+                    sv.pend_power = o.tx_power_index;
+                }
+            }
+        }
+        if (options.duty_cycle && sv.duty_state == 0) sv.duty_state = 1;
+
+        ++sv.accepted;
+        const bool queued = options.protocol.downlink_every > 0 &&
+                            sv.accepted % options.protocol.downlink_every == 0;
+        std::uint8_t kind = 0;  // 1 ACK, 2 donnée, 3 MAC seul
+        if (queued) {
+            kind = 2;
+        } else if (options.protocol.confirmed_uplinks) {
+            kind = 1;
+        }
+        std::uint8_t cmds = 0;
+        if (sv.adr_pending) cmds |= kLoopCmdLinkAdr;
+        if (options.duty_cycle && sv.duty_state == 1) cmds |= kLoopCmdDutyCycle;
+        if (kind == 0 && cmds == 0) return;
+        if (kind == 0) kind = 3;
+
+        const std::uint32_t fopts = (((cmds & kLoopCmdLinkAdr) != 0) ? 5U : 0U) +
+                                    (((cmds & kLoopCmdDutyCycle) != 0) ? 2U : 0U);
+        const std::uint32_t base = kind == 2 ? kLoopDataOverheadBytes + options.protocol.downlink_payload_bytes
+                                             : kLoopAckBytes;
+        plan::DeviceRadio rad = radios[d];
+        rad.rx1_sf = ta.sf;  // RX1 au débit montant (RX1DROffset 0)
+        SimTime air = 0;
+        if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
+            status = SimStatus::InvalidInput;
+            return;
+        }
+        const SimTime t_open = ta.end + kLoopRxDelayNs;
+        const SimTime start = any_busy ? std::max(t_open, busy_until) : t_open;
+        const bool scheduled = start - t_open < kLoopRx1WindowNs;
+        if (scheduled) {
+            any_busy = true;
+            busy_until = start + air;
+            busy.push_back(Interval{start, busy_until});
+        }
+        LoopDownlink dl;
+        dl.uplink = static_cast<std::uint32_t>(a);
+        dl.device = d;
+        dl.kind = kind;
+        dl.commands = cmds;
+        dl.t_open = t_open;
+        dl.start_ns = scheduled ? start : -1;
+        dl.air_ns = air;
+        dl.req_dr = sv.pend_dr;
+        dl.req_power_index = sv.pend_power;
+        dls.push_back(dl);
+        // Fermeture de RX1 : l'occupation de la passerelle est connue, la réception se décide là.
+        q.push(LoopEvent{t_open + kLoopRx1WindowNs, kLoopRankCheck, seq++, LoopKind::Check, d,
+                         static_cast<std::uint32_t>(dls.size() - 1), 0});
+    };
+
+    while (!q.empty() && status == SimStatus::Ok) {
+        const LoopEvent ev = q.top();
+        q.pop();
+        switch (ev.kind) {
+            case LoopKind::Start: {
+                const std::size_t i = ev.device;
+                const EndDeviceSpec& d = devices[i];
+                LoopDevice& ds = dev[i];
+                if (ds.next_k >= d.messages) break;
+                const std::uint32_t bytes = d.payload_bytes + answer_octets(ds.answer_mask);
+                if (bytes > 255) {
+                    status = SimStatus::InvalidInput;
+                    break;
+                }
+                SimTime air = 0;
+                if (!uplink_airtime(ds.sf, bytes, air)) {
+                    status = SimStatus::InvalidInput;
+                    break;
+                }
+                if (ds.has_prev) {
+                    // Rapport cyclique au moment du départ (une commande reçue l'a pu changer).
+                    const double off = (1.0 - ds.duty) / ds.duty;
+                    if (off > 0.0) {
+                        const double earliest_d = static_cast<double>(ds.prev_end) +
+                                                  std::round(static_cast<double>(air) * off);
+                        if (earliest_d > kMaxHorizonNs) {
+                            status = SimStatus::InvalidInput;
+                            break;
+                        }
+                        const SimTime earliest = static_cast<SimTime>(earliest_d);
+                        if (earliest > ev.t) {
+                            q.push(LoopEvent{earliest, kLoopRankStart, seq++, LoopKind::Start,
+                                             ev.device, 0, 0});
+                            break;
+                        }
+                    }
+                }
+                const std::uint32_t idx = static_cast<std::uint32_t>(txs.size());
+                Tx t;
+                t.start = ev.t;
+                t.end = ev.t + air;
+                t.device = static_cast<std::uint32_t>(i);
+                t.sf = ds.sf;
+                t.rssi_dbm = rssi_of(i, ds.power_index);
+                txs.push_back(t);
+                outcome.push_back(TxOutcome::LostSensitivity);
+                powers.push_back(ds.power_index);
+                drs.push_back(ds.dr);
+                masks.push_back(ds.answer_mask);
+                oks.push_back(ds.answer_ok);
+                next_tx.push_back(-1);
+                if (ds.last_tx >= 0) next_tx[static_cast<std::size_t>(ds.last_tx)] = idx;
+                ds.last_tx = idx;
+                ds.answer_mask = 0;
+                ds.answer_ok = 0;
+                per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
+                totals.airtime_ns += static_cast<std::uint64_t>(air);
+                ds.prev_end = t.end;
+                ds.has_prev = true;
+                ++ds.next_k;
+                q.push(LoopEvent{t.end, kLoopRankEnd, seq++, LoopKind::End, 0, idx, 0});
+                if (ds.next_k < d.messages) {
+                    SimTime nom = 0;
+                    if (!nominal(i, ds.next_k, nom)) {
+                        status = SimStatus::InvalidInput;
+                        break;
+                    }
+                    q.push(LoopEvent{nom, kLoopRankStart, seq++, LoopKind::Start, ev.device, 0, 0});
+                }
+                break;
+            }
+            case LoopKind::End: {
+                const std::size_t a = ev.index;
+                const Tx ta = txs[a];
+                DeviceStats& st = per_device[ta.device];
+                TxOutcome o = TxOutcome::LostSensitivity;
+                if (ta.rssi_dbm < sensitivity_by_sf[ta.sf]) {
+                    ++st.lost_sensitivity;
+                    ++totals.lost_sensitivity;
+                } else if (transmitting(ta.start, ta.end)) {
+                    ++st.lost_gateway_busy;
+                    ++totals.lost_gateway_busy;
+                    o = TxOutcome::LostGatewayBusy;
+                } else {
+                    bool interfered = false;
+                    double max_interf = -1e300;
+                    const auto consider = [&](const Tx& tb) {
+                        if (tb.sf == ta.sf && overlap(ta, tb)) {
+                            interfered = true;
+                            max_interf = std::max(max_interf, tb.rssi_dbm);
+                        }
+                    };
+                    for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
+                        consider(txs[b]);
+                    }
+                    for (std::size_t b = a; b-- > 0;) {
+                        if (txs[b].start + max_airtime <= ta.start) break;
+                        consider(txs[b]);
+                    }
+                    const bool captured =
+                        !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
+                    if (captured) {
+                        ++st.received;
+                        ++totals.received;
+                        o = TxOutcome::Received;
+                    } else {
+                        ++st.lost_collision;
+                        ++totals.lost_collision;
+                        o = TxOutcome::LostCollision;
+                    }
+                }
+                outcome[a] = o;
+                if (o == TxOutcome::Received) on_received(a);
+                break;
+            }
+            case LoopKind::Check: {
+                // RX1 fermée : perdue si le dispositif a émis dans la fenêtre, ou si la réception
+                // de la descente échoue. Les émissions débutant avant cet instant sont connues.
+                LoopDownlink& dl = dls[ev.index];
+                const SimTime close = dl.t_open + kLoopRx1WindowNs;
+                const std::int64_t nxt = next_tx[dl.uplink];
+                dl.device_missed = nxt >= 0 && txs[static_cast<std::size_t>(nxt)].start < close;
+                bool ok = dl.start_ns >= 0 && !dl.device_missed;
+                if (ok) {
+                    const Tx& ta = txs[dl.uplink];
+                    plan::DeviceRadio rad = radios[dl.device];
+                    rad.rx1_sf = ta.sf;
+                    const double rssi_dl = ta.rssi_dbm - tx_dbm(dl.device, powers[dl.uplink]) +
+                                           options.protocol.gateway_tx_power_dbm +
+                                           options.protocol.device_antenna_gain_dbi;
+                    double sens = 0.0;
+                    if (lora::receiver_sensitivity_dbm(rad.rx1_sf, static_cast<lora::Bandwidth>(rad.rx1_bw_hz),
+                                                       sens) != lora::Status::Ok) {
+                        status = SimStatus::InvalidInput;
+                        break;
+                    }
+                    ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
+                }
+                dl.delivered = ok;
+                if (ok) {
+                    const SimTime apply_at = std::max(close, dl.start_ns + dl.air_ns);
+                    if ((dl.commands & kLoopCmdLinkAdr) != 0) {
+                        q.push(LoopEvent{apply_at, kLoopRankCheck, seq++, LoopKind::Apply, dl.device,
+                                         ev.index, kLoopCmdLinkAdr});
+                    }
+                    if ((dl.commands & kLoopCmdDutyCycle) != 0) {
+                        q.push(LoopEvent{apply_at, kLoopRankCheck, seq++, LoopKind::Apply, dl.device,
+                                         ev.index, kLoopCmdDutyCycle});
+                    }
+                }
+                break;
+            }
+            case LoopKind::Apply: {
+                const std::size_t i = ev.device;
+                LoopDevice& ds = dev[i];
+                const LoopDownlink& dl = dls[ev.index];
+                if (ev.cmd == kLoopCmdLinkAdr) {
+                    // Atomique : si le débit ou la puissance est refusé, rien n'est appliqué.
+                    const LoopRegion& rg = regions[i];
+                    const std::uint8_t dr = dl.req_dr;
+                    const std::uint8_t pi = dl.req_power_index;
+                    const bool ok_dr = dr == kLoopIgnoreField || (dr <= rg.max_dr && rg.dr_sf[dr] != 0);
+                    const bool ok_pi = pi == kLoopIgnoreField || pi <= rg.max_tx_power_index;
+                    ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
+                    ds.answer_ok = static_cast<std::uint8_t>((ds.answer_ok & ~3U) | (ok_dr ? 1U : 0U) |
+                                                             (ok_pi ? 2U : 0U));
+                    if (ok_dr && ok_pi) {
+                        if (dr != kLoopIgnoreField) {
+                            ds.dr = static_cast<std::int8_t>(dr);
+                            ds.sf = rg.dr_sf[dr];
+                        }
+                        if (pi != kLoopIgnoreField) ds.power_index = pi;
+                    }
+                } else {
+                    const double cap = std::ldexp(1.0, -static_cast<int>(options.duty_cycle_exponent));
+                    ds.duty = std::min(devices[i].duty_cycle, cap);
+                    ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 2U);
+                }
+                break;
+            }
+        }
+    }
+    if (status != SimStatus::Ok) return status;
+
+    // Sorties : émissions, occupation passerelle, métriques passerelle (comme `simulate_uplinks`).
+    out.uplinks.reserve(txs.size());
+    for (std::size_t a = 0; a < txs.size(); ++a) {
+        const Tx& t = txs[a];
+        LoopUplink u;
+        u.device = t.device;
+        u.start_ns = t.start;
+        u.end_ns = t.end;
+        u.spreading_factor = t.sf;
+        u.dr = drs[a];
+        u.power_index = powers[a];
+        u.rssi_dbm = t.rssi_dbm;
+        u.outcome = outcome[a];
+        u.answer_mask = masks[a];
+        u.answer_ok = oks[a];
+        out.uplinks.push_back(u);
+    }
+    out.gateway_busy = busy;
+    if (!txs.empty()) {
+        SimTime busy_sum = 0;
+        SimTime cur_s = txs[0].start;
+        SimTime cur_e = txs[0].end;
+        SimTime last_end = txs[0].end;
+        for (std::size_t k = 1; k < txs.size(); ++k) {
+            last_end = std::max(last_end, txs[k].end);
+            if (txs[k].start > cur_e) {
+                busy_sum += cur_e - cur_s;
+                cur_s = txs[k].start;
+                cur_e = txs[k].end;
+            } else {
+                cur_e = std::max(cur_e, txs[k].end);
+            }
+        }
+        busy_sum += cur_e - cur_s;
+        std::vector<SimTime> ends;
+        ends.reserve(txs.size());
+        for (const Tx& t : txs) ends.push_back(t.end);
+        std::sort(ends.begin(), ends.end());
+        std::uint64_t peak = 0;
+        std::size_t ended = 0;
+        for (std::size_t k = 0; k < txs.size(); ++k) {
+            while (ended < ends.size() && ends[ended] <= txs[k].start) ++ended;
+            peak = std::max(peak, static_cast<std::uint64_t>(k + 1 - ended));
+        }
+        const SimTime observation = last_end - txs[0].start;
+        totals.gateway_busy_ns = static_cast<std::uint64_t>(busy_sum);
+        totals.gateway_peak_concurrent = peak;
+        totals.observation_ns = observation;
+        totals.gateway_utilization =
+            observation > 0 ? static_cast<double>(busy_sum) / static_cast<double>(observation) : 0.0;
+    }
+    for (std::size_t i = 0; i < n; ++i) totals.sent += per_device[i].sent;
     return SimStatus::Ok;
 }
 

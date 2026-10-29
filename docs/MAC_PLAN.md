@@ -1,6 +1,6 @@
 # Commandes MAC dans la simulation : plan par phases
 
-Statut : phase 1 terminée ; phase 2 en cours (DeviceTime fait, LinkADR et DutyCycle en attente de la boucle fermée) ; phases 3 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
+Statut : phase 1 terminée ; phase 2 en cours (DeviceTime fait ; LinkADR et DutyCycle faits en boucle fermée pour la passerelle unique, voir `docs/CLOSED_LOOP_PLAN.md`) ; phases 3 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
 (`python/lsim/mac.py`, `core/src/mac_commands.cpp`) ; son usage dans la simulation ne l'est pas.
 
 ## Décisions retenues
@@ -17,9 +17,8 @@ Interface : le journal affiche un libellé MAC dédié (`macLabel`, `isMacEvent`
 Annotations : `mac_request` et les `mac_answer` ajoutés à un downlink n'ont pas de saut propre (pas de trame redessinée) ; seul un downlink dédié à une réponse en porte un.
 2. **ADR et temps** (en cours) :
    - Fait : DeviceTimeReq/Ans. `device_time_every` (bloc `mac:`) : DeviceTimeReq (1 octet, réservée) dans l'uplink de rang multiple de N ; DeviceTimeAns (6 octets : CID, secondes GPS, fraction 1/256 s) dans la descente qui répond, confirmée (`mac_answer`) seulement si cette descente est reçue. Ancre temporelle : époque GPS en t = 0 de la simulation (décision du propriétaire, sans champ de date au schéma).
-   - Reste, bloqué par une décision d'architecture : LinkADRReq/Ans et DutyCycleReq/Ans. Le moteur fixe aujourd'hui le SF, la puissance et le duty cycle de chaque dispositif pour toute la simulation (`EndDevice`). Une commande reçue doit changer les émissions suivantes, donc dépendre des collisions et des pertes radio.
-   - Décision retenue : boucle fermée dans le moteur, en une seule exécution, descentes incluses (voir `docs/CLOSED_LOOP_PLAN.md`). Le point fixe actuel de `build_trace` sur l'occupation passerelle est à supprimer. Chantier de refonte : le moteur doit traiter les émissions en ordre temporel et appliquer une descente reçue aux émissions suivantes. La décision ADR existante (`python/lsim/adr.py`, fonction pure) servira de calcul de référence côté serveur.
-   - Non commencé : aucun code moteur pour cette boucle.
+   - Fait (passerelle unique, sans jointure) : LinkADRReq/Ans et DutyCycleReq/Ans en boucle fermée, dans le moteur, en une seule exécution (`simulate_closed_loop`, `lsim_simulate_closed_loop_v1`, `python/lsim/closed_loop.py`). Décision ADR : `adr::decide()` côté serveur. Détails, hypothèses et preuves dans `docs/CLOSED_LOOP_PLAN.md` (S2).
+   - Reste : brancher le bloc `mac:` du scénario et `build_trace` sur la boucle fermée ; LinkADR et DutyCycle avec jointure, mesh ou multi-passerelles.
 3. **Configuration radio et classes** : RXParamSetup, NewChannel, RXTimingSetup, DlChannel, ADRParamSetup, PingSlot (info, channel), BeaconFreq, RejoinParamSetup, ForceRejoin, avec leurs effets sur le modèle.
 4. **Orchestration** : commandes initiées par le serveur, files de descentes, réponses différées, refus, expiration, interaction avec les classes A, B et C.
 5. **Validation et interface** : vecteurs de référence, conformité TS001-1.1.0, journal détaillé, métriques, limites documentées.

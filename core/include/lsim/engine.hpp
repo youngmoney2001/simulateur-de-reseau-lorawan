@@ -10,6 +10,7 @@
 //   * toutes les entrées sont validées avant calcul.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -217,6 +218,82 @@ struct CausalDownlinks {
     plan::PlanOptions options;
     std::vector<plan::Interval>* busy_out = nullptr;  // reçoit les émissions passerelle planifiées
 };
+
+// ------------------------------------------------------- Boucle fermée (S2)
+//
+// Passerelle unique, sans jointure, sans mesh ni autre commande MAC. Le serveur envoie
+// LinkADRReq (débit et puissance, décision ADR sur les 20 dernières trames reçues) et
+// DutyCycleReq (rapport cyclique 1/2^k). Une seule exécution, émissions en ordre temporel :
+//   * une commande reçue (fin de RX1 + réception de la descente) s'applique aux émissions qui
+//     commencent après cet instant ; le dispositif répond dans son uplink suivant ;
+//   * la réponse n'est confirmée côté serveur que si cet uplink est reçu ;
+//   * une commande est perdue si le dispositif émet pendant RX1 (classe A), ou si la passerelle
+//     n'a pas de créneau dans la RX1 ; elle est retentée au prochain uplink reçu.
+// Sans commande active, les résultats sont ceux de `simulate_uplinks` avec `causal`.
+
+// Paramètres régionaux d'un dispositif (table ADR). dr_sf[i] : SF du débit i, 0 = indisponible.
+// L'index de puissance 0 est la puissance initiale du dispositif ; chaque index retire
+// `power_step_tenth_db` dixièmes de dB.
+struct LoopRegion {
+    std::array<std::uint8_t, 16> dr_sf{};
+    std::uint8_t max_dr = 0;
+    std::uint8_t max_tx_power_index = 0;
+    std::int32_t power_step_tenth_db = 20;
+};
+
+struct LoopOptions {
+    plan::PlanOptions protocol;               // acquittements, descentes de données, puissances
+    bool adr = false;                         // LinkADRReq
+    std::int32_t installation_margin_tenth_db = 0;  // marge d'installation de l'ADR (dixièmes de dB)
+    bool duty_cycle = false;                  // DutyCycleReq, une fois, au premier uplink reçu
+    std::uint8_t duty_cycle_exponent = 0;     // 0..15 : rapport cyclique 1 / 2^k
+};
+
+// Uplink : une entrée par émission, dans l'ordre temporel des débuts.
+struct LoopUplink {
+    std::uint32_t device = 0;
+    SimTime start_ns = 0;
+    SimTime end_ns = 0;
+    std::uint8_t spreading_factor = 7;
+    std::int8_t dr = -1;                      // -1 : pas de table régionale
+    std::uint8_t power_index = 0;
+    double rssi_dbm = 0.0;
+    TxOutcome outcome = TxOutcome::LostSensitivity;
+    std::uint8_t answer_mask = 0;             // bit 0 : LinkADRAns, bit 1 : DutyCycleAns (portées)
+    std::uint8_t answer_ok = 0;               // bit 0 : débit acquitté, bit 1 : puissance acquittée
+};
+
+inline constexpr std::uint8_t kLoopCmdLinkAdr = 1;   // bit de `LoopDownlink::commands`
+inline constexpr std::uint8_t kLoopCmdDutyCycle = 2;
+
+// Descente créée (ACK, donnée ou MAC seul) pour un uplink reçu.
+struct LoopDownlink {
+    std::uint32_t uplink = 0;                 // indice dans LoopResult::uplinks
+    std::uint32_t device = 0;
+    std::uint8_t kind = 3;                    // 1 ACK, 2 donnée, 3 MAC seul
+    std::uint8_t commands = 0;                // kLoopCmdLinkAdr | kLoopCmdDutyCycle (FOpts)
+    SimTime t_open = 0;
+    SimTime start_ns = -1;                    // -1 : pas de créneau passerelle dans la RX1
+    SimTime air_ns = 0;
+    bool device_missed = false;               // le dispositif émet pendant la RX1
+    bool delivered = false;                   // reçue par le dispositif (commandes appliquées)
+    std::uint8_t req_dr = 0;                  // LinkADRReq : débit demandé
+    std::uint8_t req_power_index = 0;         // LinkADRReq : index de puissance demandé
+};
+
+struct LoopResult {
+    std::vector<LoopUplink> uplinks;
+    std::vector<LoopDownlink> downlinks;
+    std::vector<Interval> gateway_busy;       // émissions passerelle planifiées (ordre croissant)
+};
+
+// `radios` : un paramètre radio par dispositif (le SF RX1 suit le SF montant courant).
+// `regions` : une table par dispositif. Sans ADR, les tables ne sont pas lues.
+SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_count,
+                               const plan::DeviceRadio* radios, const LoopRegion* regions,
+                               const GatewaySpec& gateway, const PropagationSpec& prop,
+                               const env::Environment* environment, const LoopOptions& options,
+                               DeviceStats* per_device, SimulationStats& totals, LoopResult& out);
 
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
