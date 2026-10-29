@@ -75,6 +75,9 @@ SimStatus validate_inputs(const GatewaySpec& g, const PropagationSpec& p) {
     if (!finite(g.position.x_m) || !finite(g.position.y_m) || !finite(g.antenna_gain_dbi)) {
         return SimStatus::InvalidInput;
     }
+    if (!finite(g.rx_sensitivity_offset_db) || std::fabs(g.rx_sensitivity_offset_db) > 20.0) {
+        return SimStatus::InvalidInput;
+    }
     if (!finite(p.frequency_hz) || p.frequency_hz <= 0.0) return SimStatus::InvalidInput;
     if (!finite(p.reference_distance_m) || p.reference_distance_m <= 0.0) return SimStatus::InvalidInput;
     if (!finite(p.exponent) || p.exponent < 1.0 || p.exponent > 6.0) return SimStatus::InvalidInput;
@@ -473,7 +476,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
 // Charge de réception par passerelle, sur les trames audibles (RSSI >= sensibilité) :
 // union des intervalles, pic de simultanéité. Balayage d'événements, fins avant débuts.
 static void fill_gateway_load(const std::vector<Tx>& txs, const std::vector<double>& rssi,
-                              const std::vector<double>& sensitivity, std::size_t G,
+                              const std::vector<double>& thresholds, std::size_t G,
                               GatewayRxStats* per_gateway) {
     if (txs.empty()) return;
     SimTime first = txs.front().start;
@@ -487,7 +490,7 @@ static void fill_gateway_load(const std::vector<Tx>& txs, const std::vector<doub
         events.clear();
         std::uint64_t audible = 0;
         for (const Tx& t : txs) {
-            if (rssi[t.device * G + g] < sensitivity[t.device]) continue;
+            if (rssi[t.device * G + g] < thresholds[t.device * G + g]) continue;
             events.emplace_back(t.start, +1);
             events.emplace_back(t.end, -1);
             ++audible;
@@ -521,12 +524,13 @@ static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_
                         const GatewaySpec* gateways, std::size_t G, const PropagationSpec& prop,
                         const env::Environment* environment, std::vector<SimTime>& airtime,
                         std::vector<double>& sensitivity, std::vector<double>& rssi,
-                        std::uint64_t& total_tx) {
+                        std::vector<double>& thresholds, std::uint64_t& total_tx) {
     const env::Environment no_environment{};
     const env::Environment& envr = environment != nullptr ? *environment : no_environment;
     airtime.assign(device_count, 0);
     sensitivity.assign(device_count, 0.0);
     rssi.assign(device_count * G, 0.0);
+    thresholds.assign(device_count * G, 0.0);
     total_tx = 0;
 
     radio::LogDistanceModel model;
@@ -583,6 +587,12 @@ static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_
         if (total_tx > kMaxTransmissions) return SimStatus::TooManyTransmissions;
     }
 
+    // Seuil montant par couple (dispositif, passerelle) : sensibilité du dispositif + décalage.
+    for (std::size_t i = 0; i < device_count; ++i) {
+        for (std::size_t g = 0; g < G; ++g) {
+            thresholds[i * G + g] = sensitivity[i] + gateways[g].rx_sensitivity_offset_db;
+        }
+    }
     return SimStatus::Ok;
 }
 
@@ -654,9 +664,10 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
     std::vector<SimTime> airtime;
     std::vector<double> sensitivity;
     std::vector<double> rssi;  // rssi[i * G + g]
+    std::vector<double> thresholds;  // seuil montant par (dispositif, passerelle)
     std::uint64_t total_tx = 0;
     const SimStatus ls = prepare_links(devices, device_count, gateways, G, prop, environment,
-                                       airtime, sensitivity, rssi, total_tx);
+                                       airtime, sensitivity, rssi, thresholds, total_tx);
     if (ls != SimStatus::Ok) return ls;
     for (std::size_t i = 0; i < device_count; ++i) per_device[i] = DeviceStats{};
 
@@ -698,7 +709,7 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
         if (a.start != b.start) return a.start < b.start;
         return a.device < b.device;
     });
-    fill_gateway_load(txs, rssi, sensitivity, G, per_gateway);
+    fill_gateway_load(txs, rssi, thresholds, G, per_gateway);
 
     if (trace != nullptr) trace->reserve(txs.size());
     for (std::size_t a = 0; a < txs.size(); ++a) {
@@ -714,7 +725,7 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
         bool any_busy = false;
         for (std::size_t g = 0; g < G; ++g) {
             const double r = rssi[ta.device * G + g];
-            if (r < sensitivity[ta.device]) {
+            if (r < thresholds[ta.device * G + g]) {
                 ++per_gateway[g].lost_sensitivity;
                 continue;
             }
@@ -874,9 +885,10 @@ SimStatus simulate_uplinks_multi_downlinks(
     std::vector<SimTime> airtime;
     std::vector<double> sensitivity;
     std::vector<double> rssi;
+    std::vector<double> thresholds;  // seuil montant par (dispositif, passerelle)
     std::uint64_t total_tx = 0;
     const SimStatus ls = prepare_links(devices, device_count, gateways, G, prop, environment,
-                                       airtime, sensitivity, rssi, total_tx);
+                                       airtime, sensitivity, rssi, thresholds, total_tx);
     if (ls != SimStatus::Ok) return ls;
     for (std::size_t i = 0; i < device_count; ++i) per_device[i] = DeviceStats{};
 
@@ -920,7 +932,7 @@ SimStatus simulate_uplinks_multi_downlinks(
         if (a.start != b.start) return a.start < b.start;
         return a.device < b.device;
     });
-    fill_gateway_load(txs, rssi, sensitivity, G, per_gateway);
+    fill_gateway_load(txs, rssi, thresholds, G, per_gateway);
     const std::size_t T = txs.size();
     std::vector<std::int64_t> next_start(T, -1);
     {
@@ -939,7 +951,7 @@ SimStatus simulate_uplinks_multi_downlinks(
         const Tx& ta = txs[a];
         for (std::size_t g = 0; g < G; ++g) {
             const double r = rssi[ta.device * G + g];
-            if (r < sensitivity[ta.device]) {
+            if (r < thresholds[ta.device * G + g]) {
                 sens_fail[a] |= std::uint64_t{1} << g;
                 continue;
             }

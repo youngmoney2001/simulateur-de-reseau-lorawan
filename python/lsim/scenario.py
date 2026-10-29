@@ -31,7 +31,8 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
-from lsim.gateway_profiles import can_relay, can_simulate_radio, get_profile
+from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
+                                   rx_sensitivity_offset_db)
 
 SCHEMA_VERSION = 1
 MAX_DEVICES = 10_000
@@ -407,7 +408,9 @@ class Scenario:
         return [self.model.gateway]
 
     def gateways(self) -> list[Gateway]:
-        return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
+        return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                        rx_sensitivity_offset_db=(rx_sensitivity_offset_db(get_profile(g.profile))
+                                                  if g.profile is not None else 0.0))
                 for g in self.gateway_models()]
 
     @property

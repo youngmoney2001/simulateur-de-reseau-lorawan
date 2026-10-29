@@ -306,6 +306,7 @@ typedef struct lsim_gateway {
     double x_m;
     double y_m;
     double antenna_gain_dbi;
+    double rx_sensitivity_offset_db; /* décalage du seuil montant (dB), |.| <= 20 ; 0 = sans profil */
 } lsim_gateway;
 
 typedef struct lsim_propagation {

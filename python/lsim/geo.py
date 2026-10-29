@@ -16,6 +16,7 @@ from array import array
 from typing import Any, Optional
 
 from lsim.export import RunResult
+from lsim.gateway_profiles import get_profile, rx_sensitivity_offset_db
 from lsim.radio import LinkBudget, LogDistanceModel, receiver_sensitivity_dbm
 from lsim.scenario import GatewayModel, Scenario
 from lsim.simulator import Gateway, coverage_radii
@@ -45,7 +46,9 @@ DEM_FORMAT = "lsim-dem-v1"
 def _mapl_db(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
              gateway: Optional[GatewayModel] = None) -> float:
     gw = gateway if gateway is not None else scenario.model.gateway
-    sensitivity = receiver_sensitivity_dbm(spreading_factor, 125_000)
+    # Même seuil que la simulation : référence du moteur + décalage du profil (voir gateway_profiles).
+    offset = rx_sensitivity_offset_db(get_profile(gw.profile)) if gw.profile is not None else 0.0
+    sensitivity = receiver_sensitivity_dbm(spreading_factor, 125_000) + offset
     budget = LinkBudget(tx_power_dbm=tx_power_dbm, rx_antenna_gain_dbi=gw.antenna_gain_dbi)
     return budget.max_allowable_path_loss_db(sensitivity)
 

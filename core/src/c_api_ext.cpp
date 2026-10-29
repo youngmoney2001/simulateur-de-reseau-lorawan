@@ -330,6 +330,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         g.position.x_m = gateway->x_m;
         g.position.y_m = gateway->y_m;
         g.antenna_gain_dbi = gateway->antenna_gain_dbi;
+        g.rx_sensitivity_offset_db = gateway->rx_sensitivity_offset_db;
 
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;
@@ -440,6 +441,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         g.position.x_m = gateway->x_m;
         g.position.y_m = gateway->y_m;
         g.antenna_gain_dbi = gateway->antenna_gain_dbi;
+        g.rx_sensitivity_offset_db = gateway->rx_sensitivity_offset_db;
 
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;
@@ -618,6 +620,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
         g.position.x_m = gateway->x_m;
         g.position.y_m = gateway->y_m;
         g.antenna_gain_dbi = gateway->antenna_gain_dbi;
+        g.rx_sensitivity_offset_db = gateway->rx_sensitivity_offset_db;
 
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;
@@ -938,6 +941,7 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
             gws[g].position.x_m = gateways[g].x_m;
             gws[g].position.y_m = gateways[g].y_m;
             gws[g].antenna_gain_dbi = gateways[g].antenna_gain_dbi;
+            gws[g].rx_sensitivity_offset_db = gateways[g].rx_sensitivity_offset_db;
         }
         std::vector<std::vector<lsim::sim::Interval>> busy_lists;
         if (busy != nullptr) {
@@ -1073,6 +1077,7 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             gws[g].position.x_m = gateways[g].x_m;
             gws[g].position.y_m = gateways[g].y_m;
             gws[g].antenna_gain_dbi = gateways[g].antenna_gain_dbi;
+            gws[g].rx_sensitivity_offset_db = gateways[g].rx_sensitivity_offset_db;
         }
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;

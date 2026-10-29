@@ -222,7 +222,7 @@ paramètre radio : il est refusé comme passerelle radio, le module installé do
 
 - `mesh: true` : la passerelle relaie sur la bande mesh 2,4 GHz. Profil de relais : `rak5146-rak5148`
   (RAK5146 pour les capteurs sous-GHz, RAK5148 pour le lien mesh ; solution publiée par RAK, compatibilité
-  logicielle **à valider** : essai ChirpStack Gateway OS ou confirmation RAK ; la sensibilité des profils n'entre pas encore dans le calcul de liaison). Un relais `rak5148` seul ne reçoit pas les capteurs sous-GHz : une région de
+  logicielle **à valider** : essai ChirpStack Gateway OS ou confirmation RAK ; la sensibilité publiée entre dans la réception montante des accès par un décalage de -3 dB, modèle `decalage-uniforme-v1`, non calibré sur matériel). Un relais `rak5148` seul ne reçoit pas les capteurs sous-GHz : une région de
   groupe absente de ses bandes d'accès est refusée à la validation. Sans `mesh`, la passerelle a un backhaul
   IP direct vers le LNS.
 - `mesh` (bloc de scénario) : `border` (nom de la passerelle frontière, `mesh: true`),

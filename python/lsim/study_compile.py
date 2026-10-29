@@ -36,8 +36,9 @@ DEFAULT_REGION = "EU868"
 DEFAULT_SUB_BAND = 1
 MESH_PROFILE = "rak5146-rak5148"  # relais : accès sous-GHz + lien mesh 2,4 GHz (gateway_profiles)
 MESH_DEFAULTS = {"spreading_factor": 9, "bandwidth_khz": 203, "max_hops": 8}   # défauts de MeshModel
-NOT_MODELLED = ("puissance d'émission des passerelles d'accès", "sensibilité des récepteurs (budget de liaison "
-                "non calculé : les profils ne la font pas intervenir)", "fréquence réglée sur les passerelles",
+NOT_MODELLED = ("puissance d'émission des passerelles d'accès", "sensibilité des récepteurs : décalage uniforme "
+                "par profil en réception montante (decalage-uniforme-v1, non calibré), descente et mesh inchangés",
+                "fréquence réglée sur les passerelles",
                 "interface Ethernet", "serveur réseau (le LNS est implicite derrière la frontière)")
 
 

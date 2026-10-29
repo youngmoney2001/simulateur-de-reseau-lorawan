@@ -148,7 +148,7 @@ def test_compiled_notes_state_software_reserve_and_radio_limit():
         **{"relais-1": cfg("EU868", mesh={"bandwidth_khz": "812"})}), seed=0)
     text = " | ".join(out.notes)
     assert "rak5146-rak5148" in text and "à valider" in text
-    assert "sensibilité des récepteurs" in text and "non calculé" in text
+    assert "sensibilité des récepteurs" in text and "decalage-uniforme-v1" in text and "non calibré" in text
 
 
 def test_no_software_reserve_without_relay():

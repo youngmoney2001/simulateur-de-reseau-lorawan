@@ -128,6 +128,7 @@ class Gateway:
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    rx_sensitivity_offset_db: float = 0.0   # 0 sans profil ; voir gateway_profiles.rx_sensitivity_offset_db
 
 
 @dataclass(frozen=True)
@@ -498,7 +499,7 @@ def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gate
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions")
     c_devs = _c_end_devices(devices)
     c_gws = (_CGateway * g_count)(*[
-        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi) for g in gateways])
+        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)
@@ -621,7 +622,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions")
     c_devs = _c_end_devices(devices)
     c_gws = (_CGateway * g_count)(*[
-        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi) for g in gateways])
+        _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
                            propagation.shadowing_sigma_db, propagation.shadowing_seed)

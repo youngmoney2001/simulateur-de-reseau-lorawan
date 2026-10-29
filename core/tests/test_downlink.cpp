@@ -201,7 +201,7 @@ void run_downlink_tests() {
         p.count = 1;
         p.first_request_ns = 10 * kS;
         p.rx_window_ns = kS;
-        lsim_gateway g{0.0, 0.0, 0.0};
+        lsim_gateway g{0.0, 0.0, 0.0, 0.0};
         lsim_propagation pr{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
         lsim_device_stats per[1]{};
         lsim_sim_stats tot{};

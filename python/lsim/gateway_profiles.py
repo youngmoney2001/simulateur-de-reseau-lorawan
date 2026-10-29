@@ -26,6 +26,9 @@ class GatewayProfile:
     # Hôte : porteur de modules, sans radio LoRa propre publiée. Un hôte ne peut pas être
     # utilisé comme passerelle radio : il faut un module dans ses emplacements.
     is_host: bool = False
+    # Point de sensibilité publié (SF, bande en Hz) de `rx_sensitivity_min_dbm`. None : point non
+    # publié, ou hors des bandes du moteur (125/250/500 kHz) : aucun décalage n'est appliqué.
+    rx_sensitivity_point: Optional[tuple[int, int]] = None
     # Compatibilité logicielle validée (essai réel ou confirmation constructeur). False : provisoire.
     software_validated: bool = True
     notes: tuple[str, ...] = field(default=())
@@ -84,6 +87,7 @@ CATALOG: tuple[GatewayProfile, ...] = (
         access_bands=("EU433", "EU868", "RU864", "CN470", "US915", "AS923", "AU915", "KR920", "IN865"),
         max_channels=8,                 # page produit : « 8 channels subGHz LoRa concentrator (RAK5146) »
         rx_sensitivity_min_dbm=-139.0,  # RAK5146, accès : -139 dBm à SF12 / 125 kHz (fiche)
+        rx_sensitivity_point=(12, 125_000),
         tx_power_max_dbm=27.0,          # RAK5146 : Tx jusqu'à 27 dBm (fiche)
         mesh_bands=("ISM2400",),        # RAK5148 : lien relais 2,4 GHz
         software_validated=False,       # provisoire : essai ChirpStack Gateway OS ou confirmation RAK requis
@@ -94,8 +98,10 @@ CATALOG: tuple[GatewayProfile, ...] = (
             "mais pas le fonctionnement de chaque version logicielle. Essai requis : détection "
             "simultanée des deux concentrateurs, accès EU868 et backhaul mesh 2,4 GHz, relais de "
             "trames entre les deux radios, comportement après redémarrage et perte du lien mesh.",
-            "Fidélité radio : la sensibilité publiée (RAK5146, -139 dBm) n'est PAS utilisée par le "
-            "moteur ; seule la puissance d'émission (27 dBm) l'est, pour les relais.",
+            "Fidélité radio : la sensibilité publiée (RAK5146, -139 dBm, SF12 / 125 kHz) entre dans la "
+            "réception montante des accès sous forme de décalage uniforme (modèle « decalage-uniforme-v1 », "
+            "-3 dB). Hypothèse non calibrée sur le matériel : ni la descente ni le lien mesh n'en tiennent "
+            "compte, et la puissance d'émission (27 dBm) ne sert qu'aux relais.",
             "Un relais RAK5148 seul ne reçoit pas les capteurs sous-GHz : la règle de scénario le refuse.",
         ),
     ),
@@ -127,6 +133,21 @@ def get_profile(key: str) -> GatewayProfile:
         if p.key == key:
             return p
     raise KeyError(f"passerelle inconnue : {key!r}")
+
+
+# Hypothèse de modèle versionnée (voir CHANGELOG) : le décalage mesuré au seul point publié
+# s'applique à tous les SF et bandes du moteur. Sans donnée par SF, c'est l'hypothèse la plus simple.
+SENSITIVITY_MODEL = "decalage-uniforme-v1"
+
+
+def rx_sensitivity_offset_db(profile: GatewayProfile) -> float:
+    """Décalage (dB) du seuil montant de la passerelle : sensibilité publiée − sensibilité de référence
+    du moteur au même point (SF, bande). 0.0 si le profil ne publie pas de point utilisable."""
+    if profile.rx_sensitivity_min_dbm is None or profile.rx_sensitivity_point is None:
+        return 0.0
+    from lsim.radio import receiver_sensitivity_dbm
+    sf, bw_hz = profile.rx_sensitivity_point
+    return float(profile.rx_sensitivity_min_dbm) - receiver_sensitivity_dbm(sf, bw_hz)
 
 
 def software_status(profile: GatewayProfile) -> str:

@@ -255,6 +255,7 @@ class _CGateway(ctypes.Structure):
         ("x_m", ctypes.c_double),
         ("y_m", ctypes.c_double),
         ("antenna_gain_dbi", ctypes.c_double),
+        ("rx_sensitivity_offset_db", ctypes.c_double),
     ]
 
 

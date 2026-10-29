@@ -93,6 +93,9 @@ inline constexpr double kMaxHorizonNs = 4.0e18;
 struct GatewaySpec {
     Position position;
     double antenna_gain_dbi = 0.0;
+    // Décalage du seuil de réception montant de cette passerelle (dB) : seuil = sensibilité de
+    // l'équipement + décalage. Négatif = passerelle plus sensible. 0 = modèle sans profil.
+    double rx_sensitivity_offset_db = 0.0;
 };
 
 struct PropagationSpec {
