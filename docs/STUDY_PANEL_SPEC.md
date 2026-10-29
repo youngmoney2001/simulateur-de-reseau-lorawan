@@ -28,6 +28,9 @@ firmware réel.
   bande dédiée, comme le fait ChirpStack Gateway Mesh : la passerelle frontière déballe la trame
   relayée et la transmet au serveur comme si elle l'avait reçue directement. Le protocole exact
   (encapsulation, nombre de sauts, bande) est un paramètre du modèle, pas une copie d'un produit.
+- Bande : **dédiée**, distincte de celle des capteurs (choix de l'auteur). Le lien mesh n'entre
+  donc pas en collision avec le trafic des capteurs, mais il a son propre duty cycle et son propre
+  temps d'antenne.
 - Limite de sauts : 8 par défaut (valeur de ChirpStack Gateway Mesh), configurable.
 
 Source de référence du mécanisme : documentation ChirpStack Gateway Mesh
@@ -187,5 +190,7 @@ implémenter, voir `docs/API_CONTRACT.md`). Les tentatives sont journalisées sa
 | Exercices | Notés (barème, somme des critères) |
 | Équipements | Mélange de modèles génériques et de références commerciales |
 
-Points restants à trancher avant la phase 2 : la bande du lien mesh (même bande que les capteurs ou
-bande dédiée), et le nombre de sauts par défaut (proposé : 8, comme ChirpStack).
+| Bande du lien mesh | **Bande dédiée**, distincte de la bande des capteurs (choix de l'auteur) |
+
+Points restants avant la phase 2 : le choix précis de la bande dédiée (sous-GHz second canal ou
+2,4 GHz), et le nombre de sauts par défaut (proposé : 8, comme ChirpStack).
