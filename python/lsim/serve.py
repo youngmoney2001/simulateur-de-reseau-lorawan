@@ -23,7 +23,9 @@ import logging
 import os
 import stat
 from pathlib import Path
+from typing import Optional
 
+from lsim.basicstation import DEFAULT_HWSPEC, BasicStationServer, make_ssl_context, start_basicstation_server
 from lsim.gwmp_server import JoinUplinkHandler, start_server
 from lsim.join_server import DeviceKeys, JoinServer
 from lsim.join_store import DurableJoinStore
@@ -104,6 +106,46 @@ def enqueue_downlink(db_path: Path, dev_eui_hex: str, fport: int, payload_hex: s
     store.enqueue_downlink(dev_eui, fport, confirmed, payload, plan)
     with store.transaction() as tx:
         return tx.queue_length(dev_eui)
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def run_basicstation(host: str, port: int, db_path: Path, keys_path: Path, net_id_hex: str,
+                     region: str, uri: str, tls_cert: Optional[str] = None,
+                     tls_key: Optional[str] = None, hwspec: str = DEFAULT_HWSPEC) -> int:
+    """Passerelles Basic Station (WebSocket). `uri` : adresse publique annoncée aux passerelles."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    log = logging.getLogger("lsim.serve")
+    if not uri.startswith(("ws://", "wss://")):
+        raise ValueError("--uri : schéma ws:// ou wss:// attendu")
+    if (tls_cert is None) != (tls_key is None):
+        raise ValueError("--tls-cert et --tls-key vont ensemble")
+    if tls_cert is None and host not in _LOOPBACK_HOSTS:
+        log.warning("WebSocket en clair sur %s : utiliser --tls-cert/--tls-key ou un proxy TLS", host)
+    net_id = _hex(net_id_hex, 3, "NetID")
+    keys = load_keys_file(keys_path)
+    plan = get_plan(region)
+    handler = build_handler(open_store(db_path), keys, net_id[::-1], plan)
+    ssl_context = make_ssl_context(tls_cert, tls_key) if tls_cert else None
+    server = BasicStationServer(handler, plan, net_id=int.from_bytes(net_id, "big"), uri=uri,
+                                hwspec=hwspec, on_delivery=_log_delivery)
+
+    async def main() -> None:
+        listener = await start_basicstation_server(server, host, port, ssl_context)
+        log.info("Basic Station : écoute %s:%s (%s), plan %s, %d dispositif(s)",
+                 host, port, "TLS" if ssl_context else "clair", plan.name, len(keys))
+        try:
+            async with listener:
+                await listener.serve_forever()
+        finally:
+            log.info("statistiques : %s", dict(server.stats))
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 def _log_delivery(delivery: Delivery) -> None:

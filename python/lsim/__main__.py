@@ -41,10 +41,19 @@ def main(argv: list[str] | None = None) -> int:
                      help="profil énergie : rak4631 (module, MCU inclus) ou "
                           "sx1262-stm32l072 (puce + MCU séparé) ; prime sur energy.profile du "
                           f"YAML ; sans l'un ni l'autre : {DEFAULT_ENERGY_PROFILE}")
-    srv = sub.add_parser("serve", help="serveur de jointure pour passerelles Semtech UDP")
+    srv = sub.add_parser("serve", help="serveur de jointure pour passerelles (Semtech UDP ou Basic Station)")
+    srv.add_argument("--transport", choices=["udp", "basicstation"], default="udp",
+                     help="udp : Semtech GWMP ; basicstation : WebSocket LNS (défaut : %(default)s)")
     srv.add_argument("--host", default="127.0.0.1",
                      help="adresse d'écoute (défaut : boucle locale ; 0.0.0.0 pour le réseau)")
-    srv.add_argument("--port", type=int, default=DEFAULT_PORT, help="port UDP (défaut : %(default)s)")
+    srv.add_argument("--port", type=int, default=None,
+                     help="port (défaut : 1700 en UDP, 8887 en Basic Station)")
+    srv.add_argument("--uri", default=None,
+                     help="basicstation : adresse WebSocket publique annoncée (ws:// ou wss://)")
+    srv.add_argument("--tls-cert", default=None, help="basicstation : certificat PEM (wss)")
+    srv.add_argument("--tls-key", default=None, help="basicstation : clé PEM du certificat")
+    srv.add_argument("--hwspec", default="sx1302/1",
+                     help="basicstation : matériel annoncé (défaut : %(default)s)")
     srv.add_argument("--db", required=True, help="base SQLite du registre de jointure")
     srv.add_argument("--keys", required=True, help="fichier JSON des clés (mode 600)")
     srv.add_argument("--net-id", default="000013", help="NetID, 3 octets en hexadécimal")
@@ -84,8 +93,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         from lsim.serve import run as serve_run
         try:
-            return serve_run(args.host, args.port, Path(args.db), Path(args.keys), args.net_id,
-                             args.region)
+            if args.transport == "basicstation":
+                from lsim.basicstation import DEFAULT_PORT_WS
+                from lsim.serve import run_basicstation
+                if args.uri is None:
+                    raise ValueError("--uri requis pour basicstation")
+                return run_basicstation(args.host, args.port or DEFAULT_PORT_WS, Path(args.db),
+                                        Path(args.keys), args.net_id, args.region, args.uri,
+                                        args.tls_cert, args.tls_key, args.hwspec)
+            if args.uri is not None or args.tls_cert or args.tls_key:
+                raise ValueError("--uri et TLS ne concernent que --transport basicstation")
+            return serve_run(args.host, args.port or DEFAULT_PORT, Path(args.db), Path(args.keys),
+                             args.net_id, args.region)
         except (ValueError, OSError) as exc:
             print(f"erreur : {exc}", file=sys.stderr)
             return 2

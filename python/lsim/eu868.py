@@ -28,4 +28,5 @@ EU868 = register(Plan(
     rx1_channel_hz=lambda tx_ch: _CHANNELS_HZ[tx_ch],    # RX1 : même canal
     max_frm_payload={0: 51, 1: 51, 2: 51, 3: 115, 4: 222, 5: 222, 6: 222},
     dl_settings=0x80,                                    # OptNeg, RX2 DR0
+    rx2_hz=869_525_000,                                  # RX2 par défaut (RP002-1.0.2 §2.4.4)
 ))

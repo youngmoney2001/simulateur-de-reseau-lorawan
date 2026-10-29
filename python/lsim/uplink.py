@@ -55,6 +55,7 @@ class Outcome:
     issue: str
     txpk: Optional[Txpk] = None
     delivery: Optional["Delivery"] = None
+    dev_eui: Optional[bytes] = None      # dispositif concerné par le downlink (Basic Station : DevEui)
 
 
 @dataclass(frozen=True)
@@ -145,7 +146,7 @@ class DataUplinkHandler:
             txpk, sent = _build_downlink(rxpk, rec, rx1, ack_for=cand, send=None,
                                          max_payload=self._plan.queue_payload_max)
             _save(tx, rec, fcnt_up=rec.fcnt_up, pending=rec.pending_conf, sent=sent)
-            return Outcome("data_ack_repeated", txpk=txpk)
+            return Outcome("data_ack_repeated", txpk=txpk, dev_eui=rec.dev_eui)
 
         fport = frame.fport
         payload = frame.payload if (fport is not None and fport > 0 and rec.has_app_key) else None
@@ -165,7 +166,7 @@ class DataUplinkHandler:
         # Un downlink confirmé émis ici devient la confirmation attendue de l'uplink suivant.
         pending = sent.counter if (sent is not None and sent.confirmed) else None
         _save(tx, rec, fcnt_up=cand, pending=pending, sent=sent)
-        return Outcome("data_accepted", txpk=txpk, delivery=delivery)
+        return Outcome("data_accepted", txpk=txpk, delivery=delivery, dev_eui=rec.dev_eui)
 
 
 @dataclass(frozen=True)

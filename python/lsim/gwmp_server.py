@@ -69,7 +69,7 @@ class JoinUplinkHandler:
             tmst = (rxpk.tmst + JOIN_ACCEPT_DELAY1_US) % (2**32)
             txpk = Txpk(tmst=tmst, freq_mhz=rx1_freq, datr=rx1_datr, codr=rxpk.codr,
                         payload=outcome.accept_wire)
-            return Outcome("join_accepted", txpk=txpk)
+            return Outcome("join_accepted", txpk=txpk, dev_eui=rxpk.payload[9:17])
         if mtype == MTYPE_REJOIN_REQUEST:
             return Outcome("rejoin_unanswered")
         return Outcome("data_unhandled")

@@ -66,6 +66,13 @@
   Alliance) et de la page The Things Network « US902-928 MHz Band ». Valeurs numériques
   reprises, aucun texte copié. Source de référence : `python/lsim/us915.py`.
 
+## Protocole Basic Station (LNS)
+
+- Messages et champs décrits d'après la documentation publique « The LNS Protocol » (LoRa Basics
+  Station, doc.sm.tc). Aucun code copié ; la mise en œuvre WebSocket (RFC 6455) est écrite
+  à partir de la RFC, sans bibliothèque tierce. Source : `python/lsim/basicstation.py`,
+  `python/lsim/wsproto.py`.
+
 ## Plan régional AU915-928 (valeurs seulement)
 
 - Canaux, débits, règle RX1 et charges maximales extraits des Regional Parameters RP002-1.0.2 et

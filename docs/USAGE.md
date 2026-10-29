@@ -133,7 +133,48 @@ Limites des trames de données :
 - AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
-- Basic Station : pas encore pris en charge. Autres plans (AS923, KR920…) : à ajouter (même interface `Plan`).
+- Basic Station : voir section 5ter. Autres plans (AS923, KR920…) : à ajouter (même interface `Plan`).
+
+## 5ter. Passerelles Basic Station (WebSocket)
+
+Même cœur que le serveur UDP (jointure, trames de données, file de downlinks, chiffrement au
+repos) ; seul le transport change. Les RAKwireless et autres passerelles Basic Station s'y
+connectent en WebSocket (`ws://` ou `wss://`).
+
+```bash
+python -m lsim serve --transport basicstation --host 0.0.0.0 --port 8887 \
+  --db joins.sqlite --keys keys.json --net-id 000013 --region AU915 \
+  --uri wss://lns.example.org:8887/ws --tls-cert cert.pem --tls-key key.pem
+```
+
+- `--uri` : adresse publique annoncée aux passerelles lors de la découverte (`ws://` ou `wss://`).
+  Obligatoire.
+- TLS : `--tls-cert` et `--tls-key` vont ensemble (TLS 1.2 minimum). Sans TLS, le serveur n'écoute
+  en clair qu'en boucle locale : hors boucle locale, il journalise un avertissement. En production,
+  utiliser TLS ici ou un proxy TLS devant le serveur.
+- `--hwspec` : matériel annoncé dans `router_config` (défaut `sx1302/1`). À vérifier pour chaque
+  passerelle : une passerelle SX1301 doit recevoir `sx1301/1`.
+- Routes : `…/router-info` (découverte : `router` → `muxs`, `uri`) ; toute autre cible est une
+  session de données, ouverte après un `version`.
+- `router_config` : plan régional (`--region`), NetID, bornes de fréquence, tables DR (16 entrées),
+  et `sx1301_conf` pour un concentrateur de 8 canaux (les 8 premiers canaux montants du plan).
+- Jointure et données : même logique que le serveur UDP. Un join-accept est un `dnmsg` avec
+  `RxDelay` 5 s ; un ACK ou un downlink de file, `RxDelay` 1 s ; RX2 du plan dans le message.
+- Acquittement `dntxed`, `timesync` (avec `gpstime`) et messages inconnus : comptés, sans effet.
+- Sécurité : taille de message bornée (16 Kio), trames masquées obligatoires, RSV refusés, UTF-8
+  vérifié, délai de handshake 10 s, inactivité 300 s, nombre de connexions borné (503 au-delà).
+
+**Convention des identifiants** : le cœur reçoit les EUI et nonces en ordre de transmission
+(LSB first), inverse de l'affichage TTN. Basic Station envoie les EUI dans l'ordre d'affichage ;
+la conversion est faite par le serveur. En revanche, `keys.json` et `lsim downlink --dev-eui`
+attendent le DevEUI **en ordre de transmission** (ex. `0102030405060708` pour le DevEUI affiché
+`08-07-06-05-04-03-02-01`). À vérifier avant la mise en service.
+
+**Limites** : authentification des passerelles seulement par TLS (pas de certificat client ni de
+jeton) ; `router` en format ID6 non accepté (EUI ou entier seulement) ; un seul concentrateur et
+seulement les 8 premiers canaux montants du plan (pas de sous-bandes par LinkADRReq, pas de
+LR-FHSS) ; pas de beacon, de Class B/C ni de `rmtsh` ; formats EUI et MIC (petit-boutiste) validés
+sur des trames produites par le cœur, à confirmer contre une passerelle réelle.
 
 ## 6. Limites connues
 
