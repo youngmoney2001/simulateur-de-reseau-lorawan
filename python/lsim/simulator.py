@@ -19,6 +19,7 @@ from lsim._native import (
     _CDownlinkPlan,
     _CDownlinkStats,
     _CSimStats,
+    _CInterval,
     _CTxRecord,
     _CEndDevice,
     _CEnvironment,
@@ -156,6 +157,7 @@ class Counters:
     lost_sensitivity: int = 0
     lost_collision: int = 0
     airtime_ns: int = 0  # temps d'antenne cumulé des trames émises
+    lost_gateway_busy: int = 0  # reçue pendant une émission de la passerelle (demi-duplex)
 
 
 @dataclass(frozen=True)
@@ -274,6 +276,7 @@ class TxRecord:
     OUTCOME_LOST_SENSITIVITY = 0
     OUTCOME_LOST_COLLISION = 1
     OUTCOME_RECEIVED = 2
+    OUTCOME_LOST_GATEWAY_BUSY = 3  # passerelle en émission pendant la trame
 
 
 @dataclass(frozen=True)
@@ -304,12 +307,24 @@ def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
 
 def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation: Propagation,
-                           environment: Optional[Environment] = None) -> TraceResult:
+                           environment: Optional[Environment] = None,
+                           gateway_busy: Sequence[tuple[int, int]] = ()) -> TraceResult:
     """Comme `simulate_uplinks`, avec une entrée de trace par transmission.
+
+    `gateway_busy` : périodes [début, fin) pendant lesquelles la passerelle émet (ns). Une trame
+    reçue qui les chevauche est perdue (demi-duplex, issue LOST_GATEWAY_BUSY).
 
     Les temps de la trace (début, fin) sont ceux du moteur, en nanosecondes. La trace
     est bornée par le cœur (statut 309 au-delà de 200 000 émissions).
     """
+    if len(gateway_busy) > MAX_TRACE_RECORDS:
+        raise ValueError("trop de périodes d'émission passerelle")
+    c_busy = None
+    if gateway_busy:
+        c_busy = (_CInterval * len(gateway_busy))()
+        for k, (start, end) in enumerate(gateway_busy):
+            c_busy[k].start_ns = start
+            c_busy[k].end_ns = end
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     n = len(devices)
@@ -335,17 +350,19 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
     records = (_CTxRecord * capacity)() if capacity else None
     status = LIB.lsim_simulate_uplinks_trace(
         c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
-        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count))
+        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
+        c_busy, len(gateway_busy))
     del keep
     if status != 0:
         raise StatusError(status)
 
     per = tuple(
-        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns)
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
         for s in c_stats
     )
     tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
-                   c_tot.airtime_ns)
+                   c_tot.airtime_ns, c_tot.lost_gateway_busy)
     load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
                        c_tot.observation_ns, c_tot.gateway_utilization)
     trace = tuple(
@@ -405,11 +422,12 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
         raise StatusError(status)
 
     per = tuple(
-        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns)
+        Counters(s.sent, s.received, s.lost_sensitivity, s.lost_collision, s.airtime_ns,
+                 s.lost_gateway_busy)
         for s in c_stats
     )
     tot = Counters(c_tot.sent, c_tot.received, c_tot.lost_sensitivity, c_tot.lost_collision,
-                   c_tot.airtime_ns)
+                   c_tot.airtime_ns, c_tot.lost_gateway_busy)
     load = GatewayLoad(c_tot.gateway_busy_ns, c_tot.gateway_peak_concurrent,
                        c_tot.observation_ns, c_tot.gateway_utilization)
     dl_per = tuple(

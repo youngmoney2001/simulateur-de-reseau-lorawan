@@ -9,18 +9,25 @@ en dérive les événements de la couche protocole, avec les temporisations de l
 - downlink (un seul par uplink accepté, comme `lsim.uplink`) : si une charge est en file
   (`downlink_every`), sinon ACK seul si l'uplink est confirmé.
 
-Règles de modélisation (volontairement explicites) :
-- le dispositif est en demi-duplex : s'il émet à nouveau pendant sa fenêtre RX1, la fenêtre est
-  manquée (événement `rx_window_missed`, pas de retransmission) ;
-- réception du downlink par le dispositif : hypothèse de réciprocité. Le lien descendant suit le
-  même chemin que le montant (même perte, même shadowing). Le RSSI reçu par le dispositif vaut
-  donc RSSI_montant - P_dispositif + P_passerelle + G_dispositif (le gain d'antenne passerelle
-  s'annule). Réception si ce RSSI atteint la sensibilité du débit RX1 (plan régional). Valeurs
-  par défaut : P_passerelle = 14 dBm, G_dispositif = 0 dBi (`ProtocolOptions`) ;
-- la passerelle ne refuse pas l'émission (duplex non modélisé) ; les downlinks ne se brouillent
-  pas entre eux ; la sensibilité est celle du récepteur de référence (SX1276, `lsim.radio`) ;
-- le backhaul passerelle -> serveur est sans perte (issue `delivered`) ; le join-accept est
-  transmis par le serveur à la passerelle sans perte (issue `delivered`).
+Modèle de la passerelle (demi-duplex, un émetteur) :
+- elle n'émet qu'un downlink à la fois : un downlink qui tombe pendant un autre attend la fin de
+  celui-ci. S'il ne peut partir qu'après la fenêtre RX1 du dispositif (1 s), il est perdu
+  (`rx_window_missed`, issue `gateway_busy`), sans retransmission ;
+- pendant une émission de downlink, elle ne reçoit pas : une trame montante qui la chevauche est
+  perdue (issue `lost_gateway_busy`). Les émissions de downlink dépendent des uplinks reçus, et
+  inversement : le calcul itère jusqu'à un point fixe, sinon il échoue (pas de résultat faux).
+
+Modèle du dispositif :
+- demi-duplex : s'il émet à nouveau pendant sa fenêtre RX1, la fenêtre est manquée
+  (`rx_window_missed`, issue `device_transmitting`) ;
+- réception du downlink par réciprocité : RSSI descendant = RSSI montant - P_dispositif
+  + P_passerelle + G_dispositif (le gain d'antenne passerelle s'annule). Reçu si ce RSSI atteint
+  la sensibilité du débit RX1 du plan (référence SX1276, `lsim.radio`) plus
+  `device_rx_offset_db` (écart du récepteur réel, à renseigner depuis sa fiche technique).
+
+Limites assumées : une seule passerelle ; backhaul passerelle -> serveur et transmission du
+join-accept par le serveur sans perte (issue `delivered`) ; les downlinks ne sont pas testés
+contre les brouillages du dispositif hors de la passerelle elle-même.
 
 Les dates sont en nanosecondes entières, issues du moteur, sans recalcul flottant.
 """
@@ -33,6 +40,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
+from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
@@ -47,32 +55,44 @@ from lsim.simulator import (
 NS_PER_US = 1_000
 RECEIVE_DELAY1_NS = RECEIVE_DELAY1_US * NS_PER_US
 JOIN_ACCEPT_DELAY1_NS = JOIN_ACCEPT_DELAY1_US * NS_PER_US
-# Durée supposée de la fenêtre RX1 (hypothèse, identique au moteur de downlink : 1 s).
+# Durée de la fenêtre RX1 du dispositif (hypothèse, 1 s).
 RX1_WINDOW_NS = 1_000_000_000
 # Borne des événements par run (contrat d'API : 200 000).
 MAX_EVENTS = 200_000
+# Trame downlink sans charge : MHDR (1) + DevAddr (4) + FCtrl (1) + FCnt (2) + MIC (4).
+ACK_FRAME_BYTES = 12
+# Trame downlink avec charge : ACK_FRAME_BYTES + FPort (1) + charge.
+DATA_FRAME_OVERHEAD_BYTES = 13
+# Join-accept sans CFList : MHDR (1) + AppNonce (3) + NetID (3) + DevAddr (4) + DLSettings (1)
+# + RxDelay (1) + MIC (4).
+JOIN_ACCEPT_BYTES = 17
+MAX_ITERATIONS = 12
 
 _UPLINK_OUTCOME = {
     TxRecord.OUTCOME_LOST_SENSITIVITY: "lost_sensitivity",
     TxRecord.OUTCOME_LOST_COLLISION: "lost_collision",
     TxRecord.OUTCOME_RECEIVED: "received",
+    TxRecord.OUTCOME_LOST_GATEWAY_BUSY: "lost_gateway_busy",
 }
 _HOP_OUTCOME = {
     TxRecord.OUTCOME_LOST_SENSITIVITY: "lost_sensitivity",
     TxRecord.OUTCOME_LOST_COLLISION: "lost_collision",
     TxRecord.OUTCOME_RECEIVED: "delivered",
+    TxRecord.OUTCOME_LOST_GATEWAY_BUSY: "not_listened",
 }
 
 
 @dataclass(frozen=True)
 class ProtocolOptions:
-    """Comportement applicatif du scénario, hors moteur radio."""
+    """Comportement applicatif et paramètres de réception, hors moteur radio."""
 
     join: bool = False              # première émission de chaque dispositif = join-request
     confirmed_uplinks: bool = False  # uplinks de données confirmés (ACK attendu)
     downlink_every: int = 0         # 0 : aucune charge en file ; N : une charge par N uplinks acceptés
+    downlink_payload_bytes: int = 10  # charge des downlinks de données (hypothèse)
     gateway_tx_power_dbm: float = 14.0    # puissance d'émission de la passerelle (downlink)
     device_antenna_gain_dbi: float = 0.0  # gain d'antenne du dispositif (réception downlink)
+    device_rx_offset_db: float = 0.0      # écart de sensibilité du récepteur réel (0 = SX1276)
 
 
 @dataclass(frozen=True)
@@ -116,6 +136,22 @@ class TraceRun:
     gateway: GatewayLoad
     records: tuple[TxRecord, ...]
     events: tuple[ProtocolEvent, ...]
+    gateway_tx: tuple[tuple[int, int], ...]  # émissions de la passerelle [début, fin) (ns)
+
+
+@dataclass(frozen=True)
+class _Job:
+    """Réponse de la passerelle attendue pour une trame montante reçue."""
+
+    record: int           # index dans la trace
+    device: int
+    kind: str             # join_accept | ack | downlink
+    content: str          # issue si reçue : delivered | ack_only | data | data_ack
+    t_open: int           # ouverture de la fenêtre RX1 du dispositif
+    airtime_ns: int       # durée d'émission du downlink
+    rx1_hz: int
+    received: bool        # réception par le dispositif (réciprocité)
+    device_missed: bool   # le dispositif émet pendant sa fenêtre RX1
 
 
 def _dev(i: int) -> str:
@@ -147,10 +183,10 @@ def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> 
 
 def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
     """Paramètres radio de chaque dispositif, dans l'ordre de `Scenario.deploy`."""
-    devices, group_of, _ = scenario.deploy()
+    _devices, group_of, _ = scenario.deploy()
     by_name = {g.name: g for g in scenario.model.groups}
     radios = []
-    for _dev_spec, name in zip(devices, group_of):
+    for name in group_of:
         g = by_name[name]
         plan: Optional[Plan] = None
         if g.region is not None:
@@ -162,20 +198,31 @@ def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
     return tuple(radios)
 
 
-def _downlink_received(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions) -> bool:
-    """Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev (gain passerelle annulé)."""
+def _downlink_airtime_ns(radio: DeviceRadio, payload_bytes: int) -> int:
+    """Temps d'antenne d'un downlink sur le débit RX1 (CR 4/5, en-tête explicite, sans CRC)."""
+    sf, bw = radio.rx1_sf, radio.rx1_bw_hz
+    symbol_s = (2 ** sf) / bw
+    config = RadioConfig(spreading_factor=sf, bandwidth_hz=bw, coding_rate=1, crc_on=False,
+                         explicit_header=True, low_data_rate_optimize=symbol_s > 0.016)
+    return time_on_air_ns(config, payload_bytes)
+
+
+def _received_by_device(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions) -> bool:
+    """Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev."""
     rssi_dl = (r.rssi_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
                + options.device_antenna_gain_dbi)
-    return rssi_dl >= receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz)
+    threshold = receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz) + options.device_rx_offset_db
+    return rssi_dl >= threshold
 
 
-def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
-                          options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
-    """Dérive les événements du protocole de la trace (ordre temporel, `seq` séquentiel)."""
+def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
+                   options: ProtocolOptions) -> list[_Job]:
+    """Une réponse attendue par uplink reçu, dans l'ordre de la trace (un seul downlink par uplink)."""
     if options.downlink_every < 0:
         raise ValueError("downlink_every doit être positif ou nul")
+    if not 0 <= options.downlink_payload_bytes <= 242:
+        raise ValueError("downlink_payload_bytes doit être compris entre 0 et 242")
 
-    # Prochaine émission du même dispositif : détection du demi-duplex sur la fenêtre RX1.
     by_device: dict[int, list[int]] = defaultdict(list)
     for i, r in enumerate(records):
         by_device[r.device_index].append(i)
@@ -184,12 +231,7 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
         for a, b in zip(idxs, idxs[1:]):
             next_start[a] = records[b].start_ns
 
-    # (t, ordre de création, événement sans seq)
-    pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
-
-    def add(t: int, kind: str, device: int, hops: list[HopEvent], outcome: str) -> None:
-        pending.append((t, len(pending), kind, device, tuple(hops), outcome))
-
+    jobs: list[_Job] = []
     joined: set[int] = set()
     accepted: dict[int, int] = defaultdict(int)
     for i, r in enumerate(records):
@@ -197,50 +239,100 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
         radio = radios[d]
         is_join = options.join and d not in joined
         joined.add(d)
-        received = r.outcome == TxRecord.OUTCOME_RECEIVED
-
-        hops = [HopEvent(_dev(d), "gw:0", r.start_ns, radio.freq_hz, radio.dr, r.rssi_dbm,
-                         _HOP_OUTCOME[r.outcome])]
-        if received:
-            hops.append(HopEvent("gw:0", "ns", r.end_ns, radio.freq_hz, radio.dr, None,
-                                 "delivered"))
-        kind_up = "join_request" if is_join else "uplink"
-        add(r.start_ns, kind_up, d, hops, _UPLINK_OUTCOME[r.outcome])
-
-        if not received:
+        if r.outcome != TxRecord.OUTCOME_RECEIVED:
             continue
 
-        # Fenêtre de réception du downlink : RX1 après l'uplink (1 s) ou après le join (5 s).
         if is_join:
             t_open = r.end_ns + JOIN_ACCEPT_DELAY1_NS
-            kind, outcome = "join_accept", "delivered"
+            kind, content = "join_accept", "delivered"
+            airtime = _downlink_airtime_ns(radio, JOIN_ACCEPT_BYTES)
         else:
             accepted[d] += 1
             queued = options.downlink_every > 0 and accepted[d] % options.downlink_every == 0
             if queued:
                 kind = "downlink"
-                outcome = "data_ack" if options.confirmed_uplinks else "data"
+                content = "data_ack" if options.confirmed_uplinks else "data"
+                airtime = _downlink_airtime_ns(
+                    radio, DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes)
             elif options.confirmed_uplinks:
-                kind, outcome = "ack", "ack_only"
+                kind, content = "ack", "ack_only"
+                airtime = _downlink_airtime_ns(radio, ACK_FRAME_BYTES)
             else:
                 continue
             t_open = r.end_ns + RECEIVE_DELAY1_NS
 
         nxt = next_start.get(i)
-        if nxt is not None and nxt < t_open + RX1_WINDOW_NS:
-            # Le dispositif émet encore : sa fenêtre RX1 est manquée.
-            missed = HopEvent("gw:0", _dev(d), t_open, radio.rx1_hz, None, None, "not_listened")
-            add(t_open, "rx_window_missed", d, [missed], "device_transmitting")
-            continue
+        jobs.append(_Job(
+            record=i, device=d, kind=kind, content=content, t_open=t_open, airtime_ns=airtime,
+            rx1_hz=radio.rx1_hz,
+            received=_received_by_device(r, radio, options),
+            device_missed=nxt is not None and nxt < t_open + RX1_WINDOW_NS,
+        ))
+    return jobs
 
-        ok = _downlink_received(r, radio, options)
-        down_hop = HopEvent("gw:0", _dev(d), t_open, radio.rx1_hz, None, None,
+
+def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[tuple[int, int]]]:
+    """Sérialise les downlinks sur la passerelle (un émetteur). Retourne (début par job ou None si
+    perdu faute de fenêtre, intervalles d'émission)."""
+    order = sorted(range(len(jobs)), key=lambda k: (jobs[k].t_open, k))
+    starts: list[Optional[int]] = [None] * len(jobs)
+    intervals: list[tuple[int, int]] = []
+    busy_until = None
+    for k in order:
+        job = jobs[k]
+        start = job.t_open if busy_until is None else max(job.t_open, busy_until)
+        if start - job.t_open >= RX1_WINDOW_NS:
+            continue  # la passerelle ne peut plus émettre dans la fenêtre du dispositif
+        starts[k] = start
+        busy_until = start + job.airtime_ns
+        intervals.append((start, busy_until))
+    return starts, intervals
+
+
+def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
+            starts: Sequence[Optional[int]], options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
+    """Événements dans l'ordre temporel, à partir de la trace et de la planification."""
+    pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
+
+    def add(t: int, kind: str, device: int, hops: list[HopEvent], outcome: str) -> None:
+        pending.append((t, len(pending), kind, device, tuple(hops), outcome))
+
+    job_of = {job.record: k for k, job in enumerate(jobs)}
+    joined: set[int] = set()
+    for i, r in enumerate(records):
+        d = r.device_index
+        radio = radios[d]
+        is_join = options.join and d not in joined
+        joined.add(d)
+        hops = [HopEvent(_dev(d), "gw:0", r.start_ns, radio.freq_hz, radio.dr, r.rssi_dbm,
+                         _HOP_OUTCOME[r.outcome])]
+        if r.outcome == TxRecord.OUTCOME_RECEIVED:
+            hops.append(HopEvent("gw:0", "ns", r.end_ns, radio.freq_hz, radio.dr, None,
+                                 "delivered"))
+        add(r.start_ns, "join_request" if is_join else "uplink", d, hops,
+            _UPLINK_OUTCOME[r.outcome])
+
+        k = job_of.get(i)
+        if k is None:
+            continue
+        job = jobs[k]
+        start = starts[k]
+        if start is None:
+            hop = HopEvent("gw:0", _dev(d), job.t_open, job.rx1_hz, None, None, "not_listened")
+            add(job.t_open, "rx_window_missed", d, [hop], "gateway_busy")
+            continue
+        if job.device_missed:
+            hop = HopEvent("gw:0", _dev(d), start, job.rx1_hz, None, None, "not_listened")
+            add(job.t_open, "rx_window_missed", d, [hop], "device_transmitting")
+            continue
+        ok = job.received
+        down_hop = HopEvent("gw:0", _dev(d), start, job.rx1_hz, None, None,
                             "delivered" if ok else "lost_sensitivity")
-        if is_join:
-            down = [HopEvent("ns", "gw:0", t_open, radio.rx1_hz, None, None, "delivered"), down_hop]
+        if job.kind == "join_accept":
+            down = [HopEvent("ns", "gw:0", start, job.rx1_hz, None, None, "delivered"), down_hop]
         else:
             down = [down_hop]
-        add(t_open, kind, d, down, outcome if ok else "lost_sensitivity")
+        add(start, job.kind, d, down, job.content if ok else "lost_sensitivity")
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")
@@ -252,18 +344,48 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
     )
 
 
+def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
+                          options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
+    """Événements dérivés d'une trace déjà produite (sans nouvelle itération du moteur).
+
+    Les émissions passerelle sont celles des downlinks planifiés à partir de cette trace. Pour
+    une trace cohérente avec ces émissions, utiliser `build_trace`.
+    """
+    jobs = _downlink_jobs(records, radios, options)
+    starts, _intervals = _schedule_gateway(jobs)
+    return _events(records, radios, jobs, starts, options)
+
+
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
-    """Déploie le scénario, lance le cœur (compteurs + trace) et dérive les événements."""
+    """Déploie le scénario et calcule la trace cohérente avec les émissions de la passerelle.
+
+    Point fixe : les trames montantes dépendent des émissions passerelle, qui dépendent des
+    uplinks reçus. L'itération s'arrête quand les émissions utilisées par le moteur sont celles
+    que produit la trace obtenue. Pas de convergence en `MAX_ITERATIONS` : erreur explicite.
+    """
     devices, _group_of, _indices = scenario.deploy()
     if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
-    result = simulate_uplinks_trace(devices, scenario.gateway(), scenario.propagation(),
-                                    scenario.environment)
-    events = build_protocol_events(result.records, device_radios(scenario), options)
-    return TraceRun(
-        per_device=result.per_device,
-        totals=result.totals,
-        gateway=result.gateway,
-        records=result.records,
-        events=events,
-    )
+    radios = device_radios(scenario)
+    gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
+
+    busy: list[tuple[int, int]] = []
+    for _ in range(MAX_ITERATIONS):
+        result = simulate_uplinks_trace(devices, gateway, propagation, environment,
+                                        gateway_busy=busy)
+        jobs = _downlink_jobs(result.records, radios, options)
+        starts, new_busy = _schedule_gateway(jobs)
+        if new_busy == busy:
+            events = _events(result.records, radios, jobs, starts, options)
+            return TraceRun(
+                per_device=result.per_device,
+                totals=result.totals,
+                gateway=result.gateway,
+                records=result.records,
+                events=events,
+                gateway_tx=tuple(busy),
+            )
+        busy = new_busy
+    raise RuntimeError(
+        f"pas de point fixe entre trames montantes et émissions passerelle "
+        f"après {MAX_ITERATIONS} itérations")

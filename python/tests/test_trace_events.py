@@ -76,7 +76,7 @@ def test_trace_capacity_reports_required_size():
     count = ctypes.c_size_t(0)
     status = _native.LIB.lsim_simulate_uplinks_trace(
         c_devs, 2, ctypes.byref(gw), ctypes.byref(prop), None, stats, ctypes.byref(tot),
-        None, 0, ctypes.byref(count))
+        None, 0, ctypes.byref(count), None, 0)
     assert status == 308
     assert count.value == 3
 
@@ -104,8 +104,9 @@ def test_join_accept_and_ack_use_engine_times(quartier):
 def test_one_downlink_per_accepted_uplink(quartier):
     run = build_trace(quartier, ProtocolOptions(confirmed_uplinks=True, downlink_every=3))
     received = sum(1 for r in run.records if r.outcome == TxRecord.OUTCOME_RECEIVED)
-    down = [e for e in run.events if e.kind in ("ack", "downlink")]
-    assert len(down) == received  # un downlink par uplink accepté, jamais deux
+    # Chaque uplink accepté produit une réponse ou une fenêtre manquée, jamais deux.
+    down = [e for e in run.events if e.kind in ("ack", "downlink", "rx_window_missed")]
+    assert len(down) == received
     # Charge en file : une sur trois des uplinks acceptés de chaque dispositif.
     accepted = Counter(r.device_index for r in run.records
                        if r.outcome == TxRecord.OUTCOME_RECEIVED)
@@ -218,10 +219,79 @@ def test_downlink_outcomes_partition_scenario(quartier):
     run = build_trace(quartier, ProtocolOptions(join=True, confirmed_uplinks=True,
                                                 downlink_every=5))
     received = sum(1 for r in run.records if r.outcome == TxRecord.OUTCOME_RECEIVED)
-    down = [e for e in run.events if e.kind in ("ack", "downlink", "join_accept")]
+    down = [e for e in run.events
+            if e.kind in ("ack", "downlink", "join_accept", "rx_window_missed")]
     delivered = [e for e in down if e.hops[-1].outcome == "delivered"]
     lost = [e for e in down if e.hops[-1].outcome == "lost_sensitivity"]
-    assert len(delivered) + len(lost) == len(down)
-    assert len(down) == received  # un downlink par uplink accepté (join compris)
+    missed = [e for e in down if e.kind == "rx_window_missed"]
+    assert len(delivered) + len(lost) + len(missed) == len(down)
+    assert len(down) == received  # une réponse par uplink accepté (join compris)
     assert all(e.outcome == "lost_sensitivity" for e in lost)
     assert all(e.outcome != "lost_sensitivity" for e in delivered)
+
+
+def test_gateway_serializes_downlinks_and_drops_late_ones():
+    from lsim.trace_events import _Job, _schedule_gateway, RX1_WINDOW_NS
+
+    def job(t_open, airtime):
+        return _Job(record=0, device=0, kind="ack", content="ack_only", t_open=t_open,
+                    airtime_ns=airtime, rx1_hz=868_100_000, received=True, device_missed=False)
+
+    # Deux réponses qui tombent presque ensemble : la seconde attend la fin de la première.
+    starts, busy = _schedule_gateway([job(1_000_000_000, 300_000_000),
+                                      job(1_050_000_000, 300_000_000)])
+    assert starts == [1_000_000_000, 1_300_000_000]
+    assert busy == [(1_000_000_000, 1_300_000_000), (1_300_000_000, 1_600_000_000)]
+
+    # Une réponse qui ne peut partir qu'après la fenêtre RX1 du dispositif est perdue.
+    starts, busy = _schedule_gateway([job(1_000_000_000, 1_500_000_000),
+                                      job(1_100_000_000, 100_000_000)])
+    assert starts[0] == 1_000_000_000
+    assert starts[1] is None
+    assert len(busy) == 1
+    assert RX1_WINDOW_NS == 1_000_000_000
+
+
+def test_uplink_overlapping_gateway_transmission_is_lost():
+    busy = [(100_000_000, 200_000_000)]
+    devices = [EndDevice(x_m=10.0, messages=1, start_offset_ns=0)]
+    traced = simulate_uplinks_trace(devices, Gateway(), Propagation(), gateway_busy=busy)
+    assert traced.records[0].outcome == TxRecord.OUTCOME_RECEIVED  # pas de chevauchement
+    devices = [EndDevice(x_m=10.0, messages=1, start_offset_ns=150_000_000)]
+    traced = simulate_uplinks_trace(devices, Gateway(), Propagation(), gateway_busy=busy)
+    assert traced.records[0].outcome == TxRecord.OUTCOME_LOST_GATEWAY_BUSY
+    assert traced.totals.lost_gateway_busy == 1
+    assert traced.per_device[0].lost_gateway_busy == 1
+
+
+def test_trace_is_consistent_with_gateway_transmissions(quartier):
+    # Invariants du point fixe : la passerelle n'émet jamais deux downlinks à la fois, et aucune
+    # trame reçue ne chevauche une de ses émissions.
+    run = build_trace(quartier, ProtocolOptions(join=True, confirmed_uplinks=True,
+                                                downlink_every=3))
+    tx = sorted(run.gateway_tx)
+    assert all(a_end <= b_start for (_, a_end), (b_start, _) in zip(tx, tx[1:]))
+    for r in run.records:
+        overlapping = any(s < r.end_ns and r.start_ns < e for s, e in tx)
+        if r.outcome == TxRecord.OUTCOME_RECEIVED:
+            assert not overlapping
+        if r.outcome == TxRecord.OUTCOME_LOST_GATEWAY_BUSY:
+            assert overlapping
+    assert run.totals.lost_gateway_busy > 0  # le demi-duplex a un effet mesurable
+
+
+def test_device_rx_offset_creates_downlink_losses(quartier):
+    default = build_trace(quartier, ProtocolOptions(confirmed_uplinks=True))
+    assert not any(e.outcome == "lost_sensitivity" for e in default.events)
+    harsh = build_trace(quartier, ProtocolOptions(confirmed_uplinks=True,
+                                                  device_rx_offset_db=40.0))
+    assert any(e.outcome == "lost_sensitivity" for e in harsh.events)
+
+
+def test_downlink_payload_and_offset_bounds():
+    with pytest.raises(ValueError):
+        build_protocol_events([], [], ProtocolOptions(downlink_payload_bytes=243))
+    from lsim.api_contract import ProtocolOptionsIn
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ProtocolOptionsIn(downlink_payload_bytes=300)

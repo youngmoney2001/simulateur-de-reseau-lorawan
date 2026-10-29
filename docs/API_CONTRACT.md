@@ -78,13 +78,18 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   RSSI montant − P_dispositif + P_passerelle + G_dispositif ; reçu si ≥ sensibilité du débit RX1
   du plan. Valeurs par défaut : P_passerelle 14 dBm, G_dispositif 0 dBi (`RunCreate.protocol`).
   Perte : événement dont l'issue est `lost_sensitivity`, saut `lost_sensitivity`.
+- Passerelle demi-duplex : un seul downlink à la fois (un downlink qui tombe pendant un autre
+  attend ; s'il ne peut partir dans la fenêtre RX1 du dispositif, il est perdu : `rx_window_missed`,
+  issue `gateway_busy`). Pendant ses émissions, elle ne reçoit pas : un uplink qui les chevauche
+  est perdu (`lost_gateway_busy`, comptée dans `Totals.lost_gateway_busy`). Uplinks et downlinks
+  dépendent les uns des autres : le calcul itère jusqu'à un point fixe, sinon il échoue.
 - Limites assumées : le backhaul passerelle → serveur et le join-accept transmis par le serveur
-  sont sans perte (`delivered`) ; le duplex de la passerelle n'est pas modélisé ; les downlinks ne
-  se brouillent pas entre eux ; sensibilité du récepteur de référence (SX1276). Une seule
-  passerelle.
+  sont sans perte (`delivered`) ; sensibilité du récepteur de référence (SX1276) plus
+  `device_rx_offset_db` ; une seule passerelle.
 - Options applicatives dans `RunCreate.protocol` : `join`, `confirmed_uplinks`, `downlink_every`,
-  `gateway_tx_power_dbm`, `device_antenna_gain_dbi` (par défaut : aucune charge ; seuls uplinks,
-  pertes et ACK/join-accept sont produits quand les options correspondantes sont activées).
+  `downlink_payload_bytes`, `gateway_tx_power_dbm`, `device_antenna_gain_dbi`, `device_rx_offset_db`
+  (par défaut : aucune charge ; seuls uplinks, pertes et ACK/join-accept sont produits quand les
+  options correspondantes sont activées).
 
 Tant que la route `events` n'existe pas, l'animation n'est pas disponible côté navigateur ; les
 totaux (`summary`, `devices`) le sont.

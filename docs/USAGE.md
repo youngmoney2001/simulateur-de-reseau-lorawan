@@ -188,11 +188,38 @@ Le serveur ne gère pas LR-FHSS. Décision documentée, pas un oubli :
 
 Test de référence : `python/tests/test_lrfhss_unsupported.py`. Une prise en charge future demandera une capture `rxpk` réelle et une source officielle pour la fenêtre RX1.
 
+## 5quinquies. MNT libre (Copernicus DEM GLO-30)
+
+Source retenue : Copernicus DEM GLO-30, version publique (seau AWS `copernicus-dem-30m`, sans
+compte). Usage commercial autorisé avec attribution ; le fichier `*.ATTRIBUTION.txt` produit par
+l'outil reprend la mention à vérifier. Le 5 m de JAXA (ALOS World 3D) est un produit commercial : il
+n'est pas utilisé.
+
+Acquisition, sur le poste de l'opérateur (le serveur de simulation ne télécharge rien) :
+
+```bash
+pip install rasterio numpy
+python scripts/fetch_copernicus_dem.py --bbox 9.5 3.8 9.9 4.2 --out data/douala_dem.csv
+```
+
+Le script reprojette en UTM (zone 32N pour Douala) à 30 m et écrit `x_m,y_m,z_m`. Il s'utilise
+ensuite comme `terrain` du scénario (`type: dem_csv`, chemin relatif au YAML). Précautions :
+
+- une tuile absente (HTTP 404) arrête le script : elle peut être de l'océan (pas de tuile) ou une
+  tuile non publiée. La liste des tuiles non publiées est sur spacedata.copernicus.eu ; le
+  Cameroun n'a pas été vérifié dans cette liste. `--allow-missing` remplace l'absence par 0 m, après
+  avertissement ;
+- les coins de la grille UTM, hors de la boîte demandée, valent 0 m ;
+- les tuiles sont mises en cache dans `data/cache/copernicus_dem`, exclu du dépôt par `.gitignore`.
+
 ## 6. Limites connues
 
 Voir `docs/ROADMAP.md`. Points notables pour l'usage :
 
 - collisions : même SF, capture à 6 dB ; une seule passerelle ;
+- protocole (`lsim.trace_events`) : passerelle mono-émetteur et demi-duplex (un downlink à la fois,
+  uplinks perdus pendant ses émissions) ; réception descendante par réciprocité avec 14 dBm en
+  passerelle et 0 dBi au dispositif ; sensibilité de référence SX1276 plus `device_rx_offset_db` ;
 - latence = temps d'antenne (ni file ni backhaul) ;
 - énergie : profils constructeur, pas de mesure terrain ;
 - pénétration : pertes par matériau selon UIT-R P.2040-4 (diélectriques), non calibrées sur mesures.

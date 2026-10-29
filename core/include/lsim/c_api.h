@@ -307,6 +307,7 @@ typedef struct lsim_device_stats {
     uint64_t lost_sensitivity;
     uint64_t lost_collision;
     uint64_t airtime_ns;        /* temps d'antenne cumulé (ns) */
+    uint64_t lost_gateway_busy; /* reçue pendant une émission passerelle (demi-duplex) */
 } lsim_device_stats;
 
 typedef struct lsim_sim_stats {
@@ -319,7 +320,14 @@ typedef struct lsim_sim_stats {
     uint64_t gateway_peak_concurrent;    /* trames simultanées maximales */
     int64_t  observation_ns;             /* fin dernière trame - début première */
     double   gateway_utilization;        /* busy / observation, dans [0, 1] */
+    uint64_t lost_gateway_busy;          /* trames perdues pendant une émission passerelle */
 } lsim_sim_stats;
+
+/* Période d'émission de la passerelle : [start_ns, end_ns), end > start. */
+typedef struct lsim_interval {
+    int64_t start_ns;
+    int64_t end_ns;
+} lsim_interval;
 
 /* Simule les liaisons montantes. per_device doit contenir device_count entrées ;
  * totals reçoit la somme. */
@@ -384,7 +392,9 @@ LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, siz
                                              const lsim_environment* env,
                                              lsim_device_stats* per_device,
                                              lsim_sim_stats* totals, lsim_tx_record* records,
-                                             size_t record_capacity, size_t* record_count);
+                                             size_t record_capacity, size_t* record_count,
+                                             const lsim_interval* gateway_busy,
+                                             size_t gateway_busy_count);
 
 /* ------------------------------------------- Downlinks par classe (A, B, C)
  * Requêtes de downlink par dispositif. plans : device_count entrées (NULL = aucune).

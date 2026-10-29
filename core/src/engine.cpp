@@ -144,9 +144,36 @@ bool EventQueue::pop(Event& out) {
 SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                            const GatewaySpec& gateway, const PropagationSpec& prop,
                            DeviceStats* per_device, SimulationStats& totals,
-                           const env::Environment* environment, std::vector<TxRecord>* trace) {
+                           const env::Environment* environment, std::vector<TxRecord>* trace,
+                           const std::vector<Interval>* gateway_busy) {
     totals = SimulationStats{};
     if (trace != nullptr) trace->clear();
+    // Périodes d'émission passerelle : triées et fusionnées (intervalles disjoints, triés).
+    std::vector<Interval> busy;
+    if (gateway_busy != nullptr) {
+        busy = *gateway_busy;
+        for (const Interval& b : busy) {
+            if (b.end <= b.start) return SimStatus::InvalidGatewayBusy;
+        }
+        std::sort(busy.begin(), busy.end(), [](const Interval& a, const Interval& b) {
+            return a.start < b.start;
+        });
+        std::vector<Interval> merged;
+        for (const Interval& b : busy) {
+            if (!merged.empty() && b.start <= merged.back().end) {
+                merged.back().end = std::max(merged.back().end, b.end);
+            } else {
+                merged.push_back(b);
+            }
+        }
+        busy.swap(merged);
+    }
+    // Vrai si la trame [start, end) chevauche une période d'émission passerelle.
+    auto gateway_transmitting = [&busy](SimTime start, SimTime end) {
+        auto it = std::lower_bound(busy.begin(), busy.end(), start,
+                                   [](const Interval& b, SimTime s) { return b.end <= s; });
+        return it != busy.end() && it->start < end;
+    };
     if (device_count > kMaxEndDevices) {
         return SimStatus::TooManyDevices;
     }
@@ -344,6 +371,11 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         if (ta.rssi_dbm < sensitivity[ta.device]) {
             ++st.lost_sensitivity;
             ++totals.lost_sensitivity;
+        } else if (gateway_transmitting(ta.start, ta.end)) {
+            // Demi-duplex : la passerelle émet un downlink, elle ne reçoit pas cette trame.
+            ++st.lost_gateway_busy;
+            ++totals.lost_gateway_busy;
+            outcome = TxOutcome::LostGatewayBusy;
         } else {
             // Interférence maximale parmi les émissions simultanées de même SF.
             bool interfered = false;

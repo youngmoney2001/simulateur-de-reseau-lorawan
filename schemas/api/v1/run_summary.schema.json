@@ -47,6 +47,12 @@
           "title": "Lost Collision",
           "type": "integer"
         },
+        "lost_gateway_busy": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Lost Gateway Busy",
+          "type": "integer"
+        },
         "lost_sensitivity": {
           "minimum": 0,
           "title": "Lost Sensitivity",

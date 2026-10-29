@@ -128,6 +128,7 @@ struct DeviceStats {
     std::uint64_t lost_sensitivity = 0;  // sous le seuil de sensibilité
     std::uint64_t lost_collision = 0;    // détruite par une collision non capturée
     std::uint64_t airtime_ns = 0;        // temps d'antenne cumulé des trames émises
+    std::uint64_t lost_gateway_busy = 0; // reçue mais passerelle en émission
     DownlinkStats downlink;
 };
 
@@ -136,6 +137,7 @@ struct SimulationStats {
     std::uint64_t received = 0;
     std::uint64_t lost_sensitivity = 0;
     std::uint64_t lost_collision = 0;
+    std::uint64_t lost_gateway_busy = 0;      // trames perdues pendant une émission passerelle
     std::uint64_t airtime_ns = 0;             // somme des temps d'antenne
     std::uint64_t gateway_busy_ns = 0;        // durée où la passerelle reçoit au moins une trame (union)
     std::uint64_t gateway_peak_concurrent = 0;  // nombre maximal de trames simultanées
@@ -163,6 +165,7 @@ enum class SimStatus : std::int32_t {
     TooManyDownlinks = 7,
     TraceBufferTooSmall = 8,
     TraceTooLarge = 9,
+    InvalidGatewayBusy = 10,
 };
 
 // Issue d'une transmission, telle que calculée par le moteur.
@@ -170,6 +173,13 @@ enum class TxOutcome : std::uint8_t {
     LostSensitivity = 0,  // RSSI sous la sensibilité du SF
     LostCollision = 1,    // détruite par une collision non capturée
     Received = 2,         // reçue par la passerelle
+    LostGatewayBusy = 3,  // passerelle en émission (downlink) pendant la trame
+};
+
+// Intervalle [start, end) pendant lequel la passerelle émet (demi-duplex : elle ne reçoit pas).
+struct Interval {
+    SimTime start = 0;
+    SimTime end = 0;
 };
 
 // Une transmission de la trace, dans l'ordre temporel (début, puis ordre de file).
@@ -187,10 +197,13 @@ struct TxRecord {
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
 // `environment` optionnel : relief et obstacles (nullptr = terrain plat sans obstacle).
 // `trace` optionnel : reçoit une entrée par transmission, dans l'ordre temporel (vidé puis rempli).
+// `gateway_busy` optionnel : périodes d'émission de la passerelle (intervalles [start, end)).
+// Une trame reçue qui chevauche une de ces périodes est perdue (LostGatewayBusy).
 LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                                     const GatewaySpec& gateway, const PropagationSpec& prop,
                                     DeviceStats* per_device, SimulationStats& totals,
                                     const env::Environment* environment = nullptr,
-                                    std::vector<TxRecord>* trace = nullptr);
+                                    std::vector<TxRecord>* trace = nullptr,
+                                    const std::vector<Interval>* gateway_busy = nullptr);
 
 }  // namespace lsim::sim

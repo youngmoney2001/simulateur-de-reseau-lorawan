@@ -347,6 +347,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         totals->received = tot.received;
         totals->lost_sensitivity = tot.lost_sensitivity;
         totals->lost_collision = tot.lost_collision;
+        totals->lost_gateway_busy = tot.lost_gateway_busy;
         totals->airtime_ns = tot.airtime_ns;
         totals->gateway_busy_ns = tot.gateway_busy_ns;
         totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
@@ -357,6 +358,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
             per_device[i].received = stats[i].received;
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].lost_gateway_busy = stats[i].lost_gateway_busy;
             per_device[i].airtime_ns = stats[i].airtime_ns;
         }
         if (st == lsim::sim::SimStatus::Ok) {
@@ -417,7 +419,8 @@ namespace {
 int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
                         const lsim_gateway* gateway, const lsim_propagation* prop,
                         const lsim_environment* env, lsim_device_stats* per_device,
-                        lsim_sim_stats* totals, std::vector<lsim::sim::TxRecord>* trace) {
+                        lsim_sim_stats* totals, std::vector<lsim::sim::TxRecord>* trace,
+                        const std::vector<lsim::sim::Interval>* busy = nullptr) {
     try {
         std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
         for (size_t i = 0; i < device_count; ++i) {
@@ -460,7 +463,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         lsim::sim::SimulationStats tot;
         const auto st = lsim::sim::simulate_uplinks(specs.data(), device_count, g, p,
                                                     stats.data(), tot,
-                                                    env != nullptr ? &e : nullptr, trace);
+                                                    env != nullptr ? &e : nullptr, trace, busy);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }
@@ -468,6 +471,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         totals->received = tot.received;
         totals->lost_sensitivity = tot.lost_sensitivity;
         totals->lost_collision = tot.lost_collision;
+        totals->lost_gateway_busy = tot.lost_gateway_busy;
         totals->airtime_ns = tot.airtime_ns;
         totals->gateway_busy_ns = tot.gateway_busy_ns;
         totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
@@ -478,6 +482,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
             per_device[i].received = stats[i].received;
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].lost_gateway_busy = stats[i].lost_gateway_busy;
             per_device[i].airtime_ns = stats[i].airtime_ns;
         }
         return 0;
@@ -507,17 +512,30 @@ int32_t lsim_simulate_uplinks_env(const lsim_end_device* devices, size_t device_
 
 // Trace par transmission : borne de sortie (le contrat d'API limite les événements par run).
 constexpr std::uint64_t kMaxTraceRecords = 200'000;
+// Périodes d'émission passerelle : une par downlink au plus (bornées comme les transmissions).
+constexpr size_t kMaxGatewayBusyIntervals = 5'000'000;
 
 int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t device_count,
                                     const lsim_gateway* gateway, const lsim_propagation* prop,
                                     const lsim_environment* env, lsim_device_stats* per_device,
                                     lsim_sim_stats* totals, lsim_tx_record* records,
-                                    size_t record_capacity, size_t* record_count) {
+                                    size_t record_capacity, size_t* record_count,
+                                    const lsim_interval* gateway_busy,
+                                    size_t gateway_busy_count) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
-        (device_count > 0 && (devices == nullptr || per_device == nullptr))) {
+        (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
+        (gateway_busy_count > 0 && gateway_busy == nullptr)) {
         return static_cast<int32_t>(lsim::lora::Status::NullOutput);
     }
     *record_count = 0;
+    if (gateway_busy_count > kMaxGatewayBusyIntervals) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidGatewayBusy);
+    }
+    std::vector<lsim::sim::Interval> busy(gateway_busy_count);
+    for (size_t k = 0; k < gateway_busy_count; ++k) {
+        busy[k].start = gateway_busy[k].start_ns;
+        busy[k].end = gateway_busy[k].end_ns;
+    }
     if (device_count > lsim::sim::kMaxEndDevices) {
         return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::TooManyDevices);
     }
@@ -531,7 +549,7 @@ int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, size_t devic
     try {
         std::vector<lsim::sim::TxRecord> trace;
         const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
-                                           totals, &trace);
+                                           totals, &trace, &busy);
         if (st != 0) {
             return st;
         }
@@ -630,6 +648,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
         totals->received = tot.received;
         totals->lost_sensitivity = tot.lost_sensitivity;
         totals->lost_collision = tot.lost_collision;
+        totals->lost_gateway_busy = tot.lost_gateway_busy;
         totals->airtime_ns = tot.airtime_ns;
         totals->gateway_busy_ns = tot.gateway_busy_ns;
         totals->gateway_peak_concurrent = tot.gateway_peak_concurrent;
@@ -644,6 +663,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
             per_device[i].received = stats[i].received;
             per_device[i].lost_sensitivity = stats[i].lost_sensitivity;
             per_device[i].lost_collision = stats[i].lost_collision;
+            per_device[i].lost_gateway_busy = stats[i].lost_gateway_busy;
             per_device[i].airtime_ns = stats[i].airtime_ns;
             per_device_dl[i].requested = stats[i].downlink.requested;
             per_device_dl[i].delivered = stats[i].downlink.delivered;

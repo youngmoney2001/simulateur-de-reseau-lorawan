@@ -341,9 +341,44 @@ void test_trace_matches_counters() {
     CHECK_EQ(trace.size(), static_cast<std::size_t>(tot2.sent));
 }
 
+// Demi-duplex : une trame reçue pendant une émission passerelle est perdue ; hors période, non.
+void test_gateway_busy_blocks_reception() {
+    std::vector<EndDeviceSpec> devs;
+    EndDeviceSpec d = device_at(10.0, 7, 0);  // trame proche : bien reçue sans passerelle occupée
+    d.messages = 2;
+    d.period_ns = 1'000'000'000;
+    devs.push_back(d);
+    std::vector<DeviceStats> per(1);
+    SimulationStats tot;
+    std::vector<TxRecord> trace;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per.data(), tot,
+                                nullptr, &trace) == SimStatus::Ok);
+    CHECK_EQ(tot.received, std::uint64_t{2});
+
+    // Passerelle occupée sur la première trame seulement.
+    const std::vector<Interval> busy{{trace[0].start_ns, trace[0].start_ns + 1'000'000}};
+    std::vector<DeviceStats> per2(1);
+    SimulationStats tot2;
+    std::vector<TxRecord> trace2;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per2.data(), tot2,
+                                nullptr, &trace2, &busy) == SimStatus::Ok);
+    CHECK_EQ(tot2.lost_gateway_busy, std::uint64_t{1});
+    CHECK_EQ(tot2.received, std::uint64_t{1});
+    CHECK_TRUE(trace2[0].outcome == TxOutcome::LostGatewayBusy);
+    CHECK_TRUE(trace2[1].outcome == TxOutcome::Received);
+    CHECK_EQ(per2[0].lost_gateway_busy, std::uint64_t{1});
+
+    // Intervalle invalide refusé.
+    const std::vector<Interval> bad{{5, 5}};
+    SimulationStats tot3;
+    CHECK_TRUE(simulate_uplinks(devs.data(), 1, gateway(), PropagationSpec{}, per2.data(), tot3,
+                                nullptr, nullptr, &bad) == SimStatus::InvalidGatewayBusy);
+}
+
 }  // namespace
 
 void run_engine_tests() {
+    test_gateway_busy_blocks_reception();
     test_trace_matches_counters();
     test_duty_cycle_spacing();
     test_duty_cycle_invalid_inputs();

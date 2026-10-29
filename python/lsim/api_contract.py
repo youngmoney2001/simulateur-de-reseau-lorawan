@@ -80,8 +80,10 @@ class ProtocolOptionsIn(_Strict):
     join: bool = False                 # première émission de chaque dispositif = join-request
     confirmed_uplinks: bool = False    # uplinks de données confirmés (ACK attendu)
     downlink_every: int = Field(0, ge=0, le=10_000)  # 0 : aucune charge ; N : une par N uplinks
+    downlink_payload_bytes: int = Field(10, ge=0, le=242)  # charge des downlinks de données
     gateway_tx_power_dbm: float = Field(14.0, ge=-10.0, le=27.0)  # downlink, réciprocité
     device_antenna_gain_dbi: float = Field(0.0, ge=-10.0, le=10.0)
+    device_rx_offset_db: float = Field(0.0, ge=-30.0, le=40.0)  # écart du récepteur réel
 
 
 class RunCreate(_Strict):
@@ -105,6 +107,7 @@ class Totals(_Strict):
     lost_sensitivity: int = Field(ge=0)
     lost_collision: int = Field(ge=0)
     airtime_ns: int = Field(ge=0)
+    lost_gateway_busy: int = Field(0, ge=0)  # reçue pendant une émission passerelle
 
 
 class GatewayLoadOut(_Strict):
