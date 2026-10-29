@@ -265,6 +265,73 @@ void test_retry_after_device_missed_rx1() {
     CHECK_TRUE((res.downlinks[4].commands & kLoopCmdDutyCycle) != 0);
 }
 
+void test_mac_reservations_and_answers() {
+    // Trois émissions à 60 s, passerelle proche. Calendrier : LinkCheckReq au rang 1 (1 octet
+    // réservé), DevStatusReq au rang 2, DeviceTimeReq au rang 3 avec 3 octets réservés
+    // (DevStatusAns, réservée au rang suivant la demande). La descente de l'uplink de rang 1
+    // porte LinkCheckAns, celle du rang 2 DevStatusReq ; DevStatusAns est portée par le rang 3.
+    const EndDeviceSpec d[] = {dev(10.0, 7, 0, 60 * kS, 3)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    const LoopMacSlot slots[] = {
+        {0, 1, 1, kLoopMacLinkCheck},
+        {0, 2, 0, kLoopMacDevStatus},
+        {0, 3, 3, kLoopMacDeviceTime},
+    };
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.mac = slots;
+    opt.mac_count = 3;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{3});
+    CHECK_EQ(res.downlinks.size(), std::size_t{3});
+    if (res.uplinks.size() != 3 || res.downlinks.size() != 3) return;
+    // Octets réservés dans l'airtime : l'uplink 3 (13 octets) dure plus que l'uplink 1 (11).
+    CHECK_TRUE(res.uplinks[2].end_ns - res.uplinks[2].start_ns >
+               res.uplinks[0].end_ns - res.uplinks[0].start_ns);
+    CHECK_TRUE(res.uplinks[0].end_ns - res.uplinks[0].start_ns ==
+               res.uplinks[1].end_ns - res.uplinks[1].start_ns);
+    // Commandes par descente (une descente par uplink, dans l'ordre).
+    for (std::size_t k = 0; k < 3; ++k) {
+        CHECK_EQ(static_cast<std::size_t>(res.downlinks[k].uplink), k);
+        CHECK_TRUE(res.downlinks[k].delivered);
+        CHECK_EQ(static_cast<int>(res.downlinks[k].kind), 3);
+    }
+    CHECK_TRUE((res.downlinks[0].commands & kLoopCmdLinkCheck) != 0);
+    CHECK_TRUE((res.downlinks[0].commands & kLoopCmdDevStatus) == 0);
+    CHECK_TRUE((res.downlinks[1].commands & kLoopCmdDevStatus) != 0);
+    CHECK_TRUE((res.downlinks[2].commands & kLoopCmdDeviceTime) != 0);
+    // DevStatusReq dans la descente de l'uplink de rang 2 (indice 1), livrée : DevStatusAns est
+    // portée par l'uplink de rang 3 (indice 2), et seulement par lui.
+    CHECK_TRUE((res.uplinks[0].answer_mask & 4) == 0);
+    CHECK_TRUE((res.uplinks[1].answer_mask & 4) == 0);
+    CHECK_TRUE((res.uplinks[2].answer_mask & 4) != 0);
+    // Calendrier invalide : doublon, rang hors plage, octets au-delà de 15.
+    const LoopMacSlot dup[] = {{0, 1, 1, 0}, {0, 1, 0, kLoopMacLinkCheck}};
+    LoopOptions bad = opt;
+    bad.mac = dup;
+    bad.mac_count = 2;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, bad, st, tot, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+    const LoopMacSlot range[] = {{0, 4, 1, 0}};
+    bad.mac = range;
+    bad.mac_count = 1;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, bad, st, tot, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+    const LoopMacSlot big[] = {{0, 1, 16, 0}};
+    bad.mac = big;
+    bad.mac_count = 1;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, bad, st, tot, res)),
+             static_cast<int>(SimStatus::InvalidInput));
+}
+
 }  // namespace
 
 void run_closed_loop_tests() {
@@ -275,4 +342,5 @@ void run_closed_loop_tests() {
     test_adr_converges_to_sf7();
     test_duty_cycle_spacing_after_apply();
     test_retry_after_device_missed_rx1();
+    test_mac_reservations_and_answers();
 }

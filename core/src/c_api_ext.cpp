@@ -684,15 +684,18 @@ int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t d
     }
 }
 
-int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t device_count,
-                                     const lsim_plan_device* radios, const lsim_loop_region* regions,
-                                     const lsim_gateway* gateway, const lsim_propagation* prop,
-                                     const lsim_environment* env, const lsim_loop_options* options,
-                                     lsim_device_stats* per_device, lsim_sim_stats* totals,
-                                     lsim_loop_uplink* uplinks, size_t uplink_capacity,
-                                     size_t* uplink_count, lsim_loop_downlink* downlinks,
-                                     size_t downlink_capacity, size_t* downlink_count,
-                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+namespace {
+
+int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
+                         const lsim_plan_device* radios, const lsim_loop_region* regions,
+                         const lsim_gateway* gateway, const lsim_propagation* prop,
+                         const lsim_environment* env, const lsim_loop_options* options,
+                         const lsim_loop_mac* mac, size_t mac_count,
+                         lsim_device_stats* per_device, lsim_sim_stats* totals,
+                         lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                         size_t* uplink_count, lsim_loop_downlink* downlinks,
+                         size_t downlink_capacity, size_t* downlink_count,
+                         lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || options == nullptr ||
         uplink_count == nullptr || downlink_count == nullptr || busy_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) ||
@@ -762,6 +765,21 @@ int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t devi
         lo.installation_margin_tenth_db = options->installation_margin_tenth_db;
         lo.duty_cycle = options->duty_cycle != 0;
         lo.duty_cycle_exponent = options->duty_cycle_exponent;
+        std::vector<lsim::sim::LoopMacSlot> slots;
+        if (mac_count > 0 && mac == nullptr) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+        }
+        slots.reserve(mac_count);
+        for (size_t m = 0; m < mac_count; ++m) {
+            lsim::sim::LoopMacSlot s;
+            s.device = mac[m].device_index;
+            s.rank = mac[m].rank;
+            s.extra_bytes = mac[m].extra_bytes;
+            s.flags = mac[m].flags;
+            slots.push_back(s);
+        }
+        lo.mac = slots.data();
+        lo.mac_count = slots.size();
 
         // Options et radios validées avant simulation (mêmes codes que lsim_plan_downlinks_v1).
         const lsim::plan::DownlinkScheduler probe(rv, lo.protocol);
@@ -868,6 +886,8 @@ int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t devi
         return LSIM_STATUS_INTERNAL;
     }
 }
+
+}  // namespace
 
 int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_downlink_plan* plans,
                                     size_t device_count, const lsim_gateway* gateway,
@@ -1481,3 +1501,38 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
         return LSIM_STATUS_INTERNAL;
     }
 }
+
+extern "C" {
+
+int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t device_count,
+                                     const lsim_plan_device* radios, const lsim_loop_region* regions,
+                                     const lsim_gateway* gateway, const lsim_propagation* prop,
+                                     const lsim_environment* env, const lsim_loop_options* options,
+                                     lsim_device_stats* per_device, lsim_sim_stats* totals,
+                                     lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                     size_t* uplink_count, lsim_loop_downlink* downlinks,
+                                     size_t downlink_capacity, size_t* downlink_count,
+                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+    return closed_loop_impl(devices, device_count, radios, regions, gateway, prop, env, options,
+                            nullptr, 0, per_device, totals, uplinks, uplink_capacity, uplink_count,
+                            downlinks, downlink_capacity, downlink_count, busy, busy_capacity,
+                            busy_count);
+}
+
+int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, size_t device_count,
+                                     const lsim_plan_device* radios, const lsim_loop_region* regions,
+                                     const lsim_gateway* gateway, const lsim_propagation* prop,
+                                     const lsim_environment* env, const lsim_loop_options* options,
+                                     const lsim_loop_mac* mac, size_t mac_count,
+                                     lsim_device_stats* per_device, lsim_sim_stats* totals,
+                                     lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                     size_t* uplink_count, lsim_loop_downlink* downlinks,
+                                     size_t downlink_capacity, size_t* downlink_count,
+                                     lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
+    return closed_loop_impl(devices, device_count, radios, regions, gateway, prop, env, options,
+                            mac, mac_count, per_device, totals, uplinks, uplink_capacity,
+                            uplink_count, downlinks, downlink_capacity, downlink_count, busy,
+                            busy_capacity, busy_count);
+}
+
+}  // extern "C"

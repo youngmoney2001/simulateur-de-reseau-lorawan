@@ -114,12 +114,16 @@ def test_power_table_caps_index_zero_and_steps_two_db():
     assert all(v == 1.0 for v in region.duty_limit[8:])
 
 
-def test_closed_loop_refuses_join_gateways_and_combinations():
+def test_closed_loop_refuses_join_and_gateways_and_accepts_reservations():
     sc = _scenario("mac:\n  link_adr: true\n")
     with pytest.raises(ValueError, match="jointure"):
         build_trace(sc, ProtocolOptions(join=True))
-    with pytest.raises(ValidationError, match="combinés"):
-        _scenario("mac:\n  link_adr: true\n  link_check_every: 5\n")
+    # Les réservations MAC (LinkCheck, DeviceTime, DevStatus) passent dans la boucle fermée.
+    combined = _scenario("mac:\n  link_adr: true\n  link_check_every: 5\n"
+                         "  device_status_every: 4\n  device_time_every: 7\n")
+    tr = build_trace(combined, ProtocolOptions())
+    assert tr.totals.sent == sum(d.messages for d in combined.deploy()[0])
+    assert any(e.kind == "mac_request" and e.outcome == "LinkCheckReq" for e in tr.events)
     with pytest.raises(ValidationError, match="passerelle unique"):
         load_scenario(BASE + "gateways:\n  - {x_m: 0, y_m: 0}\n  - {x_m: 900, y_m: 0}\n"
                       "mac:\n  link_adr: true\n")
@@ -133,3 +137,28 @@ def test_export_run_matches_trace_counters():
     run = run_scenario(sc)
     assert run.totals == tr.totals
     assert len(run.rows) == 40
+
+
+def test_reservations_closed_loop_matches_legacy_path():
+    """Sans LinkADR ni DutyCycle, la boucle fermée reproduit le chemin historique : mêmes
+    émissions (airtime des octets réservés), mêmes descentes, mêmes événements."""
+    from lsim.trace_events import build_trace_closed_loop
+
+    sc = _scenario("mac:\n  link_check_every: 3\n  device_status_every: 4\n  device_time_every: 5\n")
+    legacy = build_trace(sc, ProtocolOptions())
+    loop = build_trace_closed_loop(sc, ProtocolOptions())
+    assert loop.records == legacy.records
+    assert loop.totals == legacy.totals
+    assert loop.per_device == legacy.per_device
+    assert loop.gateway_tx == legacy.gateway_tx
+    assert loop.events == legacy.events
+    # Le scénario exerce bien les trois commandes (sinon la parité ne prouve rien).
+    kinds = Counter((e.kind, e.outcome) for e in legacy.events)
+    assert kinds[("mac_request", "LinkCheckReq")] > 0
+    assert kinds[("mac_request", "DeviceTimeReq")] > 0
+    assert kinds[("mac_request", "DevStatusReq")] > 0
+    assert kinds[("mac_answer", "DevStatusAns")] > 0
+    assert kinds[("mac_answer", "delivered")] > 0
+    # Les octets réservés allongent l'airtime par rapport au même scénario sans MAC.
+    plain = build_trace(_scenario(""), ProtocolOptions())
+    assert legacy.totals.airtime_ns > plain.totals.airtime_ns

@@ -33,6 +33,7 @@ struct Tx {
     std::uint8_t sf = 7;
     double rssi_dbm = 0.0;
     std::uint32_t msg = 0;  // indice de l'émission : dispositifs dans l'ordre, puis k (multi)
+    std::uint32_t rank = 0; // rang 1-based de l'émission dans son dispositif (boucle fermée)
 };
 
 bool overlap(const Tx& a, const Tx& b) {
@@ -1317,6 +1318,7 @@ struct LoopDevice {
     std::int64_t last_tx = -1;     // indice de la dernière émission démarrée
     std::uint8_t answer_mask = 0;  // réponses MAC à porter dans la prochaine émission
     std::uint8_t answer_ok = 0;
+    bool ds_pending = false;       // DevStatusReq reçue : DevStatusAns dans la prochaine émission
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
@@ -1483,6 +1485,28 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         q.push(LoopEvent{t0, kLoopRankStart, seq++, LoopKind::Start, static_cast<std::uint32_t>(i), 0, 0});
     }
 
+    // Calendrier MAC : octets réservés et commandes portées, par émission (dispositif, rang).
+    std::vector<std::size_t> mac_off(n + 1, 0);
+    for (std::size_t i = 0; i < n; ++i) mac_off[i + 1] = mac_off[i] + devices[i].messages;
+    std::vector<std::uint8_t> mac_extra(mac_off[n], 0);
+    std::vector<std::uint8_t> mac_flags(mac_off[n], 0);
+    if (options.mac_count > 0 && options.mac == nullptr) return SimStatus::InvalidInput;
+    {
+        std::vector<std::uint8_t> seen(mac_off[n], 0);
+        for (std::size_t m = 0; m < options.mac_count; ++m) {
+            const LoopMacSlot& s = options.mac[m];
+            if (s.device >= n || s.rank < 1 || s.rank > devices[s.device].messages ||
+                s.extra_bytes > 15 || (s.flags & ~kLoopMacAll) != 0) {
+                return SimStatus::InvalidInput;
+            }
+            const std::size_t idx = mac_off[s.device] + s.rank - 1;
+            if (seen[idx] != 0) return SimStatus::InvalidInput;  // deux entrées pour une émission
+            seen[idx] = 1;
+            mac_extra[idx] = s.extra_bytes;
+            mac_flags[idx] = s.flags;
+        }
+    }
+
     // Émissions (dans l'ordre des débuts), issues et réponses MAC portées.
     std::vector<Tx> txs;
     std::vector<TxOutcome> outcome;
@@ -1561,11 +1585,23 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         std::uint8_t cmds = 0;
         if (sv.adr_pending) cmds |= kLoopCmdLinkAdr;
         if (options.duty_cycle && sv.duty_state == 1) cmds |= kLoopCmdDutyCycle;
+        // Commandes MAC du calendrier, pour l'uplink reçu (rang 1-based).
+        const std::uint8_t mf = mac_flags[mac_off[d] + ta.rank - 1];
+        if ((mf & kLoopMacLinkCheck) != 0) cmds |= kLoopCmdLinkCheck;
+        if ((mf & kLoopMacDeviceTime) != 0) cmds |= kLoopCmdDeviceTime;
+        if ((mf & kLoopMacDevStatus) != 0) cmds |= kLoopCmdDevStatus;
         if (kind == 0 && cmds == 0) return;
         if (kind == 0) kind = 3;
 
         const std::uint32_t fopts = (((cmds & kLoopCmdLinkAdr) != 0) ? 5U : 0U) +
-                                    (((cmds & kLoopCmdDutyCycle) != 0) ? 2U : 0U);
+                                    (((cmds & kLoopCmdDutyCycle) != 0) ? 2U : 0U) +
+                                    (((cmds & kLoopCmdLinkCheck) != 0) ? 3U : 0U) +
+                                    (((cmds & kLoopCmdDeviceTime) != 0) ? 6U : 0U) +
+                                    (((cmds & kLoopCmdDevStatus) != 0) ? 1U : 0U);
+        if (fopts > 15) {  // FOpts ne se tronque pas : refus explicite plutôt qu'un débordement
+            status = SimStatus::InvalidInput;
+            return;
+        }
         const std::uint32_t base = kind == 2 ? kLoopDataOverheadBytes + options.protocol.downlink_payload_bytes
                                              : kLoopAckBytes;
         plan::DeviceRadio rad = radios[d];
@@ -1608,7 +1644,8 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 const EndDeviceSpec& d = devices[i];
                 LoopDevice& ds = dev[i];
                 if (ds.next_k >= d.messages) break;
-                const std::uint32_t bytes = d.payload_bytes + answer_octets(ds.answer_mask);
+                const std::size_t mo = mac_off[i] + ds.next_k;
+                const std::uint32_t bytes = d.payload_bytes + answer_octets(ds.answer_mask) + mac_extra[mo];
                 if (bytes > 255) {
                     status = SimStatus::InvalidInput;
                     break;
@@ -1645,12 +1682,14 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 t.device = static_cast<std::uint32_t>(i);
                 t.sf = ds.sf;
                 t.rssi_dbm = rssi_of(i, ds.power_index);
+                t.rank = ds.next_k + 1;
                 txs.push_back(t);
                 outcome.push_back(TxOutcome::LostSensitivity);
                 powers.push_back(ds.power_index);
                 drs.push_back(ds.dr);
-                masks.push_back(ds.answer_mask);
+                masks.push_back(static_cast<std::uint8_t>(ds.answer_mask | (ds.ds_pending ? 4U : 0U)));
                 oks.push_back(ds.answer_ok);
+                ds.ds_pending = false;
                 next_tx.push_back(-1);
                 if (ds.last_tx >= 0) next_tx[static_cast<std::size_t>(ds.last_tx)] = idx;
                 ds.last_tx = idx;
@@ -1741,6 +1780,9 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
                 }
                 dl.delivered = ok;
+                if (ok && (dl.commands & kLoopCmdDevStatus) != 0) {
+                    dev[dl.device].ds_pending = true;  // DevStatusAns portée par l'uplink suivant
+                }
                 if (ok) {
                     const SimTime apply_at = std::max(close, dl.start_ns + dl.air_ns);
                     if ((dl.commands & kLoopCmdLinkAdr) != 0) {

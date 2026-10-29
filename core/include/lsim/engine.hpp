@@ -250,12 +250,30 @@ struct LoopRegion {
     std::array<double, 16> duty_limit{};
 };
 
+// Calendrier MAC d'une émission (dispositif, rang 1-based), issu du calendrier réservé.
+// `extra_bytes` : octets MAC réservés dans l'uplink (LinkCheckReq, DeviceTimeReq, DevStatusAns),
+// ajoutés à la charge utile pour l'airtime. `flags` : kLoopMac* ci-dessous.
+inline constexpr std::uint8_t kLoopMacLinkCheck = 1;   // LinkCheckAns dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacDeviceTime = 2;  // DeviceTimeAns dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacDevStatus = 4;   // DevStatusReq dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacAll = 7;
+
+struct LoopMacSlot {
+    std::uint32_t device = 0;
+    std::uint32_t rank = 1;                   // 1-based
+    std::uint8_t extra_bytes = 0;             // 0..15
+    std::uint8_t flags = 0;                   // kLoopMac*
+};
+
 struct LoopOptions {
     plan::PlanOptions protocol;               // acquittements, descentes de données, puissances
     bool adr = false;                         // LinkADRReq
     std::int32_t installation_margin_tenth_db = 0;  // marge d'installation de l'ADR (dixièmes de dB)
     bool duty_cycle = false;                  // DutyCycleReq, une fois, au premier uplink reçu
     std::uint8_t duty_cycle_exponent = 0;     // 0..15 : rapport cyclique 1 / 2^k
+    // Réservations MAC (LinkCheck, DeviceTime, DevStatus) : au plus une entrée par émission.
+    const LoopMacSlot* mac = nullptr;
+    std::size_t mac_count = 0;
 };
 
 // Uplink : une entrée par émission, dans l'ordre temporel des débuts.
@@ -268,19 +286,22 @@ struct LoopUplink {
     std::uint8_t power_index = 0;
     double rssi_dbm = 0.0;
     TxOutcome outcome = TxOutcome::LostSensitivity;
-    std::uint8_t answer_mask = 0;             // bit 0 : LinkADRAns, bit 1 : DutyCycleAns (portées)
+    std::uint8_t answer_mask = 0;             // bit 0 : LinkADRAns, bit 1 : DutyCycleAns, bit 2 : DevStatusAns (portées)
     std::uint8_t answer_ok = 0;               // bit 0 : débit acquitté, bit 1 : puissance acquittée
 };
 
 inline constexpr std::uint8_t kLoopCmdLinkAdr = 1;   // bit de `LoopDownlink::commands`
 inline constexpr std::uint8_t kLoopCmdDutyCycle = 2;
+inline constexpr std::uint8_t kLoopCmdLinkCheck = 4;   // LinkCheckAns (FOpts, 3 octets)
+inline constexpr std::uint8_t kLoopCmdDeviceTime = 8;  // DeviceTimeAns (FOpts, 6 octets)
+inline constexpr std::uint8_t kLoopCmdDevStatus = 16;  // DevStatusReq (FOpts, 1 octet)
 
 // Descente créée (ACK, donnée ou MAC seul) pour un uplink reçu.
 struct LoopDownlink {
     std::uint32_t uplink = 0;                 // indice dans LoopResult::uplinks
     std::uint32_t device = 0;
     std::uint8_t kind = 3;                    // 1 ACK, 2 donnée, 3 MAC seul
-    std::uint8_t commands = 0;                // kLoopCmdLinkAdr | kLoopCmdDutyCycle (FOpts)
+    std::uint8_t commands = 0;                // kLoopCmd* (FOpts et réponses MAC)
     SimTime t_open = 0;
     SimTime start_ns = -1;                    // -1 : pas de créneau passerelle dans la RX1
     SimTime air_ns = 0;

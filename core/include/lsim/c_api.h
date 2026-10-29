@@ -1094,6 +1094,15 @@ typedef struct lsim_loop_options {
     uint8_t duty_cycle_exponent;     /* 0..15 : rapport cyclique 1 / 2^k */
 } lsim_loop_options;
 
+/* Calendrier MAC d'une émission (v2) : au plus une entrée par émission. flags : bit 0
+ * LinkCheckAns, bit 1 DeviceTimeAns, bit 2 DevStatusReq, dans la descente de cet uplink. */
+typedef struct lsim_loop_mac {
+    uint32_t device_index;
+    uint32_t rank;                   /* 1-based */
+    uint8_t extra_bytes;             /* 0..15 : octets MAC réservés dans l'uplink */
+    uint8_t flags;
+} lsim_loop_mac;
+
 typedef struct lsim_loop_uplink {
     uint32_t device_index;
     int64_t start_ns;
@@ -1103,7 +1112,7 @@ typedef struct lsim_loop_uplink {
     uint8_t power_index;
     double rssi_dbm;
     uint8_t outcome;                 /* code TxOutcome du moteur */
-    uint8_t answer_mask;             /* bit 0 LinkADRAns, bit 1 DutyCycleAns (portées) */
+    uint8_t answer_mask;             /* bit 0 LinkADRAns, bit 1 DutyCycleAns, bit 2 DevStatusAns (portées) */
     uint8_t answer_ok;               /* bit 0 débit acquitté, bit 1 puissance acquittée */
 } lsim_loop_uplink;
 
@@ -1111,7 +1120,7 @@ typedef struct lsim_loop_downlink {
     uint32_t uplink_index;           /* indice dans uplinks */
     uint32_t device_index;
     uint8_t kind;                    /* 1 ACK, 2 donnée, 3 MAC seul */
-    uint8_t commands;                /* bit 0 LinkADRReq, bit 1 DutyCycleReq */
+    uint8_t commands;                /* bit 0 LinkADRReq, bit 1 DutyCycleReq, bit 2 LinkCheckAns, bit 3 DeviceTimeAns, bit 4 DevStatusReq */
     int64_t t_open_ns;
     int64_t start_ns;                /* -1 : pas de créneau passerelle dans la RX1 */
     int64_t air_ns;
@@ -1128,6 +1137,25 @@ LSIM_API int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, si
                                               const lsim_propagation* prop,
                                               const lsim_environment* env,
                                               const lsim_loop_options* options,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count);
+
+/* Boucle fermée v2 : v1 plus le calendrier MAC (`mac`, `mac_count` : 0 et NULL acceptés).
+ * Mêmes sorties et statuts que v1. */
+LSIM_API int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              const lsim_loop_mac* mac, size_t mac_count,
                                               lsim_device_stats* per_device,
                                               lsim_sim_stats* totals,
                                               lsim_loop_uplink* uplinks, size_t uplink_capacity,

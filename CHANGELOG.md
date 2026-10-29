@@ -7,7 +7,9 @@
 - `build_trace` et `run_scenario` passent par la boucle fermée (une seule exécution native, descentes créées par le moteur) dès que l'un de ces champs est actif. Événements `mac_request` (LinkADRReq, DutyCycleReq) et `mac_answer` (LinkADRAns, DutyCycleAns).
 - **Puissance** : index 0 = puissance configurée plafonnée par la PIRE du plan ; pas du plan par index ; index réservés refusés. Table TXPower : EU868 uniquement (RP002-1.0.3, PIRE +16 dBm, pas 2 dB, index 0 à 7). Un plan sans table refuse LinkADR.
 - **Duty cycle** : limite réglementaire par index (sous-bande à la PIRE de l'index, combinée au duty cycle du groupe) ; DutyCycleReq ne fait que la réduire. Repos après une émission = airtime de l'émission terminée × (1/D − 1).
-- **Refusé explicitement** : jointure, passerelles multiples, mesh, et combinaison avec LinkCheck, DevStatus ou DeviceTime.
+- **Refusé explicitement** : jointure, passerelles multiples, mesh.
+- **Réservations MAC dans la boucle fermée** : LinkCheckReq, DeviceTimeReq et DevStatusAns réservent leurs octets dans le temps d'antenne ; LinkCheckAns, DeviceTimeAns et DevStatusReq sont portés par la descente de l'uplink concerné. DevStatusAns est confirmée à la réception de l'uplink suivant. Nouvelle API `lsim_simulate_closed_loop_v2` (la v1 est conservée). Sans ADR ni DutyCycle, la boucle fermée reproduit le chemin historique (test de parité).
+- Limite : une descente dont les commandes dépassent 15 octets de FOpts est refusée explicitement (pas encore de file d'attente).
 - Tests : `core/tests/test_closed_loop.cpp`, `python/tests/test_mac_loop.py`. Documentation : `docs/CLOSED_LOOP_PLAN.md`.
 
 ### Commandes MAC : phase 1, étape 1

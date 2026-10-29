@@ -1,6 +1,7 @@
-"""Boucle fermée (S2) : LinkADRReq et DutyCycleReq, pont vers `lsim_simulate_closed_loop_v1`.
+"""Boucle fermée (S2, S3) : LinkADRReq, DutyCycleReq et réservations MAC (LinkCheck, DeviceTime,
+DevStatus), pont vers `lsim_simulate_closed_loop_v2`.
 
-Passerelle unique, sans jointure ni autre commande MAC. Une seule exécution native : les
+Passerelle unique, sans jointure. Une seule exécution native : les
 descentes sont créées dans le moteur, au fil des uplinks reçus. Le chemin causal S1
 (`downlink_plan.simulate_causal`) reste la référence sans commande : `tests/test_closed_loop.py`
 exige l'égalité des compteurs quand aucune commande n'est active.
@@ -36,6 +37,13 @@ from lsim.simulator import (
 LOOP_STATUS_PLAN_BASE = 950
 CMD_LINK_ADR = 1
 CMD_DUTY_CYCLE = 2
+CMD_LINK_CHECK = 4
+CMD_DEVICE_TIME = 8
+CMD_DEVICE_STATUS = 16
+MAC_LINK_CHECK = 1      # bits de `MacSlot.flags`
+MAC_DEVICE_TIME = 2
+MAC_DEVICE_STATUS = 4
+ANSWER_DEVICE_STATUS = 4  # bit de `LoopUplink.answer_mask`
 KIND_ACK = 1
 KIND_DATA = 2
 KIND_MAC = 3
@@ -54,6 +62,11 @@ class _CLoopOptions(ctypes.Structure):
                 ("duty_cycle_exponent", ctypes.c_uint8)]
 
 
+class _CLoopMac(ctypes.Structure):
+    _fields_ = [("device_index", ctypes.c_uint32), ("rank", ctypes.c_uint32),
+                ("extra_bytes", ctypes.c_uint8), ("flags", ctypes.c_uint8)]
+
+
 class _CLoopUplink(ctypes.Structure):
     _fields_ = [("device_index", ctypes.c_uint32), ("start_ns", ctypes.c_int64),
                 ("end_ns", ctypes.c_int64), ("spreading_factor", ctypes.c_uint8),
@@ -70,11 +83,12 @@ class _CLoopDownlink(ctypes.Structure):
                 ("req_dr", ctypes.c_uint8), ("req_power_index", ctypes.c_uint8)]
 
 
-LIB.lsim_simulate_closed_loop_v1.restype = ctypes.c_int32
-LIB.lsim_simulate_closed_loop_v1.argtypes = [
+LIB.lsim_simulate_closed_loop_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v2.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CPlanDevice),
     ctypes.POINTER(_CLoopRegion), ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation),
-    ctypes.POINTER(_CEnvironment), ctypes.POINTER(_CLoopOptions), ctypes.POINTER(_CDeviceStats),
+    ctypes.POINTER(_CEnvironment), ctypes.POINTER(_CLoopOptions),
+    ctypes.POINTER(_CLoopMac), ctypes.c_size_t, ctypes.POINTER(_CDeviceStats),
     ctypes.POINTER(_CSimStats), ctypes.POINTER(_CLoopUplink), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CLoopDownlink), ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(_CInterval), ctypes.c_size_t,
@@ -114,6 +128,20 @@ class LoopOptions:
 
 
 @dataclass(frozen=True)
+class MacSlot:
+    """Calendrier MAC d'une émission (`device` : indice, `rank` : 1-based).
+
+    `extra_bytes` : octets MAC réservés dans l'uplink (0..15). `flags` : MAC_LINK_CHECK,
+    MAC_DEVICE_TIME, MAC_DEVICE_STATUS, dans la descente qui répond à cet uplink.
+    """
+
+    device: int
+    rank: int
+    extra_bytes: int
+    flags: int
+
+
+@dataclass(frozen=True)
 class LoopUplink:
     device: int
     start_ns: int
@@ -123,7 +151,7 @@ class LoopUplink:
     power_index: int
     rssi_dbm: float
     outcome: str
-    answer_mask: int           # bit 0 LinkADRAns, bit 1 DutyCycleAns
+    answer_mask: int           # bit 0 LinkADRAns, bit 1 DutyCycleAns, bit 2 DevStatusAns
     answer_ok: int             # bit 0 débit acquitté, bit 1 puissance acquittée
 
 
@@ -132,7 +160,7 @@ class LoopDownlink:
     uplink: int                # indice dans LoopOutcome.uplinks
     device: int
     kind: str                  # ack, data, mac
-    commands: int              # CMD_LINK_ADR | CMD_DUTY_CYCLE
+    commands: int              # CMD_* (commandes et réponses MAC portées)
     t_open_ns: int
     start_ns: Optional[int]    # None : pas de créneau passerelle dans la RX1
     air_ns: int
@@ -157,7 +185,8 @@ OUTCOME_CODES = {v: k for k, v in _OUTCOMES.items()}
 
 
 def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, radios: Sequence,
-                         regions: Sequence[LoopRegion], options: LoopOptions) -> LoopOutcome:
+                         regions: Sequence[LoopRegion], options: LoopOptions,
+                         mac: Sequence[MacSlot] = ()) -> LoopOutcome:
     """Boucle fermée S2 en une seule exécution native. Lève `StatusError` si le cœur refuse l'entrée.
 
     `devices`, `radios` et `regions` : un élément par dispositif, même ordre. `regions` n'est lu
@@ -174,6 +203,12 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
     capacity = sum(d.messages for d in devices)
     if capacity > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    c_mac = (_CLoopMac * max(1, len(mac)))()
+    for k, m in enumerate(mac):
+        c_mac[k].device_index = m.device
+        c_mac[k].rank = m.rank
+        c_mac[k].extra_bytes = m.extra_bytes
+        c_mac[k].flags = m.flags
 
     c_devs = _c_end_devices(devices)
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
@@ -226,10 +261,10 @@ def simulate_closed_loop(devices: Sequence, gateway, propagation, environment, r
     n_ups = ctypes.c_size_t(0)
     n_dls = ctypes.c_size_t(0)
     n_busy = ctypes.c_size_t(0)
-    status = LIB.lsim_simulate_closed_loop_v1(
+    status = LIB.lsim_simulate_closed_loop_v2(
         c_devs if n else None, n, c_radios if n else None, c_regions if n else None,
         ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref, ctypes.byref(c_opt),
-        c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
+        c_mac if mac else None, len(mac), c_stats if n else None, ctypes.byref(c_tot), c_ups, cap, ctypes.byref(n_ups),
         c_dls, cap, ctypes.byref(n_dls), c_busy, cap, ctypes.byref(n_busy))
     del keep
     if status != 0:

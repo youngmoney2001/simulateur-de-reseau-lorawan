@@ -3,8 +3,10 @@
 Actif seulement si le scénario demande `link_adr` ou `duty_cycle_exponent`. Sans ces champs, les
 scénarios gardent le chemin existant (résultats et empreintes inchangés).
 
-Périmètre : passerelle unique, sans jointure, sans autre commande MAC (calendrier de
-`mac_plan`). Les combinaisons hors périmètre sont refusées explicitement.
+Périmètre : passerelle unique, sans jointure. Les réservations MAC (LinkCheckReq, DeviceTimeReq,
+DevStatusAns) suivent le calendrier de `mac_plan` : octets dans l'airtime, réponses dans les
+descentes qui répondent aux uplinks reçus. Les combinaisons hors périmètre sont refusées
+explicitement.
 
 Règles de puissance et de duty cycle (voir docs/CLOSED_LOOP_PLAN.md, S2) :
 - index 0 = puissance configurée, plafonnée par la PIRE du plan (`regions.POWER_TABLES`) ; chaque
@@ -17,9 +19,12 @@ Règles de puissance et de duty cycle (voir docs/CLOSED_LOOP_PLAN.md, S2) :
 from __future__ import annotations
 
 import math
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
-from lsim.closed_loop import LoopOptions, LoopRegion
+from lsim import mac_plan
+from lsim.closed_loop import MAC_DEVICE_STATUS, MAC_DEVICE_TIME, MAC_LINK_CHECK, LoopOptions, LoopRegion, MacSlot
+from lsim.mac import DeviceTimeReq, LinkCheckReq
+from lsim.mac_plan import MacSchedule
 from lsim.plan import get_plan
 from lsim.regions import PROFILES, power_table
 
@@ -37,10 +42,33 @@ def check_closed_loop(scenario, options: Any) -> None:
     if scenario.model.gateways is not None or scenario.model.mesh is not None:
         raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
                          "(pas de « gateways » ni de mesh)")
-    m = scenario.model.mac
-    if m.link_check_every or m.device_status_every or m.device_time_every:
-        raise ValueError("LinkADR/DutyCycle combinés à LinkCheck, DevStatus ou DeviceTime : "
-                         "non supporté par la boucle fermée (à porter)")
+
+
+def mac_slots(schedule: Optional[MacSchedule], devices: Sequence) -> tuple[MacSlot, ...]:
+    """Calendrier MAC de la boucle fermée : une entrée par émission réservée ou portante.
+
+    Les octets réservés sont ceux de `mac_plan.reserved_extra_bytes` (même calendrier que le
+    chemin historique). Les drapeaux suivent les requêtes du calendrier : LinkCheckAns et
+    DeviceTimeAns répondent à un uplink reçu de rang demandé, DevStatusReq est due dans le
+    downlink répondant à l'uplink de rang indiqué.
+    """
+    if schedule is None:
+        return ()
+    out: list[MacSlot] = []
+    for i, d in enumerate(devices):
+        for rank in range(1, d.messages + 1):
+            extra = mac_plan.reserved_extra_bytes(schedule, rank)
+            requests = mac_plan.uplink_requests(schedule, rank)
+            flags = 0
+            if LinkCheckReq() in requests:
+                flags |= MAC_LINK_CHECK
+            if DeviceTimeReq() in requests:
+                flags |= MAC_DEVICE_TIME
+            if mac_plan.device_status_request_due(schedule, rank):
+                flags |= MAC_DEVICE_STATUS
+            if extra or flags:
+                out.append(MacSlot(device=i, rank=rank, extra_bytes=extra, flags=flags))
+    return tuple(out)
 
 
 def loop_options(scenario, options: Any) -> LoopOptions:

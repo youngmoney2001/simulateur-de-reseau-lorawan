@@ -1,6 +1,6 @@
 # Commandes MAC dans la simulation : plan par phases
 
-Statut : phase 1 terminée ; phase 2 en cours (DeviceTime fait ; LinkADR et DutyCycle faits en boucle fermée pour la passerelle unique, voir `docs/CLOSED_LOOP_PLAN.md`) ; phases 3 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
+Statut : phase 1 terminée ; phase 2 en cours (DeviceTime fait ; LinkADR, DutyCycle et réservations LinkCheck, DeviceTime, DevStatus faits en boucle fermée pour la passerelle unique, voir `docs/CLOSED_LOOP_PLAN.md`) ; phases 3 à 5 à faire. Étape 1 faite (configuration). Le codec des 19 commandes existe déjà
 (`python/lsim/mac.py`, `core/src/mac_commands.cpp`) ; son usage dans la simulation ne l'est pas.
 
 ## Décisions retenues
@@ -19,7 +19,8 @@ Annotations : `mac_request` et les `mac_answer` ajoutés à un downlink n'ont pa
    - Fait : DeviceTimeReq/Ans. `device_time_every` (bloc `mac:`) : DeviceTimeReq (1 octet, réservée) dans l'uplink de rang multiple de N ; DeviceTimeAns (6 octets : CID, secondes GPS, fraction 1/256 s) dans la descente qui répond, confirmée (`mac_answer`) seulement si cette descente est reçue. Ancre temporelle : époque GPS en t = 0 de la simulation (décision du propriétaire, sans champ de date au schéma).
    - Fait (passerelle unique, sans jointure) : LinkADRReq/Ans et DutyCycleReq/Ans en boucle fermée, dans le moteur, en une seule exécution (`simulate_closed_loop`, `lsim_simulate_closed_loop_v1`, `python/lsim/closed_loop.py`). Décision ADR : `adr::decide()` côté serveur. Détails, hypothèses et preuves dans `docs/CLOSED_LOOP_PLAN.md` (S2).
    - Fait ensuite : le bloc `mac:` (`link_adr`, `duty_cycle_exponent`) et `build_trace` / `run_scenario` passent par la boucle fermée. Politique de puissance et de duty cycle : voir `docs/CLOSED_LOOP_PLAN.md`.
-   - Reste : LinkADR et DutyCycle avec jointure, mesh ou multi-passerelles ; portage des réservations LinkCheck, DevStatus et DeviceTime dans la boucle fermée.
+   - Fait : réservations LinkCheck, DeviceTime et DevStatus portées dans la boucle fermée (octets dans l'airtime, FOpts des descentes, DevStatusAns confirmée à la réception de l'uplink suivant). La combinaison avec LinkADR et DutyCycle n'est plus refusée.
+   - Reste : LinkADR, DutyCycle et ces réservations avec jointure, mesh ou multi-passerelles ; file d'attente des commandes MAC quand les FOpts dépassent 15 octets (refus explicite pour l'instant).
 3. **Configuration radio et classes** : RXParamSetup, NewChannel, RXTimingSetup, DlChannel, ADRParamSetup, PingSlot (info, channel), BeaconFreq, RejoinParamSetup, ForceRejoin, avec leurs effets sur le modèle.
 4. **Orchestration** : commandes initiées par le serveur, files de descentes, réponses différées, refus, expiration, interaction avec les classes A, B et C.
 5. **Validation et interface** : vecteurs de référence, conformité TS001-1.1.0, journal détaillé, métriques, limites documentées.

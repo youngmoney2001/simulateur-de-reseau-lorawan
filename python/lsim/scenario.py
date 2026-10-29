@@ -297,18 +297,17 @@ class ScenarioModel(_Strict):
             if self.gateways is not None or self.mesh is not None:
                 raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
                                  "(pas de « gateways » ni de mesh)")
-            if (self.mac.link_check_every or self.mac.device_status_every
-                    or self.mac.device_time_every):
-                raise ValueError("LinkADR/DutyCycle combinés à LinkCheck, DevStatus ou DeviceTime : "
-                                 "non supporté par la boucle fermée (à porter)")
         if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every
                                      or self.mac.device_time_every):
             if self.gateways is not None or self.mesh is not None:
                 raise ValueError("commandes MAC : passerelle unique uniquement "
                                  "(pas de « gateways » ni de mesh)")
-            # Réservation maximale d'une émission : LinkCheckReq (1) + DeviceTimeReq (1) + DevStatusAns (3).
+            # Réservation maximale d'une émission : LinkCheckReq (1) + DeviceTimeReq (1) + DevStatusAns (3),
+            # plus LinkADRAns (2) et DutyCycleAns (1) si la boucle fermée les porte.
             extra = ((1 if self.mac.link_check_every else 0) + (1 if self.mac.device_time_every else 0)
                      + (3 if self.mac.device_status_every else 0))
+            if self.mac.link_adr or self.mac.duty_cycle_exponent is not None:
+                extra += 3
             for g in self.groups:
                 if g.payload_bytes + extra > 255:
                     raise ValueError(f"groupe {g.name!r} : charge de {g.payload_bytes} octets + "

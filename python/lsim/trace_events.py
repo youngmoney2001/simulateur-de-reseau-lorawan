@@ -610,33 +610,59 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
                                options, mac)
 
 
+def build_trace_closed_loop(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
+    """Trace produite par la boucle fermée, même sans LinkADR ni DutyCycle.
+
+    Sert à vérifier la parité avec le chemin historique (`build_trace`) sur les réservations MAC.
+    `build_trace` n'emprunte ce chemin que si `closed_loop_applies` est vrai.
+    """
+    devices, group_of, _indices = scenario.deploy()
+    if sum(d.messages for d in devices) > MAX_TRACE_RECORDS:
+        raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
+    return _build_trace_closed_loop(scenario, devices, group_of, device_radios(scenario),
+                                    scenario.gateway(), scenario.propagation(),
+                                    scenario.environment, options)
+
+
 def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propagation, environment,
                              options: ProtocolOptions) -> TraceRun:
-    """Boucle fermée S2 : une exécution, uplinks et descentes (LinkADR, DutyCycle) du moteur natif."""
+    """Boucle fermée S2/S3 : une exécution, uplinks, réservations MAC et descentes du moteur natif."""
     from lsim.closed_loop import OUTCOME_CODES, simulate_closed_loop
-    from lsim.mac_loop import check_closed_loop, loop_options, loop_regions
+    from lsim.mac_loop import check_closed_loop, loop_options, loop_regions, mac_slots
     check_closed_loop(scenario, options)
+    schedule = _schedule_of(scenario)
     out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
-                               loop_regions(scenario, group_of), loop_options(scenario, options))
+                               loop_regions(scenario, group_of), loop_options(scenario, options),
+                               mac=mac_slots(schedule, devices))
     records = tuple(
         TxRecord(u.device, u.start_ns, u.end_ns, u.spreading_factor, u.rssi_dbm,
                  OUTCOME_CODES[u.outcome])
         for u in out.uplinks)
-    events = _closed_loop_events(out, radios, options)
+    events = _closed_loop_events(out, radios, options, schedule)
     return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
                     events=events, gateway_tx=out.busy)
 
 
-def _closed_loop_events(out, radios: Sequence[DeviceRadio],
-                        options: ProtocolOptions) -> tuple[ProtocolEvent, ...]:
-    """Événements de la boucle fermée, au même format que `_events` (ordre temporel)."""
-    from lsim.closed_loop import OUTCOME_CODES
+def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOptions,
+                        mac: Optional[MacSchedule] = None) -> tuple[ProtocolEvent, ...]:
+    """Événements de la boucle fermée, au même format et au même ordre que `_events`.
+
+    Pour chaque uplink : l'uplink, ses requêtes du calendrier, la réponse DevStatusAns s'il y a
+    lieu, puis la descente qui lui répond (le moteur en crée au plus une par uplink reçu).
+    """
+    from lsim.closed_loop import (
+        ANSWER_DEVICE_STATUS, CMD_DEVICE_STATUS, CMD_DEVICE_TIME, CMD_DUTY_CYCLE, CMD_LINK_ADR,
+        CMD_LINK_CHECK, OUTCOME_CODES,
+    )
     pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
 
     def add(t: int, kind: str, device: int, hops: list[HopEvent], outcome: str) -> None:
         pending.append((t, len(pending), kind, device, tuple(hops), outcome))
 
-    for u in out.uplinks:
+    down_of = {dl.uplink: dl for dl in out.downlinks}
+    rank_of: dict[int, int] = defaultdict(int)
+    for a, u in enumerate(out.uplinks):
+        rank_of[u.device] += 1
         code = OUTCOME_CODES[u.outcome]
         radio = radios[u.device]
         hops = [HopEvent(_dev(u.device), "gw:0", u.start_ns, radio.freq_hz, radio.dr, u.rssi_dbm,
@@ -645,14 +671,21 @@ def _closed_loop_events(out, radios: Sequence[DeviceRadio],
         if received:
             hops.append(HopEvent("gw:0", "ns", u.end_ns, radio.freq_hz, radio.dr, None, "delivered"))
         add(u.start_ns, "uplink", u.device, hops, _UPLINK_OUTCOME[code])
+        if mac is not None:
+            for cmd in uplink_requests(mac, rank_of[u.device]):
+                add(u.start_ns, "mac_request", u.device, [], _MAC_NAME[type(cmd)])
         if received:
             # Réponses portées par cet uplink : confirmées parce qu'il est reçu.
             if u.answer_mask & 1:
                 add(u.start_ns, "mac_answer", u.device, [], "LinkADRAns")
             if u.answer_mask & 2:
                 add(u.start_ns, "mac_answer", u.device, [], "DutyCycleAns")
+            if u.answer_mask & ANSWER_DEVICE_STATUS:
+                add(u.start_ns, "mac_answer", u.device, [], "DevStatusAns")
 
-    for dl in out.downlinks:
+        dl = down_of.get(a)
+        if dl is None:
+            continue
         radio = radios[dl.device]
         dev = _dev(dl.device)
         if dl.start_ns is None:
@@ -666,19 +699,27 @@ def _closed_loop_events(out, radios: Sequence[DeviceRadio],
         ok = dl.delivered
         down_hop = HopEvent("gw:0", dev, dl.start_ns, radio.rx1_hz, None, None,
                             "delivered" if ok else "lost_sensitivity")
+        answers = bool(dl.commands & (CMD_LINK_CHECK | CMD_DEVICE_TIME))
         if dl.kind == "ack":
             kind, content = "ack", "ack_only"
         elif dl.kind == "data":
             kind = "downlink"
             content = "data_ack" if options.confirmed_uplinks else "data"
+        elif answers:
+            kind, content = "mac_answer", "delivered"  # downlink MAC seul portant une réponse
         else:
             kind, content = "downlink", "delivered"  # downlink MAC seul
         add(dl.start_ns, kind, dl.device, [down_hop], content if ok else "lost_sensitivity")
         if ok:
-            if dl.commands & 1:
+            # Une réponse par descente, même si elle acquitte plusieurs requêtes (comme `_events`).
+            if answers and kind != "mac_answer":
+                add(dl.start_ns, "mac_answer", dl.device, [], "delivered")
+            if dl.commands & CMD_LINK_ADR:
                 add(dl.start_ns, "mac_request", dl.device, [], "LinkADRReq")
-            if dl.commands & 2:
+            if dl.commands & CMD_DUTY_CYCLE:
                 add(dl.start_ns, "mac_request", dl.device, [], "DutyCycleReq")
+            if dl.commands & CMD_DEVICE_STATUS:
+                add(dl.start_ns, "mac_request", dl.device, [], "DevStatusReq")
 
     if len(pending) > MAX_EVENTS:
         raise ValueError(f"trop d'événements ({len(pending)} ; limite {MAX_EVENTS})")

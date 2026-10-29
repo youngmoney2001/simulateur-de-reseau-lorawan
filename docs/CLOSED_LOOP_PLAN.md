@@ -99,8 +99,25 @@ modèle de descente qui les modifie doit être explicitement validé avant le me
     du moteur. `build_trace` et `run_scenario` l'utilisent dès qu'un de ces champs est actif (sinon, chemin
     historique inchangé). Événements : `mac_request` LinkADRReq / DutyCycleReq, `mac_answer` LinkADRAns /
     DutyCycleAns.
-  - Refusé explicitement (erreur) : jointure, passerelles multiples, mesh, combinaison avec LinkCheck,
-    DevStatus ou DeviceTime (leurs réservations ne sont pas encore portées dans la boucle fermée).
+  - Refusé explicitement (erreur) : jointure, passerelles multiples, mesh.
+  - Réservations MAC (étape 4 de la priorité, faite) : LinkCheckReq, DeviceTimeReq et DevStatusAns
+    passent dans la boucle fermée, avec LinkADR et DutyCycle. Le calendrier (`mac_plan`, `mac_loop.mac_slots`)
+    donne, par émission (dispositif, rang) : les octets réservés (`extra_bytes`), et les drapeaux
+    `kLoopMacLinkCheck`, `kLoopMacDeviceTime` (réponse portée par la descente de cet uplink) et
+    `kLoopMacDevStatus` (DevStatusReq due dans cette descente). Le moteur (`lsim_simulate_closed_loop_v2`,
+    `LoopOptions::mac`) : ajoute les octets réservés à la charge utile pour l'airtime ; ajoute les FOpts
+    (LinkCheckAns 3 octets, DeviceTimeAns 6, DevStatusReq 1) ; et, pour DevStatusAns, retient la
+    demande livrée (`dev.ds_pending`) pour la porter dans l'uplink suivant (bit 2 de `answer_mask`),
+    confirmée seulement si cet uplink est reçu. Règles de conservation : l'octet DevStatusAns est réservé
+    dans l'airtime dès que la requête est planifiée, même si elle est perdue (réservation conservatrice,
+    comme `mac_plan`) ; seule la confirmation dépend de la réception. Les FOpts ne se tronquent pas : une
+    descente dont les commandes dépassent 15 octets (par exemple LinkADR 5 + DutyCycle 2 + LinkCheck 3 +
+    DeviceTime 6 + DevStatus 1) est refusée explicitement (`InvalidInput`) ; une file d'attente des
+    commandes reste à faire.
+  - Preuves : `core/tests/test_closed_loop.cpp` (`test_mac_reservations_and_answers`) ; `python/tests/test_mac_loop.py`
+    (`test_reservations_closed_loop_matches_legacy_path` : sans ADR ni DutyCycle, la boucle fermée reproduit
+    le chemin historique, en airtime, descentes et événements). Le chemin historique reste la référence de
+    ce périmètre ; ses empreintes sont inchangées.
   - Non testé : une commande LinkADR à un index réservé, donc le refus NACK par le moteur (le code est en
     place, mais l'ADR ne demande jamais un tel index et aucune API n'injecte de commande).
   - Point fixe : le chemin Python de `build_trace` (`_build_trace_python`) reste pour les jointures, les
