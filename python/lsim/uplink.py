@@ -23,8 +23,10 @@ le clôt. Sans acquittement, il est considéré non reçu et n'est pas renvoyé 
 Retransmission d'un uplink confirmé déjà accepté (delta 0, MIC valide) : ACK seul renvoyé,
 sans nouvelle livraison ni changement d'état. Un uplink non confirmé répété est rejeté.
 
-Commandes MAC à acquitter (`mac_pending`) : renvoyées en FOpts à chaque downlink jusqu'au
-LinkADRAns du dispositif, au plus MAC_MAX_ATTEMPTS fois. FPending et ADR ne sont pas interprétés. Les
+Commandes MAC à acquitter (`mac_pending`) : renvoyées en FOpts au prochain downlink tant qu'aucun
+LinkADRAns n'arrive (TS001-1.0.4 §5 : réémission décidée à la réception d'une trame sans la réponse
+attendue, sans plafond normatif ni temporisation). Un LinkADRAns négatif (un bit à 0) ferme la demande
+et est journalisé : la même configuration n'est pas renvoyée. FPending et ADR ne sont pas interprétés. Les
 charges de FPort > 0 sans AppKey ne sont pas déchiffrables et ne sont pas livrées.
 """
 
@@ -56,20 +58,28 @@ CID_LINK_ADR = 0x03          # LinkADRReq / LinkADRAns
 _log = logging.getLogger("lsim.uplink")
 
 
-def _acked_cids(fopts: bytes) -> set[int]:
-    """CID des commandes acquittées dans les FOpts montants (LinkADRAns : trois bits à 1)."""
+def _answered_cids(fopts: bytes) -> tuple[set[int], list[mac.LinkAdrAns]]:
+    """Réponses LinkADRAns des FOpts montants : (CID acquittés, réponses négatives).
+
+    Atomique (TS001 §5.2) : une réponse n'est positive que si les trois bits valent 1 ; un seul bit
+    à 0 signifie que la commande n'a pas réussi et que le dispositif garde son état précédent.
+    """
     if not fopts:
-        return set()
+        return set(), []
     try:
         answers = mac.decode_all(fopts, downlink=False)
     except (ValueError, StatusError):
-        return set()
+        return set(), []
     acked: set[int] = set()
+    refused: list[mac.LinkAdrAns] = []
     for answer in answers:
-        if isinstance(answer, mac.LinkAdrAns) and answer.channel_mask_ack \
-                and answer.data_rate_ack and answer.power_ack:
+        if not isinstance(answer, mac.LinkAdrAns):
+            continue
+        if answer.channel_mask_ack and answer.data_rate_ack and answer.power_ack:
             acked.add(CID_LINK_ADR)
-    return acked
+        else:
+            refused.append(answer)
+    return acked, refused
 
 
 def _pending_fopts(tx: Transaction, dev_eui: bytes) -> tuple[bytes, list[int]]:
@@ -77,10 +87,10 @@ def _pending_fopts(tx: Transaction, dev_eui: bytes) -> tuple[bytes, list[int]]:
     fopts = b""
     sent: list[int] = []
     for item in tx.pending_mac(dev_eui):
-        if item.attempts >= MAC_MAX_ATTEMPTS:
+        if MAC_MAX_ATTEMPTS is not None and item.attempts >= MAC_MAX_ATTEMPTS:
             tx.mac_done(dev_eui, item.cid)
-            _log.warning("commande MAC %d non acquittée après %d essais : abandon",
-                         item.cid, item.attempts)
+            _log.warning("commande MAC %d non acquittée après %d essais : abandon (plafond "
+                         "d'implémentation)", item.cid, item.attempts)
             continue
         if len(fopts) + len(item.command) <= _FOPTS_MAX:
             fopts += item.command
@@ -195,8 +205,16 @@ class DataUplinkHandler:
             _save(tx, rec, fcnt_up=rec.fcnt_up, pending=rec.pending_conf, sent=sent)
             return Outcome("data_ack_repeated", txpk=txpk, dev_eui=rec.dev_eui)
 
-        for cid in _acked_cids(frame.fopts):
+        acked, refused = _answered_cids(frame.fopts)
+        for cid in acked:
             tx.mac_done(rec.dev_eui, cid)
+        if refused and any(item.cid == CID_LINK_ADR for item in tx.pending_mac(rec.dev_eui)):
+            # Réponse négative : la demande est close et journalisée, pas renvoyée à l'identique.
+            for answer in refused:
+                _log.warning("LinkADR refusé par %s : masque %s, débit %s, puissance %s ; "
+                             "pas de renvoi de la même configuration", rec.dev_eui[::-1].hex(),
+                             answer.channel_mask_ack, answer.data_rate_ack, answer.power_ack)
+            tx.mac_done(rec.dev_eui, CID_LINK_ADR)
         # Rejoin en attente : downlinks et commandes MAC partent seulement sur le nouveau
         # contexte. Un uplink sur l'ancien n'en reçoit que l'acquittement (confirmé).
         held = tx.pending_by_eui(rec.dev_eui) is not None

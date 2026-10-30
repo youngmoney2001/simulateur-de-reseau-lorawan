@@ -742,6 +742,43 @@ void test_adr_ack_backoff_without_downlink() {
     for (const LoopDownlink& dl : res.downlinks) CHECK_TRUE(!dl.delivered);
 }
 
+// TS001 §5 : LinkADRAns est obligatoire, et l'émetteur décide de réémettre à la réception d'une
+// trame sans la réponse attendue. Aucun plafond normatif ni temporisation : tant que la réponse
+// manque, chaque uplink reçu porte une descente avec LinkADRReq (ici jamais reçue, 200 dB).
+void test_linkadr_reissued_on_each_uplink_without_answer() {
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 120)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    DeviceStats st[1];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.adr = true;
+    opt.protocol.device_rx_offset_db = 200.0;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{120});
+    if (res.uplinks.size() != 120) return;
+    std::vector<bool> has_link_adr(res.uplinks.size(), false);
+    for (const LoopDownlink& dl : res.downlinks) {
+        CHECK_TRUE(!dl.delivered);
+        if ((dl.commands & kLoopCmdLinkAdr) != 0) has_link_adr[static_cast<std::size_t>(dl.uplink)] = true;
+    }
+    // Première décision (SF12 vers SF7) : ADR a besoin de 20 trames, puis la commande reste en attente.
+    std::size_t first = res.uplinks.size();
+    for (std::size_t u = 0; u < has_link_adr.size(); ++u) {
+        if (has_link_adr[u]) { first = u; break; }
+    }
+    CHECK_TRUE(first < res.uplinks.size());
+    if (first >= res.uplinks.size()) return;
+    // Au-delà de 8 essais (ancien plafond d'implémentation) : une descente LinkADR par uplink, jusqu'au dernier.
+    CHECK_TRUE(res.uplinks.size() - first > 8);
+    for (std::size_t u = first; u < res.uplinks.size(); ++u) CHECK_TRUE(has_link_adr[u]);
+    // Jamais acquittée : le débit reste SF12 (pas de changement implicite).
+    CHECK_EQ(res.uplinks.back().spreading_factor, std::uint8_t{12});
+}
+
 void test_adr_ack_counter_reset_by_downlink() {
     // F14 : des descentes reçues (ADRACKReq honoré à chaque 64 uplinks) remettent ADRACKCnt à 0 :
     // aucun backoff, donc le débit ne remonte jamais au cours des 170 uplinks, dispositif proche
@@ -861,6 +898,7 @@ void run_closed_loop_tests() {
     test_no_shift_inside_busy_windows();
     test_exact_overlap_accepts_window_before_later_emission();
     test_adr_ack_backoff_without_downlink();
+    test_linkadr_reissued_on_each_uplink_without_answer();
     test_adr_ack_counter_reset_by_downlink();
     test_absolute_gateway_sf5_threshold();
     test_absolute_gateway_refusals();

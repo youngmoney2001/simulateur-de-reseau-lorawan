@@ -2,6 +2,12 @@
 
 ## 0.1.0 (non publiée)
 
+### Réémission des commandes LinkADR (TS001-1.0.4 §5, décision utilisateur)
+- Réémission : une commande LinkADRReq sans LinkADRAns est renvoyée à chaque uplink reçu, sans plafond normatif ni temporisation. La norme ne fixe ni nombre maximal de réémissions ni backoff exponentiel pour cette règle (section 7 : seulement les uplinks confirmés qui attendent un acquittement, intervalle aléatoire).
+- Chemin en direct (`lsim serve`) : le plafond de 8 essais devient facultatif (`MAC_MAX_ATTEMPTS = None` par défaut ; une valeur fixe est une politique d'implémentation). Un LinkADRAns négatif (au moins un bit à 0, TS001 §5.2) ferme la demande, journalisé avec ses trois bits, et la même configuration n'est pas renvoyée. Refus journalisé, non persisté.
+- Boucle fermée : aucun plafond. Une réponse négative exclut la valeur refusée de la décision ADR suivante au lieu de bloquer définitivement l'ADR. Ce chemin n'est pas atteignable tel quel : le serveur et le dispositif partagent le même plan régional, donc aucun refus n'est produit ; non testé de bout en bout.
+- Tests : `test_linkadr_wiring.py` (réémission au-delà de 8 essais, refus sur chaque bit) ; `test_closed_loop.cpp` `test_linkadr_reissued_on_each_uplink_without_answer` (mutation vers un plafond à 60 uplinks détectée).
+
 ### Boucle fermée : LinkADRReq et DutyCycleReq (passerelle unique)
 - Bloc `mac:` : `link_adr` (LinkADRReq, décision ADR côté serveur) et `duty_cycle_exponent` (DutyCycleReq, 1/2^k). Actifs seulement si demandés ; sans ces champs, scénarios, résultats et empreintes inchangés. Schémas régénérés.
 - `build_trace` et `run_scenario` passent par la boucle fermée (une seule exécution native, descentes créées par le moteur) dès que l'un de ces champs est actif. Événements `mac_request` (LinkADRReq, DutyCycleReq) et `mac_answer` (LinkADRAns, DutyCycleAns).

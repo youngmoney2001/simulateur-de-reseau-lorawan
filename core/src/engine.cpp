@@ -1387,7 +1387,8 @@ struct LoopServer {
     bool adr_pending = false;
     std::uint8_t pend_dr = 0;
     std::uint8_t pend_power = 0;
-    bool adr_refused = false;
+    std::uint16_t refused_dr = 0;    // bit n : débit n refusé par le dispositif (réponse négative)
+    std::uint16_t refused_pi = 0;    // bit n : index de puissance n refusé
     std::uint8_t duty_state = 0;     // 0 : rien à faire ; 1 : DutyCycleReq en attente ; 2 : acquittée
     std::uint64_t accepted = 0;      // uplinks reçus
 };
@@ -1605,7 +1606,10 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 sv.dr = sv.pend_dr;
                 sv.power_index = sv.pend_power;
             } else {
-                sv.adr_refused = true;  // réponse négative : configuration refusée, pas de nouvel essai
+                // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé) :
+                // l'élément refusé n'est pas renvoyé ; la décision suivante l'exclut.
+                if ((ok & 1U) == 0) sv.refused_dr = static_cast<std::uint16_t>(sv.refused_dr | (1U << sv.pend_dr));
+                if ((ok & 2U) == 0) sv.refused_pi = static_cast<std::uint16_t>(sv.refused_pi | (1U << sv.pend_power));
             }
             sv.adr_pending = false;
         }
@@ -1616,7 +1620,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
             const double snr = std::clamp(ta.rssi_dbm - kNoiseFloorDbmBw125, -kMaxLoopSnrDb, kMaxLoopSnrDb);
             sv.snr.push_back(static_cast<std::int32_t>(std::lround(snr * 10.0)));
             if (sv.snr.size() > kLoopHistory) sv.snr.erase(sv.snr.begin());
-            if (sv.snr.size() == kLoopHistory && !sv.adr_pending && !sv.adr_refused) {
+            if (sv.snr.size() == kLoopHistory && !sv.adr_pending) {
                 lorawan::adr::Input in{};
                 for (std::size_t k = 0; k < sv.snr.size(); ++k) in.snr_tenth_db[k] = sv.snr[k];
                 in.n_samples = sv.snr.size();
@@ -1633,10 +1637,15 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     status = SimStatus::InvalidInput;
                     return;
                 }
-                if (o.dr != sv.dr || o.tx_power_index != sv.power_index) {
+                // Valeurs refusées exclues : on garde l'état courant pour cet élément.
+                std::uint8_t want_dr = o.dr;
+                std::uint8_t want_pi = o.tx_power_index;
+                if (((sv.refused_dr >> want_dr) & 1U) != 0) want_dr = sv.dr;
+                if (((sv.refused_pi >> want_pi) & 1U) != 0) want_pi = sv.power_index;
+                if (want_dr != sv.dr || want_pi != sv.power_index) {
                     sv.adr_pending = true;
-                    sv.pend_dr = o.dr;
-                    sv.pend_power = o.tx_power_index;
+                    sv.pend_dr = want_dr;
+                    sv.pend_power = want_pi;
                 }
             }
         }

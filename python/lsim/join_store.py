@@ -110,9 +110,11 @@ class QueueItem:
     payload: bytes = field(repr=False)
 
 
-# Commande MAC à acquitter : renvoyée dans les FOpts de chaque downlink tant que le dispositif
-# ne la confirme pas (LinkADRAns), au plus MAC_MAX_ATTEMPTS fois.
-MAC_MAX_ATTEMPTS = 8
+# Commande MAC à acquitter : renvoyée dans les FOpts du prochain downlink tant que le dispositif
+# ne la confirme pas (LinkADRAns positif). TS001-1.0.4 §5 : l'émetteur décide de renvoyer quand il
+# reçoit une nouvelle trame sans la réponse attendue ; il n'y a ni nombre maximal de réémissions
+# ni délai exponentiel. Ce plafond est une politique d'implémentation facultative : None = aucun.
+MAC_MAX_ATTEMPTS: Optional[int] = None
 
 
 @dataclass(frozen=True)
