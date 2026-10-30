@@ -346,6 +346,58 @@ void test_no_shift_inside_busy_windows() {
     }
 }
 
+void test_exact_overlap_accepts_window_before_later_emission() {
+    // TS001 §3.3.5 (A6), vérification exacte : une fenêtre n'est indisponible que si une émission
+    // planifiée la chevauche réellement. Y (SF10) occupe la passerelle à sa RX1 ; la RX1 de X tombe
+    // dans cette émission, donc X bascule sur RX2 (+2 s), qui démarre plus tard. La RX1 de B est
+    // postérieure à la fin de Y et antérieure au début de la RX2 de X : elle est libre et doit être
+    // planifiée à l'instant exact. L'ancienne règle (fin maximale des émissions planifiées) la refusait.
+    const EndDeviceSpec d[] = {
+        dev(10.0, 10, 1 * kS, 3600 * kS, 1),        // Y
+        dev(10.0, 8, 1'400'000'000, 3600 * kS, 1),  // X
+        dev(10.0, 7, 1'850'000'000, 3600 * kS, 1),  // B
+    };
+    lsim::plan::DeviceRadio rv[3] = {radio(), radio(), radio()};
+    LoopRegion regions[3] = {region(), region(), region()};
+    const LoopMacSlot slots[] = {
+        {0, 1, 0, kLoopMacLinkCheck},
+        {1, 1, 0, kLoopMacLinkCheck},
+        {2, 1, 0, kLoopMacLinkCheck},
+    };
+    DeviceStats st[3];
+    SimulationStats tot;
+    LoopResult res;
+    LoopOptions opt;
+    opt.mac = slots;
+    opt.mac_count = 3;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 3, rv, regions, GatewaySpec{}, PropagationSpec{},
+                                                   nullptr, opt, st, tot, res)),
+             0);
+    if (res.uplinks.size() != 3 || res.downlinks.size() != 3) {
+        CHECK_TRUE(false);
+        return;
+    }
+    const LoopUplink* up[3] = {nullptr, nullptr, nullptr};
+    const LoopDownlink* dn[3] = {nullptr, nullptr, nullptr};
+    for (const LoopUplink& u : res.uplinks) up[u.device] = &u;
+    for (const LoopDownlink& l : res.downlinks) dn[l.device] = &l;
+    for (int k = 0; k < 3; ++k) {
+        CHECK_TRUE(up[k] != nullptr && dn[k] != nullptr);
+        if (up[k] == nullptr || dn[k] == nullptr) return;
+        CHECK_TRUE(up[k]->outcome == TxOutcome::Received);
+    }
+    // Préconditions : RX1 de X dans l'émission de Y (RX2 choisie), RX1 de B après la fin de Y.
+    const SimTime y_end = dn[0]->start_ns + dn[0]->air_ns;
+    CHECK_EQ(dn[0]->start_ns, dn[0]->t_open);
+    CHECK_TRUE(up[1]->end_ns + kS >= dn[0]->start_ns && up[1]->end_ns + kS < y_end);
+    CHECK_EQ(dn[1]->t_open, up[1]->end_ns + 2 * kS);  // X : RX1 bloquée, RX2
+    CHECK_TRUE(up[2]->end_ns + kS >= y_end);
+    // Résultat attendu : B est planifiée exactement à l'ouverture de sa RX1.
+    CHECK_EQ(dn[2]->t_open, up[2]->end_ns + kS);
+    CHECK_EQ(dn[2]->start_ns, dn[2]->t_open);
+    CHECK_EQ(dn[1]->start_ns, dn[1]->t_open);
+}
+
 void test_mac_reservations_and_answers() {
     // Trois émissions à 60 s, passerelle proche. Calendrier : LinkCheckReq au rang 1 (1 octet
     // réservé), DevStatusReq au rang 2, DeviceTimeReq au rang 3 avec 3 octets réservés
@@ -807,6 +859,7 @@ void run_closed_loop_tests() {
     test_next_uplink_waits_for_rx2_end();
     test_rx2_fallback_when_gateway_busy();
     test_no_shift_inside_busy_windows();
+    test_exact_overlap_accepts_window_before_later_emission();
     test_adr_ack_backoff_without_downlink();
     test_adr_ack_counter_reset_by_downlink();
     test_absolute_gateway_sf5_threshold();

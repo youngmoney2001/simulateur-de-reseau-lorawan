@@ -1321,6 +1321,9 @@ constexpr SimTime kLoopRx2WindowNs = 1'000'000'000;  // durée de RX2 (égale à
 constexpr std::uint8_t kLoopRx2Sf = 12;
 constexpr std::uint32_t kLoopAdrAckLimit = 64;   // ADR_ACK_LIMIT (RP002-1.0.5 §3.3)
 constexpr std::uint32_t kLoopAdrAckDelay = 32;   // ADR_ACK_DELAY (RP002-1.0.5 §3.3)
+// RP002-1.0.5 Table 12 (EU863-870, « data rate back-off ») : DRnext pendant le repli de débit ADR,
+// indexé par DRcurrent. Table propre à EU868 : le moteur n'a pas d'identifiant de région.
+constexpr std::array<std::uint8_t, 14> kLoopDrBackOffEu868 = {0, 0, 1, 2, 3, 4, 5, 6, 0, 8, 0, 10, 5, 12};
 constexpr std::uint32_t kLoopAckBytes = 12;         // MHDR, DevAddr, FCtrl, FCnt, MIC
 constexpr std::uint32_t kLoopDataOverheadBytes = 13;
 constexpr std::uint8_t kLoopIgnoreField = 15;       // LinkADRReq : champ « ignorer »
@@ -1580,8 +1583,6 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     std::vector<std::int8_t> drs;
     std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
     std::vector<Interval> busy;         // émissions passerelle planifiées (croissantes, disjointes)
-    bool any_busy = false;
-    SimTime busy_until = 0;
     std::vector<LoopDownlink>& dls = out.downlinks;
     const auto transmitting = [&busy](SimTime start, SimTime end) {
         auto it = std::lower_bound(busy.begin(), busy.end(), start,
@@ -1720,27 +1721,33 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         plan::DeviceRadio rad = radios[d];
         // Fenêtre : RX1 (fin + 1 s, débit montant, RX1DROffset 0) ; si la passerelle ne peut pas
         // émettre dans RX1, repli sur RX2 (fin + 2 s, SF kLoopRx2Sf). TS001 §3.3.1 et §3.3.3.
+        // TS001 §3.3.5 : la descente débute exactement à l'ouverture de la fenêtre, sans décalage. La
+        // fenêtre est indisponible si une émission planifiée chevauche [départ, départ + airtime) ;
+        // la descente bascule alors sur RX2, puis est perdue si RX2 est aussi occupée.
         SimTime t_open = ta.end + kLoopRxDelayNs;
-        // TS001 §3.3.5 : la descente débute exactement à l'ouverture de la fenêtre. Si la passerelle
-        // est encore occupée à cet instant, la fenêtre n'est pas utilisable (pas de décalage).
         SimTime start = t_open;
-        bool scheduled = !any_busy || busy_until <= t_open;
         rad.rx1_sf = ta.sf;
-        if (!scheduled) {
-            t_open = ta.end + kLoopRx2DelayNs;
-            start = t_open;
-            scheduled = !any_busy || busy_until <= t_open;
-            rad.rx1_sf = kLoopRx2Sf;
-        }
         SimTime air = 0;
         if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
             status = SimStatus::InvalidInput;
             return;
         }
+        bool scheduled = !transmitting(start, start + air);
+        if (!scheduled) {
+            t_open = ta.end + kLoopRx2DelayNs;
+            start = t_open;
+            rad.rx1_sf = kLoopRx2Sf;
+            if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
+                status = SimStatus::InvalidInput;
+                return;
+            }
+            scheduled = !transmitting(start, start + air);
+        }
         if (scheduled) {
-            any_busy = true;
-            busy_until = start + air;
-            busy.push_back(Interval{start, busy_until});
+            // Insertion ordonnée : la liste reste croissante et disjointe (requise par `transmitting`).
+            const auto pos = std::upper_bound(busy.begin(), busy.end(), start,
+                                              [](SimTime s, const Interval& b) { return s < b.start; });
+            busy.insert(pos, Interval{start, start + air});
         }
         LoopDownlink dl;
         dl.uplink = static_cast<std::uint32_t>(a);
@@ -1819,9 +1826,14 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                     const std::uint32_t first = kLoopAdrAckLimit + kLoopAdrAckDelay + 1;
                     if (ds.adr_cnt >= first && (ds.adr_cnt - first) % kLoopAdrAckDelay == 0) {
                         ds.power_index = 0;
-                        if (ds.dr > 0) {
-                            --ds.dr;
-                            ds.sf = regions[i].dr_sf[static_cast<std::size_t>(ds.dr)];
+                        // Repli : DRnext de la Table 12. Un débit cible indisponible dans la région
+                        // laisse le débit inchangé (cas non atteint : max_dr ≤ 7 pour les régions de la boucle).
+                        if (ds.dr >= 0 && static_cast<std::size_t>(ds.dr) < kLoopDrBackOffEu868.size()) {
+                            const std::uint8_t back = kLoopDrBackOffEu868[static_cast<std::size_t>(ds.dr)];
+                            if (back != ds.dr && regions[i].dr_sf[back] != 0) {
+                                ds.dr = static_cast<std::int8_t>(back);
+                                ds.sf = regions[i].dr_sf[back];
+                            }
                         }
                     }
                     if (ds.adr_cnt >= kLoopAdrAckLimit) adr_req = 1;
