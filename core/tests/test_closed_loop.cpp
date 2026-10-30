@@ -1335,6 +1335,123 @@ void test_mask_removing_confirmed_channels_attributes_only_suspects() {
     CHECK_TRUE(!io.terminals[0].channels.enabled.test(4));
 }
 
+// Plusieurs dispositifs, boucle fermée avec trace v3 et créneaux MAC (descentes forcées au rang 1).
+SimStatus run_multi_channels(const std::vector<EndDeviceSpec>& devs, const std::vector<LoopMacSlot>& slots,
+                             LoopChannelIo& io, LoopResult& res, SimulationStats& tot,
+                             std::vector<DeviceStats>& st) {
+    std::vector<lsim::plan::DeviceRadio> rv;
+    std::vector<LoopRegion> regions;
+    for (std::size_t i = 0; i < devs.size(); ++i) {
+        rv.push_back(radio());
+        regions.push_back(region());
+    }
+    LoopOptions opt;
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    st.assign(devs.size(), DeviceStats{});
+    return simulate_closed_loop_channels(devs.data(), devs.size(), rv.data(), regions.data(), GatewaySpec{},
+                                         PropagationSpec{}, nullptr, opt, st.data(), tot, res, io);
+}
+
+// Passerelle occupée dans RX1 et RX2 : NoGatewaySlot, provoquée et vérifiée causalement.
+// Dispositif 0 (SF12) : uplink 0 → 0,99 s ; descente RX1 à 1,99 s, occupant la passerelle jusqu'à 3,146 s.
+// Dispositif 1 (SF7) émet à 1,0 s : RX1 (2,04 s) et RX2 (3,04 s) tombent toutes deux dans cette occupation.
+// Au décalage 1,2 s, RX2 est libre et la descente part : la fenêtre est donc étroite et réelle.
+void test_no_gateway_slot_loss_is_caused_by_busy_rx1_and_rx2() {
+    const std::vector<EndDeviceSpec> devs = {dev(10.0, 12, 0, 60 * kS, 1), dev(10.0, 7, kS, 60 * kS, 1)};
+    const std::vector<LoopMacSlot> slots = {{0, 1, 0, kLoopMacLinkCheck}, {1, 1, 0, kLoopMacLinkCheck}};
+    LoopChannelIo io;
+    io.trace_v3 = true;
+    LoopResult res;
+    SimulationStats tot;
+    std::vector<DeviceStats> st;
+    CHECK_EQ(static_cast<int>(run_multi_channels(devs, slots, io, res, tot, st)), 0);
+    CHECK_EQ(res.uplinks.size(), std::size_t{2});
+    CHECK_EQ(res.downlinks.size(), std::size_t{2});
+    if (res.uplinks.size() != 2 || res.downlinks.size() != 2) return;
+    const LoopDownlink* d0 = nullptr;
+    const LoopDownlink* d1 = nullptr;
+    std::size_t i1 = 0;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if (res.downlinks[i].device == 0) d0 = &res.downlinks[i];
+        if (res.downlinks[i].device == 1) { d1 = &res.downlinks[i]; i1 = i; }
+    }
+    CHECK_TRUE(d0 != nullptr && d1 != nullptr);
+    if (d0 == nullptr || d1 == nullptr) return;
+    // Occupation par la descente du dispositif 0.
+    const SimTime busy_begin = d0->start_ns;
+    const SimTime busy_end = d0->start_ns + d0->air_ns;
+    CHECK_TRUE(d0->delivered);
+    // Dispositif 1 : RX1 et RX2 dans l'occupation.
+    const SimTime rx1 = res.uplinks[d1->uplink].end_ns + kS;
+    const SimTime rx2 = res.uplinks[d1->uplink].end_ns + 2 * kS;
+    CHECK_TRUE(rx1 >= busy_begin && rx1 < busy_end);
+    CHECK_TRUE(rx2 >= busy_begin && rx2 < busy_end);
+    CHECK_TRUE(d1->t_open == rx2);  // RX2 essayée après le refus RX1
+    CHECK_TRUE(d1->start_ns == -1);                  // aucun créneau
+    CHECK_TRUE(!d1->delivered);
+    CHECK_TRUE(!d1->device_missed);                                 // ce n'est pas une émission du dispositif
+    // Événements : cause NoGatewaySlot, et elle seule.
+    const std::uint8_t cause = static_cast<std::uint8_t>(LoopDownlinkLoss::NoGatewaySlot);
+    int seen = 0;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind != LoopTraceKind::Downlink || e.downlink != i1) continue;
+        ++seen;
+        CHECK_TRUE(e.origin == LoopTraceOrigin::Radio);
+        CHECK_EQ(static_cast<int>(e.uplink), static_cast<int>(d1->uplink));
+        CHECK_TRUE(!e.flag);
+        CHECK_EQ(static_cast<int>(e.loss), static_cast<int>(cause));
+    }
+    CHECK_EQ(seen, 1);
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::Downlink && e.downlink == 0) {
+            CHECK_TRUE(e.flag);
+            CHECK_EQ(static_cast<int>(e.loss), 0);
+        }
+        if (e.kind == LoopTraceKind::Apply && e.downlink == i1) CHECK_TRUE(false);  // pas de LinkADR appliquée
+    }
+}
+
+// C1 (TS001 §3.3.6) : l'émission suivante du même dispositif ne part qu'à la fin de RX2 (fin + 3 s).
+// La cause DeviceTransmitting exige une émission du dispositif avant la fermeture de RX1 (fin + 2 s
+// pour RX1 à 1 s, fin + 3 s pour RX2) : elle est donc inatteignable dans la boucle fermée. Ce test
+// le vérifie sur des scénarios où les émissions sont rapprochées, au lieu de l'affirmer.
+void test_device_transmitting_unreachable_under_c1() {
+    struct Scenario {
+        std::vector<EndDeviceSpec> devs;
+        std::vector<LoopMacSlot> slots;
+    };
+    const std::vector<Scenario> scenarios = {
+        {{dev(10.0, 7, 0, 3 * kS / 2, 6)}, {{0, 1, 0, kLoopMacLinkCheck}, {0, 2, 0, kLoopMacLinkCheck}}},
+        {{dev(10.0, 7, 0, 3 * kS / 2, 6), dev(10.0, 7, kS / 2, 3 * kS / 2, 6)},
+         {{0, 1, 0, kLoopMacLinkCheck}, {1, 1, 0, kLoopMacLinkCheck}}},
+        {{dev(10.0, 12, 0, 60 * kS, 1), dev(10.0, 7, kS, 60 * kS, 1)},
+         {{0, 1, 0, kLoopMacLinkCheck}, {1, 1, 0, kLoopMacLinkCheck}}},
+    };
+    for (const Scenario& sc : scenarios) {
+        LoopChannelIo io;
+        io.trace_v3 = true;
+        LoopResult res;
+        SimulationStats tot;
+        std::vector<DeviceStats> st;
+        CHECK_EQ(static_cast<int>(run_multi_channels(sc.devs, sc.slots, io, res, tot, st)), 0);
+        for (const LoopDownlink& dl : res.downlinks) CHECK_TRUE(!dl.device_missed);
+        for (const LoopTraceEvent& e : io.trace) {
+            if (e.kind == LoopTraceKind::Downlink && e.loss == static_cast<std::uint8_t>(LoopDownlinkLoss::DeviceTransmitting)) {
+                CHECK_TRUE(false);
+            }
+        }
+        for (std::size_t a = 0; a < res.uplinks.size(); ++a) {
+            SimTime next = -1;
+            for (std::size_t b = 0; b < res.uplinks.size(); ++b) {
+                if (res.uplinks[b].device != res.uplinks[a].device || res.uplinks[b].start_ns <= res.uplinks[a].start_ns) continue;
+                if (next < 0 || res.uplinks[b].start_ns < next) next = res.uplinks[b].start_ns;
+            }
+            if (next >= 0) CHECK_TRUE(next >= res.uplinks[a].end_ns + 3 * kS);
+        }
+    }
+}
+
 // D5 : CM=0 et DR=0 simultanés. Le débit est exclu, les canaux ne le sont pas. Le canal indéfini
 // n'est suspect que lorsque le débit est accepté (CM=0, DR=1) : il est alors seul exclu.
 void test_d5_cm0_dr0_then_channel_refusal() {
@@ -2026,6 +2143,8 @@ void run_closed_loop_tests() {
     test_trace_v3_exclusion_expired_then_recreated();
     test_mask_removing_confirmed_channels_attributes_only_suspects();
     test_d5_cm0_dr0_then_channel_refusal();
+    test_no_gateway_slot_loss_is_caused_by_busy_rx1_and_rx2();
+    test_device_transmitting_unreachable_under_c1();
     test_valid_suspect_channel_excluded_by_over_approximation();
     test_empty_suspect_refusal_excludes_mask_without_repetition();
     test_trace_v3_mask_exclusion_renewed_while_active();
