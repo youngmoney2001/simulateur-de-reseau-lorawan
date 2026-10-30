@@ -138,7 +138,12 @@ Causes de perte (`LoopDownlinkLoss`) : `DeviceTransmitting` (émission pendant l
 
 - `BelowSensitivity` : exercée (marge de réception du terminal de 110 dB, `test_trace_v3_downlink_invariants`).
 - `NoGatewaySlot` : exercée. Dispositif 0 (SF12) : descente RX1 de 1,99 s à 3,146 s. Dispositif 1 (SF7) émet à 1,0 s : RX1 (2,04 s) et RX2 (3,04 s) tombent dans cette occupation. Test : `test_no_gateway_slot_loss_is_caused_by_busy_rx1_and_rx2`. À 1,2 s, RX2 est libre et la descente part.
-- `DeviceTransmitting` : **inatteignable en boucle fermée**. La règle C1 (`Start`) retarde toute émission du dispositif à fin + 3 s. La perte exige une émission avant la fermeture de RX1 (fin + 2 s), donc impossible. Test : `test_device_transmitting_unreachable_under_c1` (aucune perte de ce type, délai minimal vérifié). Sans C1 (mutation), la branche produit bien cette perte et les assertions du test échouent.
+- `DeviceTransmitting` : **inatteignable dans le chemin nominal en boucle fermée tant que C1 est respectée.** Décision : option (a), branche conservée comme protection défensive, non supprimée, sans commutateur de test.
+  - C1 impose un délai minimal de fin + 3 s avant le prochain uplink du même dispositif (`Start`).
+  - `DeviceTransmitting` exige une émission du dispositif avant la fermeture de RX1 (fin + 1 s de RX1 après la fin de l'uplink, soit fin + 2 s).
+  - Donc, tant que C1 est respectée, cette perte ne se produit pas en boucle fermée.
+  - Test : `test_device_transmitting_unreachable_under_c1` vérifie plusieurs scénarios (émissions rapprochées, deux dispositifs). **Ce n'est pas une preuve formelle universelle** : c'est une vérification sur des scénarios.
+  - Sans C1 (mutation de test), la perte apparaît et les assertions du test échouent.
 
 Invariants testés (`test_trace_v3_downlink_invariants`) : une issue par descente ; `Apply` = descentes
 reçues portant une LinkADRReq ; une descente reçue n'a pas de cause de perte, une descente perdue en a
@@ -166,7 +171,7 @@ forcé reste identique.
 - La durée de 100 uplinks est une convention du simulateur, pas une norme.
 - Une seule case d'exclusion de masque : un nouveau masque refusé remplace l'exclusion précédente.
 - Repli sur un masque confirmé refusé : limite connue, **non corrigée volontairement**. Elle n'apparaît qu'avec un terminal qui ne définit pas les canaux par défaut (RP002 Table 8). La politique ADR n'est pas modifiée. Corriger exigerait un choix explicite (par exemple ne pas émettre de LinkADRReq) à valider séparément.
-- Cause de perte `DeviceTransmitting` : inatteignable en boucle fermée (C1), branche conservée par défense.
+- Cause de perte `DeviceTransmitting` : inatteignable dans le chemin nominal tant que C1 est respectée ; branche conservée par défense (option a) ; test sur plusieurs scénarios, non une preuve formelle universelle.
 - Trace v3 : interne au C++, non exposée à Python avant l'ABI v3.
 - US915 et AU915 : hors périmètre de ce modèle (EU868 seulement).
 
