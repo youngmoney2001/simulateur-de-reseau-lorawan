@@ -1012,6 +1012,7 @@ void test_partial_channel_refusal_excludes_only_unacknowledged_requested_channel
     cfg.device.dr_mask[3] = 0;
     cfg.device.enabled.reset(3);
     LoopChannelIo io;
+    io.trace_v3 = true;  // exclusions observées directement
     LoopResult res;
     SimulationStats tot;
     DeviceStats st[1];
@@ -1026,6 +1027,26 @@ void test_partial_channel_refusal_excludes_only_unacknowledged_requested_channel
     CHECK_TRUE(!cfg.device.defined(3) && !cfg.device.defined(4));  // sanity : canaux indéfinis
     CHECK_EQ(static_cast<int>(io.downlink_requests[first].ch_mask), 0x1F);  // canaux 0..4 demandés
     CHECK_TRUE(io.downlink_diagnoses[first].refused_channels.test(3));
+    // Le masque demandé garde les confirmés 0..2 : aucun d'eux ne doit être exclu, même au refus.
+    // (Sans cette assertion, le repli sur le masque confirmé masquerait l'erreur.)
+    // Premier refus de canal : uplink du premier LinkAdrAns avec ChannelMaskACK = 0.
+    std::uint32_t refusal_uplink = 0;
+    bool refusal_seen = false;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::LinkAdrAns && (e.status & 1U) == 0 && !refusal_seen) {
+            refusal_uplink = e.uplink;
+            refusal_seen = true;
+        }
+    }
+    CHECK_TRUE(refusal_seen);
+    int ex34_at_refusal = 0, ex012 = 0;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind != LoopTraceKind::Exclusion || e.target != LoopExclusionTarget::Channel) continue;
+        if ((e.value == 3 || e.value == 4) && e.uplink == refusal_uplink) ++ex34_at_refusal;
+        if (e.value <= 2) ++ex012;  // jamais, sur toute la trace
+    }
+    CHECK_EQ(ex34_at_refusal, 2);  // 3 et 4 (suspects), une fois chacun
+    CHECK_EQ(ex012, 0);
     // Requêtes suivantes : seuls les canaux acquittés (0..2) ; 3 et 4 exclus (indéfinis : exact).
     bool accepted = false;
     for (std::size_t i = first + 1; i < res.downlinks.size(); ++i) {
@@ -1271,6 +1292,47 @@ void test_trace_v3_deterministic() {
     CHECK_TRUE(ra.downlinks.size() == rb.downlinks.size());
     // Les événements sont classés par temps.
     for (std::size_t i = 1; i < a.trace.size(); ++i) CHECK_TRUE(a.trace[i - 1].t_ns <= a.trace[i].t_ns);
+}
+
+// Masque qui retire des canaux confirmés (0..2) au profit de canaux 3 (indéfini) et 4 (valide) : le
+// refus n'attribue que les suspects (3 et 4). Les canaux confirmés 0..2 ne sont jamais exclus, et le
+// terminal reste atomique (ses canaux activés ne changent pas).
+void test_mask_removing_confirmed_channels_attributes_only_suspects() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.device.dr_mask[3] = 0;     // 3 indéfini
+    cfg.device.dr_mask[4] = 0x3F;  // 4 défini, non activé
+    LoopLinkAdrRequest rq;
+    rq.ch_mask_cntl = 0;
+    rq.ch_mask = 0x0018;           // canaux 3 et 4 seulement : retire 0..2 (confirmés)
+    rq.dr = 5;
+    rq.power_index = 7;
+    cfg.forced_sequence = {rq};
+    LoopChannelIo io;
+    io.trace_v3 = true;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 120)), 0);
+    const LoopTraceEvent* ans = nullptr;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::LinkAdrAns && (e.status & 1U) == 0) { ans = &e; break; }
+    }
+    CHECK_TRUE(ans != nullptr);
+    if (ans == nullptr) return;
+    CHECK_EQ(static_cast<int>(ans->status & 2U), 2);  // débit accepté : attribution au masque seul
+    int ex34 = 0, ex012 = 0;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind != LoopTraceKind::Exclusion || e.target != LoopExclusionTarget::Channel) continue;
+        if (e.value == 3 || e.value == 4) ++ex34;
+        if (e.value <= 2) ++ex012;
+    }
+    CHECK_EQ(ex34, 2);    // suspects exclus
+    CHECK_EQ(ex012, 0);   // confirmés jamais exclus, même retirés par le masque demandé
+    CHECK_TRUE(io.terminals[0].channels.enabled.test(0));
+    CHECK_TRUE(io.terminals[0].channels.enabled.test(1));
+    CHECK_TRUE(io.terminals[0].channels.enabled.test(2));
+    CHECK_TRUE(!io.terminals[0].channels.enabled.test(3));
+    CHECK_TRUE(!io.terminals[0].channels.enabled.test(4));
 }
 
 // D5 : CM=0 et DR=0 simultanés. Le débit est exclu, les canaux ne le sont pas. Le canal indéfini
@@ -1962,6 +2024,7 @@ void run_closed_loop_tests() {
     test_trace_v3_partial_refusal_shows_three_bits_and_exclusions();
     test_trace_v3_causal_order_and_time_sorted();
     test_trace_v3_exclusion_expired_then_recreated();
+    test_mask_removing_confirmed_channels_attributes_only_suspects();
     test_d5_cm0_dr0_then_channel_refusal();
     test_valid_suspect_channel_excluded_by_over_approximation();
     test_empty_suspect_refusal_excludes_mask_without_repetition();
