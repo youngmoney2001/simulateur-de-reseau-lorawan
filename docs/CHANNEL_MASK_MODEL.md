@@ -134,8 +134,11 @@ descente (`kLoopNoIndex` si sans objet).
 
 Causes de perte (`LoopDownlinkLoss`) : `DeviceTransmitting` (émission pendant la RX1),
 `NoGatewaySlot` (pas de créneau passerelle), `BelowSensitivity` (sous la sensibilité du terminal).
-Seule `BelowSensitivity` est exercée par un test (marge de réception de 110 dB). Les deux autres
-exigent deux dispositifs ou une passerelle occupée : elles sont implémentées, non testées.
+État des tests :
+
+- `BelowSensitivity` : exercée (marge de réception du terminal de 110 dB, `test_trace_v3_downlink_invariants`).
+- `NoGatewaySlot` : exercée. Dispositif 0 (SF12) : descente RX1 de 1,99 s à 3,146 s. Dispositif 1 (SF7) émet à 1,0 s : RX1 (2,04 s) et RX2 (3,04 s) tombent dans cette occupation. Test : `test_no_gateway_slot_loss_is_caused_by_busy_rx1_and_rx2`. À 1,2 s, RX2 est libre et la descente part.
+- `DeviceTransmitting` : **inatteignable en boucle fermée**. La règle C1 (`Start`) retarde toute émission du dispositif à fin + 3 s. La perte exige une émission avant la fermeture de RX1 (fin + 2 s), donc impossible. Test : `test_device_transmitting_unreachable_under_c1` (aucune perte de ce type, délai minimal vérifié). Sans C1 (mutation), la branche produit bien cette perte et les assertions du test échouent.
 
 Invariants testés (`test_trace_v3_downlink_invariants`) : une issue par descente ; `Apply` = descentes
 reçues portant une LinkADRReq ; une descente reçue n'a pas de cause de perte, une descente perdue en a
@@ -162,7 +165,18 @@ forcé reste identique.
 - Un refus de canal exclut aussi un canal valide suspect (sur-approximation, testée).
 - La durée de 100 uplinks est une convention du simulateur, pas une norme.
 - Une seule case d'exclusion de masque : un nouveau masque refusé remplace l'exclusion précédente.
-- Repli sur un masque confirmé refusé : possible seulement avec un terminal non conforme aux défauts.
-- Causes de perte `DeviceTransmitting` et `NoGatewaySlot` : implémentées, non testées.
+- Repli sur un masque confirmé refusé : limite connue, **non corrigée volontairement**. Elle n'apparaît qu'avec un terminal qui ne définit pas les canaux par défaut (RP002 Table 8). La politique ADR n'est pas modifiée. Corriger exigerait un choix explicite (par exemple ne pas émettre de LinkADRReq) à valider séparément.
+- Cause de perte `DeviceTransmitting` : inatteignable en boucle fermée (C1), branche conservée par défense.
 - Trace v3 : interne au C++, non exposée à Python avant l'ABI v3.
 - US915 et AU915 : hors périmètre de ce modèle (EU868 seulement).
+
+## 9. Hypothèses du modèle
+
+Ces hypothèses sont des choix de modélisation. Elles ne sont pas des exigences de TS001 ou RP002.
+
+- **Vue serveur statique.** `server_view` est fixée à l'initialisation et ne change pas pendant la simulation. Justification : la boucle fermée EU868 a un plan fixe, et elle n'émet aucun NewChannelReq (absent de `engine.cpp`). Si un plan évolutif est ajouté, cette hypothèse devra être revue, avec ses tests.
+- **Émission du dispositif contrainte par C1.** Le dispositif n'émet pas avant la fin de RX2 de son uplink précédent (fin + 3 s). Conséquence : `DeviceTransmitting` ne se produit pas en boucle fermée.
+- **Passerelle à une seule voie de descente.** Une descente occupe la passerelle sur `[départ, départ + airtime]`. Une autre descente ne peut pas se chevaucher. Une RX1 et une RX2 occupées font perdre la descente (`NoGatewaySlot`).
+- **Pas de tirage aléatoire** dans le modèle de canaux, les exclusions et l'attribution.
+- **Aucune requête forcée** (`forced_request`, `forced_sequence`) n'est produite par la politique ADR. Elles servent aux tests de robustesse.
+
