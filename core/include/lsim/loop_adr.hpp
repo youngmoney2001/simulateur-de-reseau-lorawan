@@ -16,7 +16,9 @@
 // propre paramètre. L'application reste atomique : si un bit vaut 0, rien n'est appliqué.
 //
 // Règles de validation (évaluation dans cet ordre, déterministe) :
-//   1. Masque : ChMaskCntl RFU -> refus, motif RfuCntl.
+//   1. Masque : ChMaskCntl RFU -> refus, motif RfuCntl ; ChMaskCntl 5 avec un bit RFU non nul
+//      (bits 10 à 15) -> refus, motif RfuBits (convention du simulateur : un masque invalide
+//      n'est jamais accepté, même si la norme ne décrit pas ce cas).
 //   2. Masque : canal activé non défini -> refus, motif UndefinedChannel ; canaux refusés
 //      = ceux activés et non définis.
 //   3. Masque : aucun canal actif après la commande -> refus, motif AllDisabled.
@@ -82,6 +84,7 @@ struct LoopTerminalRadio {
 struct LoopRegionalPlan {
     LoopChannelSet defaults;               // canaux par défaut (RP002 Table 8)
     std::uint8_t default_dr_mask = 0;      // débits supportés par les canaux par défaut
+    std::uint8_t dr_available = 0xFF;      // bit n = DRn utilisable (table du plan / de la région)
     std::uint8_t max_dr = 0;
     std::uint8_t max_power_index = 0;
     std::size_t max_channels = kLoopMaxChannels;
@@ -89,6 +92,9 @@ struct LoopRegionalPlan {
 
 // Plan EU863-870 (RP002-1.0.5) : défauts 0..2 avec DR0..DR5.
 LoopRegionalPlan loop_eu868_plan();
+
+// État canal par défaut d'un terminal EU863-870 : canaux 0..2 définis, actifs, DR0..DR5.
+LoopChannelState loop_eu868_default_channels();
 
 // LinkADRReq tel que reçu par le terminal.
 struct LoopLinkAdrRequest {
@@ -116,6 +122,7 @@ enum class LoopChannelReason : std::uint8_t {
     UndefinedChannel,
     AllDisabled,
     IncompatibleWithDataRate,
+    RfuBits,
 };
 
 enum class LoopDataRateReason : std::uint8_t {

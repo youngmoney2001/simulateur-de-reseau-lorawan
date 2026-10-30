@@ -27,6 +27,10 @@ LoopLinkAdrDiagnosis evaluate(const LoopRegionalPlan& plan, const LoopTerminalRa
     if (req.ch_mask_cntl == 7) {
         d.channel_reason = LoopChannelReason::RfuCntl;
         mask_valid = false;
+    } else if (req.ch_mask_cntl == 5 && (req.ch_mask & 0xFC00U) != 0) {
+        // Bits 10 à 15 RFU non nuls : refus (jamais d'application silencieuse d'un masque douteux).
+        d.channel_reason = LoopChannelReason::RfuBits;
+        mask_valid = false;
     } else if (req.ch_mask_cntl == 6) {
         // Tous les canaux définis ON ; le champ ChMask est ignoré (RP002 Table 14).
         for (std::size_t c = 0; c < max_ch; ++c) {
@@ -47,7 +51,7 @@ LoopLinkAdrDiagnosis evaluate(const LoopRegionalPlan& plan, const LoopTerminalRa
         }
     } else {
         // ChMaskCntl 5 : 10 bits, banques de 8 canaux (RP002 Table 14). Les bits 10 à 15 sont
-        // RFU et ignorés ici (choix du simulateur : la norme ne fixe pas ce cas).
+        // RFU : leur présence a été refusée ci-dessus.
         for (std::size_t b = 0; b < 10U; ++b) {
             for (std::size_t i = 0; i < 8U; ++i) {
                 const std::size_t c = b * 8U + i;
@@ -91,7 +95,7 @@ LoopLinkAdrDiagnosis evaluate(const LoopRegionalPlan& plan, const LoopTerminalRa
     bool dr_known = true;
     if (req.dr == kLoopFieldIgnore) {
         d.dr_reason = LoopDataRateReason::Ignored;
-    } else if (req.dr > plan.max_dr) {
+    } else if (req.dr > plan.max_dr || ((plan.dr_available >> req.dr) & 1U) == 0) {
         d.dr_reason = LoopDataRateReason::UnknownDr;
         d.refuse_dr = true;
         dr_known = false;
@@ -208,6 +212,18 @@ LoopRegionalPlan loop_eu868_plan() {
     plan.max_power_index = kLoopEuMaxPowerIndex;
     plan.max_channels = kLoopMaxChannels;
     return plan;
+}
+
+LoopChannelState loop_eu868_default_channels() {
+    LoopChannelState st;
+    const LoopRegionalPlan plan = loop_eu868_plan();
+    for (std::size_t c = 0; c < kLoopMaxChannels; ++c) {
+        if (plan.defaults.test(c)) {
+            st.dr_mask[c] = plan.default_dr_mask;
+            st.enabled.set(c);
+        }
+    }
+    return st;
 }
 
 std::uint8_t LoopAdrStatus::to_wire() const {

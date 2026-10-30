@@ -269,6 +269,38 @@ void test_validation_is_pure() {
     CHECK_TRUE(d1.refused_channels == d2.refused_channels);
 }
 
+// Convention du simulateur : ChMaskCntl 5 avec un bit RFU non nul (10..15) est refusé, jamais
+// appliqué silencieusement. Le terminal reste strictement inchangé.
+void test_cntl5_rfu_bits_refused_atomic() {
+    const lsim::sim::LoopRegionalPlan plan = lsim::sim::loop_eu868_plan();
+    LoopTerminalRadio t = terminal({{0, 0x3F}, {1, 0x3F}, {2, 0x3F}}, {0, 1, 2}, 0, 0);
+    const lsim::sim::LoopTerminalRadio before = t;
+    // Bit 10 (RFU) à 1 avec un canal valide : refus complet.
+    const lsim::sim::LoopLinkAdrDiagnosis d = lsim::sim::loop_apply_link_adr(plan, t, req(5, 0x0401, 0, 0));
+    CHECK_TRUE(d.channel_reason == lsim::sim::LoopChannelReason::RfuBits);
+    CHECK_TRUE(!d.status.channel_mask_ack);
+    CHECK_TRUE(d.status.data_rate_ack);
+    CHECK_TRUE(d.status.power_ack);
+    CHECK_TRUE(t == before);
+    // Bit 15 seul : refus aussi.
+    const lsim::sim::LoopLinkAdrDiagnosis d2 = lsim::sim::loop_apply_link_adr(plan, t, req(5, 0x8000, 0, 0));
+    CHECK_TRUE(d2.channel_reason == lsim::sim::LoopChannelReason::RfuBits);
+    CHECK_TRUE(t == before);
+}
+
+// Table des débits du plan : un débit absent de la table de la région est refusé (UnknownDr),
+// même si le terminal le supporte sur ses canaux.
+void test_plan_dr_availability_refuses_unknown_dr() {
+    lsim::sim::LoopRegionalPlan plan = lsim::sim::loop_eu868_plan();
+    plan.dr_available = 0x3F;  // DR0..DR5 seulement (table 125 kHz)
+    LoopTerminalRadio t = terminal({{0, 0xFF}, {1, 0xFF}, {2, 0xFF}}, {0, 1, 2}, 0, 0);
+    const lsim::sim::LoopTerminalRadio before = t;
+    const lsim::sim::LoopLinkAdrDiagnosis d = lsim::sim::loop_apply_link_adr(plan, t, req(0, 0x0007, 6, 0));
+    CHECK_TRUE(d.dr_reason == lsim::sim::LoopDataRateReason::UnknownDr);
+    CHECK_TRUE(d.refuse_dr);
+    CHECK_TRUE(t == before);
+}
+
 }  // namespace
 
 void run_loop_adr_tests() {
@@ -289,4 +321,6 @@ void run_loop_adr_tests() {
     test_ignore_fields_keep_values();
     test_power_boundaries();
     test_validation_is_pure();
+    test_cntl5_rfu_bits_refused_atomic();
+    test_plan_dr_availability_refuses_unknown_dr();
 }

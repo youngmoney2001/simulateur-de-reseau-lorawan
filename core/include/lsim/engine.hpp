@@ -20,6 +20,7 @@
 #include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
+#include "lsim/loop_adr.hpp"
 
 namespace lsim::sim {
 
@@ -381,6 +382,37 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                                const GatewaySpec& gateway, const PropagationSpec& prop,
                                const env::Environment* environment, const LoopOptions& options,
                                DeviceStats* per_device, SimulationStats& totals, LoopResult& out);
+
+// Modèle canaux de la boucle fermée (C++ interne, hors ABI C : `LoopDownlink`, `LoopUplink` et
+// `LoopOptions` restent inchangés). Pour chaque dispositif :
+//   * `device` : capacités réelles du terminal (canaux définis, débits par canal, canaux actifs) ;
+//   * `server_view` : canaux que le serveur croit définis et configure (ChMaskCntl 0, bloc 0).
+// La vue serveur doit être non vide et ne contenir que les canaux 0..15.
+struct LoopChannelConfig {
+    LoopChannelState device;
+    LoopChannelSet server_view;
+};
+
+// Entrées optionnelles et sorties du modèle canaux. `config` nullptr : configuration EU868 par défaut
+// (canaux 0..2, DR0..DR5 pour le terminal comme pour le serveur ; le résultat est alors celui de
+// `simulate_closed_loop`).
+struct LoopChannelIo {
+    const LoopChannelConfig* config = nullptr;  // `config_count` entrées, `device_count` attendu
+    std::size_t config_count = 0;
+    // Sorties (remplies si le simulateur réussit) :
+    std::vector<LoopTerminalRadio> terminals;             // état final du terminal, par dispositif
+    std::vector<std::uint8_t> uplink_status;              // LinkADRAns par uplink (0xFF : aucun)
+    std::vector<LoopLinkAdrRequest> downlink_requests;    // LinkADRReq portée par chaque descente
+};
+
+// Boucle fermée avec modèle canaux. Même comportement que `simulate_closed_loop` pour la
+// configuration par défaut.
+SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_t device_count,
+                                        const plan::DeviceRadio* radios, const LoopRegion* regions,
+                                        const GatewaySpec& gateway, const PropagationSpec& prop,
+                                        const env::Environment* environment, const LoopOptions& options,
+                                        DeviceStats* per_device, SimulationStats& totals, LoopResult& out,
+                                        LoopChannelIo& io);
 
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.

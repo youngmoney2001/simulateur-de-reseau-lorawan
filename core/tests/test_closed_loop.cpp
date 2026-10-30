@@ -883,6 +883,173 @@ void test_absolute_gateway_no_sf5_downlink() {
              static_cast<int>(SimStatus::InvalidInput));
 }
 
+// ---- Modèle canaux (étape 2) : LinkADR validé de bout en bout, état terminal observé ----
+namespace {
+
+constexpr std::uint8_t kAccepted = 0x07;
+
+lsim::sim::LoopChannelConfig cfg_default() {
+    LoopChannelConfig c;
+    c.device = lsim::sim::loop_eu868_default_channels();
+    c.server_view = lsim::sim::loop_eu868_plan().defaults;
+    return c;
+}
+
+// Un dispositif SF12 à 10 m, 120 messages, ADR actif ; `cfg` nullptr = configuration par défaut.
+SimStatus run_channels(const LoopChannelConfig* cfg, std::size_t cfg_count, LoopChannelIo& io,
+                       LoopResult& res, SimulationStats& tot, DeviceStats* st) {
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 120)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    LoopOptions opt;
+    opt.adr = true;
+    io.config = cfg;
+    io.config_count = cfg_count;
+    return simulate_closed_loop_channels(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{}, nullptr,
+                                         opt, st, tot, res, io);
+}
+
+// Vue 011 : le serveur croit le canal 5 défini, le terminal ne le connaît pas.
+void test_channel_accepted_changes_terminal_state() {
+    LoopChannelConfig cfg = cfg_default();
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1 || res.uplinks.empty()) return;
+    // Le terminal a appliqué le débit SF7 (DR5) : l'état final diffère de l'état initial (DR0).
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 5);
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    bool any_accepted = false;
+    for (std::uint8_t s : io.uplink_status) any_accepted = any_accepted || s == kAccepted;
+    CHECK_TRUE(any_accepted);
+    CHECK_EQ(static_cast<int>(res.uplinks.back().spreading_factor), 7);
+}
+
+void test_channel_refused_leaves_terminal_unchanged() {
+    // Canaux 0..2 et 5 côté serveur : 5 n'est pas défini côté terminal -> ChannelMaskACK = 0.
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(5);
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    // Refus atomique : rien n'est appliqué (DR0 et canaux par défaut conservés).
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    bool refused = false;
+    for (std::uint8_t s : io.uplink_status) {
+        CHECK_TRUE(s != kAccepted);
+        refused = refused || s == 0x06;  // ChannelMaskACK = 0, débit et puissance OK
+    }
+    CHECK_TRUE(refused);
+    for (const LoopUplink& u : res.uplinks) CHECK_EQ(static_cast<int>(u.spreading_factor), 12);
+}
+
+// Vue 001 : le terminal ne supporte que DR0..DR3. Le serveur demande DR5 : refus de débit
+// (attribué au débit, D5), l'état terminal reste inchangé. Après exclusion, la réévaluation
+// propose un autre débit (DR0, accepté) : le débit refusé n'est jamais renvoyé.
+void test_data_rate_refused_then_reevaluated_without_repetition() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;  // DR0..DR3 seulement
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1 || io.downlink_requests.size() != res.downlinks.size()) return;
+    // État final = requête acceptée (DR0, état initial) ; DR5 refusé n'a rien modifié.
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    // Requêtes LinkADR livrées dans l'ordre : débits strictement décroissants (aucune répétition).
+    std::vector<int> drs;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) != 0) {
+            drs.push_back(static_cast<int>(io.downlink_requests[i].dr));
+        }
+    }
+    CHECK_TRUE(drs.size() >= 2);
+    // Aucun débit demandé deux fois : le refus de DR5 n'est pas renvoyé.
+    for (std::size_t i = 0; i < drs.size(); ++i) {
+        for (std::size_t j = i + 1; j < drs.size(); ++j) CHECK_TRUE(drs[i] != drs[j]);
+    }
+    CHECK_EQ(drs.front(), 5);
+    // Réponses : débit refusé (0x04 : DataRateACK = 0 ; ChannelMaskACK = 0 par compatibilité, D5
+    // attribue le refus au débit), puis acceptation (0x07).
+    bool refused_dr = false;
+    bool accepted = false;
+    for (std::uint8_t s : io.uplink_status) {
+        if (s == 0x04) refused_dr = true;
+        if (s == kAccepted) accepted = true;
+    }
+    CHECK_TRUE(refused_dr);
+    CHECK_TRUE(accepted);
+}
+
+void test_channel_view_outside_block0_refused() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(20);  // hors bloc 0 : ChMaskCntl 0 ne peut le représenter
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), static_cast<int>(SimStatus::InvalidInput));
+    cfg = cfg_default();
+    cfg.server_view = LoopChannelSet{};  // vue vide
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), static_cast<int>(SimStatus::InvalidInput));
+    cfg = cfg_default();
+    cfg.device.enabled.set(9);  // canal actif non défini côté terminal
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), static_cast<int>(SimStatus::InvalidInput));
+    cfg = cfg_default();
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 0, io, res, tot, st)), static_cast<int>(SimStatus::InvalidInput));
+}
+
+// Configuration par défaut explicite = chemin historique (aucun écart de résultat).
+void test_explicit_defaults_equal_legacy_path() {
+    LoopResult legacy;
+    SimulationStats tot_legacy;
+    DeviceStats st_legacy[1];
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 120)};
+    lsim::plan::DeviceRadio rv[1] = {radio()};
+    LoopRegion regions[1] = {region()};
+    LoopOptions opt;
+    opt.adr = true;
+    CHECK_EQ(static_cast<int>(simulate_closed_loop(d, 1, rv, regions, GatewaySpec{}, PropagationSpec{}, nullptr,
+                                                   opt, st_legacy, tot_legacy, legacy)),
+             0);
+    LoopChannelConfig cfg = cfg_default();
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    CHECK_EQ(res.uplinks.size(), legacy.uplinks.size());
+    CHECK_EQ(res.downlinks.size(), legacy.downlinks.size());
+    CHECK_TRUE(tot.airtime_ns == tot_legacy.airtime_ns);
+    CHECK_TRUE(st[0].received == st_legacy[0].received);
+    for (std::size_t i = 0; i < res.uplinks.size() && i < legacy.uplinks.size(); ++i) {
+        CHECK_EQ(static_cast<int>(res.uplinks[i].spreading_factor), static_cast<int>(legacy.uplinks[i].spreading_factor));
+        CHECK_EQ(static_cast<int>(res.uplinks[i].answer_ok), static_cast<int>(legacy.uplinks[i].answer_ok));
+        CHECK_EQ(static_cast<int>(res.uplinks[i].outcome), static_cast<int>(legacy.uplinks[i].outcome));
+    }
+    // Sans configuration (nullptr), le résultat est identique à la configuration par défaut explicite.
+    LoopChannelIo io_null;
+    LoopResult res_null;
+    SimulationStats tot_null;
+    DeviceStats st_null[1];
+    CHECK_EQ(static_cast<int>(run_channels(nullptr, 0, io_null, res_null, tot_null, st_null)), 0);
+    CHECK_EQ(res_null.uplinks.size(), res.uplinks.size());
+    CHECK_EQ(io_null.uplink_status.size(), io.uplink_status.size());
+    for (std::size_t i = 0; i < io.uplink_status.size() && i < io_null.uplink_status.size(); ++i) {
+        CHECK_EQ(static_cast<int>(io_null.uplink_status[i]), static_cast<int>(io.uplink_status[i]));
+    }
+}
+
+}  // namespace
+
 void run_closed_loop_tests() {
     test_mac_queue_lifecycle_under_mixed_load();
     test_mac_queue_fairness_bounded_wait();
@@ -899,6 +1066,11 @@ void run_closed_loop_tests() {
     test_exact_overlap_accepts_window_before_later_emission();
     test_adr_ack_backoff_without_downlink();
     test_linkadr_reissued_on_each_uplink_without_answer();
+    test_channel_accepted_changes_terminal_state();
+    test_channel_refused_leaves_terminal_unchanged();
+    test_data_rate_refused_then_reevaluated_without_repetition();
+    test_channel_view_outside_block0_refused();
+    test_explicit_defaults_equal_legacy_path();
     test_adr_ack_counter_reset_by_downlink();
     test_absolute_gateway_sf5_threshold();
     test_absolute_gateway_refusals();

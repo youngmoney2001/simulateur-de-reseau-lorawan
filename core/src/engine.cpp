@@ -1327,7 +1327,6 @@ constexpr std::array<std::uint8_t, 14> kLoopDrBackOffEu868 = {0, 0, 1, 2, 3, 4, 
 constexpr std::uint32_t kLoopAckBytes = 12;         // MHDR, DevAddr, FCtrl, FCnt, MIC
 constexpr std::uint32_t kLoopDataOverheadBytes = 13;
 constexpr std::uint8_t kLoopIgnoreField = 15;       // LinkADRReq : champ « ignorer »
-constexpr int kLoopAnsAdrBits = 3;                  // bits 0 (débit) et 1 (puissance) de answer_ok
 constexpr int kLoopRankCheck = 0;                   // fermeture RX1 et application : avant les émissions
 constexpr int kLoopRankStart = 1;
 constexpr int kLoopRankEnd = 2;
@@ -1367,6 +1366,8 @@ struct LoopDevice {
     std::uint8_t answer_ok = 0;
     bool ds_pending = false;       // DevStatusReq reçue : DevStatusAns dans la prochaine émission
     std::uint32_t adr_cnt = 0;     // ADRACKCnt : uplinks depuis la dernière descente reçue (TS001 §4.3.1.1)
+    LoopChannelState channels;     // capacités et canaux actifs du terminal (modèle canaux)
+    std::uint8_t answer_status = 0xFF;  // LinkADRAns (bits CM, DR, PW) de la prochaine émission ; 0xFF : aucun
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
@@ -1389,6 +1390,7 @@ struct LoopServer {
     std::uint8_t pend_power = 0;
     std::uint16_t refused_dr = 0;    // bit n : débit n refusé par le dispositif (réponse négative)
     std::uint16_t refused_pi = 0;    // bit n : index de puissance n refusé
+    LoopChannelSet view;             // canaux que le serveur configure (sa vue, pas celle du terminal)
     std::uint8_t duty_state = 0;     // 0 : rien à faire ; 1 : DutyCycleReq en attente ; 2 : acquittée
     std::uint64_t accepted = 0;      // uplinks reçus
 };
@@ -1418,13 +1420,45 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                                const GatewaySpec& gateway, const PropagationSpec& prop,
                                const env::Environment* environment, const LoopOptions& options,
                                DeviceStats* per_device, SimulationStats& totals, LoopResult& out) {
+    LoopChannelIo io;  // configuration par défaut, sorties ignorées
+    return simulate_closed_loop_channels(devices, device_count, radios, regions, gateway, prop,
+                                         environment, options, per_device, totals, out, io);
+}
+
+SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_t device_count,
+                                        const plan::DeviceRadio* radios, const LoopRegion* regions,
+                                        const GatewaySpec& gateway, const PropagationSpec& prop,
+                                        const env::Environment* environment, const LoopOptions& options,
+                                        DeviceStats* per_device, SimulationStats& totals, LoopResult& out,
+                                        LoopChannelIo& io) {
     totals = SimulationStats{};
     out = LoopResult{};
+    {
+        const LoopChannelConfig* cfg = io.config;  // entrées conservées, sorties remises à zéro
+        const std::size_t cfg_count = io.config_count;
+        io = LoopChannelIo{};
+        io.config = cfg;
+        io.config_count = cfg_count;
+    }
     if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
     if (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) {
         return SimStatus::InvalidInput;
     }
     if (device_count > 0 && regions == nullptr) return SimStatus::InvalidInput;
+    if (io.config != nullptr) {
+        if (io.config_count != device_count) return SimStatus::InvalidInput;
+        for (std::size_t i = 0; i < device_count; ++i) {
+            const LoopChannelConfig& cfg = io.config[i];
+            // Vue serveur : non vide, bloc 0 seulement (ChMaskCntl 0, canaux 0..15).
+            if (!cfg.server_view.any() || cfg.server_view.words[1] != 0 || (cfg.server_view.words[0] >> 16) != 0) {
+                return SimStatus::InvalidInput;
+            }
+            // Un canal actif doit être défini côté terminal.
+            for (std::size_t c = 0; c < kLoopMaxChannels; ++c) {
+                if (cfg.device.enabled.test(c) && !cfg.device.defined(c)) return SimStatus::InvalidInput;
+            }
+        }
+    }
     const SimStatus gs = validate_inputs(gateway, prop);
     if (gs != SimStatus::Ok) return gs;
     const env::Environment no_environment{};
@@ -1461,6 +1495,8 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         per_device[i] = DeviceStats{};
         per_device[i].sent = d.messages;
         dev[i].sf = d.spreading_factor;
+        dev[i].channels = io.config != nullptr ? io.config[i].device : loop_eu868_default_channels();
+        srv[i].view = io.config != nullptr ? io.config[i].server_view : loop_eu868_plan().defaults;
         {
             const LoopRegion& rg = regions[i];
             if (rg.max_dr > 15 || rg.max_tx_power_index > 15 || rg.power_step_tenth_db < 1 ||
@@ -1579,7 +1615,8 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
     // Émissions (dans l'ordre des débuts), issues et réponses MAC portées.
     std::vector<Tx> txs;
     std::vector<TxOutcome> outcome;
-    std::vector<std::uint8_t> powers, masks, oks;
+    std::vector<std::uint8_t> powers, masks, oks, sts;
+    std::vector<LoopLinkAdrRequest> dl_requests;  // parallèle à `dls`
     std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
     std::vector<std::int8_t> drs;
     std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
@@ -1599,17 +1636,19 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         const std::uint32_t d = ta.device;
         LoopServer& sv = srv[d];
         const std::uint8_t mask = masks[a];
-        const std::uint8_t ok = oks[a];
+        const std::uint8_t st = sts[a];
         // Réponses : confirmées seulement parce que cet uplink est reçu.
         if ((mask & 1U) != 0 && sv.adr_pending) {
-            if ((ok & kLoopAnsAdrBits) == kLoopAnsAdrBits) {
+            if (st == 0x07) {
                 sv.dr = sv.pend_dr;
                 sv.power_index = sv.pend_power;
             } else {
                 // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé) :
                 // l'élément refusé n'est pas renvoyé ; la décision suivante l'exclut.
-                if ((ok & 1U) == 0) sv.refused_dr = static_cast<std::uint16_t>(sv.refused_dr | (1U << sv.pend_dr));
-                if ((ok & 2U) == 0) sv.refused_pi = static_cast<std::uint16_t>(sv.refused_pi | (1U << sv.pend_power));
+                // Bit 1 (DataRateACK) à 0 : débit exclu. Bit 2 (PowerACK) à 0 : puissance exclue.
+                // Bit 0 (ChannelMaskACK) à 0 : aucune exclusion avant l'étape 4 (réévaluation).
+                if ((st & 2U) == 0) sv.refused_dr = static_cast<std::uint16_t>(sv.refused_dr | (1U << sv.pend_dr));
+                if ((st & 4U) == 0) sv.refused_pi = static_cast<std::uint16_t>(sv.refused_pi | (1U << sv.pend_power));
             }
             sv.adr_pending = false;
         }
@@ -1771,6 +1810,13 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         dl.req_dr = sv.pend_dr;
         dl.req_power_index = sv.pend_power;
         dls.push_back(dl);
+        // LinkADRReq : vue du serveur, ChMaskCntl 0 sur le bloc 0 (utilisée seulement si LinkADR est portée).
+        LoopLinkAdrRequest rq;
+        rq.ch_mask_cntl = 0;
+        rq.ch_mask = static_cast<std::uint16_t>(sv.view.words[0] & 0xFFFFU);
+        rq.dr = sv.pend_dr;
+        rq.power_index = sv.pend_power;
+        dl_requests.push_back(rq);
         // Fermeture de RX1 : l'occupation de la passerelle est connue, la réception se décide là.
         q.push(LoopEvent{t_open + kLoopRx1WindowNs, kLoopRankCheck, seq++, LoopKind::Check, d,
                          static_cast<std::uint32_t>(dls.size() - 1), 0});
@@ -1861,6 +1907,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 drs.push_back(ds.dr);
                 masks.push_back(static_cast<std::uint8_t>(ds.answer_mask | (ds.ds_pending ? 4U : 0U)));
                 oks.push_back(ds.answer_ok);
+                sts.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_status : std::uint8_t{0xFF});
                 adr_reqs.push_back(adr_req);
                 ds.ds_pending = false;
                 next_tx.push_back(-1);
@@ -1868,6 +1915,7 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
                 ds.last_tx = idx;
                 ds.answer_mask = 0;
                 ds.answer_ok = 0;
+                ds.answer_status = 0xFF;
                 per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
                 totals.airtime_ns += static_cast<std::uint64_t>(air);
                 ds.prev_end = t.end;
@@ -1985,23 +2033,36 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
             case LoopKind::Apply: {
                 const std::size_t i = ev.device;
                 LoopDevice& ds = dev[i];
-                const LoopDownlink& dl = dls[ev.index];
                 if (ev.cmd == kLoopCmdLinkAdr) {
-                    // Atomique : si le débit ou la puissance est refusé, rien n'est appliqué.
+                    // Validation et application atomiques (TS001 §5.2) sur la vue du terminal : le
+                    // plan porte les débits de la région (table 125 kHz), ses puissances et ses défauts.
                     const LoopRegion& rg = regions[i];
-                    const std::uint8_t dr = dl.req_dr;
-                    const std::uint8_t pi = dl.req_power_index;
-                    const bool ok_dr = dr == kLoopIgnoreField || (dr <= rg.max_dr && rg.dr_sf[dr] != 0);
-                    const bool ok_pi = pi == kLoopIgnoreField || pi <= rg.max_tx_power_index;
+                    const LoopLinkAdrRequest& rq = dl_requests[ev.index];
+                    LoopRegionalPlan plan = loop_eu868_plan();
+                    plan.max_dr = rg.max_dr;
+                    plan.max_power_index = rg.max_tx_power_index;
+                    plan.dr_available = 0;
+                    for (std::size_t k = 0; k < 8U; ++k) {
+                        if (rg.dr_sf[k] != 0) plan.dr_available = static_cast<std::uint8_t>(plan.dr_available | (1U << k));
+                    }
+                    LoopTerminalRadio term;
+                    term.channels = ds.channels;
+                    term.dr = static_cast<std::uint8_t>(ds.dr < 0 ? 0 : ds.dr);
+                    term.power_index = ds.power_index;
+                    const LoopLinkAdrDiagnosis dg = loop_apply_link_adr(plan, term, rq);
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
-                    ds.answer_ok = static_cast<std::uint8_t>((ds.answer_ok & ~3U) | (ok_dr ? 1U : 0U) |
-                                                             (ok_pi ? 2U : 0U));
-                    if (ok_dr && ok_pi) {
-                        if (dr != kLoopIgnoreField) {
-                            ds.dr = static_cast<std::int8_t>(dr);
-                            ds.sf = rg.dr_sf[dr];
+                    ds.answer_status = dg.status.to_wire();
+                    // Bits historiques de ABI v2 (`answer_ok`) : bit 0 débit, bit 1 puissance.
+                    ds.answer_ok = static_cast<std::uint8_t>((ds.answer_ok & ~3U) |
+                                                             (dg.status.data_rate_ack ? 1U : 0U) |
+                                                             (dg.status.power_ack ? 2U : 0U));
+                    if (dg.status.all()) {
+                        ds.channels = term.channels;
+                        if (rq.dr != kLoopIgnoreField) {
+                            ds.dr = static_cast<std::int8_t>(term.dr);
+                            ds.sf = rg.dr_sf[term.dr];
                         }
-                        if (pi != kLoopIgnoreField) ds.power_index = pi;
+                        if (rq.power_index != kLoopIgnoreField) ds.power_index = term.power_index;
                     }
                 } else {
                     ds.cap = std::ldexp(1.0, -static_cast<int>(options.duty_cycle_exponent));
@@ -2033,6 +2094,16 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
         out.uplinks.push_back(u);
     }
     out.gateway_busy = busy;
+    io.uplink_status = sts;
+    io.downlink_requests = dl_requests;
+    io.terminals.clear();
+    for (std::size_t i = 0; i < n; ++i) {
+        LoopTerminalRadio t;
+        t.channels = dev[i].channels;
+        t.dr = static_cast<std::uint8_t>(dev[i].dr < 0 ? 0 : dev[i].dr);
+        t.power_index = dev[i].power_index;
+        io.terminals.push_back(t);
+    }
     if (!txs.empty()) {
         SimTime busy_sum = 0;
         SimTime cur_s = txs[0].start;
