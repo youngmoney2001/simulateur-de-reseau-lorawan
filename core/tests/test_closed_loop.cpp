@@ -947,6 +947,22 @@ void test_channel_refused_leaves_terminal_unchanged() {
     }
     CHECK_TRUE(refused);
     for (const LoopUplink& u : res.uplinks) CHECK_EQ(static_cast<int>(u.spreading_factor), 12);
+    // Requêtes construites à partir de la vue serveur (canaux 0, 1, 2 et 5), pas du terminal.
+    std::size_t sent = 0;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        ++sent;
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x27);
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask_cntl), 0);
+        // Diagnostic exact : canal indéfini côté terminal, débit et puissance acceptés.
+        if (res.downlinks[i].delivered) {
+            CHECK_TRUE(io.downlink_diagnoses[i].channel_reason == LoopChannelReason::UndefinedChannel);
+            CHECK_TRUE(io.downlink_diagnoses[i].dr_reason == LoopDataRateReason::Ok);
+            CHECK_TRUE(io.downlink_diagnoses[i].refused_channels.test(5));
+            CHECK_TRUE(!io.downlink_diagnoses[i].refuse_dr);
+        }
+    }
+    CHECK_TRUE(sent > 0);
 }
 
 // Vue 001 : le terminal ne supporte que DR0..DR3. Le serveur demande DR5 : refus de débit
@@ -987,6 +1003,196 @@ void test_data_rate_refused_then_reevaluated_without_repetition() {
     }
     CHECK_TRUE(refused_dr);
     CHECK_TRUE(accepted);
+    // D5 : refus croisé attribué au débit (diagnostic exact, débit exclu côté serveur).
+    bool cross = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0 || !res.downlinks[i].delivered) continue;
+        const auto& dg = io.downlink_diagnoses[i];
+        if (io.downlink_requests[i].dr == 5 && dg.dr_reason == LoopDataRateReason::NotSupportedByChannels) {
+            cross = true;
+            CHECK_TRUE(dg.channel_reason == LoopChannelReason::IncompatibleWithDataRate);
+            CHECK_TRUE(dg.refuse_dr);
+            CHECK_TRUE(!dg.refuse_power);
+            CHECK_TRUE(!dg.status.data_rate_ack);
+            CHECK_TRUE(dg.status.power_ack);
+        }
+    }
+    CHECK_TRUE(cross);
+}
+
+// ---- Étape 3 : terminal et serveur ont des vues distinctes ; le terminal valide seul ----
+
+// Le terminal connaît un canal 5 que le serveur ignore : la requête (bloc 0 de la vue serveur)
+// l'inclut dans le bloc et le désactive. Acceptée, et la requête reprend la vue serveur (0x07),
+// non l'état actif du terminal (0x27).
+void test_terminal_extra_channel_unknown_to_server_follows_server_view() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.device.dr_mask[5] = 0x3F;
+    cfg.device.enabled.set(5);
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    CHECK_TRUE(io.terminals[0].channels.defined(5));          // le terminal garde sa capacité
+    CHECK_TRUE(!io.terminals[0].channels.enabled.test(5));    // canal 5 désactivé par le bloc serveur
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 5);
+    bool seen = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        seen = true;
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x07);
+    }
+    CHECK_TRUE(seen);
+}
+
+// Le serveur croit le canal 2 défini ; le terminal ne le définit pas : refus CM, rien appliqué,
+// y compris le débit (valide) et la puissance (valide).
+void test_server_channel_missing_on_terminal_refused_atomic() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.device.dr_mask[2] = 0;   // canal 2 non défini côté terminal
+    cfg.device.enabled.reset(2);
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    bool refused = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0 || !res.downlinks[i].delivered) continue;
+        refused = true;
+        CHECK_TRUE(io.downlink_diagnoses[i].channel_reason == LoopChannelReason::UndefinedChannel);
+        CHECK_TRUE(io.downlink_diagnoses[i].refused_channels.test(2));
+        CHECK_TRUE(!io.downlink_diagnoses[i].status.channel_mask_ack);
+    }
+    CHECK_TRUE(refused);
+    for (std::uint8_t s : io.uplink_status) CHECK_TRUE(s != kAccepted);
+}
+
+// Combinaisons 101, 110 et 000 en boucle fermée : LinkADRReq imposée (test de robustesse),
+// l'état du terminal ne doit changer dans aucun cas.
+void test_forced_101_dr_refused_valid_mask_not_applied() {
+    // Masque valide (canaux 0 et 1 seulement) + débit inconnu du plan (DR6) + puissance ignorée.
+    LoopChannelConfig cfg = cfg_default();
+    LoopLinkAdrRequest rq;
+    rq.ch_mask_cntl = 0;
+    rq.ch_mask = 0x0003;
+    rq.dr = 6;
+    rq.power_index = kLoopFieldIgnore;
+    cfg.forced_request = rq;
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);   // le masque valide n'a pas été appliqué
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    bool seen = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0 || !res.downlinks[i].delivered) continue;
+        seen = true;
+        CHECK_TRUE(io.downlink_diagnoses[i].dr_reason == LoopDataRateReason::UnknownDr);
+        CHECK_TRUE(io.downlink_diagnoses[i].channel_reason == LoopChannelReason::Ok);
+    }
+    CHECK_TRUE(seen);
+    bool s101 = false;
+    for (std::uint8_t s : io.uplink_status) {
+        if (s == 0xFF) continue;
+        CHECK_EQ(static_cast<int>(s), 0x05);  // CM=1, DR=0, PW=1
+        s101 = true;
+    }
+    CHECK_TRUE(s101);
+}
+
+void test_forced_110_power_refused_valid_mask_and_dr_not_applied() {
+    // Masque valide (canaux 0 et 1), débit DR0 supporté, puissance réservée (8).
+    LoopChannelConfig cfg = cfg_default();
+    LoopLinkAdrRequest rq;
+    rq.ch_mask_cntl = 0;
+    rq.ch_mask = 0x0003;
+    rq.dr = 0;
+    rq.power_index = 8;
+    cfg.forced_request = rq;
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_EQ(static_cast<int>(io.terminals[0].power_index), 0);
+    bool seen = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0 || !res.downlinks[i].delivered) continue;
+        seen = true;
+        CHECK_TRUE(io.downlink_diagnoses[i].power_reason == LoopPowerReason::Reserved);
+    }
+    CHECK_TRUE(seen);
+    bool s110 = false;
+    for (std::uint8_t s : io.uplink_status) {
+        if (s == 0xFF) continue;
+        CHECK_EQ(static_cast<int>(s), 0x03);  // CM=1, DR=1, PW=0
+        s110 = true;
+    }
+    CHECK_TRUE(s110);
+}
+
+void test_forced_000_everything_refused() {
+    // Masque vide (aucun canal actif), débit inconnu, puissance réservée.
+    LoopChannelConfig cfg = cfg_default();
+    LoopLinkAdrRequest rq;
+    rq.ch_mask_cntl = 0;
+    rq.ch_mask = 0x0000;
+    rq.dr = 6;
+    rq.power_index = 8;
+    cfg.forced_request = rq;
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_EQ(static_cast<int>(io.terminals[0].power_index), 0);
+    bool s000 = false;
+    for (std::uint8_t s : io.uplink_status) {
+        if (s == 0xFF) continue;
+        CHECK_EQ(static_cast<int>(s), 0x00);
+        s000 = true;
+    }
+    CHECK_TRUE(s000);
+}
+
+// Vue serveur sans canal 2 (terminal le définit) : la requête suivante n'inclut pas le canal 2
+// non demandé, et le terminal reste sur sa configuration initiale en cas d'acceptation.
+void test_requests_follow_server_view_not_terminal_state() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view = LoopChannelSet{};
+    cfg.server_view.set(0);
+    cfg.server_view.set(1);   // le serveur ne voit pas le canal 2 comme configuré
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    bool seen = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        seen = true;
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x03);
+    }
+    CHECK_TRUE(seen);
+    // Le canal 2 du terminal est désactivé par le bloc serveur (accepté, requête = vue serveur).
+    CHECK_TRUE(!io.terminals[0].channels.enabled.test(2));
+    CHECK_TRUE(io.terminals[0].channels.enabled.test(0));
 }
 
 void test_channel_view_outside_block0_refused() {
@@ -1071,6 +1277,12 @@ void run_closed_loop_tests() {
     test_data_rate_refused_then_reevaluated_without_repetition();
     test_channel_view_outside_block0_refused();
     test_explicit_defaults_equal_legacy_path();
+    test_terminal_extra_channel_unknown_to_server_follows_server_view();
+    test_server_channel_missing_on_terminal_refused_atomic();
+    test_forced_101_dr_refused_valid_mask_not_applied();
+    test_forced_110_power_refused_valid_mask_and_dr_not_applied();
+    test_forced_000_everything_refused();
+    test_requests_follow_server_view_not_terminal_state();
     test_adr_ack_counter_reset_by_downlink();
     test_absolute_gateway_sf5_threshold();
     test_absolute_gateway_refusals();

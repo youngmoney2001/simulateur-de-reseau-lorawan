@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "lsim/downlink.hpp"
@@ -391,6 +392,9 @@ SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_
 struct LoopChannelConfig {
     LoopChannelState device;
     LoopChannelSet server_view;
+    // Test de robustesse uniquement (hors politique serveur) : LinkADRReq imposée à chaque descente
+    // LinkADR de ce dispositif. Sert à atteindre 101, 110 et 000, que l'ADR ne produit jamais.
+    std::optional<LoopLinkAdrRequest> forced_request;
 };
 
 // Entrées optionnelles et sorties du modèle canaux. `config` nullptr : configuration EU868 par défaut
@@ -403,6 +407,9 @@ struct LoopChannelIo {
     std::vector<LoopTerminalRadio> terminals;             // état final du terminal, par dispositif
     std::vector<std::uint8_t> uplink_status;              // LinkADRAns par uplink (0xFF : aucun)
     std::vector<LoopLinkAdrRequest> downlink_requests;    // LinkADRReq portée par chaque descente
+    // Diagnostic exact de chaque descente LinkADR reçue (motifs et attribution D5) ; vide pour les
+    // descentes non reçues ou sans LinkADR.
+    std::vector<LoopLinkAdrDiagnosis> downlink_diagnoses;
 };
 
 // Boucle fermée avec modèle canaux. Même comportement que `simulate_closed_loop` pour la

@@ -1617,6 +1617,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     std::vector<TxOutcome> outcome;
     std::vector<std::uint8_t> powers, masks, oks, sts;
     std::vector<LoopLinkAdrRequest> dl_requests;  // parallèle à `dls`
+    std::vector<LoopLinkAdrDiagnosis> dl_diag;    // diagnostic à l'application (descentes reçues)
     std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
     std::vector<std::int8_t> drs;
     std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
@@ -1816,6 +1817,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         rq.ch_mask = static_cast<std::uint16_t>(sv.view.words[0] & 0xFFFFU);
         rq.dr = sv.pend_dr;
         rq.power_index = sv.pend_power;
+        if (io.config != nullptr && io.config[d].forced_request) rq = *io.config[d].forced_request;
         dl_requests.push_back(rq);
         // Fermeture de RX1 : l'occupation de la passerelle est connue, la réception se décide là.
         q.push(LoopEvent{t_open + kLoopRx1WindowNs, kLoopRankCheck, seq++, LoopKind::Check, d,
@@ -2050,6 +2052,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     term.dr = static_cast<std::uint8_t>(ds.dr < 0 ? 0 : ds.dr);
                     term.power_index = ds.power_index;
                     const LoopLinkAdrDiagnosis dg = loop_apply_link_adr(plan, term, rq);
+                    if (dl_diag.size() <= ev.index) dl_diag.resize(ev.index + 1);
+                    dl_diag[ev.index] = dg;
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
                     ds.answer_status = dg.status.to_wire();
                     // Bits historiques de ABI v2 (`answer_ok`) : bit 0 débit, bit 1 puissance.
@@ -2096,6 +2100,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     out.gateway_busy = busy;
     io.uplink_status = sts;
     io.downlink_requests = dl_requests;
+    io.downlink_diagnoses = dl_diag;
+    io.downlink_diagnoses.resize(dls.size());
     io.terminals.clear();
     for (std::size_t i = 0; i < n; ++i) {
         LoopTerminalRadio t;
