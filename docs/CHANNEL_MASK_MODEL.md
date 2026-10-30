@@ -47,6 +47,9 @@ Précisions :
   encore un canal indéfini, la requête suivante (débit accepté) le retrouve : le refus suivant a
   `DataRateACK` = 1, et le canal devient suspect et est exclu. Testé par
   `test_d5_cm0_dr0_then_channel_refusal`.
+- **Masque retirant des confirmés.** Un masque qui retire des canaux confirmés (0..2) n'attribue que
+  les suspects. Testé par `test_mask_removing_confirmed_channels_attributes_only_suspects`. Un masque qui
+  *conserve* des confirmés et ajoute un indéfini les exclut pas : testé par `test_partial_channel_refusal_excludes_only_unacknowledged_requested_channels`.
 - **Sur-approximation.** Un suspect peut être valide. Le serveur ne sait pas quel canal est en cause.
   Un canal valide suspect est donc exclu pendant 100 uplinks. Testé par
   `test_valid_suspect_channel_excluded_by_over_approximation` (le canal 4 y est défini et exclu).
