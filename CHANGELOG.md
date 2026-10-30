@@ -3,10 +3,12 @@
 ## 0.1.0 (non publiée)
 
 ### Modèle de canaux LinkADR : exclusions par canal, trace interne v3 (boucle fermée, EU868)
-- Refus de canal : exclusion par canal des seuls suspects (`applied \ confirmed`), 100 uplinks admissibles (convention du simulateur, ni TS001 ni RP002). Repli sur le dernier masque acquitté si le candidat est vide. Le débit et la puissance acceptés restent appliqués.
+- Refus de canal : exclusion par canal des seuls suspects (`demandés \ confirmés`), 100 uplinks admissibles (convention du simulateur, ni TS001 ni RP002). Le débit et la puissance acceptés restent appliqués.
+- Refus à suspects vides (aucun suspect, masque demandé entièrement confirmé ou vide) : exclusion du masque exact (politique du simulateur, non TS001), sans répétition pendant 100 uplinks, renouvelée si le même masque est refusé, expirée sans commande. Repli sur le dernier masque confirmé.
+- Refus de débit et de masque simultanés (D5) : seul le débit est exclu ; le canal indéfini n'est exclu qu'au refus suivant à débit accepté.
 - **Changement de comportement** : dans le scénario 011 (masque refusé, débit et puissance acceptés), le masque entier n'est plus exclu. Voir `docs/CHANNEL_MASK_MODEL.md`.
 - Compteurs indépendants par débit, puissance et canal ; renouvellement signalé ; expiration sans commande.
-- Trace interne v3 (`LoopChannelIo::trace_v3`, opt-in, C++ seulement) : bits LinkADRAns, exclusions créées / renouvelées / expirées, décisions ADR, motifs D5, chaque événement avec son origine (normative ou politique du simulateur). Sans effet sur les radios. Non exposée à Python : elle attend l'ABI v3.
+- Trace interne v3 (`LoopChannelIo::trace_v3`, opt-in, C++ seulement) : bits LinkADRAns et contenu acquitté, exclusions créées / renouvelées / expirées, décisions ADR, motifs D5, descentes avec issue radio et cause de perte, chaque événement avec son origine (`Normative`, `Radio` ou `SimulatorPolicy`). Sans effet sur les radios. Non exposée à Python : elle attend l'ABI v3.
 - Empreintes historiques (dump, trace ADR) inchangées.
 
 ### Réémission des commandes LinkADR (TS001-1.0.4 §5, décision utilisateur)
