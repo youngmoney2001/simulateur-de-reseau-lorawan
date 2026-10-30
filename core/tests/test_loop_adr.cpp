@@ -333,6 +333,42 @@ void test_exclusion_renewal_resets_counter() {
     CHECK_TRUE(!e.exclude_dr(5));  // après expiration : création, pas renouvellement
 }
 
+// Exclusion de masque : exacte (seul le masque demandé est bloqué), renouvelée si identique,
+// expirée au 100e uplink avec signalement. Repli : vers le dernier masque confirmé.
+void test_mask_exclusion_is_exact_and_falls_back() {
+    lsim::sim::LoopExclusions e;
+    lsim::sim::LoopChannelSet view;
+    view.set(0);
+    view.set(1);
+    view.set(2);
+    lsim::sim::LoopChannelSet conf;
+    conf.set(0);
+    conf.set(1);
+    CHECK_TRUE(!e.exclude_mask(0x0007));           // création
+    CHECK_TRUE(e.mask_excluded(0x0007));
+    CHECK_TRUE(!e.mask_excluded(0x0003));           // seul le masque exact est exclu
+    // Candidat égal au masque exclu : repli sur le dernier masque confirmé (0x03), jamais 0x07.
+    CHECK_EQ(static_cast<int>(lsim::sim::loop_request_block0(view, e, conf)), 0x03);
+    // Candidat différent : aucune interférence (pas d'exclusion globale).
+    lsim::sim::LoopChannelSet small;
+    small.set(0);
+    CHECK_EQ(static_cast<int>(lsim::sim::loop_request_block0(small, e, conf)), 0x01);
+    CHECK_TRUE(e.exclude_mask(0x0007));             // même masque : renouvellement
+    std::vector<lsim::sim::LoopExpiry> ex;
+    for (int k = 0; k < 99; ++k) e.tick(&ex);
+    CHECK_TRUE(e.mask_excluded(0x0007));
+    CHECK_TRUE(ex.empty());
+    e.tick(&ex);                                    // 100e uplink : expiration
+    CHECK_TRUE(!e.mask_excluded(0x0007));
+    CHECK_EQ(static_cast<int>(ex.size()), 1);
+    if (ex.size() == 1) {
+        CHECK_TRUE(ex[0].target == lsim::sim::LoopExclusionTarget::Mask);
+        CHECK_EQ(static_cast<int>(ex[0].value), 0x0007);
+    }
+    // Après expiration, le masque redevient le candidat (aucune commande émise par l'expiration).
+    CHECK_EQ(static_cast<int>(lsim::sim::loop_request_block0(view, e, conf)), 0x07);
+}
+
 // Compteurs indépendants : un débit n'exclut ni un autre débit, ni une puissance, ni le masque.
 void test_exclusion_counters_are_independent() {
     lsim::sim::LoopExclusions e;
@@ -388,6 +424,7 @@ void run_loop_adr_tests() {
     test_plan_dr_availability_refuses_unknown_dr();
     test_exclusion_boundary_99_and_100();
     test_exclusion_renewal_resets_counter();
+    test_mask_exclusion_is_exact_and_falls_back();
     test_exclusion_counters_are_independent();
     test_exclusion_out_of_range_ignored();
 }

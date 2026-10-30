@@ -79,7 +79,8 @@ struct LoopChannelState {
 // Le renouvellement remet le compteur à 100. L'expiration ne déclenche aucune commande.
 inline constexpr std::uint16_t kLoopExclusionUplinks = 100;
 
-enum class LoopExclusionTarget : std::uint8_t { DataRate, Power, Channel };
+// Cible d'une exclusion. `Mask` : le masque demandé complet (politique du simulateur, suspects vides).
+enum class LoopExclusionTarget : std::uint8_t { DataRate, Power, Channel, Mask };
 
 // Exclusion arrivée à échéance lors d'un `tick`.
 struct LoopExpiry {
@@ -91,11 +92,17 @@ struct LoopExclusions {
     std::array<std::uint16_t, 16> dr{};     // uplinks admissibles restants par débit ; 0 = éligible
     std::array<std::uint16_t, 16> power{};  // idem par index de puissance
     std::array<std::uint16_t, kLoopMaxChannels> channel{};  // par canal ; 0 = éligible
+    // Masque demandé complet (bloc 0) exclu : une seule case. Ne bloque que ce masque exact.
+    std::uint16_t mask_value = 0;
+    std::uint16_t mask = 0;                                  // uplinks restants ; 0 = aucun
 
-    // Pose (ou renouvelle) l'exclusion. Retourne vrai si elle était déjà active (renouvellement).
+    // Pose (ou renouvelle) l'exclusion. Retourne vrai si la même exclusion était déjà active
+    // (renouvellement). Une exclusion de masque remplace une exclusion de masque différente.
     bool exclude_dr(std::uint8_t dr);
     bool exclude_power(std::uint8_t power_index);
     bool exclude_channel(std::size_t channel_index);
+    bool exclude_mask(std::uint16_t block0);
+    bool mask_excluded(std::uint16_t block0) const;
     // Un uplink admissible reçu : décrémente les compteurs actifs. `expired` (optionnel) reçoit les
     // exclusions qui arrivent à 0 à cet uplink.
     void tick(std::vector<LoopExpiry>* expired = nullptr);
@@ -103,6 +110,11 @@ struct LoopExclusions {
     bool power_excluded(std::uint8_t power_index) const;
     bool channel_excluded(std::size_t channel_index) const;
 };
+
+// Masque du bloc 0 à demander : vue serveur privée des canaux exclus. Repli sur le dernier masque
+// confirmé si ce candidat est vide ou égal au masque exclu (politique du simulateur).
+std::uint16_t loop_request_block0(const LoopChannelSet& view, const LoopExclusions& excl,
+                                  const LoopChannelSet& confirmed);
 
 // Terminal complet (partie radio pertinente pour LinkADR).
 struct LoopTerminalRadio {

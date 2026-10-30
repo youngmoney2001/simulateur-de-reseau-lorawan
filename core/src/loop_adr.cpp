@@ -228,6 +228,31 @@ bool LoopExclusions::exclude_power(std::uint8_t value) {
     return renewed;
 }
 
+bool LoopExclusions::exclude_mask(std::uint16_t block0) {
+    const bool renewed = mask > 0 && mask_value == block0;
+    mask_value = block0;
+    mask = kLoopExclusionUplinks;
+    return renewed;
+}
+
+bool LoopExclusions::mask_excluded(std::uint16_t block0) const {
+    return mask > 0 && mask_value == block0;
+}
+
+std::uint16_t loop_request_block0(const LoopChannelSet& view, const LoopExclusions& excl,
+                                  const LoopChannelSet& confirmed) {
+    LoopChannelSet cand;
+    for (std::size_t c = 0; c < 16U; ++c) {
+        if (view.test(c) && !excl.channel_excluded(c)) cand.set(c);
+    }
+    const auto block0 = [](const LoopChannelSet& s) {
+        return static_cast<std::uint16_t>(s.words[0] & 0xFFFFU);
+    };
+    const std::uint16_t bits = block0(cand);
+    if (bits == 0 || excl.mask_excluded(bits)) return block0(confirmed);
+    return bits;
+}
+
 bool LoopExclusions::exclude_channel(std::size_t channel_index) {
     if (channel_index >= channel.size()) return false;
     const bool renewed = channel[channel_index] > 0;
@@ -246,6 +271,12 @@ void LoopExclusions::tick(std::vector<LoopExpiry>* expired) {
     for (std::size_t i = 0; i < dr.size(); ++i) step(dr[i], LoopExclusionTarget::DataRate, i);
     for (std::size_t i = 0; i < power.size(); ++i) step(power[i], LoopExclusionTarget::Power, i);
     for (std::size_t i = 0; i < channel.size(); ++i) step(channel[i], LoopExclusionTarget::Channel, i);
+    if (mask > 0) {
+        --mask;
+        if (mask == 0 && expired != nullptr) {
+            expired->push_back(LoopExpiry{LoopExclusionTarget::Mask, mask_value});
+        }
+    }
 }
 
 bool LoopExclusions::dr_excluded(std::uint8_t value) const { return value < dr.size() && dr[value] > 0; }

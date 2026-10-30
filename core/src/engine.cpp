@@ -1368,7 +1368,9 @@ struct LoopDevice {
     std::uint32_t adr_cnt = 0;     // ADRACKCnt : uplinks depuis la dernière descente reçue (TS001 §4.3.1.1)
     LoopChannelState channels;     // capacités et canaux actifs du terminal (modèle canaux)
     std::uint8_t answer_status = 0xFF;  // LinkADRAns (bits CM, DR, PW) de la prochaine émission ; 0xFF : aucun
-    std::uint16_t answer_chmask = 0;    // masque du bloc 0 appliqué par ce LinkADR (avec answer_status)
+    std::uint16_t answer_chmask = 0;    // masque du bloc 0 de la LinkADRReq reçue (avec answer_status)
+    std::uint8_t answer_dr = 0;         // débit de cette LinkADRReq
+    std::uint8_t answer_power = 0;      // index de puissance de cette LinkADRReq
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
@@ -1397,7 +1399,6 @@ struct LoopServer {
 };
 
 // Masque du bloc 0 (bits 0 à 15) et réciproque.
-std::uint16_t block0_bits(const LoopChannelSet& s) { return static_cast<std::uint16_t>(s.words[0] & 0xFFFFU); }
 LoopChannelSet set_from_block0(std::uint16_t bits) {
     LoopChannelSet s;
     for (std::size_t i = 0; i < 16U; ++i) {
@@ -1630,7 +1631,10 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     std::vector<Tx> txs;
     std::vector<TxOutcome> outcome;
     std::vector<std::uint8_t> powers, masks, oks, sts;
-    std::vector<std::uint16_t> cms;  // masque du bloc 0 appliqué par le LinkADR de chaque uplink
+    std::vector<std::uint16_t> ans_chmask;  // bloc 0 de la LinkADRReq acquittée par chaque uplink
+    std::vector<std::uint8_t> ans_dr;       // débit de cette LinkADRReq
+    std::vector<std::uint8_t> ans_pw;       // index de puissance de cette LinkADRReq
+    std::vector<std::uint32_t> linkadr_sent(n, 0);  // LinkADRReq envoyées par dispositif (indice de séquence)
     std::vector<LoopLinkAdrRequest> dl_requests;  // parallèle à `dls`
     std::vector<LoopLinkAdrDiagnosis> dl_diag;    // diagnostic à l'application (descentes reçues)
     std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
@@ -1682,12 +1686,16 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
             e.device = d;
             e.uplink = static_cast<std::uint32_t>(a);
             e.kind = LoopTraceKind::Uplink;
-            e.origin = LoopTraceOrigin::Normative;
+            e.origin = LoopTraceOrigin::Radio;
             e.flag = true;
             emit(e);
         }
         const std::uint8_t st = sts[a];
-        const std::uint16_t applied = cms[a];
+        // Contenu acquitté : la LinkADRReq réellement reçue par le terminal (pas la demande en attente,
+        // qui diffère en cas de requête forcée). Identique à la demande en attente sans forçage.
+        const std::uint16_t req_chmask = ans_chmask[a];
+        const std::uint8_t req_dr = ans_dr[a];
+        const std::uint8_t req_pw = ans_pw[a];
         // Réponses : confirmées seulement parce que cet uplink est reçu.
         if ((mask & 1U) != 0 && sv.adr_pending) {
             {
@@ -1698,16 +1706,16 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 e.kind = LoopTraceKind::LinkAdrAns;
                 e.origin = LoopTraceOrigin::Normative;
                 e.status = st;
-                e.dr = sv.pend_dr;
-                e.power_index = sv.pend_power;
-                e.channel_mask = applied;
+                e.dr = req_dr;
+                e.power_index = req_pw;
+                e.channel_mask = req_chmask;
                 e.flag = st == 0x07;
                 emit(e);
             }
             if (st == 0x07) {
-                sv.dr = sv.pend_dr;
-                sv.power_index = sv.pend_power;
-                sv.confirmed = set_from_block0(applied);
+                sv.dr = req_dr;
+                sv.power_index = req_pw;
+                sv.confirmed = set_from_block0(req_chmask);
             } else {
                 // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé).
                 // Attribution avec les seuls bits ACK et l'état connu du serveur (jamais l'état privé
@@ -1731,16 +1739,25 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     e.value = value;
                     emit(e);
                 };
-                if ((st & 2U) == 0) post(LoopExclusionTarget::DataRate, sv.pend_dr, sv.excl.exclude_dr(sv.pend_dr));
-                if ((st & 4U) == 0) {
-                    post(LoopExclusionTarget::Power, sv.pend_power, sv.excl.exclude_power(sv.pend_power));
-                }
+                if ((st & 2U) == 0) post(LoopExclusionTarget::DataRate, req_dr, sv.excl.exclude_dr(req_dr));
+                if ((st & 4U) == 0) post(LoopExclusionTarget::Power, req_pw, sv.excl.exclude_power(req_pw));
                 if ((st & 1U) == 0 && (st & 2U) != 0) {
-                    const LoopChannelSet applied_set = set_from_block0(applied);
+                    // Masque refusé alors que le débit est accepté (D5 : un débit refusé est attribué au
+                    // débit, et les canaux ne sont pas suspects). Suspects = demandés et non confirmés.
+                    const LoopChannelSet req_set = set_from_block0(req_chmask);
+                    LoopChannelSet suspects;
                     for (std::size_t c = 0; c < 16U; ++c) {
-                        if (applied_set.test(c) && !sv.confirmed.test(c)) {
-                            post(LoopExclusionTarget::Channel, static_cast<std::uint16_t>(c),
-                                 sv.excl.exclude_channel(c));
+                        if (req_set.test(c) && !sv.confirmed.test(c)) suspects.set(c);
+                    }
+                    if (!suspects.any()) {
+                        // Aucun suspect : exclusion du masque demandé complet (politique du simulateur).
+                        post(LoopExclusionTarget::Mask, req_chmask, sv.excl.exclude_mask(req_chmask));
+                    } else {
+                        for (std::size_t c = 0; c < 16U; ++c) {
+                            if (suspects.test(c)) {
+                                post(LoopExclusionTarget::Channel, static_cast<std::uint16_t>(c),
+                                     sv.excl.exclude_channel(c));
+                            }
                         }
                     }
                 }
@@ -1920,21 +1937,24 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         // LinkADRReq : vue du serveur, ChMaskCntl 0 sur le bloc 0 (utilisée seulement si LinkADR est portée).
         LoopLinkAdrRequest rq;
         rq.ch_mask_cntl = 0;
-        // Masque : vue serveur privée de ses canaux exclus ; à défaut (vide), le dernier masque acquitté.
-        LoopChannelSet candidate;
-        for (std::size_t c = 0; c < 16U; ++c) {
-            if (sv.view.test(c) && !sv.excl.channel_excluded(c)) candidate.set(c);
-        }
-        rq.ch_mask = block0_bits(candidate.any() ? candidate : sv.confirmed);
+        // Masque : vue serveur privée des canaux exclus ; repli sur le dernier masque confirmé.
+        rq.ch_mask = loop_request_block0(sv.view, sv.excl, sv.confirmed);
         rq.dr = sv.pend_dr;
         rq.power_index = sv.pend_power;
         if (io.config != nullptr && io.config[d].forced_request) rq = *io.config[d].forced_request;
+        if ((cmds & kLoopCmdLinkAdr) != 0) {
+            const std::uint32_t k = linkadr_sent[d]++;
+            if (io.config != nullptr && k < io.config[d].forced_sequence.size()) {
+                rq = io.config[d].forced_sequence[k];
+            }
+        }
         dl_requests.push_back(rq);
         if ((cmds & kLoopCmdLinkAdr) != 0) {
             LoopTraceEvent e;
             e.t_ns = t_open;
             e.device = d;
             e.uplink = static_cast<std::uint32_t>(a);
+            e.downlink = static_cast<std::uint32_t>(dls.size() - 1);
             e.kind = LoopTraceKind::LinkAdrReq;
             e.origin = LoopTraceOrigin::SimulatorPolicy;
             e.dr = rq.dr;
@@ -2033,7 +2053,9 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 masks.push_back(static_cast<std::uint8_t>(ds.answer_mask | (ds.ds_pending ? 4U : 0U)));
                 oks.push_back(ds.answer_ok);
                 sts.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_status : std::uint8_t{0xFF});
-                cms.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_chmask : std::uint16_t{0});
+                ans_chmask.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_chmask : std::uint16_t{0});
+                ans_dr.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_dr : std::uint8_t{0});
+                ans_pw.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_power : std::uint8_t{0});
                 adr_reqs.push_back(adr_req);
                 ds.ds_pending = false;
                 next_tx.push_back(-1);
@@ -2043,6 +2065,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 ds.answer_ok = 0;
                 ds.answer_status = 0xFF;
                 ds.answer_chmask = 0;
+                ds.answer_dr = 0;
+                ds.answer_power = 0;
                 per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
                 totals.airtime_ns += static_cast<std::uint64_t>(air);
                 ds.prev_end = t.end;
@@ -2129,6 +2153,24 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     ok = rssi_dl >= sens + options.protocol.device_rx_offset_db;
                 }
                 dl.delivered = ok;
+                if (io.trace_v3) {
+                    LoopTraceEvent e;
+                    e.t_ns = ev.t;
+                    e.device = dl.device;
+                    e.uplink = dl.uplink;
+                    e.downlink = static_cast<std::uint32_t>(ev.index);
+                    e.kind = LoopTraceKind::Downlink;
+                    e.origin = LoopTraceOrigin::Radio;
+                    e.flag = ok;
+                    e.value = dl.commands;
+                    if (!ok) {
+                        e.loss = static_cast<std::uint8_t>(
+                            dl.start_ns < 0 ? LoopDownlinkLoss::NoGatewaySlot
+                                            : (dl.device_missed ? LoopDownlinkLoss::DeviceTransmitting
+                                                                : LoopDownlinkLoss::BelowSensitivity));
+                    }
+                    io.trace.push_back(e);
+                }
                 if (ok) dev[dl.device].adr_cnt = 0;  // F14 : toute descente de classe A reçue
                 {
                     const std::vector<std::uint32_t>& ids = dl_items[ev.index];
@@ -2183,7 +2225,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                         LoopTraceEvent e;
                         e.t_ns = ev.t;
                         e.device = static_cast<std::uint32_t>(i);
-                        e.uplink = static_cast<std::uint32_t>(ev.index);
+                        e.uplink = dls[ev.index].uplink;
+                        e.downlink = static_cast<std::uint32_t>(ev.index);
                         e.kind = LoopTraceKind::Apply;
                         e.origin = LoopTraceOrigin::Normative;
                         e.status = dg.status.to_wire();
@@ -2199,6 +2242,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
                     ds.answer_status = dg.status.to_wire();
                     ds.answer_chmask = rq.ch_mask;
+                    ds.answer_dr = rq.dr;
+                    ds.answer_power = rq.power_index;
                     // Bits historiques de ABI v2 (`answer_ok`) : bit 0 débit, bit 1 puissance.
                     ds.answer_ok = static_cast<std::uint8_t>((ds.answer_ok & ~3U) |
                                                              (dg.status.data_rate_ack ? 1U : 0U) |

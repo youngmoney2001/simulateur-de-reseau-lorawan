@@ -395,6 +395,10 @@ struct LoopChannelConfig {
     // Test de robustesse uniquement (hors politique serveur) : LinkADRReq imposée à chaque descente
     // LinkADR de ce dispositif. Sert à atteindre 101, 110 et 000, que l'ADR ne produit jamais.
     std::optional<LoopLinkAdrRequest> forced_request;
+    // Test de robustesse uniquement : LinkADRReq imposées aux descentes LinkADR successives
+    // (k-ième descente LinkADR = entrée k). Au-delà, la politique du serveur reprend. Prioritaire
+    // sur `forced_request`.
+    std::vector<LoopLinkAdrRequest> forced_sequence;
 };
 
 // Entrées optionnelles et sorties du modèle canaux. `config` nullptr : configuration EU868 par défaut
@@ -406,22 +410,39 @@ struct LoopChannelConfig {
 //  - SimulatorPolicy : choix du serveur ou du simulateur (ADR, exclusions, repli, valeurs demandées) ;
 //  - Radio : résultat physique (réception). Non utilisé à ce stade, réservé.
 enum class LoopTraceKind : std::uint8_t {
-    Uplink,        // uplink admissible reçu (début d'émission)
-    LinkAdrAns,    // réponse LinkADRAns portée par cet uplink (bits 0..2 dans `status`)
-    Exclusion,     // exclusion créée, renouvelée ou expirée (`action`, `target`, `value`)
-    AdrDecision,   // décision ADR (flag = une demande est en attente)
-    LinkAdrReq,    // LinkADRReq placée dans une descente (valeurs : SimulatorPolicy)
-    Apply,         // application d'une LinkADRReq reçue par le terminal (motifs D5 dans `reason_*`)
+    Uplink,        // uplink admissible reçu (Radio)
+    LinkAdrAns,    // LinkADRAns portée par cet uplink : bits dans `status`, contenu acquitté (Normative)
+    Exclusion,     // exclusion créée, renouvelée ou expirée (SimulatorPolicy)
+    AdrDecision,   // décision ADR (SimulatorPolicy ; flag = une demande est en attente)
+    LinkAdrReq,    // contenu LinkADRReq planifié dans une descente (SimulatorPolicy)
+    Downlink,      // issue radio d'une descente : reçue ou perdue, cause dans `loss` (Radio)
+    Apply,         // application par le terminal d'une LinkADRReq reçue (Normative)
 };
 
-enum class LoopTraceOrigin : std::uint8_t { Normative, SimulatorPolicy, Radio };
+enum class LoopTraceOrigin : std::uint8_t {
+    Normative,        // comportement du terminal défini par TS001 / RP002
+    SimulatorPolicy,  // choix du serveur ou du simulateur, non normatif
+    Radio,            // résultat de propagation, collision, occupation de passerelle
+};
+
+// Cause d'une descente non reçue (LoopTraceEvent::loss) ; 0 si reçue.
+enum class LoopDownlinkLoss : std::uint8_t {
+    None = 0,
+    DeviceTransmitting = 1,   // le dispositif émet pendant la RX1
+    NoGatewaySlot = 2,        // pas de créneau passerelle dans la RX1
+    BelowSensitivity = 3,     // niveau reçu sous la sensibilité du terminal
+};
+
+inline constexpr std::uint32_t kLoopNoIndex = 0xFFFFFFFFU;
 
 enum class LoopTraceAction : std::uint8_t { Created, Renewed, Expired };
 
 struct LoopTraceEvent {
     std::int64_t t_ns = 0;
     std::uint32_t device = 0;
-    std::uint32_t uplink = 0;          // indice d'uplink (LinkAdrAns, Exclusion, AdrDecision, Uplink)
+    std::uint32_t uplink = 0;          // uplink concerné ; pour une descente, uplink déclencheur
+    std::uint32_t downlink = kLoopNoIndex;  // LinkAdrReq, Downlink, Apply : indice de descente
+    std::uint8_t loss = 0;             // Downlink : LoopDownlinkLoss
     LoopTraceKind kind = LoopTraceKind::Uplink;
     LoopTraceOrigin origin = LoopTraceOrigin::Normative;
     LoopTraceAction action = LoopTraceAction::Created;  // Exclusion uniquement
@@ -436,7 +457,8 @@ struct LoopTraceEvent {
     std::uint8_t reason_dr = 0;
     std::uint8_t reason_power = 0;
     bool operator==(const LoopTraceEvent& o) const {
-        return t_ns == o.t_ns && device == o.device && uplink == o.uplink && kind == o.kind &&
+        return t_ns == o.t_ns && device == o.device && uplink == o.uplink && downlink == o.downlink &&
+               loss == o.loss && kind == o.kind &&
                origin == o.origin && action == o.action && target == o.target && status == o.status &&
                dr == o.dr && power_index == o.power_index && channel_mask == o.channel_mask &&
                value == o.value && flag == o.flag && reason_channel == o.reason_channel &&
