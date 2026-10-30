@@ -36,6 +36,7 @@ add_library(lsim_objects OBJECT
     core/src/lorawan_keys.cpp
     core/src/secure_frame.cpp
     core/src/engine.cpp
+    core/src/loop_adr.cpp
     core/src/c_api_ext.cpp
     core/src/join.cpp
     core/src/mac_commands.cpp
@@ -87,6 +88,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_secure_frame.cpp
         core/tests/test_engine.cpp
         core/tests/test_closed_loop.cpp
+        core/tests/test_loop_adr.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp
         core/tests/test_mac_commands.cpp

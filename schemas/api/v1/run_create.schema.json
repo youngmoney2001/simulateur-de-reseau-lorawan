@@ -123,6 +123,37 @@
       "title": "ApiScenario",
       "type": "object"
     },
+    "ChannelDefModel": {
+      "additionalProperties": false,
+      "description": "Canal défini du terminal (RP002 EU863-870) : index 0..79, débits supportés dr_min..dr_max.",
+      "properties": {
+        "dr_max": {
+          "default": 7,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Dr Max",
+          "type": "integer"
+        },
+        "dr_min": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Dr Min",
+          "type": "integer"
+        },
+        "index": {
+          "maximum": 79,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "title": "ChannelDefModel",
+      "type": "object"
+    },
     "DiskPlacement": {
       "additionalProperties": false,
       "properties": {
@@ -442,6 +473,22 @@
       "additionalProperties": false,
       "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 (passerelle unique), rangs 1-based des émissions du dispositif :\n- `link_check_every` : LinkCheckReq (1 octet) dans l'uplink de rang multiple de N ; reçue, elle\n  est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;\n- `device_status_every` : DevStatusReq dans le downlink répondant à un uplink reçu de rang\n  multiple de N. Le dispositif répond par DevStatusAns (3 octets) dans son uplink suivant, si\n  la requête lui parvient. Cette réponse est réservée conservativement dans cet uplink\n  suivant : le temps d'antenne le compte, même si la requête n'est pas reçue.\nLes octets réservés allongent le temps d'antenne des émissions concernées (moteur natif) ; les\noctets émis effectivement n'apparaissent dans la trace qu'une fois confirmés.\nRefusé avec plusieurs passerelles ou un mesh.\n\nMarge de LinkCheckAns (indicative, pas la marge SNR normative) :\n    M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)\noù S_ref est la sensibilité SX1276 utilisée par le simulateur pour décider de la perte : M\nmesure la marge au-dessus du seuil de réception, en dB. `link_margin_installation_db` est une\nmarge d'installation soustraite (0 par défaut), comme dans l'ADR.",
       "properties": {
+        "device_channels": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ChannelDefModel"
+              },
+              "maxItems": 80,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Channels"
+        },
         "device_status_every": {
           "default": 0,
           "maximum": 1000,
@@ -488,6 +535,22 @@
           "minimum": 0,
           "title": "Link Margin Installation Db",
           "type": "integer"
+        },
+        "server_channel_plan": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 80,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Server Channel Plan"
         }
       },
       "title": "MacModel",

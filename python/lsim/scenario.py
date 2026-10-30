@@ -285,6 +285,20 @@ class EnergyModel(_Strict):
     profile: Literal["rak4631", "sx1262-stm32l072"]
 
 
+class ChannelDefModel(_Strict):
+    """Canal défini du terminal (RP002 EU863-870) : index 0..79, débits supportés dr_min..dr_max."""
+
+    index: int = Field(ge=0, le=79)
+    dr_min: int = Field(0, ge=0, le=7)
+    dr_max: int = Field(7, ge=0, le=7)
+
+    @model_validator(mode="after")
+    def _range(self) -> "ChannelDefModel":
+        if self.dr_min > self.dr_max:
+            raise ValueError("canal : dr_min > dr_max")
+        return self
+
+
 class MacModel(_Strict):
     """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
 
@@ -315,6 +329,13 @@ class MacModel(_Strict):
     # `duty_cycle_exponent` k : DutyCycleReq avec 1/2^k (None : pas de DutyCycleReq).
     link_adr: bool = False
     duty_cycle_exponent: Optional[int] = Field(None, ge=0, le=15)
+    # Canaux (correction ChannelMask, étape 1) : deux vues strictement séparées.
+    #   `device_channels` : capacité réelle du terminal (canaux définis et débits supportés) ;
+    #   `server_channel_plan` : canaux que le serveur croit définis (sa propre vue).
+    # Le moteur ne les utilise pas encore : tant que l'étape 3 n'est pas validée, toute valeur
+    # est refusée explicitement (pas de paramètre silencieusement inactif).
+    device_channels: Optional[list[ChannelDefModel]] = Field(None, max_length=80)
+    server_channel_plan: Optional[list[int]] = Field(None, max_length=80)
 
 
 class ScenarioModel(_Strict):
@@ -370,6 +391,10 @@ class ScenarioModel(_Strict):
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.mac is not None and (self.mac.device_channels is not None
+                                     or self.mac.server_channel_plan is not None):
+            raise ValueError("mac : « device_channels » et « server_channel_plan » ne sont pas "
+                             "encore actifs dans le moteur (étape 3 de la correction ChannelMask)")
         if self.mac is not None and (self.mac.link_adr or self.mac.duty_cycle_exponent is not None):
             if self.gateways is not None or self.mesh is not None:
                 raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
@@ -466,6 +491,11 @@ class Scenario:
                 dumped["mac"].pop("link_adr", None)
             if model.mac.duty_cycle_exponent is None:
                 dumped["mac"].pop("duty_cycle_exponent", None)
+            # Champs de canaux absents : hash des scénarios antérieurs inchangé.
+            if model.mac.device_channels is None:
+                dumped["mac"].pop("device_channels", None)
+            if model.mac.server_channel_plan is None:
+                dumped["mac"].pop("server_channel_plan", None)
         # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
         if model.gateways is None:
             dumped.pop("gateways", None)
