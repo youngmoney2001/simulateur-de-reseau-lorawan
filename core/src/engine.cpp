@@ -1368,6 +1368,7 @@ struct LoopDevice {
     std::uint32_t adr_cnt = 0;     // ADRACKCnt : uplinks depuis la dernière descente reçue (TS001 §4.3.1.1)
     LoopChannelState channels;     // capacités et canaux actifs du terminal (modèle canaux)
     std::uint8_t answer_status = 0xFF;  // LinkADRAns (bits CM, DR, PW) de la prochaine émission ; 0xFF : aucun
+    std::uint16_t answer_chmask = 0;    // masque du bloc 0 appliqué par ce LinkADR (avec answer_status)
 };
 
 // État du serveur pour un dispositif : état confirmé et commandes en attente.
@@ -1388,12 +1389,22 @@ struct LoopServer {
     bool adr_pending = false;
     std::uint8_t pend_dr = 0;
     std::uint8_t pend_power = 0;
-    std::uint16_t refused_dr = 0;    // bit n : débit n refusé par le dispositif (réponse négative)
-    std::uint16_t refused_pi = 0;    // bit n : index de puissance n refusé
+    LoopExclusions excl;             // exclusions après refus (étape 4), compteurs indépendants
     LoopChannelSet view;             // canaux que le serveur configure (sa vue, pas celle du terminal)
+    LoopChannelSet confirmed;        // dernier masque du bloc 0 acquitté par le terminal (connu du serveur)
     std::uint8_t duty_state = 0;     // 0 : rien à faire ; 1 : DutyCycleReq en attente ; 2 : acquittée
     std::uint64_t accepted = 0;      // uplinks reçus
 };
+
+// Masque du bloc 0 (bits 0 à 15) et réciproque.
+std::uint16_t block0_bits(const LoopChannelSet& s) { return static_cast<std::uint16_t>(s.words[0] & 0xFFFFU); }
+LoopChannelSet set_from_block0(std::uint16_t bits) {
+    LoopChannelSet s;
+    for (std::size_t i = 0; i < 16U; ++i) {
+        if (((bits >> i) & 1U) != 0) s.set(i);
+    }
+    return s;
+}
 
 // Temps d'antenne d'un uplink à 125 kHz (CR 4/5, en-tête explicite), en ns.
 bool uplink_airtime(std::uint8_t sf, std::uint32_t bytes, SimTime& out) {
@@ -1497,6 +1508,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         dev[i].sf = d.spreading_factor;
         dev[i].channels = io.config != nullptr ? io.config[i].device : loop_eu868_default_channels();
         srv[i].view = io.config != nullptr ? io.config[i].server_view : loop_eu868_plan().defaults;
+        srv[i].confirmed = loop_eu868_plan().defaults;  // le serveur connaît les canaux par défaut
         {
             const LoopRegion& rg = regions[i];
             if (rg.max_dr > 15 || rg.max_tx_power_index > 15 || rg.power_step_tenth_db < 1 ||
@@ -1616,6 +1628,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     std::vector<Tx> txs;
     std::vector<TxOutcome> outcome;
     std::vector<std::uint8_t> powers, masks, oks, sts;
+    std::vector<std::uint16_t> cms;  // masque du bloc 0 appliqué par le LinkADR de chaque uplink
     std::vector<LoopLinkAdrRequest> dl_requests;  // parallèle à `dls`
     std::vector<LoopLinkAdrDiagnosis> dl_diag;    // diagnostic à l'application (descentes reçues)
     std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
@@ -1637,19 +1650,28 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         const std::uint32_t d = ta.device;
         LoopServer& sv = srv[d];
         const std::uint8_t mask = masks[a];
+        // Exclusions : un uplink admissible reçu. Avant la réponse de cet uplink : une exclusion posée
+        // ici vaut 100 uplinks à partir de l'uplink suivant (convention des frontières, étape 4).
+        sv.excl.tick();
         const std::uint8_t st = sts[a];
+        const std::uint16_t applied = cms[a];
         // Réponses : confirmées seulement parce que cet uplink est reçu.
         if ((mask & 1U) != 0 && sv.adr_pending) {
             if (st == 0x07) {
                 sv.dr = sv.pend_dr;
                 sv.power_index = sv.pend_power;
+                sv.confirmed = set_from_block0(applied);
             } else {
-                // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé) :
-                // l'élément refusé n'est pas renvoyé ; la décision suivante l'exclut.
-                // Bit 1 (DataRateACK) à 0 : débit exclu. Bit 2 (PowerACK) à 0 : puissance exclue.
-                // Bit 0 (ChannelMaskACK) à 0 : aucune exclusion avant l'étape 4 (réévaluation).
-                if ((st & 2U) == 0) sv.refused_dr = static_cast<std::uint16_t>(sv.refused_dr | (1U << sv.pend_dr));
-                if ((st & 4U) == 0) sv.refused_pi = static_cast<std::uint16_t>(sv.refused_pi | (1U << sv.pend_power));
+                // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé).
+                // Attribution avec les seuls bits ACK (le serveur ne connaît pas le motif exact) :
+                //  - DataRateACK = 0 : débit exclu ; D5 : la cause est attribuée au débit, même si
+                //    ChannelMaskACK vaut aussi 0 ;
+                //  - PowerACK = 0 : puissance exclue ;
+                //  - ChannelMaskACK = 0 sans refus de débit : masque exclu. Le serveur ne sait pas quel
+                //    canal est en cause ; la requête suivante reprend le dernier masque acquitté.
+                if ((st & 2U) == 0) sv.excl.exclude_dr(sv.pend_dr);
+                if ((st & 4U) == 0) sv.excl.exclude_power(sv.pend_power);
+                if ((st & 1U) == 0 && (st & 2U) != 0 && applied != block0_bits(sv.confirmed)) sv.excl.exclude_mask();
             }
             sv.adr_pending = false;
         }
@@ -1680,8 +1702,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 // Valeurs refusées exclues : on garde l'état courant pour cet élément.
                 std::uint8_t want_dr = o.dr;
                 std::uint8_t want_pi = o.tx_power_index;
-                if (((sv.refused_dr >> want_dr) & 1U) != 0) want_dr = sv.dr;
-                if (((sv.refused_pi >> want_pi) & 1U) != 0) want_pi = sv.power_index;
+                if (sv.excl.dr_excluded(want_dr)) want_dr = sv.dr;
+                if (sv.excl.power_excluded(want_pi)) want_pi = sv.power_index;
                 if (want_dr != sv.dr || want_pi != sv.power_index) {
                     sv.adr_pending = true;
                     sv.pend_dr = want_dr;
@@ -1814,7 +1836,8 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         // LinkADRReq : vue du serveur, ChMaskCntl 0 sur le bloc 0 (utilisée seulement si LinkADR est portée).
         LoopLinkAdrRequest rq;
         rq.ch_mask_cntl = 0;
-        rq.ch_mask = static_cast<std::uint16_t>(sv.view.words[0] & 0xFFFFU);
+        // Masque : la vue serveur, ou le dernier masque acquitté si la vue est exclue.
+        rq.ch_mask = block0_bits(sv.excl.mask_excluded() ? sv.confirmed : sv.view);
         rq.dr = sv.pend_dr;
         rq.power_index = sv.pend_power;
         if (io.config != nullptr && io.config[d].forced_request) rq = *io.config[d].forced_request;
@@ -1910,6 +1933,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 masks.push_back(static_cast<std::uint8_t>(ds.answer_mask | (ds.ds_pending ? 4U : 0U)));
                 oks.push_back(ds.answer_ok);
                 sts.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_status : std::uint8_t{0xFF});
+                cms.push_back((ds.answer_mask & 1U) != 0 ? ds.answer_chmask : std::uint16_t{0});
                 adr_reqs.push_back(adr_req);
                 ds.ds_pending = false;
                 next_tx.push_back(-1);
@@ -1918,6 +1942,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 ds.answer_mask = 0;
                 ds.answer_ok = 0;
                 ds.answer_status = 0xFF;
+                ds.answer_chmask = 0;
                 per_device[i].airtime_ns += static_cast<std::uint64_t>(air);
                 totals.airtime_ns += static_cast<std::uint64_t>(air);
                 ds.prev_end = t.end;
@@ -2056,6 +2081,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     dl_diag[ev.index] = dg;
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
                     ds.answer_status = dg.status.to_wire();
+                    ds.answer_chmask = rq.ch_mask;
                     // Bits historiques de ABI v2 (`answer_ok`) : bit 0 débit, bit 1 puissance.
                     ds.answer_ok = static_cast<std::uint8_t>((ds.answer_ok & ~3U) |
                                                              (dg.status.data_rate_ack ? 1U : 0U) |

@@ -214,6 +214,32 @@ LoopRegionalPlan loop_eu868_plan() {
     return plan;
 }
 
+void LoopExclusions::exclude_dr(std::uint8_t value) {
+    if (value < dr.size()) dr[value] = kLoopExclusionUplinks;
+}
+
+void LoopExclusions::exclude_power(std::uint8_t value) {
+    if (value < power.size()) power[value] = kLoopExclusionUplinks;
+}
+
+void LoopExclusions::exclude_mask() { mask = kLoopExclusionUplinks; }
+
+void LoopExclusions::tick() {
+    for (std::uint16_t& c : dr) {
+        if (c > 0) --c;
+    }
+    for (std::uint16_t& c : power) {
+        if (c > 0) --c;
+    }
+    if (mask > 0) --mask;
+}
+
+bool LoopExclusions::dr_excluded(std::uint8_t value) const { return value < dr.size() && dr[value] > 0; }
+
+bool LoopExclusions::power_excluded(std::uint8_t value) const { return value < power.size() && power[value] > 0; }
+
+bool LoopExclusions::mask_excluded() const { return mask > 0; }
+
 LoopChannelState loop_eu868_default_channels() {
     LoopChannelState st;
     const LoopRegionalPlan plan = loop_eu868_plan();

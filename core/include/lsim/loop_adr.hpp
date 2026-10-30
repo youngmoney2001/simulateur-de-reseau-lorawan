@@ -71,6 +71,28 @@ struct LoopChannelState {
     bool operator==(const LoopChannelState& other) const;
 };
 
+// Exclusions après refus (étape 4). Durée : 5 fenêtres ADR de 20 uplinks admissibles reçus, soit
+// 100 uplinks (convention du simulateur, les fenêtres ADR ne sont pas normatives). Chaque valeur a
+// son compteur : un débit exclu n'exclut ni un autre débit, ni une puissance, ni le masque.
+// Un uplink admissible reçu décrémente tous les compteurs actifs ; à 0, l'exclusion expire.
+// Le renouvellement remet le compteur à 100. L'expiration ne déclenche aucune commande.
+inline constexpr std::uint16_t kLoopExclusionUplinks = 100;
+
+struct LoopExclusions {
+    std::array<std::uint16_t, 16> dr{};     // uplinks admissibles restants par débit ; 0 = éligible
+    std::array<std::uint16_t, 16> power{};  // idem par index de puissance
+    std::uint16_t mask = 0;                 // masque du bloc 0 (vue serveur) ; 0 = éligible
+
+    void exclude_dr(std::uint8_t dr);
+    void exclude_power(std::uint8_t power_index);
+    void exclude_mask();
+    // Un uplink admissible reçu : décrémente les compteurs actifs.
+    void tick();
+    bool dr_excluded(std::uint8_t dr) const;
+    bool power_excluded(std::uint8_t power_index) const;
+    bool mask_excluded() const;
+};
+
 // Terminal complet (partie radio pertinente pour LinkADR).
 struct LoopTerminalRadio {
     LoopChannelState channels;

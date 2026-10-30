@@ -897,8 +897,8 @@ lsim::sim::LoopChannelConfig cfg_default() {
 
 // Un dispositif SF12 à 10 m, 120 messages, ADR actif ; `cfg` nullptr = configuration par défaut.
 SimStatus run_channels(const LoopChannelConfig* cfg, std::size_t cfg_count, LoopChannelIo& io,
-                       LoopResult& res, SimulationStats& tot, DeviceStats* st) {
-    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, 120)};
+                       LoopResult& res, SimulationStats& tot, DeviceStats* st, std::uint32_t messages = 120) {
+    const EndDeviceSpec d[] = {dev(10.0, 12, 0, 60 * kS, messages)};
     lsim::plan::DeviceRadio rv[1] = {radio()};
     LoopRegion regions[1] = {region()};
     LoopOptions opt;
@@ -927,42 +927,60 @@ void test_channel_accepted_changes_terminal_state() {
     CHECK_EQ(static_cast<int>(res.uplinks.back().spreading_factor), 7);
 }
 
-void test_channel_refused_leaves_terminal_unchanged() {
-    // Canaux 0..2 et 5 côté serveur : 5 n'est pas défini côté terminal -> ChannelMaskACK = 0.
+// Vue 011 : le serveur croit le canal 5 défini, le terminal ne le connaît pas (ChannelMaskACK = 0,
+// débit et puissance acceptables). Étape 4 : le masque de la vue est exclu ; la requête suivante reprend
+// le dernier masque acquitté (canaux 0..2) et le débit est alors appliqué. Aucune commande n'est
+// déclenchée à l'expiration de l'exclusion (ici l'ADR n'a plus rien à changer).
+void test_channel_refused_mask_excluded_then_acknowledged_mask_used() {
     LoopChannelConfig cfg = cfg_default();
     cfg.server_view.set(5);
     LoopChannelIo io;
     LoopResult res;
     SimulationStats tot;
     DeviceStats st[1];
-    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
-    if (io.terminals.size() != 1) return;
-    // Refus atomique : rien n'est appliqué (DR0 et canaux par défaut conservés).
-    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 240)), 0);
+    if (io.terminals.size() != 1 || io.downlink_requests.size() != res.downlinks.size()) return;
+    // Première requête : vue serveur complète (0x27), refusée pour le canal 5 indéfini.
+    std::size_t first = res.downlinks.size();
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) != 0) { first = i; break; }
+    }
+    CHECK_TRUE(first < res.downlinks.size());
+    if (first >= res.downlinks.size()) return;
+    CHECK_EQ(static_cast<int>(io.downlink_requests[first].ch_mask), 0x27);
+    CHECK_TRUE(io.downlink_diagnoses[first].channel_reason == LoopChannelReason::UndefinedChannel);
+    CHECK_TRUE(io.downlink_diagnoses[first].refused_channels.test(5));
+    // Requêtes suivantes : dernier masque acquitté (0x07), jamais le masque exclu.
+    for (std::size_t i = first + 1; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x07);
+    }
+    // Uplink portant l'acceptation (statut 0b111) : après lui, aucune commande LinkADR, et ce jusqu'à
+    // la fin de l'horizon (240 uplinks, expiration de l'exclusion à first+100 incluse).
+    std::size_t accepted_at = res.uplinks.size();
+    for (std::size_t u = 0; u < io.uplink_status.size(); ++u) {
+        if (io.uplink_status[u] == kAccepted) { accepted_at = u; break; }
+    }
+    CHECK_TRUE(accepted_at < res.uplinks.size());
+    std::size_t sent_after = 0;
+    for (const LoopDownlink& dl : res.downlinks) {
+        if ((dl.commands & kLoopCmdLinkAdr) != 0 && static_cast<std::size_t>(dl.uplink) > accepted_at) ++sent_after;
+    }
+    // Acceptation : débit SF7 (DR5) appliqué, canaux du terminal inchangés.
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 5);
     CHECK_TRUE(io.terminals[0].channels == cfg.device);
     bool refused = false;
-    for (std::uint8_t s : io.uplink_status) {
-        CHECK_TRUE(s != kAccepted);
-        refused = refused || s == 0x06;  // ChannelMaskACK = 0, débit et puissance OK
+    bool accepted = false;
+    for (std::uint8_t s2 : io.uplink_status) {
+        if (s2 == 0xFF) continue;
+        refused = refused || s2 == 0x06;
+        accepted = accepted || s2 == kAccepted;
+        CHECK_TRUE(s2 == 0x06 || s2 == kAccepted);
     }
     CHECK_TRUE(refused);
-    for (const LoopUplink& u : res.uplinks) CHECK_EQ(static_cast<int>(u.spreading_factor), 12);
-    // Requêtes construites à partir de la vue serveur (canaux 0, 1, 2 et 5), pas du terminal.
-    std::size_t sent = 0;
-    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
-        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
-        ++sent;
-        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x27);
-        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask_cntl), 0);
-        // Diagnostic exact : canal indéfini côté terminal, débit et puissance acceptés.
-        if (res.downlinks[i].delivered) {
-            CHECK_TRUE(io.downlink_diagnoses[i].channel_reason == LoopChannelReason::UndefinedChannel);
-            CHECK_TRUE(io.downlink_diagnoses[i].dr_reason == LoopDataRateReason::Ok);
-            CHECK_TRUE(io.downlink_diagnoses[i].refused_channels.test(5));
-            CHECK_TRUE(!io.downlink_diagnoses[i].refuse_dr);
-        }
-    }
-    CHECK_TRUE(sent > 0);
+    CHECK_TRUE(accepted);
+    // Expiration (100 uplinks après le refus) : aucune commande n'est déclenchée automatiquement.
+    CHECK_EQ(static_cast<int>(sent_after), 0);
 }
 
 // Vue 001 : le terminal ne supporte que DR0..DR3. Le serveur demande DR5 : refus de débit
@@ -1018,6 +1036,63 @@ void test_data_rate_refused_then_reevaluated_without_repetition() {
         }
     }
     CHECK_TRUE(cross);
+}
+
+// ---- Étape 4 : exclusions après refus, frontières et renouvellement ----
+// Refus de débit DR5 (terminal limité à DR0..DR3). Les compteurs sont exprimés en uplinks admissibles
+// REÇUS (ordinaux) : R est l'uplink porteur de la réponse négative. Convention : l'exclusion vaut
+// 100 uplinks reçus ; R+1 … R+99 restent exclus, R+100 est le premier uplink où le débit redevient
+// éligible. Le refus renouvelé à R' = R+101 repousse la prochaine proposition à R'+100.
+void test_dr_exclusion_boundary_99_100_and_renewal() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;  // DR0..DR3 seulement
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 340)), 0);
+    if (io.downlink_requests.size() != res.downlinks.size() || res.uplinks.empty()) return;
+    // Ordinal (0-based) de chaque uplink reçu ; -1 pour les uplinks perdus.
+    std::vector<long> ord(res.uplinks.size(), -1);
+    std::vector<std::size_t> by_ord;  // ordinal -> index d'uplink
+    for (std::size_t u = 0; u < res.uplinks.size(); ++u) {
+        if (res.uplinks[u].outcome != TxOutcome::Received) continue;
+        ord[u] = static_cast<long>(by_ord.size());
+        by_ord.push_back(u);
+    }
+    // Ordinal de l'uplink portant la réponse LinkADR à la descente de l'uplink `u` (suivant immédiat).
+    const auto answer_ordinal_after = [&](std::size_t u) -> long {
+        for (std::size_t k = u + 1; k < res.uplinks.size(); ++k) {
+            if (io.uplink_status[k] != 0xFF && ord[k] >= 0) return ord[k];
+        }
+        return -1;
+    };
+    // Ordinaux des uplinks porteurs d'une descente LinkADR demandant DR5.
+    std::vector<long> dr5_at;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        if (io.downlink_requests[i].dr != 5) continue;
+        dr5_at.push_back(ord[static_cast<std::size_t>(res.downlinks[i].uplink)]);
+    }
+    CHECK_TRUE(dr5_at.size() >= 3);
+    if (dr5_at.size() < 3) return;
+    const long proposal1 = dr5_at[0];
+    const long R = answer_ordinal_after(by_ord[static_cast<std::size_t>(proposal1)]);  // refus, ordinal R
+    CHECK_TRUE(R >= 0);
+    if (R < 0) return;
+    // 99 uplinks admissibles après le refus : DR5 exclu, aucune proposition.
+    for (long k = R + 1; k <= R + 99; ++k) {
+        for (const long v : dr5_at) CHECK_TRUE(v != k);
+    }
+    // 100e uplink admissible après le refus : DR5 de nouveau éligible et proposé à cet uplink.
+    CHECK_EQ(static_cast<int>(dr5_at[1] - R), 100);
+    // Renouvellement : la proposition R+100 est refusée à nouveau (ordinal R2), et la suivante
+    // n'arrive qu'après 100 uplinks admissibles reçus depuis R2.
+    const long R2 = answer_ordinal_after(by_ord[static_cast<std::size_t>(dr5_at[1])]);
+    CHECK_EQ(static_cast<int>(R2 - R), 101);
+    CHECK_EQ(static_cast<int>(dr5_at[2] - R2), 100);
+    // Chaque refus reçu a laissé le terminal sur DR0 (débit refusé jamais appliqué).
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 0);
 }
 
 // ---- Étape 3 : terminal et serveur ont des vues distinctes ; le terminal valide seul ----
@@ -1273,10 +1348,11 @@ void run_closed_loop_tests() {
     test_adr_ack_backoff_without_downlink();
     test_linkadr_reissued_on_each_uplink_without_answer();
     test_channel_accepted_changes_terminal_state();
-    test_channel_refused_leaves_terminal_unchanged();
+    test_channel_refused_mask_excluded_then_acknowledged_mask_used();
     test_data_rate_refused_then_reevaluated_without_repetition();
     test_channel_view_outside_block0_refused();
     test_explicit_defaults_equal_legacy_path();
+    test_dr_exclusion_boundary_99_100_and_renewal();
     test_terminal_extra_channel_unknown_to_server_follows_server_view();
     test_server_channel_missing_on_terminal_refused_atomic();
     test_forced_101_dr_refused_valid_mask_not_applied();
