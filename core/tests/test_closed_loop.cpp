@@ -931,6 +931,8 @@ void test_channel_accepted_changes_terminal_state() {
 // débit et puissance acceptables). Étape 4 : le masque de la vue est exclu ; la requête suivante reprend
 // le dernier masque acquitté (canaux 0..2) et le débit est alors appliqué. Aucune commande n'est
 // déclenchée à l'expiration de l'exclusion (ici l'ADR n'a plus rien à changer).
+// Changement de comportement (étape 4) : le refus d'un canal (CM=0, DR et PW acceptés) n'exclut plus
+// le masque entier ; le canal non acquitté est exclu, et le dernier masque acquitté est repris.
 void test_channel_refused_mask_excluded_then_acknowledged_mask_used() {
     LoopChannelConfig cfg = cfg_default();
     cfg.server_view.set(5);
@@ -981,6 +983,239 @@ void test_channel_refused_mask_excluded_then_acknowledged_mask_used() {
     CHECK_TRUE(accepted);
     // Expiration (100 uplinks après le refus) : aucune commande n'est déclenchée automatiquement.
     CHECK_EQ(static_cast<int>(sent_after), 0);
+}
+
+// Refus partiel : le serveur demande les canaux 0..4, le terminal ne définit pas le canal 3. Le serveur
+// n'exclut que les canaux demandés et non acquittés (3 et 4) ; la requête suivante reprend les canaux
+// acquittés (0..2). Sur-approximation documentée : le canal 4 (valide) est aussi exclu.
+void test_partial_channel_refusal_excludes_only_unacknowledged_requested_channels() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(3);
+    cfg.server_view.set(4);
+    cfg.device.dr_mask[3] = 0;
+    cfg.device.enabled.reset(3);
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 240)), 0);
+    if (io.terminals.size() != 1 || io.downlink_requests.size() != res.downlinks.size()) return;
+    std::size_t first = res.downlinks.size();
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) != 0) { first = i; break; }
+    }
+    CHECK_TRUE(first < res.downlinks.size());
+    if (first >= res.downlinks.size()) return;
+    CHECK_EQ(static_cast<int>(io.downlink_requests[first].ch_mask), 0x1F);  // canaux 0..4 demandés
+    CHECK_TRUE(io.downlink_diagnoses[first].refused_channels.test(3));
+    // Requêtes suivantes : seuls les canaux acquittés (0..2) ; 3 et 4 exclus (ici sur-approximation).
+    bool accepted = false;
+    for (std::size_t i = first + 1; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x07);
+    }
+    for (std::uint8_t s2 : io.uplink_status) accepted = accepted || s2 == kAccepted;
+    CHECK_TRUE(accepted);
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 5);          // débit appliqué malgré le refus de canal
+    CHECK_TRUE(io.terminals[0].channels == cfg.device);
+}
+
+// Canal valide nouvellement demandé (défini côté terminal) : accepté dès la première requête.
+void test_valid_new_channel_accepted_first_time() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(5);
+    cfg.device.dr_mask[5] = 0x3F;
+    cfg.device.enabled.set(5);
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    if (io.terminals.size() != 1) return;
+    bool any = false;
+    for (std::size_t i = 0; i < res.downlinks.size(); ++i) {
+        if ((res.downlinks[i].commands & kLoopCmdLinkAdr) == 0) continue;
+        if (!any) CHECK_EQ(static_cast<int>(io.downlink_requests[i].ch_mask), 0x27);
+        any = true;
+    }
+    CHECK_TRUE(any);
+    CHECK_TRUE(io.terminals[0].channels.enabled.test(5));
+    CHECK_EQ(static_cast<int>(io.terminals[0].dr), 5);
+    for (std::uint8_t s2 : io.uplink_status) {
+        if (s2 != 0xFF) CHECK_EQ(static_cast<int>(s2), static_cast<int>(kAccepted));
+    }
+}
+
+// ---- Trace interne v3 (étape 5) -------------------------------------------------------------
+
+// Désactivée par défaut : aucune sortie.
+void test_trace_v3_off_by_default() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;
+    LoopChannelIo io;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    CHECK_TRUE(!io.trace_v3);
+    CHECK_TRUE(io.trace.empty());
+}
+
+// Activer la trace ne change ni les radios, ni les réponses, ni les requêtes, ni les compteurs.
+void test_trace_v3_does_not_change_radio_or_answers() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(3);
+    cfg.server_view.set(4);
+    cfg.device.dr_mask[3] = 0;
+    cfg.device.enabled.reset(3);
+    LoopChannelIo off, on;
+    LoopResult ro, rn;
+    SimulationStats to, tn;
+    DeviceStats so[1], sn[1];
+    on.trace_v3 = true;
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, off, ro, to, so, 240)), 0);
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, on, rn, tn, sn, 240)), 0);
+    CHECK_TRUE(!on.trace.empty());
+    CHECK_EQ(static_cast<int>(ro.uplinks.size()), static_cast<int>(rn.uplinks.size()));
+    CHECK_EQ(static_cast<int>(ro.downlinks.size()), static_cast<int>(rn.downlinks.size()));
+    CHECK_TRUE(off.uplink_status == on.uplink_status);
+    CHECK_EQ(static_cast<int>(off.downlink_requests.size()), static_cast<int>(on.downlink_requests.size()));
+    for (std::size_t i = 0; i < off.downlink_requests.size() && i < on.downlink_requests.size(); ++i) {
+        CHECK_EQ(static_cast<int>(off.downlink_requests[i].ch_mask), static_cast<int>(on.downlink_requests[i].ch_mask));
+        CHECK_EQ(static_cast<int>(off.downlink_requests[i].dr), static_cast<int>(on.downlink_requests[i].dr));
+    }
+    CHECK_EQ(static_cast<int>(off.terminals.size()), static_cast<int>(on.terminals.size()));
+    if (off.terminals.size() == on.terminals.size() && !off.terminals.empty()) {
+        CHECK_EQ(static_cast<int>(off.terminals[0].dr), static_cast<int>(on.terminals[0].dr));
+        CHECK_TRUE(off.terminals[0].channels == on.terminals[0].channels);
+    }
+    CHECK_EQ(static_cast<int>(to.received), static_cast<int>(tn.received));
+}
+
+// Refus partiel : bits 0..2 visibles, motifs exacts, exclusions par canal, dans l'ordre causal.
+void test_trace_v3_partial_refusal_shows_three_bits_and_exclusions() {
+    LoopChannelConfig cfg = cfg_default();
+    cfg.server_view.set(3);
+    cfg.server_view.set(4);
+    cfg.device.dr_mask[3] = 0;
+    cfg.device.enabled.reset(3);
+    LoopChannelIo io;
+    io.trace_v3 = true;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 240)), 0);
+    // Réponse partielle : CM=0 (bit 0), DR=1 et PW=1 : statut 0b110.
+    const LoopTraceEvent* ans = nullptr;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::LinkAdrAns && e.status == 0x06) { ans = &e; break; }
+    }
+    CHECK_TRUE(ans != nullptr);
+    if (ans == nullptr) return;
+    CHECK_TRUE(!ans->flag);
+    CHECK_TRUE(ans->origin == LoopTraceOrigin::Normative);
+    // Exclusions créées pour les canaux 3 et 4, et pas pour le débit ni la puissance.
+    int ex3 = 0, ex4 = 0, ex_dr = 0, ex_pw = 0;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind != LoopTraceKind::Exclusion || e.uplink != ans->uplink) continue;
+        CHECK_TRUE(e.action == LoopTraceAction::Created);
+        CHECK_TRUE(e.origin == LoopTraceOrigin::SimulatorPolicy);
+        if (e.target == LoopExclusionTarget::Channel && e.value == 3) ++ex3;
+        if (e.target == LoopExclusionTarget::Channel && e.value == 4) ++ex4;
+        if (e.target == LoopExclusionTarget::DataRate) ++ex_dr;
+        if (e.target == LoopExclusionTarget::Power) ++ex_pw;
+    }
+    CHECK_EQ(ex3, 1);
+    CHECK_EQ(ex4, 1);
+    CHECK_EQ(ex_dr, 0);
+    CHECK_EQ(ex_pw, 0);
+    // Motif du canal présent dans la trace d'application.
+    bool reason_seen = false;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::Apply && e.reason_channel != 0) reason_seen = true;
+    }
+    CHECK_TRUE(reason_seen);
+}
+
+// Ordre causal à l'intérieur d'un uplink : Uplink < LinkAdrAns < Exclusion < AdrDecision ; et trace
+// triée par temps.
+void test_trace_v3_causal_order_and_time_sorted() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;
+    LoopChannelIo io;
+    io.trace_v3 = true;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st)), 0);
+    for (std::size_t i = 1; i < io.trace.size(); ++i) CHECK_TRUE(io.trace[i - 1].t_ns <= io.trace[i].t_ns);
+    std::size_t iu = io.trace.size(), ia = io.trace.size(), ie = io.trace.size(), ad = io.trace.size();
+    for (std::size_t i = 0; i < io.trace.size(); ++i) {
+        const LoopTraceEvent& e = io.trace[i];
+        if (e.kind == LoopTraceKind::LinkAdrAns && ia == io.trace.size()) {
+            ia = i;
+            const std::uint32_t u = e.uplink;
+            for (std::size_t j = 0; j < io.trace.size(); ++j) {
+                if (io.trace[j].kind == LoopTraceKind::Uplink && io.trace[j].uplink == u) iu = j;
+                if (io.trace[j].kind == LoopTraceKind::Exclusion && io.trace[j].uplink == u && ie == io.trace.size()) ie = j;
+                if (io.trace[j].kind == LoopTraceKind::AdrDecision && io.trace[j].uplink == u && ad == io.trace.size()) ad = j;
+            }
+        }
+    }
+    CHECK_TRUE(ia < io.trace.size());
+    CHECK_TRUE(iu < ia);
+    CHECK_TRUE(ia < ie);
+    CHECK_TRUE(ie < ad);
+}
+
+// Cycle de vie 001 : créée au refus, expirée exactement 100 uplinks plus tard. Un refus renégocié
+// après expiration rouvre une exclusion (création) à partir de R' ; le renouvellement strict (refus
+// pendant une exclusion encore active) n'est pas atteignable par l'ADR et est couvert en unitaire.
+// Aucune décision ADR portant DR5 strictement entre la création et l'expiration.
+void test_trace_v3_exclusion_created_expired_renewed() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;
+    LoopChannelIo io;
+    io.trace_v3 = true;
+    LoopResult res;
+    SimulationStats tot;
+    DeviceStats st[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, io, res, tot, st, 340)), 0);
+    std::vector<LoopTraceEvent> dr5;
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::Exclusion && e.target == LoopExclusionTarget::DataRate && e.value == 5) {
+            dr5.push_back(e);
+        }
+    }
+    CHECK_TRUE(dr5.size() >= 3);
+    if (dr5.size() < 3) return;
+    CHECK_TRUE(dr5[0].action == LoopTraceAction::Created);
+    CHECK_TRUE(dr5[1].action == LoopTraceAction::Expired);
+    CHECK_TRUE(dr5[2].action == LoopTraceAction::Created);               // refus renégocié après expiration
+    CHECK_EQ(static_cast<int>(dr5[1].uplink - dr5[0].uplink), 100);      // expiration au 100e uplink
+    CHECK_EQ(static_cast<int>(dr5[2].uplink - dr5[1].uplink), 1);        // réponse refusée à l'uplink suivant
+    for (const LoopTraceEvent& e : io.trace) {
+        if (e.kind == LoopTraceKind::AdrDecision && e.flag && e.dr == 5 && e.uplink > dr5[0].uplink &&
+            e.uplink < dr5[1].uplink) {
+            CHECK_TRUE(false);  // aucune demande DR5 pendant l'exclusion
+        }
+    }
+}
+
+// Déterminisme : deux exécutions identiques donnent une trace identique, événement par événement.
+void test_trace_v3_deterministic() {
+    LoopChannelConfig cfg = cfg_default();
+    for (std::size_t c = 0; c < 3; ++c) cfg.device.dr_mask[c] = 0x0F;
+    LoopChannelIo a, b;
+    a.trace_v3 = true;
+    b.trace_v3 = true;
+    LoopResult ra, rb;
+    SimulationStats ta, tb;
+    DeviceStats sa[1], sb[1];
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, a, ra, ta, sa, 240)), 0);
+    CHECK_EQ(static_cast<int>(run_channels(&cfg, 1, b, rb, tb, sb, 240)), 0);
+    CHECK_EQ(static_cast<int>(a.trace.size()), static_cast<int>(b.trace.size()));
+    CHECK_TRUE(a.trace == b.trace);
 }
 
 // Vue 001 : le terminal ne supporte que DR0..DR3. Le serveur demande DR5 : refus de débit
@@ -1349,6 +1584,14 @@ void run_closed_loop_tests() {
     test_linkadr_reissued_on_each_uplink_without_answer();
     test_channel_accepted_changes_terminal_state();
     test_channel_refused_mask_excluded_then_acknowledged_mask_used();
+    test_partial_channel_refusal_excludes_only_unacknowledged_requested_channels();
+    test_valid_new_channel_accepted_first_time();
+    test_trace_v3_off_by_default();
+    test_trace_v3_does_not_change_radio_or_answers();
+    test_trace_v3_partial_refusal_shows_three_bits_and_exclusions();
+    test_trace_v3_causal_order_and_time_sorted();
+    test_trace_v3_exclusion_created_expired_renewed();
+    test_trace_v3_deterministic();
     test_data_rate_refused_then_reevaluated_without_repetition();
     test_channel_view_outside_block0_refused();
     test_explicit_defaults_equal_legacy_path();

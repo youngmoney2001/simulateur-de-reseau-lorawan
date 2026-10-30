@@ -214,31 +214,47 @@ LoopRegionalPlan loop_eu868_plan() {
     return plan;
 }
 
-void LoopExclusions::exclude_dr(std::uint8_t value) {
-    if (value < dr.size()) dr[value] = kLoopExclusionUplinks;
+bool LoopExclusions::exclude_dr(std::uint8_t value) {
+    if (value >= dr.size()) return false;
+    const bool renewed = dr[value] > 0;
+    dr[value] = kLoopExclusionUplinks;
+    return renewed;
 }
 
-void LoopExclusions::exclude_power(std::uint8_t value) {
-    if (value < power.size()) power[value] = kLoopExclusionUplinks;
+bool LoopExclusions::exclude_power(std::uint8_t value) {
+    if (value >= power.size()) return false;
+    const bool renewed = power[value] > 0;
+    power[value] = kLoopExclusionUplinks;
+    return renewed;
 }
 
-void LoopExclusions::exclude_mask() { mask = kLoopExclusionUplinks; }
+bool LoopExclusions::exclude_channel(std::size_t channel_index) {
+    if (channel_index >= channel.size()) return false;
+    const bool renewed = channel[channel_index] > 0;
+    channel[channel_index] = kLoopExclusionUplinks;
+    return renewed;
+}
 
-void LoopExclusions::tick() {
-    for (std::uint16_t& c : dr) {
-        if (c > 0) --c;
-    }
-    for (std::uint16_t& c : power) {
-        if (c > 0) --c;
-    }
-    if (mask > 0) --mask;
+void LoopExclusions::tick(std::vector<LoopExpiry>* expired) {
+    const auto step = [expired](std::uint16_t& c, LoopExclusionTarget target, std::size_t index) {
+        if (c == 0) return;
+        --c;
+        if (c == 0 && expired != nullptr) {
+            expired->push_back(LoopExpiry{target, static_cast<std::uint16_t>(index)});
+        }
+    };
+    for (std::size_t i = 0; i < dr.size(); ++i) step(dr[i], LoopExclusionTarget::DataRate, i);
+    for (std::size_t i = 0; i < power.size(); ++i) step(power[i], LoopExclusionTarget::Power, i);
+    for (std::size_t i = 0; i < channel.size(); ++i) step(channel[i], LoopExclusionTarget::Channel, i);
 }
 
 bool LoopExclusions::dr_excluded(std::uint8_t value) const { return value < dr.size() && dr[value] > 0; }
 
 bool LoopExclusions::power_excluded(std::uint8_t value) const { return value < power.size() && power[value] > 0; }
 
-bool LoopExclusions::mask_excluded() const { return mask > 0; }
+bool LoopExclusions::channel_excluded(std::size_t channel_index) const {
+    return channel_index < channel.size() && channel[channel_index] > 0;
+}
 
 LoopChannelState loop_eu868_default_channels() {
     LoopChannelState st;

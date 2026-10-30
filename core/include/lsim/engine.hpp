@@ -400,8 +400,56 @@ struct LoopChannelConfig {
 // Entrées optionnelles et sorties du modèle canaux. `config` nullptr : configuration EU868 par défaut
 // (canaux 0..2, DR0..DR5 pour le terminal comme pour le serveur ; le résultat est alors celui de
 // `simulate_closed_loop`).
+// Trace interne v3 (étape 5) : événements de la boucle fermée avec canaux. Interne au C++ ; la
+// frontière Python ne l'expose pas avant l'ABI v3 (étape 6). Chaque événement porte son origine :
+//  - Normative : comportement du terminal défini par TS001 (bits LinkADRAns, application) ;
+//  - SimulatorPolicy : choix du serveur ou du simulateur (ADR, exclusions, repli, valeurs demandées) ;
+//  - Radio : résultat physique (réception). Non utilisé à ce stade, réservé.
+enum class LoopTraceKind : std::uint8_t {
+    Uplink,        // uplink admissible reçu (début d'émission)
+    LinkAdrAns,    // réponse LinkADRAns portée par cet uplink (bits 0..2 dans `status`)
+    Exclusion,     // exclusion créée, renouvelée ou expirée (`action`, `target`, `value`)
+    AdrDecision,   // décision ADR (flag = une demande est en attente)
+    LinkAdrReq,    // LinkADRReq placée dans une descente (valeurs : SimulatorPolicy)
+    Apply,         // application d'une LinkADRReq reçue par le terminal (motifs D5 dans `reason_*`)
+};
+
+enum class LoopTraceOrigin : std::uint8_t { Normative, SimulatorPolicy, Radio };
+
+enum class LoopTraceAction : std::uint8_t { Created, Renewed, Expired };
+
+struct LoopTraceEvent {
+    std::int64_t t_ns = 0;
+    std::uint32_t device = 0;
+    std::uint32_t uplink = 0;          // indice d'uplink (LinkAdrAns, Exclusion, AdrDecision, Uplink)
+    LoopTraceKind kind = LoopTraceKind::Uplink;
+    LoopTraceOrigin origin = LoopTraceOrigin::Normative;
+    LoopTraceAction action = LoopTraceAction::Created;  // Exclusion uniquement
+    LoopExclusionTarget target = LoopExclusionTarget::DataRate;  // Exclusion uniquement
+    std::uint8_t status = 0xFF;        // LinkAdrAns/Apply : bits ACK (0xFF = sans objet)
+    std::uint8_t dr = 0;               // débit demandé / appliqué
+    std::uint8_t power_index = 0;
+    std::uint16_t channel_mask = 0;    // bloc 0 du masque demandé / appliqué
+    std::uint16_t value = 0;           // Exclusion : débit, index de puissance ou canal exclu
+    bool flag = false;                 // Uplink : reçu ; AdrDecision : en attente ; Apply : tous ACK
+    std::uint8_t reason_channel = 0;   // Apply : motif (LoopLinkAdrReason) par partie
+    std::uint8_t reason_dr = 0;
+    std::uint8_t reason_power = 0;
+    bool operator==(const LoopTraceEvent& o) const {
+        return t_ns == o.t_ns && device == o.device && uplink == o.uplink && kind == o.kind &&
+               origin == o.origin && action == o.action && target == o.target && status == o.status &&
+               dr == o.dr && power_index == o.power_index && channel_mask == o.channel_mask &&
+               value == o.value && flag == o.flag && reason_channel == o.reason_channel &&
+               reason_dr == o.reason_dr && reason_power == o.reason_power;
+    }
+};
+
 struct LoopChannelIo {
     const LoopChannelConfig* config = nullptr;  // `config_count` entrées, `device_count` attendu
+    // Entrée : vrai pour produire la trace interne v3 (désactivée par défaut, sans effet radio).
+    bool trace_v3 = false;
+    // Sortie : trace v3 triée par temps (ordre d'insertion à temps égal) ; vide si désactivée.
+    std::vector<LoopTraceEvent> trace;
     std::size_t config_count = 0;
     // Sorties (remplies si le simulateur réussit) :
     std::vector<LoopTerminalRadio> terminals;             // état final du terminal, par dispositif

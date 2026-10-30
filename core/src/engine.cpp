@@ -1447,9 +1447,11 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     {
         const LoopChannelConfig* cfg = io.config;  // entrées conservées, sorties remises à zéro
         const std::size_t cfg_count = io.config_count;
+        const bool trace_on = io.trace_v3;
         io = LoopChannelIo{};
         io.config = cfg;
         io.config_count = cfg_count;
+        io.trace_v3 = trace_on;
     }
     if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
     if (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) {
@@ -1645,6 +1647,25 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
     LoopMacQueueStats qs;
     std::vector<std::vector<std::uint32_t>> dl_items;  // commandes de la file par descente
+    // Trace interne v3 : sans effet sur la simulation (aucune lecture ne dépend d'elle).
+    const auto emit = [&io](LoopTraceEvent e) -> void {
+        if (io.trace_v3) io.trace.push_back(e);
+    };
+    const auto emit_expiries = [&](std::uint32_t dev, std::uint32_t up, SimTime t,
+                                   const std::vector<LoopExpiry>& ex) -> void {
+        for (const LoopExpiry& x : ex) {
+            LoopTraceEvent e;
+            e.t_ns = t;
+            e.device = dev;
+            e.uplink = up;
+            e.kind = LoopTraceKind::Exclusion;
+            e.origin = LoopTraceOrigin::SimulatorPolicy;
+            e.action = LoopTraceAction::Expired;
+            e.target = x.target;
+            e.value = x.value;
+            emit(e);
+        }
+    };
     const auto on_received = [&](std::size_t a) -> void {
         const Tx& ta = txs[a];
         const std::uint32_t d = ta.device;
@@ -1652,26 +1673,77 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         const std::uint8_t mask = masks[a];
         // Exclusions : un uplink admissible reçu. Avant la réponse de cet uplink : une exclusion posée
         // ici vaut 100 uplinks à partir de l'uplink suivant (convention des frontières, étape 4).
-        sv.excl.tick();
+        std::vector<LoopExpiry> expired;
+        sv.excl.tick(io.trace_v3 ? &expired : nullptr);
+        emit_expiries(d, static_cast<std::uint32_t>(a), ta.end, expired);
+        {
+            LoopTraceEvent e;
+            e.t_ns = ta.end;
+            e.device = d;
+            e.uplink = static_cast<std::uint32_t>(a);
+            e.kind = LoopTraceKind::Uplink;
+            e.origin = LoopTraceOrigin::Normative;
+            e.flag = true;
+            emit(e);
+        }
         const std::uint8_t st = sts[a];
         const std::uint16_t applied = cms[a];
         // Réponses : confirmées seulement parce que cet uplink est reçu.
         if ((mask & 1U) != 0 && sv.adr_pending) {
+            {
+                LoopTraceEvent e;
+                e.t_ns = ta.end;
+                e.device = d;
+                e.uplink = static_cast<std::uint32_t>(a);
+                e.kind = LoopTraceKind::LinkAdrAns;
+                e.origin = LoopTraceOrigin::Normative;
+                e.status = st;
+                e.dr = sv.pend_dr;
+                e.power_index = sv.pend_power;
+                e.channel_mask = applied;
+                e.flag = st == 0x07;
+                emit(e);
+            }
             if (st == 0x07) {
                 sv.dr = sv.pend_dr;
                 sv.power_index = sv.pend_power;
                 sv.confirmed = set_from_block0(applied);
             } else {
                 // Réponse négative (TS001 §5.2 : un bit à 0 = échec, état précédent conservé).
-                // Attribution avec les seuls bits ACK (le serveur ne connaît pas le motif exact) :
+                // Attribution avec les seuls bits ACK et l'état connu du serveur (jamais l'état privé
+                // du terminal) :
                 //  - DataRateACK = 0 : débit exclu ; D5 : la cause est attribuée au débit, même si
                 //    ChannelMaskACK vaut aussi 0 ;
                 //  - PowerACK = 0 : puissance exclue ;
-                //  - ChannelMaskACK = 0 sans refus de débit : masque exclu. Le serveur ne sait pas quel
-                //    canal est en cause ; la requête suivante reprend le dernier masque acquitté.
-                if ((st & 2U) == 0) sv.excl.exclude_dr(sv.pend_dr);
-                if ((st & 4U) == 0) sv.excl.exclude_power(sv.pend_power);
-                if ((st & 1U) == 0 && (st & 2U) != 0 && applied != block0_bits(sv.confirmed)) sv.excl.exclude_mask();
+                //  - ChannelMaskACK = 0 sans refus de débit : les canaux demandés et non acquittés sont
+                //    les seuls suspects, car tout canal acquitté a été accepté donc défini. Chacun est
+                //    exclu. Sur-approximation : un suspect peut être valide. Ce n'est pas une règle
+                //    TS001 ; c'est la seule attribution possible sans motif par canal.
+                const auto post = [&](LoopExclusionTarget target, std::uint16_t value, bool renewed) -> void {
+                    LoopTraceEvent e;
+                    e.t_ns = ta.end;
+                    e.device = d;
+                    e.uplink = static_cast<std::uint32_t>(a);
+                    e.kind = LoopTraceKind::Exclusion;
+                    e.origin = LoopTraceOrigin::SimulatorPolicy;
+                    e.action = renewed ? LoopTraceAction::Renewed : LoopTraceAction::Created;
+                    e.target = target;
+                    e.value = value;
+                    emit(e);
+                };
+                if ((st & 2U) == 0) post(LoopExclusionTarget::DataRate, sv.pend_dr, sv.excl.exclude_dr(sv.pend_dr));
+                if ((st & 4U) == 0) {
+                    post(LoopExclusionTarget::Power, sv.pend_power, sv.excl.exclude_power(sv.pend_power));
+                }
+                if ((st & 1U) == 0 && (st & 2U) != 0) {
+                    const LoopChannelSet applied_set = set_from_block0(applied);
+                    for (std::size_t c = 0; c < 16U; ++c) {
+                        if (applied_set.test(c) && !sv.confirmed.test(c)) {
+                            post(LoopExclusionTarget::Channel, static_cast<std::uint16_t>(c),
+                                 sv.excl.exclude_channel(c));
+                        }
+                    }
+                }
             }
             sv.adr_pending = false;
         }
@@ -1704,6 +1776,18 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                 std::uint8_t want_pi = o.tx_power_index;
                 if (sv.excl.dr_excluded(want_dr)) want_dr = sv.dr;
                 if (sv.excl.power_excluded(want_pi)) want_pi = sv.power_index;
+                {
+                    LoopTraceEvent e;
+                    e.t_ns = ta.end;
+                    e.device = d;
+                    e.uplink = static_cast<std::uint32_t>(a);
+                    e.kind = LoopTraceKind::AdrDecision;
+                    e.origin = LoopTraceOrigin::SimulatorPolicy;
+                    e.dr = want_dr;
+                    e.power_index = want_pi;
+                    e.flag = want_dr != sv.dr || want_pi != sv.power_index;
+                    emit(e);
+                }
                 if (want_dr != sv.dr || want_pi != sv.power_index) {
                     sv.adr_pending = true;
                     sv.pend_dr = want_dr;
@@ -1836,12 +1920,28 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         // LinkADRReq : vue du serveur, ChMaskCntl 0 sur le bloc 0 (utilisée seulement si LinkADR est portée).
         LoopLinkAdrRequest rq;
         rq.ch_mask_cntl = 0;
-        // Masque : la vue serveur, ou le dernier masque acquitté si la vue est exclue.
-        rq.ch_mask = block0_bits(sv.excl.mask_excluded() ? sv.confirmed : sv.view);
+        // Masque : vue serveur privée de ses canaux exclus ; à défaut (vide), le dernier masque acquitté.
+        LoopChannelSet candidate;
+        for (std::size_t c = 0; c < 16U; ++c) {
+            if (sv.view.test(c) && !sv.excl.channel_excluded(c)) candidate.set(c);
+        }
+        rq.ch_mask = block0_bits(candidate.any() ? candidate : sv.confirmed);
         rq.dr = sv.pend_dr;
         rq.power_index = sv.pend_power;
         if (io.config != nullptr && io.config[d].forced_request) rq = *io.config[d].forced_request;
         dl_requests.push_back(rq);
+        if ((cmds & kLoopCmdLinkAdr) != 0) {
+            LoopTraceEvent e;
+            e.t_ns = t_open;
+            e.device = d;
+            e.uplink = static_cast<std::uint32_t>(a);
+            e.kind = LoopTraceKind::LinkAdrReq;
+            e.origin = LoopTraceOrigin::SimulatorPolicy;
+            e.dr = rq.dr;
+            e.power_index = rq.power_index;
+            e.channel_mask = rq.ch_mask;
+            emit(e);
+        }
         // Fermeture de RX1 : l'occupation de la passerelle est connue, la réception se décide là.
         q.push(LoopEvent{t_open + kLoopRx1WindowNs, kLoopRankCheck, seq++, LoopKind::Check, d,
                          static_cast<std::uint32_t>(dls.size() - 1), 0});
@@ -2079,6 +2179,23 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     const LoopLinkAdrDiagnosis dg = loop_apply_link_adr(plan, term, rq);
                     if (dl_diag.size() <= ev.index) dl_diag.resize(ev.index + 1);
                     dl_diag[ev.index] = dg;
+                    {
+                        LoopTraceEvent e;
+                        e.t_ns = ev.t;
+                        e.device = static_cast<std::uint32_t>(i);
+                        e.uplink = static_cast<std::uint32_t>(ev.index);
+                        e.kind = LoopTraceKind::Apply;
+                        e.origin = LoopTraceOrigin::Normative;
+                        e.status = dg.status.to_wire();
+                        e.dr = rq.dr;
+                        e.power_index = rq.power_index;
+                        e.channel_mask = rq.ch_mask;
+                        e.flag = dg.status.all();
+                        e.reason_channel = static_cast<std::uint8_t>(dg.channel_reason);
+                        e.reason_dr = static_cast<std::uint8_t>(dg.dr_reason);
+                        e.reason_power = static_cast<std::uint8_t>(dg.power_reason);
+                        if (io.trace_v3) io.trace.push_back(e);
+                    }
                     ds.answer_mask = static_cast<std::uint8_t>(ds.answer_mask | 1U);
                     ds.answer_status = dg.status.to_wire();
                     ds.answer_chmask = rq.ch_mask;
@@ -2125,6 +2242,9 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     }
     out.gateway_busy = busy;
     io.uplink_status = sts;
+    // Trace v3 triée par temps ; à temps égal, l'ordre d'insertion (chronologie causale) est conservé.
+    std::stable_sort(io.trace.begin(), io.trace.end(),
+                     [](const LoopTraceEvent& x, const LoopTraceEvent& y) { return x.t_ns < y.t_ns; });
     io.downlink_requests = dl_requests;
     io.downlink_diagnoses = dl_diag;
     io.downlink_diagnoses.resize(dls.size());

@@ -2,6 +2,13 @@
 
 ## 0.1.0 (non publiée)
 
+### Modèle de canaux LinkADR : exclusions par canal, trace interne v3 (boucle fermée, EU868)
+- Refus de canal : exclusion par canal des seuls suspects (`applied \ confirmed`), 100 uplinks admissibles (convention du simulateur, ni TS001 ni RP002). Repli sur le dernier masque acquitté si le candidat est vide. Le débit et la puissance acceptés restent appliqués.
+- **Changement de comportement** : dans le scénario 011 (masque refusé, débit et puissance acceptés), le masque entier n'est plus exclu. Voir `docs/CHANNEL_MASK_MODEL.md`.
+- Compteurs indépendants par débit, puissance et canal ; renouvellement signalé ; expiration sans commande.
+- Trace interne v3 (`LoopChannelIo::trace_v3`, opt-in, C++ seulement) : bits LinkADRAns, exclusions créées / renouvelées / expirées, décisions ADR, motifs D5, chaque événement avec son origine (normative ou politique du simulateur). Sans effet sur les radios. Non exposée à Python : elle attend l'ABI v3.
+- Empreintes historiques (dump, trace ADR) inchangées.
+
 ### Réémission des commandes LinkADR (TS001-1.0.4 §5, décision utilisateur)
 - Réémission : une commande LinkADRReq sans LinkADRAns est renvoyée à chaque uplink reçu, sans plafond normatif ni temporisation. La norme ne fixe ni nombre maximal de réémissions ni backoff exponentiel pour cette règle (section 7 : seulement les uplinks confirmés qui attendent un acquittement, intervalle aléatoire).
 - Chemin en direct (`lsim serve`) : le plafond de 8 essais devient facultatif (`MAC_MAX_ATTEMPTS = None` par défaut ; une valeur fixe est une politique d'implémentation). Un LinkADRAns négatif (au moins un bit à 0, TS001 §5.2) ferme la demande, journalisé avec ses trois bits, et la même configuration n'est pas renvoyée. Refus journalisé, non persisté.

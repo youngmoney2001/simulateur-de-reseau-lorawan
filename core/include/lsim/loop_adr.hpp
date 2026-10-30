@@ -37,6 +37,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace lsim::sim {
 
@@ -78,19 +79,29 @@ struct LoopChannelState {
 // Le renouvellement remet le compteur à 100. L'expiration ne déclenche aucune commande.
 inline constexpr std::uint16_t kLoopExclusionUplinks = 100;
 
+enum class LoopExclusionTarget : std::uint8_t { DataRate, Power, Channel };
+
+// Exclusion arrivée à échéance lors d'un `tick`.
+struct LoopExpiry {
+    LoopExclusionTarget target = LoopExclusionTarget::DataRate;
+    std::uint16_t value = 0;
+};
+
 struct LoopExclusions {
     std::array<std::uint16_t, 16> dr{};     // uplinks admissibles restants par débit ; 0 = éligible
     std::array<std::uint16_t, 16> power{};  // idem par index de puissance
-    std::uint16_t mask = 0;                 // masque du bloc 0 (vue serveur) ; 0 = éligible
+    std::array<std::uint16_t, kLoopMaxChannels> channel{};  // par canal ; 0 = éligible
 
-    void exclude_dr(std::uint8_t dr);
-    void exclude_power(std::uint8_t power_index);
-    void exclude_mask();
-    // Un uplink admissible reçu : décrémente les compteurs actifs.
-    void tick();
+    // Pose (ou renouvelle) l'exclusion. Retourne vrai si elle était déjà active (renouvellement).
+    bool exclude_dr(std::uint8_t dr);
+    bool exclude_power(std::uint8_t power_index);
+    bool exclude_channel(std::size_t channel_index);
+    // Un uplink admissible reçu : décrémente les compteurs actifs. `expired` (optionnel) reçoit les
+    // exclusions qui arrivent à 0 à cet uplink.
+    void tick(std::vector<LoopExpiry>* expired = nullptr);
     bool dr_excluded(std::uint8_t dr) const;
     bool power_excluded(std::uint8_t power_index) const;
-    bool mask_excluded() const;
+    bool channel_excluded(std::size_t channel_index) const;
 };
 
 // Terminal complet (partie radio pertinente pour LinkADR).

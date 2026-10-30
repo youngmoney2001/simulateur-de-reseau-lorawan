@@ -316,13 +316,21 @@ void test_exclusion_boundary_99_and_100() {
 // accumulation) ; l'expiration n'est pas une acceptation et ne touche à aucun autre compteur.
 void test_exclusion_renewal_resets_counter() {
     lsim::sim::LoopExclusions e;
-    e.exclude_dr(5);
+    CHECK_TRUE(!e.exclude_dr(5));  // création
     for (int k = 0; k < 60; ++k) e.tick();
-    e.exclude_dr(5);
-    for (int k = 0; k < 99; ++k) e.tick();
+    CHECK_TRUE(e.exclude_dr(5));   // renouvellement : vrai, compteur remis à 100
+    std::vector<lsim::sim::LoopExpiry> ex;
+    for (int k = 0; k < 99; ++k) e.tick(&ex);
     CHECK_TRUE(e.dr_excluded(5));
-    e.tick();
+    CHECK_TRUE(ex.empty());
+    e.tick(&ex);
     CHECK_TRUE(!e.dr_excluded(5));
+    CHECK_EQ(static_cast<int>(ex.size()), 1);  // une seule expiration, au 100e uplink
+    if (ex.size() == 1) {
+        CHECK_TRUE(ex[0].target == lsim::sim::LoopExclusionTarget::DataRate);
+        CHECK_EQ(static_cast<int>(ex[0].value), 5);
+    }
+    CHECK_TRUE(!e.exclude_dr(5));  // après expiration : création, pas renouvellement
 }
 
 // Compteurs indépendants : un débit n'exclut ni un autre débit, ni une puissance, ni le masque.
@@ -331,17 +339,18 @@ void test_exclusion_counters_are_independent() {
     e.exclude_dr(5);
     CHECK_TRUE(!e.dr_excluded(4));
     CHECK_TRUE(!e.power_excluded(5));
-    CHECK_TRUE(!e.mask_excluded());
+    CHECK_TRUE(!e.channel_excluded(2));
     for (int k = 0; k < 50; ++k) e.tick();
     e.exclude_power(1);
-    e.exclude_mask();
-    for (int k = 0; k < 50; ++k) e.tick();  // DR5 expire (100) ; puissance et masque restent (50)
+    e.exclude_channel(2);
+    for (int k = 0; k < 50; ++k) e.tick();  // DR5 expire (100) ; puissance et canal restent (50)
     CHECK_TRUE(!e.dr_excluded(5));
     CHECK_TRUE(e.power_excluded(1));
-    CHECK_TRUE(e.mask_excluded());
+    CHECK_TRUE(e.channel_excluded(2));
+    CHECK_TRUE(!e.channel_excluded(1));
     for (int k = 0; k < 50; ++k) e.tick();
     CHECK_TRUE(!e.power_excluded(1));
-    CHECK_TRUE(!e.mask_excluded());
+    CHECK_TRUE(!e.channel_excluded(2));
 }
 
 // Valeurs hors bornes (index RFU ou débit absent du tableau) : ignorées, jamais de dépassement.
@@ -352,7 +361,7 @@ void test_exclusion_out_of_range_ignored() {
     CHECK_TRUE(!e.dr_excluded(16));
     CHECK_TRUE(!e.power_excluded(200));
     e.tick();
-    CHECK_TRUE(!e.mask_excluded());
+    CHECK_TRUE(!e.channel_excluded(2));
 }
 
 }  // namespace
