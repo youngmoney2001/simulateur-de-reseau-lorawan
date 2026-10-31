@@ -2,6 +2,11 @@
 
 ## 0.1.0 (non publiée)
 
+### Caractérisation RF R1 (tests seulement, aucun changement de comportement)
+- `python/tests/test_rf_characterization_r1.py` : 24 tests qui figent le comportement radio **réel** de la base, mesuré et non supposé. Six sujets : gain de la passerelle (+3 dBi = +3 dB, additif de 0 à 6 dBi, sans effet sur l'airtime ; RSSI = P_tx + G_passerelle − PL(d) à 1e-9) ; absence de gain d'antenne du terminal dans le modèle (seul `tx_power_dbm` agit) et non-contamination du gain de descente sur la liaison montante (RSSI montant identique au bit près pour 0 / 10 / 20 dBi, alors que l'issue de descente bascule) ; descente par réciprocité, avec bascule de réception à 12 km / SF12 quand le gain terminal passe de 0 à 10 dBi ; sensibilité RAK7249 (catalogue −139 dBm, aucun point publié, seuils relatifs SX1276 appliqués : écarts 16 / 13 / 10 / 7 / 6 / 3 dB du SF7 au SF12) ; collisions de même SF, frontière de capture exacte et inclusive à 6 dB, chevauchement partiel (140 ms chevauche, 150 ms non pour un airtime SF9 de 144 384 000 ns) ; contrôles (SF différents et transmissions disjointes ne collisionnent pas).
+- Limites documentées dans les tests, non corrigées ici : la fréquence est portée par la propagation et non par la trame (aucun modèle de canaux distincts au niveau radio) ; l'issue de descente utilise un encodage inversé de celui de la montée (0 = reçu), figé par l'ABI.
+- Empreintes gelées, résultats C++ et symboles exportés **inchangés** : `d2cb0fac6c2d9950` / `ed126d7ff5aac3b0`, 685165 / 685165, 91 symboles.
+
 ### Modèle de canaux LinkADR : exclusions par canal, trace interne v3 (boucle fermée, EU868)
 - Refus de canal : exclusion par canal des seuls suspects (`demandés \ confirmés`), 100 uplinks admissibles (convention du simulateur, ni TS001 ni RP002). Le débit et la puissance acceptés restent appliqués.
 - Refus à suspects vides (aucun suspect, masque demandé entièrement confirmé ou vide) : exclusion du masque exact (politique du simulateur, non TS001), sans répétition pendant 100 uplinks, renouvelée si le même masque est refusé, expirée sans commande. Repli sur le dernier masque confirmé.
