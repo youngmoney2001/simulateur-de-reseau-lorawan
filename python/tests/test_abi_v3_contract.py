@@ -1,7 +1,9 @@
 """Tests du contrat Python ABI v3 (étape 6.2.7) : parité avec c_api.h, schémas synchronisés,
 validations, conditionnels de trace, chemins Python inchangés, documentation complète."""
 
+import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -410,6 +412,66 @@ class PathIsolationTests(unittest.TestCase):
         source = (ROOT / "python/lsim/abi_v3_contract.py").read_text(encoding="utf-8")
         self.assertNotIn("from lsim.scenario", source)
         self.assertNotIn("import scenario", source)
+
+
+    def test_runtime_imports_are_isolated_and_the_library_is_loaded_once(self):
+        # Le scan textuel ci-dessus ne voit pas les imports dynamiques : on observe ici la table
+        # `sys.modules` réelle et l'identité des handles natifs, dans un sous-processus propre.
+        script = """
+import os
+import sys
+
+import lsim
+assert "lsim.simulator" not in sys.modules, "import direct : lsim.simulator chargé d'emblée"
+assert "lsim.closed_loop_v3" not in sys.modules, "import direct : binding v3 chargé d'emblée"
+print("OK-IMPORT-DIRECT")
+
+import lsim.trace_events as trace_events
+from lsim.scenario import load_scenario
+
+scenario = load_scenario(sys.argv[1])
+trace_events.build_trace(scenario)
+assert "lsim.closed_loop_v3" not in sys.modules, "le chemin sans MAC charge le binding v3"
+print("OK-SANS-V3")
+
+import lsim.simulator as simulator
+import lsim.closed_loop_v3 as closed_loop_v3
+from lsim import _native
+
+assert simulator.LIB is _native.LIB, "lsim.simulator a un handle natif distinct"
+assert closed_loop_v3.LIB is _native.LIB, "lsim.closed_loop_v3 a un handle natif distinct"
+print("OK-SECOND-BINDING")
+
+from lsim._native import _load_library
+
+same = _load_library()
+assert os.path.realpath(same._name) == os.path.realpath(_native.LIB._name), "LSIM_LIBRARY ignoré"
+print("OK-DYNLOAD-SAME")
+
+# Fichier régulier mais non ELF : la surcharge doit être honorée, sans repli silencieux
+# sur une bibliothèque de repli (indépendant de la présence d'un `build/`).
+os.environ["LSIM_LIBRARY"] = sys.argv[1]
+try:
+    _load_library()
+except OSError:
+    print("OK-DYNLOAD-REFUSED")
+else:
+    raise AssertionError("LSIM_LIBRARY invalide ignoré : repli silencieux")
+"""
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(ROOT / "python")
+        library = env.get("LSIM_LIBRARY") or str(ROOT / "build" / "liblsim_core.so")
+        env["LSIM_LIBRARY"] = library
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(ROOT / "examples" / "quartier_sf9.yaml")],
+            capture_output=True, text=True, timeout=120, env=env,
+            cwd=str(ROOT),
+        )
+        detail = f"code={completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        self.assertEqual(completed.returncode, 0, detail)
+        for marker in ("OK-IMPORT-DIRECT", "OK-SANS-V3", "OK-SECOND-BINDING",
+                       "OK-DYNLOAD-SAME", "OK-DYNLOAD-REFUSED"):
+            self.assertIn(marker, completed.stdout, detail)
 
 
 class DocumentationTests(unittest.TestCase):
