@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "ChannelDefinitionV3": {
+      "additionalProperties": false,
+      "description": "Débits supportés par un canal défini (dr_mask : bit n = DRn). Un canal absent n'est pas défini.",
+      "properties": {
+        "index": {
+          "exclusiveMaximum": 80,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "dr_mask": {
+          "maximum": 255,
+          "minimum": 1,
+          "title": "Dr Mask",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "dr_mask"
+      ],
+      "title": "ChannelDefinitionV3",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "État final d'un terminal (sortie). Les canaux définis et actifs sont listés explicitement.",
+  "properties": {
+    "device_index": {
+      "exclusiveMaximum": 10000,
+      "minimum": 0,
+      "title": "Device Index",
+      "type": "integer"
+    },
+    "dr": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Dr",
+      "type": "integer"
+    },
+    "power_index": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Power Index",
+      "type": "integer"
+    },
+    "defined": {
+      "items": {
+        "$ref": "#/$defs/ChannelDefinitionV3"
+      },
+      "maxItems": 80,
+      "title": "Defined",
+      "type": "array"
+    },
+    "enabled": {
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 80,
+      "title": "Enabled",
+      "type": "array"
+    }
+  },
+  "required": [
+    "device_index",
+    "dr",
+    "power_index"
+  ],
+  "title": "TerminalStateV3",
+  "type": "object"
+}

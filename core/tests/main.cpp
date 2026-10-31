@@ -27,12 +27,22 @@ void run_downlink_plan_tests();
 void run_materials_tests();
 void run_energy_tests();
 void run_mesh_tests();
+void run_abi_v3_prep_tests();
+void run_channel_config_v3_tests();
+void run_closed_loop_v3_buffers_tests();
+void run_closed_loop_v3_crossval_tests();
+void run_closed_loop_v3_api_tests();
 
 int main() {
     run_lora_phy_tests();
     run_materials_tests();
     run_energy_tests();
     run_mesh_tests();
+    run_abi_v3_prep_tests();
+    run_channel_config_v3_tests();
+    run_closed_loop_v3_buffers_tests();
+    run_closed_loop_v3_crossval_tests();
+    run_closed_loop_v3_api_tests();
     run_link_budget_tests();
     run_lorawan_frame_tests();
     run_crypto_tests();

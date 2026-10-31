@@ -1,0 +1,592 @@
+{
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "apply",
+              "downlink",
+              "link_adr_req"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "downlink": {
+            "maximum": 4294967294,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "downlink"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "adr_decision",
+              "exclusion",
+              "link_adr_ans",
+              "uplink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "downlink": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "apply",
+              "link_adr_ans"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "maximum": 7,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "adr_decision",
+              "downlink",
+              "exclusion",
+              "link_adr_req",
+              "uplink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "adr_decision",
+              "apply",
+              "exclusion",
+              "link_adr_ans",
+              "link_adr_req",
+              "uplink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "loss": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "adr_decision",
+              "downlink",
+              "exclusion",
+              "link_adr_ans",
+              "link_adr_req",
+              "uplink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_channel": {
+            "const": 0
+          },
+          "reason_dr": {
+            "const": 0
+          },
+          "reason_power": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "adr_decision",
+              "apply",
+              "link_adr_ans",
+              "link_adr_req",
+              "uplink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "downlink"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maximum": 31,
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "link_adr_req"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "flag": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "link_adr_ans"
+          },
+          "status": {
+            "const": 7
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "flag": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "link_adr_ans"
+          },
+          "status": {
+            "not": {
+              "const": 7
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "flag": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "downlink"
+          },
+          "loss": {
+            "const": "none"
+          }
+        },
+        "required": [
+          "kind",
+          "loss"
+        ]
+      },
+      "then": {
+        "properties": {
+          "flag": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "downlink"
+          },
+          "loss": {
+            "not": {
+              "const": "none"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "loss"
+        ]
+      },
+      "then": {
+        "properties": {
+          "flag": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "exclusion"
+          },
+          "target": {
+            "const": "data_rate"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maximum": 15,
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "exclusion"
+          },
+          "target": {
+            "const": "power"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maximum": 14,
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "exclusion"
+          },
+          "target": {
+            "const": "channel"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maximum": 15,
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "exclusion"
+          },
+          "target": {
+            "const": "mask"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ]
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "maximum": 65535,
+            "minimum": 0
+          }
+        }
+      }
+    }
+  ],
+  "description": "Événement de trace v3 (sortie). Les sentinelles sont exprimées par `null` :\n`downlink` null = 0xFFFFFFFF, `status` null = 0xFF. Les autres champs sans objet valent 0.\n\n`value` : exclusion = valeur de la cible (bornes par cible, voir TRACE_EXCLUSION_VALUE_MAX) ;\ndownlink = masque de commandes (0x01, 0x02, 0x04, 0x08, 0x10) ; 0 pour tous les autres types.\n`flag` : link_adr_ans = (status == 0x07) ; link_adr_req = false (sans objet) ; downlink = reçue.",
+  "properties": {
+    "t_ns": {
+      "minimum": 0,
+      "title": "T Ns",
+      "type": "integer"
+    },
+    "device": {
+      "exclusiveMaximum": 10000,
+      "minimum": 0,
+      "title": "Device",
+      "type": "integer"
+    },
+    "uplink": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "title": "Uplink",
+      "type": "integer"
+    },
+    "downlink": {
+      "anyOf": [
+        {
+          "maximum": 4294967294,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Downlink"
+    },
+    "kind": {
+      "enum": [
+        "uplink",
+        "link_adr_ans",
+        "exclusion",
+        "adr_decision",
+        "link_adr_req",
+        "downlink",
+        "apply"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "origin": {
+      "enum": [
+        "normative",
+        "simulator_policy",
+        "radio"
+      ],
+      "title": "Origin",
+      "type": "string"
+    },
+    "action": {
+      "default": "created",
+      "enum": [
+        "created",
+        "renewed",
+        "expired"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "target": {
+      "default": "data_rate",
+      "enum": [
+        "data_rate",
+        "power",
+        "channel",
+        "mask"
+      ],
+      "title": "Target",
+      "type": "string"
+    },
+    "loss": {
+      "default": "none",
+      "enum": [
+        "none",
+        "device_transmitting",
+        "no_gateway_slot",
+        "below_sensitivity"
+      ],
+      "title": "Loss",
+      "type": "string"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "maximum": 7,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    },
+    "dr": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Dr",
+      "type": "integer"
+    },
+    "power_index": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Power Index",
+      "type": "integer"
+    },
+    "channel_mask": {
+      "maximum": 65535,
+      "minimum": 0,
+      "title": "Channel Mask",
+      "type": "integer"
+    },
+    "value": {
+      "maximum": 65535,
+      "minimum": 0,
+      "title": "Value",
+      "type": "integer"
+    },
+    "flag": {
+      "default": false,
+      "title": "Flag",
+      "type": "boolean"
+    },
+    "reason_channel": {
+      "default": 0,
+      "maximum": 5,
+      "minimum": 0,
+      "title": "Reason Channel",
+      "type": "integer"
+    },
+    "reason_dr": {
+      "default": 0,
+      "maximum": 3,
+      "minimum": 0,
+      "title": "Reason Dr",
+      "type": "integer"
+    },
+    "reason_power": {
+      "default": 0,
+      "maximum": 2,
+      "minimum": 0,
+      "title": "Reason Power",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "t_ns",
+    "device",
+    "uplink",
+    "kind",
+    "origin",
+    "dr",
+    "power_index",
+    "channel_mask",
+    "value"
+  ],
+  "title": "TraceEventV3",
+  "type": "object"
+}

@@ -1284,6 +1284,199 @@ LSIM_API int32_t lsim_simulate_closed_loop_gw2(const lsim_end_device* devices, s
                                               size_t* busy_count,
                                               lsim_loop_mac_counters* mac_counters);
 
+/* ------------------------------------------- Boucle fermée v3 (étape 6.2, ABI additive)
+ * Configuration explicite des canaux EU868 (RP002-1.0.5) et trace v3. v1, v2 et gw2 inchangées.
+ * Tailles LP64 : lsim_channel_device_v3 128, lsim_channel_terminal_v3 112, lsim_loop_trace_v3 40,
+ * lsim_closed_loop_v3_args 272 (vérifiées par static_assert dans tests/test_abi_v3_prep.cpp). */
+
+/* Codes de statut (base 1000). Les codes historiques (dont MESH/CLASSB 800) sont inchangés. */
+#define LSIM_STATUS_CHANNEL_BASE 1000
+#define LSIM_STATUS_CHANNEL_ARGS_SIZE (LSIM_STATUS_CHANNEL_BASE + 1)
+#define LSIM_STATUS_CHANNEL_ABI_VERSION (LSIM_STATUS_CHANNEL_BASE + 2)
+#define LSIM_STATUS_CHANNEL_ELEMENT_SIZE (LSIM_STATUS_CHANNEL_BASE + 3)
+#define LSIM_STATUS_CHANNEL_PLAN (LSIM_STATUS_CHANNEL_BASE + 4)
+#define LSIM_STATUS_CHANNEL_MODE (LSIM_STATUS_CHANNEL_BASE + 5)
+#define LSIM_STATUS_CHANNEL_DEVICE_INDEX (LSIM_STATUS_CHANNEL_BASE + 6)
+#define LSIM_STATUS_CHANNEL_PRESENT_FLAG (LSIM_STATUS_CHANNEL_BASE + 7)
+#define LSIM_STATUS_CHANNEL_FIELDS_WITHOUT_PRESENT (LSIM_STATUS_CHANNEL_BASE + 8)
+#define LSIM_STATUS_CHANNEL_RESERVED_NONZERO (LSIM_STATUS_CHANNEL_BASE + 9)
+#define LSIM_STATUS_CHANNEL_INDEX_UNSUPPORTED (LSIM_STATUS_CHANNEL_BASE + 10)
+#define LSIM_STATUS_CHANNEL_DR_MASK_INVALID (LSIM_STATUS_CHANNEL_BASE + 11)
+#define LSIM_STATUS_CHANNEL_ENABLED_UNDEFINED (LSIM_STATUS_CHANNEL_BASE + 12)
+#define LSIM_STATUS_CHANNEL_ENABLED_EMPTY (LSIM_STATUS_CHANNEL_BASE + 13)
+#define LSIM_STATUS_CHANNEL_SERVER_VIEW_EMPTY (LSIM_STATUS_CHANNEL_BASE + 14)
+#define LSIM_STATUS_CHANNEL_TRACE_MODE (LSIM_STATUS_CHANNEL_BASE + 15)
+#define LSIM_STATUS_CHANNEL_TRACE_BUFFER_TOO_SMALL (LSIM_STATUS_CHANNEL_BASE + 16)
+#define LSIM_STATUS_CHANNEL_TERMINAL_BUFFER_TOO_SMALL (LSIM_STATUS_CHANNEL_BASE + 17)
+#define LSIM_STATUS_CHANNEL_BUFFERS_ALIASED (LSIM_STATUS_CHANNEL_BASE + 18)
+#define LSIM_STATUS_CHANNEL_NULL_POINTER (LSIM_STATUS_CHANNEL_BASE + 19)
+#define LSIM_STATUS_CHANNEL_RANGE_OVERFLOW (LSIM_STATUS_CHANNEL_BASE + 20)
+#define LSIM_STATUS_CHANNEL_MISALIGNED (LSIM_STATUS_CHANNEL_BASE + 21)
+
+/* Modes de configuration. */
+#define LSIM_CHANNEL_PLAN_NONE 0u
+#define LSIM_CHANNEL_PLAN_EU868_RP002_1_0_5 1u
+#define LSIM_CHANNEL_PRESENT_NO 0u
+#define LSIM_CHANNEL_PRESENT_YES 1u
+#define LSIM_CHANNEL_SUPPORTED_MAX 16u   /* canaux réellement supportés par le moteur (0..15) */
+#define LSIM_CHANNEL_ENGINE_MAX 80u      /* emplacements de l'ABI (0..79, 16..79 refusés) */
+
+/* Sentinelles de la trace v3. */
+#define LSIM_TRACE_NO_INDEX 0xFFFFFFFFu
+#define LSIM_TRACE_STATUS_NONE 0xFFu
+#define LSIM_TRACE_FIELD_IGNORE 15u
+
+/* Valeurs de lsim_loop_trace_v3 : reprises des énumérations du moteur (engine.hpp, loop_adr.hpp). */
+#define LSIM_TRACE_KIND_UPLINK 0u
+#define LSIM_TRACE_KIND_LINK_ADR_ANS 1u
+#define LSIM_TRACE_KIND_EXCLUSION 2u
+#define LSIM_TRACE_KIND_ADR_DECISION 3u
+#define LSIM_TRACE_KIND_LINK_ADR_REQ 4u
+#define LSIM_TRACE_KIND_DOWNLINK 5u
+#define LSIM_TRACE_KIND_APPLY 6u
+
+#define LSIM_TRACE_ORIGIN_NORMATIVE 0u
+#define LSIM_TRACE_ORIGIN_SIMULATOR_POLICY 1u
+#define LSIM_TRACE_ORIGIN_RADIO 2u
+
+#define LSIM_TRACE_ACTION_CREATED 0u
+#define LSIM_TRACE_ACTION_RENEWED 1u
+#define LSIM_TRACE_ACTION_EXPIRED 2u
+
+#define LSIM_TRACE_TARGET_DATA_RATE 0u
+#define LSIM_TRACE_TARGET_POWER 1u
+#define LSIM_TRACE_TARGET_CHANNEL 2u
+#define LSIM_TRACE_TARGET_MASK 3u
+
+#define LSIM_TRACE_LOSS_NONE 0u
+#define LSIM_TRACE_LOSS_DEVICE_TRANSMITTING 1u
+#define LSIM_TRACE_LOSS_NO_GATEWAY_SLOT 2u
+#define LSIM_TRACE_LOSS_BELOW_SENSITIVITY 3u
+
+#define LSIM_TRACE_CHANNEL_REASON_OK 0u
+#define LSIM_TRACE_CHANNEL_REASON_RFU_CNTL 1u
+#define LSIM_TRACE_CHANNEL_REASON_UNDEFINED_CHANNEL 2u
+#define LSIM_TRACE_CHANNEL_REASON_ALL_DISABLED 3u
+#define LSIM_TRACE_CHANNEL_REASON_INCOMPATIBLE_WITH_DATA_RATE 4u
+#define LSIM_TRACE_CHANNEL_REASON_RFU_BITS 5u
+
+#define LSIM_TRACE_DR_REASON_OK 0u
+#define LSIM_TRACE_DR_REASON_IGNORED 1u
+#define LSIM_TRACE_DR_REASON_UNKNOWN_DR 2u
+#define LSIM_TRACE_DR_REASON_NOT_SUPPORTED_BY_CHANNELS 3u
+
+#define LSIM_TRACE_POWER_REASON_OK 0u
+#define LSIM_TRACE_POWER_REASON_IGNORED 1u
+#define LSIM_TRACE_POWER_REASON_RESERVED 2u
+
+/* Configuration d'un dispositif (entrée). present = 0 : champs de configuration à zéro, valeurs
+ * par défaut moteur. */
+typedef struct lsim_channel_device_v3 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t device_index;
+    uint32_t present;
+    uint8_t dr_mask[80];
+    uint8_t enabled[10];
+    uint8_t server_defined[10];
+    uint8_t reserved[12];
+} lsim_channel_device_v3;
+
+/* État canal final d'un terminal (sortie). */
+typedef struct lsim_channel_terminal_v3 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t device_index;
+    uint8_t dr;
+    uint8_t power_index;
+    uint16_t reserved0;
+    uint8_t dr_mask[80];
+    uint8_t enabled[10];
+    uint8_t reserved1[6];
+} lsim_channel_terminal_v3;
+
+/* Événement de trace v3 (sortie). Ordre : temps croissant, ordre causal à temps égal. */
+typedef struct lsim_loop_trace_v3 {
+    int64_t t_ns;
+    uint32_t device;
+    uint32_t uplink;
+    uint32_t downlink;
+    uint8_t kind;
+    uint8_t origin;
+    uint8_t action;
+    uint8_t target;
+    uint8_t loss;
+    uint8_t status;
+    uint8_t dr;
+    uint8_t power_index;
+    uint16_t channel_mask;
+    uint16_t value;
+    uint8_t flag;
+    uint8_t reason_channel;
+    uint8_t reason_dr;
+    uint8_t reason_power;
+    uint32_t reserved;
+} lsim_loop_trace_v3;
+
+/* Arguments de lsim_simulate_closed_loop_v3. Tous les pointeurs de sortie et compteurs requis
+ * sont validés avant toute écriture (voir la documentation de l'étape 6.2.2). */
+typedef struct lsim_closed_loop_v3_args {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t channel_plan;
+    uint32_t trace_enabled;
+    uint32_t trace_element_size;
+    uint32_t terminal_element_size;
+    uint32_t reserved0;
+    uint32_t reserved1;
+
+    const lsim_end_device* devices;
+    size_t device_count;
+
+    const lsim_plan_device* radios;
+    const lsim_loop_region* regions;
+    const lsim_gateway_v2* gateway;
+    const lsim_propagation* prop;
+    const lsim_environment* env;
+    const lsim_loop_options* options;
+
+    const lsim_loop_mac* mac;
+    size_t mac_count;
+
+    const lsim_channel_device_v3* channels;
+    size_t channel_count;
+
+    lsim_device_stats* per_device;
+    lsim_sim_stats* totals;
+
+    lsim_loop_uplink* uplinks;
+    size_t uplink_capacity;
+    size_t* uplink_count;
+
+    lsim_loop_downlink* downlinks;
+    size_t downlink_capacity;
+    size_t* downlink_count;
+
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count;
+
+    lsim_loop_mac_counters* mac_counters;
+
+    lsim_loop_trace_v3* trace;
+    size_t trace_capacity;
+    size_t* trace_count;
+
+    lsim_channel_terminal_v3* terminals;
+    size_t terminal_capacity;
+    size_t* terminal_count;
+} lsim_closed_loop_v3_args;
+
+/* Boucle fermée v3 : configuration explicite des canaux et trace v3. Statut 0 en cas de succès.
+ * Définie dans core/src/c_api_closed_loop_v3.cpp (étape 6.3), exportée par core/exports.map
+ * (symbole lsim_*), et appelée par python/lsim/closed_loop_v3.py. */
+LSIM_API int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* args);
+
 #ifdef __cplusplus
 }
 #endif

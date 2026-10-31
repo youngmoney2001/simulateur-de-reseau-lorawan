@@ -38,6 +38,10 @@ add_library(lsim_objects OBJECT
     core/src/engine.cpp
     core/src/loop_adr.cpp
     core/src/c_api_ext.cpp
+    core/src/closed_loop_v3_validate.cpp
+    core/src/closed_loop_v3_config.cpp
+    core/src/closed_loop_v3_output.cpp
+    core/src/c_api_closed_loop_v3.cpp
     core/src/join.cpp
     core/src/mac_commands.cpp
     core/src/c_api_mac.cpp
@@ -88,6 +92,11 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_secure_frame.cpp
         core/tests/test_engine.cpp
         core/tests/test_closed_loop.cpp
+        core/tests/test_abi_v3_prep.cpp
+        core/tests/test_channel_config_v3.cpp
+        core/tests/test_closed_loop_v3_buffers.cpp
+        core/tests/test_closed_loop_v3_crossval.cpp
+        core/tests/test_closed_loop_v3_api.cpp
         core/tests/test_loop_adr.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp
