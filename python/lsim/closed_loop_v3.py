@@ -21,6 +21,8 @@ from typing import Mapping, Optional, Sequence
 
 from lsim._native import (
     LIB,
+    _CClosedLoopV4Args,
+    _CDeviceRf,
     _CDeviceStats,
     _CEndDevice,
     _CGateway,
@@ -29,6 +31,7 @@ from lsim._native import (
     _CPropagation,
     _CSimStats,
 )
+from lsim.rf import DeviceRf, GatewayRf, device_table, gateway_entry
 from lsim.closed_loop import (
     _CLoopDownlink,
     _CLoopMac,
@@ -312,6 +315,8 @@ def simulate_closed_loop_v3(
     trace: bool = False,
     capacity: Optional[int] = None,
     trace_capacity: Optional[int] = None,
+    device_rf: Optional[Sequence[DeviceRf]] = None,
+    gateway_rf: Optional[GatewayRf] = None,
 ) -> ClosedLoopV3Outcome:
     """Boucle fermée v3 en une seule exécution native.
 
@@ -447,7 +452,23 @@ def simulate_closed_loop_v3(
     args.terminal_capacity = n
     args.terminal_count = ctypes.pointer(n_terms)
 
-    status = LIB.lsim_simulate_closed_loop_v3(ctypes.pointer(args))
+    # v4 : frontaux fournis => enveloppe v4, qui réutilise mot pour mot les arguments v3.
+    if device_rf is not None and len(device_rf) != n:
+        raise ValueError("device_rf : une entrée par dispositif (ou None)")
+    c_dev_rf, n_dev_rf = (device_table(tuple(device_rf), _CDeviceRf)
+                          if device_rf is not None else (None, 0))
+    c_gw_rf = gateway_entry(gateway_rf)
+    if c_dev_rf is not None or c_gw_rf is not None:
+        v4 = _CClosedLoopV4Args()
+        v4.struct_size = ctypes.sizeof(_CClosedLoopV4Args)
+        v4.abi_version = 4
+        v4.v3 = ctypes.cast(ctypes.pointer(args), ctypes.c_void_p)
+        v4.device_rf = c_dev_rf
+        v4.device_rf_count = n_dev_rf
+        v4.gateway_rf = ctypes.pointer(c_gw_rf) if c_gw_rf is not None else None
+        status = LIB.lsim_simulate_closed_loop_v4(ctypes.pointer(v4))
+    else:
+        status = LIB.lsim_simulate_closed_loop_v3(ctypes.pointer(args))
     if status != 0:
         raise StatusError(status)
 

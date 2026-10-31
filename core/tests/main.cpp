@@ -32,6 +32,7 @@ void run_channel_config_v3_tests();
 void run_closed_loop_v3_buffers_tests();
 void run_closed_loop_v3_crossval_tests();
 void run_closed_loop_v3_api_tests();
+void run_rf_frontend_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -43,6 +44,7 @@ int main() {
     run_closed_loop_v3_buffers_tests();
     run_closed_loop_v3_crossval_tests();
     run_closed_loop_v3_api_tests();
+    run_rf_frontend_tests();
     run_link_budget_tests();
     run_lorawan_frame_tests();
     run_crypto_tests();

@@ -2,6 +2,14 @@
 
 ## 0.1.0 (non publiée)
 
+### Frontal RF v4 : gain et perte par terminal et par passerelle (ABI additive)
+- Quatre points d'entrée ajoutés sans modifier les 91 existants : `lsim_simulate_uplinks_trace_v3`, `lsim_simulate_uplinks_trace_gw2_v2`, `lsim_simulate_uplinks_multi_dl_v2`, `lsim_simulate_closed_loop_v4` (95 symboles exportés).
+- `lsim_device_rf` / `lsim_gateway_rf` : `present` à bits indépendants (`LSIM_RF_HAS_ANTENNA_GAIN`, `LSIM_RF_HAS_CABLE_LOSS`). Un champ absent n'est pas lu ; un bit inconnu, une valeur hors bornes (`|G| <= 40 dBi`, `0 <= L <= 40 dB`) ou une table partielle sont refusés (statut 301).
+- Sémantique réciproque : `RSSI_ul = (P_tx + G_d − L_d) + (G_g − L_g) − PL − shadowing` ; la descente réutilise le montant, les termes de la chaîne terminale s'annulent, donc le gain est compté une seule fois. Quand une table terminale est fournie, `rule.device_antenna_gain_dbi` n'est plus ajouté (aucun cumul).
+- `lsim_closed_loop_v4_args` enveloppe les arguments v3 : validation et écriture inchangées.
+- Pont Python : `python/lsim/rf.py` (`DeviceRf`, `GatewayRf`, `None` = champ absent), routage unique et testé par espions ; dès qu'un frontal est fourni, l'ancien point d'entrée n'est plus appelé.
+- **Sans frontal fourni, résultat identique au bit près** : empreintes `d2cb0fac6c2d9950` / `ed126d7ff5aac3b0` inchangées, 1778 → 1832 tests Python (dont 30 pour le frontal), C++ 685165 → 685235 vérifications.
+
 ### Caractérisation RF R1 (tests seulement, aucun changement de comportement)
 - `python/tests/test_rf_characterization_r1.py` : 24 tests qui figent le comportement radio **réel** de la base, mesuré et non supposé. Six sujets : gain de la passerelle (+3 dBi = +3 dB, additif de 0 à 6 dBi, sans effet sur l'airtime ; RSSI = P_tx + G_passerelle − PL(d) à 1e-9) ; absence de gain d'antenne du terminal dans le modèle (seul `tx_power_dbm` agit) et non-contamination du gain de descente sur la liaison montante (RSSI montant identique au bit près pour 0 / 10 / 20 dBi, alors que l'issue de descente bascule) ; descente par réciprocité, avec bascule de réception à 12 km / SF12 quand le gain terminal passe de 0 à 10 dBi ; sensibilité RAK7249 (catalogue −139 dBm, aucun point publié, seuils relatifs SX1276 appliqués : écarts 16 / 13 / 10 / 7 / 6 / 3 dB du SF7 au SF12) ; collisions de même SF, frontière de capture exacte et inclusive à 6 dB, chevauchement partiel (140 ms chevauche, 150 ms non pour un airtime SF9 de 144 384 000 ns) ; contrôles (SF différents et transmissions disjointes ne collisionnent pas).
 - Limites documentées dans les tests, non corrigées ici : la fréquence est portée par la propagation et non par la trame (aucun modèle de canaux distincts au niveau radio) ; l'issue de descente utilise un encodage inversé de celui de la montée (0 = reçu), figé par l'ABI.

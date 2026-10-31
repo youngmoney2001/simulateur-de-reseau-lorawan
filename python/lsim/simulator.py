@@ -16,6 +16,7 @@ from typing import Optional, Sequence
 
 from lsim._native import (
     LIB,
+    _CDeviceRf,
     _CDeviceStats,
     _CDownlinkPlan,
     _CDownlinkStats,
@@ -34,6 +35,7 @@ from lsim._native import (
     _CObstacle,
     _CPropagation,
 )
+from lsim.rf import DeviceRf, GatewayRf, device_table, gateway_entry, gateway_table
 from lsim.environment import Environment
 from lsim.gateway_sensitivity import (MODEL_ID, AbsoluteSensitivity,
                                      refuse_absolute)
@@ -334,6 +336,43 @@ class TraceResult:
     records: tuple[TxRecord, ...]
 
 
+def trace_native_function(*, rf: bool, absolute: bool):
+    """Point d'entrée natif de la trace, selon la présence d'un frontal et de la sensibilité.
+
+    Seul endroit où le routage est décidé : dès qu'un frontal est fourni, le contrat v4 est
+    requis et l'ancien point d'entrée ne doit plus être appelé.
+    """
+    if rf:
+        return (LIB.lsim_simulate_uplinks_trace_gw2_v2 if absolute
+                else LIB.lsim_simulate_uplinks_trace_v3)
+    return (LIB.lsim_simulate_uplinks_trace_gw2 if absolute
+            else LIB.lsim_simulate_uplinks_trace_v2)
+
+
+def multi_dl_native_function(*, rf: bool):
+    """Point d'entrée natif des downlinks multi-passerelles : v2 dès qu'un frontal est fourni."""
+    return LIB.lsim_simulate_uplinks_multi_dl_v2 if rf else LIB.lsim_simulate_uplinks_multi_dl
+
+
+def _rf_tables(device_rf, gateway_rf, device_count: int, gateway_count: int):
+    """Convertit les frontaux en tables C, en refusant toute table partielle."""
+    if device_rf is None:
+        c_dev, n_dev = None, 0
+    else:
+        entries = tuple(device_rf)
+        if len(entries) != device_count:
+            raise ValueError("device_rf : une entrée par dispositif (ou None)")
+        c_dev, n_dev = device_table(entries, _CDeviceRf)
+    if gateway_rf is None:
+        c_gw, n_gw = None, 0
+    else:
+        entries = tuple(gateway_rf)
+        if len(entries) != gateway_count:
+            raise ValueError("gateway_rf : une entrée par passerelle (ou None)")
+        c_gw, n_gw = gateway_table(entries)
+    return c_dev, n_dev, c_gw, n_gw
+
+
 def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
     c_devs = (_CEndDevice * len(devices))()
     for i, d in enumerate(devices):
@@ -354,7 +393,9 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation: Propagation,
                            environment: Optional[Environment] = None,
                            gateway_busy: Sequence[tuple[int, int]] = (),
-                           reservations: Sequence[tuple[int, int, int]] = ()) -> TraceResult:
+                           reservations: Sequence[tuple[int, int, int]] = (),
+                           device_rf: Optional[Sequence[DeviceRf]] = None,
+                           gateway_rf: Optional[GatewayRf] = None) -> TraceResult:
     """Comme `simulate_uplinks`, avec une entrée de trace par transmission.
 
     `gateway_busy` : périodes [début, fin) pendant lesquelles la passerelle émet (ns). Une trame
@@ -365,6 +406,10 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
 
     `reservations` : triplets (index de dispositif, rang 1-based, octets MAC) réservés dans
     l'émission correspondante ; ces octets allongent son temps d'antenne. Vide = sans MAC.
+
+    `device_rf` / `gateway_rf` (v4) : frontaux RF. `device_rf` est une séquence d'un `DeviceRf`
+    par dispositif, ou None. Dès qu'un frontal est fourni, le pont appelle le point d'entrée v4
+    (`trace_v3` ou `gw2_v2`) et jamais l'ancien.
     """
     if len(reservations) > MAX_TRACE_RECORDS:
         raise ValueError("trop de réservations MAC")
@@ -386,6 +431,12 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
     if len(devices) > MAX_END_DEVICES:
         raise ValueError(f"au plus {MAX_END_DEVICES} dispositifs par simulation")
     n = len(devices)
+    if device_rf is not None and len(device_rf) != n:
+        raise ValueError("device_rf : une entrée par dispositif (ou None)")
+    c_dev_rf, n_dev_rf = (device_table(tuple(device_rf), _CDeviceRf)
+                          if device_rf is not None else (None, 0))
+    c_gw_rf = gateway_entry(gateway_rf)
+    has_rf = c_dev_rf is not None or c_gw_rf is not None
     c_devs = _c_end_devices(devices)
     absolute = getattr(gateway, "absolute_sensitivity", None)
     c_gw = (absolute.to_c(gateway) if absolute is not None
@@ -408,12 +459,12 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     count = ctypes.c_size_t(0)
     records = (_CTxRecord * capacity)() if capacity else None
-    trace_fn = (LIB.lsim_simulate_uplinks_trace_gw2 if absolute is not None
-                else LIB.lsim_simulate_uplinks_trace_v2)
-    status = trace_fn(
-        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
-        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
-        c_busy, len(gateway_busy), c_res, len(reservations))
+    trace_fn = trace_native_function(rf=has_rf, absolute=absolute is not None)
+    common = (c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
+              c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
+              c_busy, len(gateway_busy), c_res, len(reservations))
+    # Les deux contrats ont la même tête ; v3/gw2_v2 ajoutent les frontaux en fin d'appel.
+    status = (trace_fn(*common, c_dev_rf, n_dev_rf, c_gw_rf) if has_rf else trace_fn(*common))
     del keep
     if status != 0:
         raise StatusError(status)
@@ -623,7 +674,9 @@ DL_READY_NEVER = (1 << 63) - 1  # INT64_MAX côté natif : descente jamais achem
 def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Gateway],
                              propagation: Propagation, rule: DownlinkRule,
                              environment: Optional[Environment] = None,
-                             dl_ready_ns: Optional[Sequence[int]] = None) -> MultiDownlinkResult:
+                             dl_ready_ns: Optional[Sequence[int]] = None,
+                             device_rf: Optional[Sequence[DeviceRf]] = None,
+                             gateway_rf: Optional[Sequence[GatewayRf]] = None) -> MultiDownlinkResult:
     """Passerelles multiples avec downlinks et demi-duplex par passerelle (calcul exact, C++).
 
     Chaque uplink décodé est acquitté ou reçoit une charge par la meilleure passerelle décodeuse.
@@ -632,6 +685,9 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     `dl_ready_ns` (optionnel) : départ au plus tôt de la descente de chaque émission, dans l'ordre
     des émissions (dispositifs dans l'ordre, puis k) ; -1 aucune contrainte ; `DL_READY_NEVER`
     descente jamais acheminée. Longueur : nombre total d'émissions.
+
+    `device_rf` / `gateway_rf` (v4) : frontaux. Fournis, ils imposent le point d'entrée
+    `multi_dl_v2` ; `rule.device_antenna_gain_dbi` est alors ignoré (le gain ne compte qu'une fois).
     """
     for _g in gateways:
         refuse_absolute(_g, "simulate_multi_downlinks")
@@ -649,6 +705,8 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     if total_messages > MAX_TRACE_RECORDS:
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions")
     c_devs = _c_end_devices(devices)
+    c_dev_rf, n_dev_rf, c_gw_rf, n_gw_rf = _rf_tables(device_rf, gateway_rf, n, g_count)
+    has_rf = c_dev_rf is not None or c_gw_rf is not None
     c_gws = (_CGateway * g_count)(*[
         _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
@@ -677,11 +735,13 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     else:
         c_ready = (ctypes.c_int64 * max(total_messages, 1))(*dl_ready_ns)
         ready_ptr, ready_count = c_ready, total_messages
-    status = LIB.lsim_simulate_uplinks_multi_dl(
-        c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), ctypes.byref(c_rule),
-        c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
-        c_records, total_messages, ctypes.byref(c_record_count),
-        c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
+    multi_fn = multi_dl_native_function(rf=has_rf)
+    common = (c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), ctypes.byref(c_rule),
+              c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
+              c_records, total_messages, ctypes.byref(c_record_count),
+              c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
+    status = (multi_fn(*common, c_dev_rf, n_dev_rf, c_gw_rf, n_gw_rf) if has_rf
+              else multi_fn(*common))
     del keep
     if status != 0:
         raise StatusError(status)

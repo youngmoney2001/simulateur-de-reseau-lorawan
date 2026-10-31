@@ -75,7 +75,31 @@ int32_t build_environment(const lsim_environment* in, lsim::env::ElevationGrid& 
 }
 
 // Exécution après validation. Ne touche aux sorties utilisateur qu'à travers emit_closed_loop_v3.
-int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a) {
+// Frontal v4 : mêmes règles que c_api_ext.cpp (bits connus, champs absents non lus, bornes).
+constexpr std::uint32_t kRfKnownBits = LSIM_RF_HAS_ANTENNA_GAIN | LSIM_RF_HAS_CABLE_LOSS;
+
+int32_t rf_invalid() {
+    return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+}
+
+int32_t to_frontend(std::uint32_t present, double gain_dbi, double loss_db,
+                    lsim::sim::RadioFrontend& out) {
+    out = lsim::sim::RadioFrontend{};
+    if ((present & ~kRfKnownBits) != 0U) return rf_invalid();
+    if ((present & LSIM_RF_HAS_ANTENNA_GAIN) != 0U) {
+        out.has_antenna_gain = true;
+        out.antenna_gain_dbi = gain_dbi;
+    }
+    if ((present & LSIM_RF_HAS_CABLE_LOSS) != 0U) {
+        out.has_cable_loss = true;
+        out.cable_loss_db = loss_db;
+    }
+    if (!lsim::sim::radio_frontend_valid(out)) return rf_invalid();
+    return 0;
+}
+
+int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a, const lsim_device_rf* device_rf,
+                           std::size_t device_rf_count, const lsim_gateway_rf* gateway_rf) {
     const std::size_t n = a.device_count;
 
     std::uint64_t planned = 0;
@@ -98,6 +122,15 @@ int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a) {
         s.period_ns = d.period_ns;
         s.messages = d.messages;
         s.duty_cycle = d.duty_cycle;
+    }
+    // Frontaux terminaux : table 0 ou complète, validée avant toute simulation.
+    if (device_rf_count != 0) {
+        if (device_rf == nullptr || device_rf_count != n) return rf_invalid();
+        for (std::size_t i = 0; i < n; ++i) {
+            const int32_t st = to_frontend(device_rf[i].present, device_rf[i].antenna_gain_dbi,
+                                           device_rf[i].cable_loss_db, specs[i].rf);
+            if (st != 0) return st;
+        }
     }
     std::vector<lsim::plan::DeviceRadio> rv(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -165,6 +198,17 @@ int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a) {
     g.antenna_gain_dbi = a.gateway->base.antenna_gain_dbi;
     g.rx_sensitivity_offset_db = a.gateway->base.rx_sensitivity_offset_db;
     g.absolute = absolute;
+    if (gateway_rf != nullptr) {
+        lsim::sim::RadioFrontend gf;
+        const int32_t st = to_frontend(gateway_rf->present, gateway_rf->antenna_gain_dbi,
+                                       gateway_rf->cable_loss_db, gf);
+        if (st != 0) return st;
+        if (gf.has_antenna_gain) g.antenna_gain_dbi = gf.antenna_gain_dbi;
+        if (gf.has_cable_loss) {
+            g.has_cable_loss = true;
+            g.cable_loss_db = gf.cable_loss_db;
+        }
+    }
 
     lsim::sim::PropagationSpec p;
     p.frequency_hz = a.prop->frequency_hz;
@@ -220,7 +264,31 @@ int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* args) {
     const int32_t valid = lsim::sim::abi_v3::validate_closed_loop_v3_args(args);
     if (valid != 0) return valid;
     try {
-        return run_closed_loop_v3(*args);
+        return run_closed_loop_v3(*args, nullptr, 0, nullptr);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+// Boucle fermée v4 : enveloppe v3 + frontaux. La validation v3 s'applique d'abord, puis les
+// tables RF sont contrôlées (0 ou complètes) avant d'atteindre le moteur.
+int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args) {
+    if (args == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    if (args->struct_size != sizeof(lsim_closed_loop_v4_args) ||
+        args->abi_version != LSIM_CLOSED_LOOP_V4_ABI_VERSION || args->v3 == nullptr) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    if (args->device_rf_count != 0 && args->device_rf == nullptr) {
+        return rf_invalid();
+    }
+    if (args->device_rf_count != 0 && args->device_rf_count != args->v3->device_count) {
+        return rf_invalid();
+    }
+    const int32_t valid = lsim::sim::abi_v3::validate_closed_loop_v3_args(args->v3);
+    if (valid != 0) return valid;
+    try {
+        return run_closed_loop_v3(*args->v3, args->device_rf, args->device_rf_count,
+                                  args->gateway_rf);
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }

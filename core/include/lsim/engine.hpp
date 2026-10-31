@@ -11,6 +11,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -76,6 +77,39 @@ struct DownlinkPlan {
     std::uint32_t clock_drift_ppm = 0;      // classe B : 0..1000
 };
 
+// Frontal RF d'un terminal (v4) : gain d'antenne et perte de câble, chacun indépendamment
+// présent. L'antenne est réciproque : la chaîne `G - L` s'applique au montant comme au descendant.
+// `present()` faux = frontal neutre, comportement identique à la base.
+struct RadioFrontend {
+    bool has_antenna_gain = false;
+    double antenna_gain_dbi = 0.0;  // |.| <= kMaxAntennaGainDbi si présent
+    bool has_cable_loss = false;
+    double cable_loss_db = 0.0;     // 0..kMaxCableLossDb si présent
+
+    bool present() const { return has_antenna_gain || has_cable_loss; }
+    // Chaîne d'émission/réception : gain moins perte. Les champs absents valent 0.
+    double chain_db() const {
+        return (has_antenna_gain ? antenna_gain_dbi : 0.0) - (has_cable_loss ? cable_loss_db : 0.0);
+    }
+};
+
+// Bornes du frontal : au-delà, l'entrée est refusée (pas de normalisation silencieuse).
+inline constexpr double kMaxAntennaGainDbi = 40.0;
+inline constexpr double kMaxCableLossDb = 40.0;
+
+// Vrai si le frontal est valide. Les champs absents ne sont pas lus.
+inline bool radio_frontend_valid(const RadioFrontend& rf) {
+    if (rf.has_antenna_gain) {
+        const double g = rf.antenna_gain_dbi;
+        if (!std::isfinite(g) || g < -kMaxAntennaGainDbi || g > kMaxAntennaGainDbi) return false;
+    }
+    if (rf.has_cable_loss) {
+        const double l = rf.cable_loss_db;
+        if (!std::isfinite(l) || l < 0.0 || l > kMaxCableLossDb) return false;
+    }
+    return true;
+}
+
 // Dispositif terminal émettant périodiquement des trames confirmées-non.
 struct EndDeviceSpec {
     Position position;
@@ -89,6 +123,9 @@ struct EndDeviceSpec {
     // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
     double duty_cycle = 1.0;
     DownlinkPlan downlink;
+    // Frontal d'émission/réception (v4), en fin de structure : les initialisations agrégées
+    // positionnelles existantes gardent leur sens. Neutre par défaut.
+    RadioFrontend rf;
 };
 
 // Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.
@@ -122,6 +159,11 @@ struct GatewaySpec {
     double rx_sensitivity_offset_db = 0.0;
     // Sensibilité absolue (remplace la référence SX1276 et le décalage quand `enabled`).
     GatewayAbsoluteSensitivity absolute;
+    // Perte de câble du frontal passerelle (v4), en fin de structure pour préserver les
+    // initialisations agrégées positionnelles. 0 = comportement de la base.
+    bool has_cable_loss = false;
+    double cable_loss_db = 0.0;
+    double chain_db() const { return antenna_gain_dbi - (has_cable_loss ? cable_loss_db : 0.0); }
 };
 
 struct PropagationSpec {

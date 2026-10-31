@@ -97,6 +97,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_closed_loop_v3_buffers.cpp
         core/tests/test_closed_loop_v3_crossval.cpp
         core/tests/test_closed_loop_v3_api.cpp
+        core/tests/test_rf_frontend.cpp
         core/tests/test_loop_adr.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp

@@ -1472,10 +1472,131 @@ typedef struct lsim_closed_loop_v3_args {
     size_t* terminal_count;
 } lsim_closed_loop_v3_args;
 
+
+/* =====================================================================================
+ * Frontal RF v4 (R2b) : gain d'antenne et perte de câble, par terminal et par passerelle.
+ *
+ * Additif et versionné : aucun symbole existant n'est modifié. Les quatre points d'entrée
+ * v4 n'appliquent un frontal que lorsque la table correspondante est fournie ; sans table,
+ * les résultats et les empreintes de la base sont inchangés au bit près.
+ *
+ * Sémantique : l'antenne est réciproque. La chaîne d'un terminal vaut (G - L) et s'applique
+ * au montant comme au descendant, sans double comptage :
+ *     RSSI_ul = (P_tx + G_d - L_d) + (G_g - L_g) - PL - shadowing
+ *     RSSI_dl = P_gw + (G_g - L_g) - PL + (G_d - L_d) + device_rx_offset_db
+ * ===================================================================================== */
+
+#define LSIM_RF_HAS_ANTENNA_GAIN 1u  /* bit 0 : antenna_gain_dbi est lu */
+#define LSIM_RF_HAS_CABLE_LOSS   2u  /* bit 1 : cable_loss_db est lu */
+
+/* Frontal d'un terminal. present = 0 : frontal neutre (chaîne 0 dB).
+ * Les champs absents ne sont jamais lus : un gain absent ne vaut pas 0 par convention, il
+ * n'existe pas. Bornes : |G| <= 40 dBi, 0 <= L <= 40 dB ; valeurs non finies refusées. */
+typedef struct lsim_device_rf {
+    uint32_t present;
+    double   antenna_gain_dbi;
+    double   cable_loss_db;
+} lsim_device_rf;
+
+/* Frontal d'une passerelle. Les mêmes bits s'appliquent. Quand une entrée est fournie pour
+ * une passerelle, son gain présent REMPLACE `lsim_gateway.antenna_gain_dbi` ; la perte de
+ * câble s'ajoute à la chaîne. Aucune valeur n'est cumulée avec le champ scalaire. */
+typedef struct lsim_gateway_rf {
+    uint32_t present;
+    double   antenna_gain_dbi;
+    double   cable_loss_db;
+} lsim_gateway_rf;
+
 /* Boucle fermée v3 : configuration explicite des canaux et trace v3. Statut 0 en cas de succès.
  * Définie dans core/src/c_api_closed_loop_v3.cpp (étape 6.3), exportée par core/exports.map
  * (symbole lsim_*), et appelée par python/lsim/closed_loop_v3.py. */
 LSIM_API int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* args);
+
+/* ------------------------------------------------------------------ Points d'entrée v4
+
+   Règle de table : un compteur RF vaut 0 (aucune table, comportement historique) ou
+   exactement le nombre d'éléments de la simulation (device_count / gateway_count). Toute
+   autre valeur est refusée avec le statut d'entrée invalide : aucun élément ne reçoit
+   silencieusement un frontal vide. Les fonctions à passerelle unique prennent un pointeur
+   nullable (0 ou 1 frontal). */
+
+/* Trace par transmission avec frontaux par terminal et par passerelle.
+   Mêmes sorties, mêmes statuts et même contrat de tampon que `lsim_simulate_uplinks_trace_v2`. */
+LSIM_API int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count,
+                                                const lsim_device_rf* device_rf,
+                                                size_t device_rf_count,
+                                                const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue) avec frontaux. Mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_trace_gw2_v2(const lsim_end_device* devices,
+                                                    size_t device_count,
+                                                    const lsim_gateway_v2* gateway,
+                                                    const lsim_propagation* prop,
+                                                    const lsim_environment* env,
+                                                    lsim_device_stats* per_device,
+                                                    lsim_sim_stats* totals,
+                                                    lsim_tx_record* records,
+                                                    size_t record_capacity, size_t* record_count,
+                                                    const lsim_interval* gateway_busy,
+                                                    size_t gateway_busy_count,
+                                                    const lsim_mac_reservation* reservations,
+                                                    size_t reservation_count,
+                                                    const lsim_device_rf* device_rf,
+                                                    size_t device_rf_count,
+                                                    const lsim_gateway_rf* gateway_rf);
+
+/* Downlinks multi-passerelles avec frontaux par terminal et par passerelle.
+   Mêmes sorties, mêmes statuts et même contrat que `lsim_simulate_uplinks_multi_dl`.
+   Lorsqu'une table terminale est fournie, `rule->device_antenna_gain_dbi` n'est PAS ajouté :
+   la chaîne du frontal fait foi, pour que le gain ne soit jamais compté deux fois. */
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* devices,
+                                                   size_t device_count,
+                                                   const lsim_gateway* gateways,
+                                                   size_t gateway_count,
+                                                   const lsim_propagation* prop,
+                                                   const lsim_downlink_rule* rule,
+                                                   const lsim_environment* env,
+                                                   lsim_device_stats* per_device,
+                                                   lsim_network_stats* totals,
+                                                   lsim_gateway_rx_stats* per_gateway,
+                                                   lsim_multi_tx_record* records,
+                                                   size_t record_capacity, size_t* record_count,
+                                                   lsim_downlink_record* downlinks,
+                                                   size_t downlink_capacity,
+                                                   size_t* downlink_count,
+                                                   const int64_t* dl_ready_ns, size_t ready_count,
+                                                   const lsim_device_rf* device_rf,
+                                                   size_t device_rf_count,
+                                                   const lsim_gateway_rf* gateway_rf,
+                                                   size_t gateway_rf_count);
+
+/* Arguments de la boucle fermée v4 : les arguments v3 sont enveloppés, jamais recopiés.
+   Validation v3 inchangée, puis frontal appliqué avant le moteur. */
+#define LSIM_CLOSED_LOOP_V4_ABI_VERSION 4u
+
+typedef struct lsim_closed_loop_v4_args {
+    uint32_t struct_size;      /* sizeof(lsim_closed_loop_v4_args) */
+    uint32_t abi_version;      /* LSIM_CLOSED_LOOP_V4_ABI_VERSION */
+    const lsim_closed_loop_v3_args* v3;  /* arguments v3, requis */
+    const lsim_device_rf* device_rf;     /* 0 ou device_count entrées */
+    size_t   device_rf_count;
+    const lsim_gateway_rf* gateway_rf;   /* NULL ou 1 entrée (passerelle unique de v3) */
+    uint64_t reserved[2];
+} lsim_closed_loop_v4_args;
+
+/* Boucle fermée v4 : identique à v3, avec frontaux par terminal et par passerelle. */
+LSIM_API int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args);
 
 #ifdef __cplusplus
 }

@@ -265,3 +265,12 @@ Les schémas `run_create`, `validate_request` et `scenario_input` sont régéné
 du dépôt (`PYTHONPATH=python python -m lsim.api_contract schemas/api/v1`) ; `terrain_list` est ajouté
 (`terrain_id` dans `run_create` et `validate_request`). Détail du comportement : `docs/USAGE.md`
 section 5sexies.
+
+## Frontal RF v4 (R2b)
+
+Quatre points d'entrée additifs : `lsim_simulate_uplinks_trace_v3`,
+`lsim_simulate_uplinks_trace_gw2_v2`, `lsim_simulate_uplinks_multi_dl_v2`,
+`lsim_simulate_closed_loop_v4`. Ils acceptent des tables `lsim_device_rf` / `lsim_gateway_rf`
+(gain d'antenne et perte de câble, présence indépendante). Sans table, le comportement est celui
+de la base. Le contrat complet (bilans, bornes, statuts, routage Python, limites) est dans
+`docs/RF_FRONTEND_V4.md`.

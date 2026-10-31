@@ -270,6 +270,40 @@ class _CGatewayV2(ctypes.Structure):
     ]
 
 
+class _CDeviceRf(ctypes.Structure):
+    """`lsim_device_rf` (v4) : frontal d'un terminal. present = bit 0 gain, bit 1 perte."""
+
+    _fields_ = [
+        ("present", ctypes.c_uint32),
+        ("antenna_gain_dbi", ctypes.c_double),
+        ("cable_loss_db", ctypes.c_double),
+    ]
+
+
+class _CGatewayRf(ctypes.Structure):
+    """`lsim_gateway_rf` (v4) : frontal d'une passerelle."""
+
+    _fields_ = [
+        ("present", ctypes.c_uint32),
+        ("antenna_gain_dbi", ctypes.c_double),
+        ("cable_loss_db", ctypes.c_double),
+    ]
+
+
+class _CClosedLoopV4Args(ctypes.Structure):
+    """`lsim_closed_loop_v4_args` : enveloppe v3 + frontaux."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("v3", ctypes.c_void_p),
+        ("device_rf", ctypes.POINTER(_CDeviceRf)),
+        ("device_rf_count", ctypes.c_size_t),
+        ("gateway_rf", ctypes.POINTER(_CGatewayRf)),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
 class _CPropagation(ctypes.Structure):
     _fields_ = [
         ("frequency_hz", ctypes.c_double),
@@ -616,6 +650,35 @@ LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
     ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_trace_v3.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_v3.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf)]
+LIB.lsim_simulate_uplinks_trace_gw2_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_gw2_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf)]
+LIB.lsim_simulate_uplinks_multi_dl_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDownlinkRule), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf), ctypes.c_size_t]
+LIB.lsim_simulate_closed_loop_v4.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v4.argtypes = [ctypes.POINTER(_CClosedLoopV4Args)]
 LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
 LIB.lsim_env_path_loss_matrix.argtypes = [
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,

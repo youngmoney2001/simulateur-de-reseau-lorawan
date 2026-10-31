@@ -63,6 +63,9 @@ SimStatus validate_device(const EndDeviceSpec& d) {
     if (!finite(d.duty_cycle) || d.duty_cycle <= 0.0 || d.duty_cycle > 1.0) {
         return SimStatus::InvalidInput;
     }
+    if (!radio_frontend_valid(d.rf)) {
+        return SimStatus::InvalidInput;  // frontal terminal v4 hors bornes
+    }
     const DownlinkPlan& dl = d.downlink;
     if (dl.count > kMaxDownlinksPerDevice) return SimStatus::InvalidInput;
     if (dl.count > 0) {
@@ -106,6 +109,11 @@ SimStatus validate_inputs(const GatewaySpec& g, const PropagationSpec& p) {
         return SimStatus::InvalidInput;
     }
     if (!finite(g.rx_sensitivity_offset_db) || std::fabs(g.rx_sensitivity_offset_db) > 20.0) {
+        return SimStatus::InvalidInput;
+    }
+    // Frontal passerelle v4 : la perte de câble est bornée, jamais normalisée en silence.
+    if (g.has_cable_loss &&
+        (!finite(g.cable_loss_db) || g.cable_loss_db < 0.0 || g.cable_loss_db > kMaxCableLossDb)) {
         return SimStatus::InvalidInput;
     }
     if (g.absolute.enabled) {
@@ -298,7 +306,8 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         }
         const double shadow = shadowing_sample_db(prop.shadowing_seed, static_cast<std::uint32_t>(i),
                                                   prop.shadowing_sigma_db);
-        rssi[i] = d.tx_power_dbm + gateway.antenna_gain_dbi - path_loss - shadow;
+        // Chaîne terminal (G - L) ajoutée à la puissance conduite ; neutre = formule de la base.
+        rssi[i] = d.tx_power_dbm + d.rf.chain_db() + gateway.chain_db() - path_loss - shadow;
 
         double s = 0.0;
         if (gateway.absolute.enabled) {
@@ -717,7 +726,7 @@ static SimStatus prepare_links(const EndDeviceSpec* devices, std::size_t device_
                 if (pl.status != lora::Status::Ok) return SimStatus::InvalidInput;
                 path_loss = pl.value;
             }
-            rssi[i * G + g] = d.tx_power_dbm + gw.antenna_gain_dbi - path_loss - shadow;
+            rssi[i * G + g] = d.tx_power_dbm + d.rf.chain_db() + gw.chain_db() - path_loss - shadow;
         }
 
         total_tx += d.messages;
@@ -1180,12 +1189,18 @@ SimStatus simulate_uplinks_multi_downlinks(
         dl.end_ns = start + air;
         busy[g][start] = start + air;
         // Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev.
+        // v4 : la chaîne terminale (G - L) est déjà dans rssi_up ; elle est retirée de la
+        // puissance conduite puis ré-ajoutée à la réception, donc comptée une seule fois.
+        // Frontal neutre : comportement historique, gain scalaire de la règle appliqué.
         double s = 0.0;
         if (lora::receiver_sensitivity_dbm(sf_used, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
             return SimStatus::InvalidInput;
         }
-        const double rssi_dl = rssi_up - devices[ta.device].tx_power_dbm +
-                               rule.gateway_tx_power_dbm + rule.device_antenna_gain_dbi;
+        const RadioFrontend& dl_rf = devices[ta.device].rf;
+        const double dl_chain = dl_rf.present() ? dl_rf.chain_db() : 0.0;
+        const double dl_rx_gain = dl_rf.present() ? dl_rf.chain_db() : rule.device_antenna_gain_dbi;
+        const double rssi_dl = rssi_up - (devices[ta.device].tx_power_dbm + dl_chain) +
+                               rule.gateway_tx_power_dbm + dl_rx_gain;
         dl.outcome = rssi_dl >= s + rule.device_rx_offset_db ? DownlinkOutcome::Delivered
                                                              : DownlinkOutcome::LostSensitivity;
         return SimStatus::Ok;
@@ -1584,7 +1599,9 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         return p0 - static_cast<double>(power_index) * step_db[i];
     };
     const auto rssi_of = [&](std::size_t i, std::uint8_t power_index) {
-        return tx_dbm(i, power_index) + gateway.antenna_gain_dbi - path_loss[i] - shadow[i];
+        // v4 : chaîne terminale et chaîne passerelle ; neutres par défaut (formule de la base).
+        return tx_dbm(i, power_index) + devices[i].rf.chain_db() + gateway.chain_db() -
+               path_loss[i] - shadow[i];
     };
     // Instant de début de la k-ième émission nominale ; false si hors horizon.
     const auto nominal = [&](std::size_t i, std::uint32_t k, SimTime& out_t) {
@@ -2141,9 +2158,12 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     plan::DeviceRadio rad = radios[dl.device];
                     const bool rx2 = dl.t_open == ta.end + kLoopRx2DelayNs;
                     rad.rx1_sf = rx2 ? kLoopRx2Sf : ta.sf;
-                    const double rssi_dl = ta.rssi_dbm - tx_dbm(dl.device, powers[dl.uplink]) +
-                                           options.protocol.gateway_tx_power_dbm +
-                                           options.protocol.device_antenna_gain_dbi;
+                    const RadioFrontend& lo_rf = devices[dl.device].rf;
+                    const double lo_chain = lo_rf.present() ? lo_rf.chain_db() : 0.0;
+                    const double lo_rx_gain =
+                        lo_rf.present() ? lo_rf.chain_db() : options.protocol.device_antenna_gain_dbi;
+                    const double rssi_dl = ta.rssi_dbm - (tx_dbm(dl.device, powers[dl.uplink]) + lo_chain) +
+                                           options.protocol.gateway_tx_power_dbm + lo_rx_gain;
                     double sens = 0.0;
                     if (lora::receiver_sensitivity_dbm(rad.rx1_sf, static_cast<lora::Bandwidth>(rad.rx1_bw_hz),
                                                        sens) != lora::Status::Ok) {

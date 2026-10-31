@@ -145,6 +145,72 @@ lsim::sim::GatewayAbsoluteSensitivity to_absolute(const lsim_gateway_v2* gw2) {
     return a;
 }
 
+// ------------------------------------------- Frontal RF v4 : conversion et validation
+//
+// Un frontal C est traduit champ par champ : seuls les champs dont le bit `present` est posé
+// sont lus. Un bit inconnu est refusé (pas d'extension silencieuse). Les bornes du moteur
+// s'appliquent (|G| <= 40 dBi, 0 <= L <= 40 dB, valeurs finies).
+constexpr std::uint32_t kRfKnownBits = LSIM_RF_HAS_ANTENNA_GAIN | LSIM_RF_HAS_CABLE_LOSS;
+
+int32_t rf_invalid() {
+    return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+}
+
+int32_t to_frontend(std::uint32_t present, double gain_dbi, double loss_db,
+                    lsim::sim::RadioFrontend& out) {
+    out = lsim::sim::RadioFrontend{};
+    if ((present & ~kRfKnownBits) != 0U) return rf_invalid();
+    if ((present & LSIM_RF_HAS_ANTENNA_GAIN) != 0U) {
+        out.has_antenna_gain = true;
+        out.antenna_gain_dbi = gain_dbi;
+    }
+    if ((present & LSIM_RF_HAS_CABLE_LOSS) != 0U) {
+        out.has_cable_loss = true;
+        out.cable_loss_db = loss_db;
+    }
+    if (!lsim::sim::radio_frontend_valid(out)) return rf_invalid();
+    return 0;
+}
+
+// Table de frontaux terminaux : 0 entrée (aucune) ou exactement device_count.
+int32_t apply_device_rf(std::vector<lsim::sim::EndDeviceSpec>& specs, const lsim_device_rf* rf,
+                        size_t count) {
+    if (count == 0) return 0;
+    if (rf == nullptr || count != specs.size()) return rf_invalid();
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t st = to_frontend(rf[i].present, rf[i].antenna_gain_dbi, rf[i].cable_loss_db,
+                                       specs[i].rf);
+        if (st != 0) return st;
+    }
+    return 0;
+}
+
+// Frontal passerelle : le gain présent remplace le champ scalaire, la perte s'ajoute.
+int32_t apply_gateway_rf(lsim::sim::GatewaySpec& gw, const lsim_gateway_rf* rf) {
+    if (rf == nullptr) return 0;
+    lsim::sim::RadioFrontend f;
+    const int32_t st = to_frontend(rf->present, rf->antenna_gain_dbi, rf->cable_loss_db, f);
+    if (st != 0) return st;
+    if (f.has_antenna_gain) gw.antenna_gain_dbi = f.antenna_gain_dbi;
+    if (f.has_cable_loss) {
+        gw.has_cable_loss = true;
+        gw.cable_loss_db = f.cable_loss_db;
+    }
+    return 0;
+}
+
+// Table de frontaux passerelles : 0 entrée ou exactement gateway_count.
+int32_t apply_gateway_rf_table(std::vector<lsim::sim::GatewaySpec>& gws,
+                               const lsim_gateway_rf* rf, size_t count) {
+    if (count == 0) return 0;
+    if (rf == nullptr || count != gws.size()) return rf_invalid();
+    for (size_t g = 0; g < count; ++g) {
+        const int32_t st = apply_gateway_rf(gws[g], &rf[g]);
+        if (st != 0) return st;
+    }
+    return 0;
+}
+
 extern "C" {
 
 int32_t lsim_derive_join_keys(const uint8_t nwk_key[16], const uint8_t dev_eui[8],
@@ -523,7 +589,9 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
                         const std::vector<lsim::sim::Interval>* busy = nullptr,
                         const std::vector<lsim::sim::MacReservation>* reservations = nullptr,
                         const lsim::sim::CausalDownlinks* causal = nullptr,
-                        const lsim::sim::GatewayAbsoluteSensitivity* absolute = nullptr) {
+                        const lsim::sim::GatewayAbsoluteSensitivity* absolute = nullptr,
+                        const lsim_device_rf* device_rf = nullptr, size_t device_rf_count = 0,
+                        const lsim_gateway_rf* gateway_rf = nullptr) {
     try {
         std::vector<lsim::sim::EndDeviceSpec> specs(device_count);
         for (size_t i = 0; i < device_count; ++i) {
@@ -545,6 +613,13 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         g.antenna_gain_dbi = gateway->antenna_gain_dbi;
         g.rx_sensitivity_offset_db = gateway->rx_sensitivity_offset_db;
         if (absolute != nullptr) g.absolute = *absolute;
+        {
+            // v4 : table terminale (0 ou complète) et frontal passerelle (0 ou 1).
+            const int32_t rf_status = apply_device_rf(specs, device_rf, device_rf_count);
+            if (rf_status != 0) return rf_status;
+            const int32_t gw_status = apply_gateway_rf(g, gateway_rf);
+            if (gw_status != 0) return gw_status;
+        }
 
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;
@@ -641,7 +716,10 @@ int32_t trace_v2_impl(const lsim_end_device* devices, size_t device_count,
                                        const lsim_interval* gateway_busy,
                                        size_t gateway_busy_count,
                                        const lsim_mac_reservation* reservations,
-                                       size_t reservation_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute) {
+                                       size_t reservation_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute,
+                                       const lsim_device_rf* device_rf = nullptr,
+                                       size_t device_rf_count = 0,
+                                       const lsim_gateway_rf* gateway_rf = nullptr) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
         (gateway_busy_count > 0 && gateway_busy == nullptr) ||
@@ -675,8 +753,13 @@ int32_t trace_v2_impl(const lsim_end_device* devices, size_t device_count,
             res[k].extra_bytes = reservations[k].extra_bytes;
         }
         std::vector<lsim::sim::TxRecord> trace;
+        // Table RF : validée ici, avant toute simulation, pour ne rien écrire en cas d'erreur.
+        if (device_rf_count != 0 && (device_rf == nullptr || device_rf_count != device_count)) {
+            return rf_invalid();
+        }
         const int32_t st = run_uplinks_env(devices, device_count, gateway, prop, env, per_device,
-                                           totals, &trace, &busy, &res, nullptr, absolute);
+                                           totals, &trace, &busy, &res, nullptr, absolute,
+                                           device_rf, device_rf_count, gateway_rf);
         if (st != 0) {
             return st;
         }
@@ -726,6 +809,49 @@ int32_t lsim_simulate_uplinks_trace_gw2(const lsim_end_device* devices, size_t d
     }
     const lsim::sim::GatewayAbsoluteSensitivity absolute = to_absolute(gateway);
     return trace_v2_impl(devices, device_count, &gateway->base, prop, env, per_device, totals, records, record_capacity, record_count, gateway_busy, gateway_busy_count, reservations, reservation_count, &absolute);
+}
+
+// ---- v4 : trace avec frontaux (R2b) ----
+
+int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices, size_t device_count,
+                                       const lsim_gateway* gateway, const lsim_propagation* prop,
+                                       const lsim_environment* env, lsim_device_stats* per_device,
+                                       lsim_sim_stats* totals, lsim_tx_record* records,
+                                       size_t record_capacity, size_t* record_count,
+                                       const lsim_interval* gateway_busy,
+                                       size_t gateway_busy_count,
+                                       const lsim_mac_reservation* reservations,
+                                       size_t reservation_count,
+                                       const lsim_device_rf* device_rf, size_t device_rf_count,
+                                       const lsim_gateway_rf* gateway_rf) {
+    return trace_v2_impl(devices, device_count, gateway, prop, env, per_device, totals, records,
+                         record_capacity, record_count, gateway_busy, gateway_busy_count,
+                         reservations, reservation_count, nullptr, device_rf, device_rf_count,
+                         gateway_rf);
+}
+
+int32_t lsim_simulate_uplinks_trace_gw2_v2(const lsim_end_device* devices, size_t device_count,
+                                           const lsim_gateway_v2* gateway,
+                                           const lsim_propagation* prop,
+                                           const lsim_environment* env,
+                                           lsim_device_stats* per_device, lsim_sim_stats* totals,
+                                           lsim_tx_record* records, size_t record_capacity,
+                                           size_t* record_count, const lsim_interval* gateway_busy,
+                                           size_t gateway_busy_count,
+                                           const lsim_mac_reservation* reservations,
+                                           size_t reservation_count,
+                                           const lsim_device_rf* device_rf,
+                                           size_t device_rf_count,
+                                           const lsim_gateway_rf* gateway_rf) {
+    if (gateway == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    if (gateway->sensitivity_model > LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2) {
+        return rf_invalid();
+    }
+    const lsim::sim::GatewayAbsoluteSensitivity absolute = to_absolute(gateway);
+    return trace_v2_impl(devices, device_count, &gateway->base, prop, env, per_device, totals,
+                         records, record_capacity, record_count, gateway_busy, gateway_busy_count,
+                         reservations, reservation_count, &absolute, device_rf, device_rf_count,
+                         gateway_rf);
 }
 
 int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
@@ -1530,16 +1656,16 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
 
 // ------------------------------------------- Passerelles multiples avec downlinks
 
-int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,
-                                       const lsim_gateway* gateways, size_t gateway_count,
-                                       const lsim_propagation* prop,
-                                       const lsim_downlink_rule* rule, const lsim_environment* env,
-                                       lsim_device_stats* per_device, lsim_network_stats* totals,
-                                       lsim_gateway_rx_stats* per_gateway,
-                                       lsim_multi_tx_record* records, size_t record_capacity,
-                                       size_t* record_count, lsim_downlink_record* downlinks,
-                                       size_t downlink_capacity, size_t* downlink_count,
-                                       const int64_t* dl_ready_ns, size_t ready_count) {
+int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
+                      const lsim_gateway* gateways, size_t gateway_count,
+                      const lsim_propagation* prop, const lsim_downlink_rule* rule,
+                      const lsim_environment* env, lsim_device_stats* per_device,
+                      lsim_network_stats* totals, lsim_gateway_rx_stats* per_gateway,
+                      lsim_multi_tx_record* records, size_t record_capacity, size_t* record_count,
+                      lsim_downlink_record* downlinks, size_t downlink_capacity,
+                      size_t* downlink_count, const int64_t* dl_ready_ns, size_t ready_count,
+                      const lsim_device_rf* device_rf, size_t device_rf_count,
+                      const lsim_gateway_rf* gateway_rf, size_t gateway_rf_count) {
     if (gateways == nullptr || prop == nullptr || rule == nullptr || totals == nullptr ||
         per_gateway == nullptr || record_count == nullptr || downlink_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
@@ -1574,6 +1700,13 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
             gws[g].position.y_m = gateways[g].y_m;
             gws[g].antenna_gain_dbi = gateways[g].antenna_gain_dbi;
             gws[g].rx_sensitivity_offset_db = gateways[g].rx_sensitivity_offset_db;
+        }
+        {
+            // v4 : tables 0 ou complètes, validées avant toute simulation.
+            const int32_t rf_status = apply_device_rf(specs, device_rf, device_rf_count);
+            if (rf_status != 0) return rf_status;
+            const int32_t gw_status = apply_gateway_rf_table(gws, gateway_rf, gateway_rf_count);
+            if (gw_status != 0) return gw_status;
         }
         lsim::sim::PropagationSpec p;
         p.frequency_hz = prop->frequency_hz;
@@ -1681,6 +1814,44 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }
+}
+
+// Points d'entrée publics : v1 (historique, sans frontal) et v2 (frontaux par terminal et
+// par passerelle). Une seule implémentation les sert, donc les sorties et statuts coïncident.
+int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t device_count,
+                                       const lsim_gateway* gateways, size_t gateway_count,
+                                       const lsim_propagation* prop,
+                                       const lsim_downlink_rule* rule, const lsim_environment* env,
+                                       lsim_device_stats* per_device, lsim_network_stats* totals,
+                                       lsim_gateway_rx_stats* per_gateway,
+                                       lsim_multi_tx_record* records, size_t record_capacity,
+                                       size_t* record_count, lsim_downlink_record* downlinks,
+                                       size_t downlink_capacity, size_t* downlink_count,
+                                       const int64_t* dl_ready_ns, size_t ready_count) {
+    return multi_dl_impl(devices, device_count, gateways, gateway_count, prop, rule, env, per_device,
+                         totals, per_gateway, records, record_capacity, record_count, downlinks,
+                         downlink_capacity, downlink_count, dl_ready_ns, ready_count, nullptr, 0,
+                         nullptr, 0);
+}
+
+int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* devices, size_t device_count,
+                                          const lsim_gateway* gateways, size_t gateway_count,
+                                          const lsim_propagation* prop,
+                                          const lsim_downlink_rule* rule,
+                                          const lsim_environment* env,
+                                          lsim_device_stats* per_device, lsim_network_stats* totals,
+                                          lsim_gateway_rx_stats* per_gateway,
+                                          lsim_multi_tx_record* records, size_t record_capacity,
+                                          size_t* record_count, lsim_downlink_record* downlinks,
+                                          size_t downlink_capacity, size_t* downlink_count,
+                                          const int64_t* dl_ready_ns, size_t ready_count,
+                                          const lsim_device_rf* device_rf, size_t device_rf_count,
+                                          const lsim_gateway_rf* gateway_rf,
+                                          size_t gateway_rf_count) {
+    return multi_dl_impl(devices, device_count, gateways, gateway_count, prop, rule, env, per_device,
+                         totals, per_gateway, records, record_capacity, record_count, downlinks,
+                         downlink_capacity, downlink_count, dl_ready_ns, ready_count, device_rf,
+                         device_rf_count, gateway_rf, gateway_rf_count);
 }
 
 extern "C" {
