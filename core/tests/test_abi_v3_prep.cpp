@@ -3,14 +3,17 @@
 // signatures et codes de statut. Les tests de la fonction publique lsim_simulate_closed_loop_v3
 // (appel réel, parité avec v2, erreurs, trace) sont dans core/tests/test_closed_loop_v3_api.cpp.
 //
-// Valeurs mesurées avec le compilateur de la sandbox (LP64, alignement 8) ; la cible 64 bits
-// est documentée (arbitrage A11).
+// Depuis F7, les tailles et décalages ne sont plus des littéraux LP64 : ils viennent de
+// `abi_layout.cpp`, qui porte DEUX tables explicites (x86-64 et i386) et les vérifie pour les
+// 53 structures de `lsim/c_api.h`. Ce fichier l'inclut pour partager une seule source de vérité
+// (la phase F7 n'autorise que ces deux fichiers, d'où l'absence d'en-tête séparé).
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <type_traits>
 
+#include "abi_layout.cpp"  // deux tables ABI + 453 vérifications de disposition
 #include "check.hpp"
 #include "lsim/c_api.h"
 #include "lsim/engine.hpp"
@@ -49,36 +52,62 @@ static_assert(std::is_same<decltype(&lsim_simulate_closed_loop_gw2), ClosedLoopG
 static_assert(std::is_same<decltype(&lsim_version), uint32_t (*)(void)>::value,
               "signature de lsim_version modifiée");
 
-// Layouts (taille, décalages des champs publics).
-static_assert(sizeof(lsim_plan_device) == 40 && offsetof(lsim_plan_device, rx1_sf) == 32, "lsim_plan_device");
-static_assert(sizeof(lsim_plan_options) == 40 && offsetof(lsim_plan_options, device_rx_offset_db) == 32,
+// Layouts (taille, décalages des champs publics) : constantes issues de la table de l'ABI
+// courante (`abi_layout::expected`), plus aucune valeur LP64 codée en dur.
+namespace exp = abi_layout::expected;
+static_assert(sizeof(lsim_plan_device) == exp::size_lsim_plan_device &&
+                  offsetof(lsim_plan_device, rx1_sf) == exp::off_lsim_plan_device__rx1_sf,
+              "lsim_plan_device");
+static_assert(sizeof(lsim_plan_options) == exp::size_lsim_plan_options &&
+                  offsetof(lsim_plan_options, device_rx_offset_db) ==
+                      exp::off_lsim_plan_options__device_rx_offset_db,
               "lsim_plan_options");
-static_assert(sizeof(lsim_loop_region) == 160 && offsetof(lsim_loop_region, duty_limit) == 32,
+static_assert(sizeof(lsim_loop_region) == exp::size_lsim_loop_region &&
+                  offsetof(lsim_loop_region, duty_limit) == exp::off_lsim_loop_region__duty_limit,
               "lsim_loop_region");
-static_assert(offsetof(lsim_loop_region, max_dr) == 16 && offsetof(lsim_loop_region, power_step_tenth_db) == 20,
+static_assert(offsetof(lsim_loop_region, max_dr) == exp::off_lsim_loop_region__max_dr &&
+                  offsetof(lsim_loop_region, power_step_tenth_db) ==
+                      exp::off_lsim_loop_region__power_step_tenth_db,
               "lsim_loop_region : décalages des entiers");
-static_assert(sizeof(lsim_loop_options) == 56 && offsetof(lsim_loop_options, adr) == 40 &&
-                  offsetof(lsim_loop_options, duty_cycle_exponent) == 49,
+static_assert(sizeof(lsim_loop_options) == exp::size_lsim_loop_options &&
+                  offsetof(lsim_loop_options, adr) == exp::off_lsim_loop_options__adr &&
+                  offsetof(lsim_loop_options, duty_cycle_exponent) ==
+                      exp::off_lsim_loop_options__duty_cycle_exponent,
               "lsim_loop_options");
-static_assert(sizeof(lsim_loop_mac) == 12 && offsetof(lsim_loop_mac, flags) == 9, "lsim_loop_mac");
-static_assert(sizeof(lsim_loop_mac_counters) == 56 && offsetof(lsim_loop_mac_counters, pending_at_end) == 48,
+static_assert(sizeof(lsim_loop_mac) == exp::size_lsim_loop_mac &&
+                  offsetof(lsim_loop_mac, flags) == exp::off_lsim_loop_mac__flags,
+              "lsim_loop_mac");
+static_assert(sizeof(lsim_loop_mac_counters) == exp::size_lsim_loop_mac_counters &&
+                  offsetof(lsim_loop_mac_counters, pending_at_end) ==
+                      exp::off_lsim_loop_mac_counters__pending_at_end,
               "lsim_loop_mac_counters");
-static_assert(sizeof(lsim_loop_uplink) == 48 && offsetof(lsim_loop_uplink, rssi_dbm) == 32 &&
-                  offsetof(lsim_loop_uplink, answer_ok) == 42,
+static_assert(sizeof(lsim_loop_uplink) == exp::size_lsim_loop_uplink &&
+                  offsetof(lsim_loop_uplink, rssi_dbm) == exp::off_lsim_loop_uplink__rssi_dbm &&
+                  offsetof(lsim_loop_uplink, answer_ok) == exp::off_lsim_loop_uplink__answer_ok,
               "lsim_loop_uplink");
-static_assert(sizeof(lsim_loop_downlink) == 48 && offsetof(lsim_loop_downlink, t_open_ns) == 16 &&
-                  offsetof(lsim_loop_downlink, req_power_index) == 43,
+static_assert(sizeof(lsim_loop_downlink) == exp::size_lsim_loop_downlink &&
+                  offsetof(lsim_loop_downlink, t_open_ns) == exp::off_lsim_loop_downlink__t_open_ns &&
+                  offsetof(lsim_loop_downlink, req_power_index) ==
+                      exp::off_lsim_loop_downlink__req_power_index,
               "lsim_loop_downlink");
-static_assert(sizeof(lsim_gateway) == 32 && offsetof(lsim_gateway, antenna_gain_dbi) == 16, "lsim_gateway");
-static_assert(sizeof(lsim_gateway_v2) == 232 && offsetof(lsim_gateway_v2, sensitivity_model) == 32 &&
-                  offsetof(lsim_gateway_v2, present) == 36 && offsetof(lsim_gateway_v2, sensitivity_dbm) == 40,
+static_assert(sizeof(lsim_gateway) == exp::size_lsim_gateway &&
+                  offsetof(lsim_gateway, antenna_gain_dbi) == exp::off_lsim_gateway__antenna_gain_dbi,
+              "lsim_gateway");
+static_assert(sizeof(lsim_gateway_v2) == exp::size_lsim_gateway_v2 &&
+                  offsetof(lsim_gateway_v2, sensitivity_model) ==
+                      exp::off_lsim_gateway_v2__sensitivity_model &&
+                  offsetof(lsim_gateway_v2, present) == exp::off_lsim_gateway_v2__present &&
+                  offsetof(lsim_gateway_v2, sensitivity_dbm) ==
+                      exp::off_lsim_gateway_v2__sensitivity_dbm,
               "lsim_gateway_v2");
-static_assert(sizeof(lsim_end_device) == 64, "lsim_end_device");
-static_assert(sizeof(lsim_propagation) == 48, "lsim_propagation");
-static_assert(sizeof(lsim_device_stats) == 48, "lsim_device_stats");
-static_assert(sizeof(lsim_sim_stats) == 80, "lsim_sim_stats");
-static_assert(sizeof(lsim_interval) == 16, "lsim_interval");
-static_assert(sizeof(lsim_mac_reservation) == 12 && offsetof(lsim_mac_reservation, extra_bytes) == 8,
+static_assert(sizeof(lsim_end_device) == exp::size_lsim_end_device, "lsim_end_device");
+static_assert(sizeof(lsim_propagation) == exp::size_lsim_propagation, "lsim_propagation");
+static_assert(sizeof(lsim_device_stats) == exp::size_lsim_device_stats, "lsim_device_stats");
+static_assert(sizeof(lsim_sim_stats) == exp::size_lsim_sim_stats, "lsim_sim_stats");
+static_assert(sizeof(lsim_interval) == exp::size_lsim_interval, "lsim_interval");
+static_assert(sizeof(lsim_mac_reservation) == exp::size_lsim_mac_reservation &&
+                  offsetof(lsim_mac_reservation, extra_bytes) ==
+                      exp::off_lsim_mac_reservation__extra_bytes,
               "lsim_mac_reservation");
 
 // Bases de statut historiques. MESH et CLASSB partagent 800 : chevauchement historique, conservé
@@ -94,43 +123,44 @@ static_assert(LSIM_STATUS_CRYPTO_BASE == 100 && LSIM_STATUS_SECURE_BASE == 200 &
 static_assert(LSIM_STATUS_MESH_BASE == LSIM_STATUS_CLASSB_BASE,
               "chevauchement historique MESH / CLASSB (800) : à conserver jusqu'à migration");
 
-// ---- ABI v3 (étape 6.2.1) : layouts LP64, sentinelles et valeurs reprises des énumérations moteur.
-static_assert(sizeof(lsim_channel_device_v3) == 128, "lsim_channel_device_v3 : 128 octets");
-static_assert(offsetof(lsim_channel_device_v3, device_index) == 8 && offsetof(lsim_channel_device_v3, present) == 12,
+// ---- ABI v3 (étape 6.2.1) : dispositions, sentinelles et valeurs reprises des énumérations moteur.
+// Les tailles et décalages suivent la table de l'ABI compilée (x86-64 ou i386).
+static_assert(sizeof(lsim_channel_device_v3) == exp::size_lsim_channel_device_v3, "lsim_channel_device_v3 : taille de la table ABI");
+static_assert(offsetof(lsim_channel_device_v3, device_index) == exp::off_lsim_channel_device_v3__device_index && offsetof(lsim_channel_device_v3, present) == exp::off_lsim_channel_device_v3__present,
               "lsim_channel_device_v3 : décalages d'en-tête");
-static_assert(offsetof(lsim_channel_device_v3, dr_mask) == 16 && offsetof(lsim_channel_device_v3, enabled) == 96 &&
-                  offsetof(lsim_channel_device_v3, server_defined) == 106 &&
-                  offsetof(lsim_channel_device_v3, reserved) == 116,
+static_assert(offsetof(lsim_channel_device_v3, dr_mask) == exp::off_lsim_channel_device_v3__dr_mask && offsetof(lsim_channel_device_v3, enabled) == exp::off_lsim_channel_device_v3__enabled &&
+                  offsetof(lsim_channel_device_v3, server_defined) == exp::off_lsim_channel_device_v3__server_defined &&
+                  offsetof(lsim_channel_device_v3, reserved) == exp::off_lsim_channel_device_v3__reserved,
               "lsim_channel_device_v3 : décalages des champs de canaux");
 
-static_assert(sizeof(lsim_channel_terminal_v3) == 112, "lsim_channel_terminal_v3 : 112 octets");
-static_assert(offsetof(lsim_channel_terminal_v3, dr) == 12 && offsetof(lsim_channel_terminal_v3, power_index) == 13 &&
-                  offsetof(lsim_channel_terminal_v3, reserved0) == 14 && offsetof(lsim_channel_terminal_v3, dr_mask) == 16 &&
-                  offsetof(lsim_channel_terminal_v3, enabled) == 96 && offsetof(lsim_channel_terminal_v3, reserved1) == 106,
+static_assert(sizeof(lsim_channel_terminal_v3) == exp::size_lsim_channel_terminal_v3, "lsim_channel_terminal_v3 : taille de la table ABI");
+static_assert(offsetof(lsim_channel_terminal_v3, dr) == exp::off_lsim_channel_terminal_v3__dr && offsetof(lsim_channel_terminal_v3, power_index) == exp::off_lsim_channel_terminal_v3__power_index &&
+                  offsetof(lsim_channel_terminal_v3, reserved0) == exp::off_lsim_channel_terminal_v3__reserved0 && offsetof(lsim_channel_terminal_v3, dr_mask) == exp::off_lsim_channel_terminal_v3__dr_mask &&
+                  offsetof(lsim_channel_terminal_v3, enabled) == exp::off_lsim_channel_terminal_v3__enabled && offsetof(lsim_channel_terminal_v3, reserved1) == exp::off_lsim_channel_terminal_v3__reserved1,
               "lsim_channel_terminal_v3 : décalages");
 
-static_assert(sizeof(lsim_loop_trace_v3) == 40, "lsim_loop_trace_v3 : 40 octets");
-static_assert(offsetof(lsim_loop_trace_v3, t_ns) == 0 && offsetof(lsim_loop_trace_v3, device) == 8 &&
-                  offsetof(lsim_loop_trace_v3, uplink) == 12 && offsetof(lsim_loop_trace_v3, downlink) == 16 &&
-                  offsetof(lsim_loop_trace_v3, kind) == 20 && offsetof(lsim_loop_trace_v3, origin) == 21 &&
-                  offsetof(lsim_loop_trace_v3, action) == 22 && offsetof(lsim_loop_trace_v3, target) == 23 &&
-                  offsetof(lsim_loop_trace_v3, loss) == 24 && offsetof(lsim_loop_trace_v3, status) == 25 &&
-                  offsetof(lsim_loop_trace_v3, dr) == 26 && offsetof(lsim_loop_trace_v3, power_index) == 27 &&
-                  offsetof(lsim_loop_trace_v3, channel_mask) == 28 && offsetof(lsim_loop_trace_v3, value) == 30 &&
-                  offsetof(lsim_loop_trace_v3, flag) == 32 && offsetof(lsim_loop_trace_v3, reason_channel) == 33 &&
-                  offsetof(lsim_loop_trace_v3, reason_dr) == 34 && offsetof(lsim_loop_trace_v3, reason_power) == 35 &&
-                  offsetof(lsim_loop_trace_v3, reserved) == 36,
+static_assert(sizeof(lsim_loop_trace_v3) == exp::size_lsim_loop_trace_v3, "lsim_loop_trace_v3 : taille de la table ABI");
+static_assert(offsetof(lsim_loop_trace_v3, t_ns) == exp::off_lsim_loop_trace_v3__t_ns && offsetof(lsim_loop_trace_v3, device) == exp::off_lsim_loop_trace_v3__device &&
+                  offsetof(lsim_loop_trace_v3, uplink) == exp::off_lsim_loop_trace_v3__uplink && offsetof(lsim_loop_trace_v3, downlink) == exp::off_lsim_loop_trace_v3__downlink &&
+                  offsetof(lsim_loop_trace_v3, kind) == exp::off_lsim_loop_trace_v3__kind && offsetof(lsim_loop_trace_v3, origin) == exp::off_lsim_loop_trace_v3__origin &&
+                  offsetof(lsim_loop_trace_v3, action) == exp::off_lsim_loop_trace_v3__action && offsetof(lsim_loop_trace_v3, target) == exp::off_lsim_loop_trace_v3__target &&
+                  offsetof(lsim_loop_trace_v3, loss) == exp::off_lsim_loop_trace_v3__loss && offsetof(lsim_loop_trace_v3, status) == exp::off_lsim_loop_trace_v3__status &&
+                  offsetof(lsim_loop_trace_v3, dr) == exp::off_lsim_loop_trace_v3__dr && offsetof(lsim_loop_trace_v3, power_index) == exp::off_lsim_loop_trace_v3__power_index &&
+                  offsetof(lsim_loop_trace_v3, channel_mask) == exp::off_lsim_loop_trace_v3__channel_mask && offsetof(lsim_loop_trace_v3, value) == exp::off_lsim_loop_trace_v3__value &&
+                  offsetof(lsim_loop_trace_v3, flag) == exp::off_lsim_loop_trace_v3__flag && offsetof(lsim_loop_trace_v3, reason_channel) == exp::off_lsim_loop_trace_v3__reason_channel &&
+                  offsetof(lsim_loop_trace_v3, reason_dr) == exp::off_lsim_loop_trace_v3__reason_dr && offsetof(lsim_loop_trace_v3, reason_power) == exp::off_lsim_loop_trace_v3__reason_power &&
+                  offsetof(lsim_loop_trace_v3, reserved) == exp::off_lsim_loop_trace_v3__reserved,
               "lsim_loop_trace_v3 : décalages");
 
-static_assert(sizeof(lsim_closed_loop_v3_args) == 272, "lsim_closed_loop_v3_args : 272 octets");
-static_assert(offsetof(lsim_closed_loop_v3_args, reserved1) == 28 && offsetof(lsim_closed_loop_v3_args, devices) == 32 &&
-                  offsetof(lsim_closed_loop_v3_args, mac) == 96 && offsetof(lsim_closed_loop_v3_args, channels) == 112 &&
-                  offsetof(lsim_closed_loop_v3_args, channel_count) == 120 &&
-                  offsetof(lsim_closed_loop_v3_args, mac_counters) == 216 &&
-                  offsetof(lsim_closed_loop_v3_args, trace) == 224 &&
-                  offsetof(lsim_closed_loop_v3_args, trace_count) == 240 &&
-                  offsetof(lsim_closed_loop_v3_args, terminals) == 248 &&
-                  offsetof(lsim_closed_loop_v3_args, terminal_count) == 264,
+static_assert(sizeof(lsim_closed_loop_v3_args) == exp::size_lsim_closed_loop_v3_args, "lsim_closed_loop_v3_args : taille de la table ABI");
+static_assert(offsetof(lsim_closed_loop_v3_args, reserved1) == exp::off_lsim_closed_loop_v3_args__reserved1 && offsetof(lsim_closed_loop_v3_args, devices) == exp::off_lsim_closed_loop_v3_args__devices &&
+                  offsetof(lsim_closed_loop_v3_args, mac) == exp::off_lsim_closed_loop_v3_args__mac && offsetof(lsim_closed_loop_v3_args, channels) == exp::off_lsim_closed_loop_v3_args__channels &&
+                  offsetof(lsim_closed_loop_v3_args, channel_count) == exp::off_lsim_closed_loop_v3_args__channel_count &&
+                  offsetof(lsim_closed_loop_v3_args, mac_counters) == exp::off_lsim_closed_loop_v3_args__mac_counters &&
+                  offsetof(lsim_closed_loop_v3_args, trace) == exp::off_lsim_closed_loop_v3_args__trace &&
+                  offsetof(lsim_closed_loop_v3_args, trace_count) == exp::off_lsim_closed_loop_v3_args__trace_count &&
+                  offsetof(lsim_closed_loop_v3_args, terminals) == exp::off_lsim_closed_loop_v3_args__terminals &&
+                  offsetof(lsim_closed_loop_v3_args, terminal_count) == exp::off_lsim_closed_loop_v3_args__terminal_count,
               "lsim_closed_loop_v3_args : décalages");
 
 // Codes de statut : base 1000, offsets +1 à +21 consécutifs.
