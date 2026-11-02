@@ -304,6 +304,9 @@ retransmissions:
   fcnt_down_start: 0         # premier compteur descendant (NFCntDown et AFCntDown)
   downlink_payload: false    # la descente porte une charge utile : AFCntDown, événement data_ack
   session_joins_s: []        # instants (s) des Join-Accept acceptés ; [] = une seule session
+  join_requests_s: []        # instants (s) des Join-Request : jointure jouée par le moteur radio
+  join_retries: 1            # 1 à 3 tentatives par jointure (10 s entre deux essais)
+  join_accept_repetitions: 1 # 1 (RX1) ou 2 (copie du Join-Accept en RX2)
 ```
 
 La classe d'écoute est une propriété du groupe :
@@ -321,7 +324,8 @@ groups:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
-| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `session_joins_s` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `session_joins_s` / `join_requests_s` / `join_retries` / `join_accept_repetitions` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `session_joins_s` et `join_requests_s` ensemble | refusé : le modèle déclaré et le modèle radio sont exclusifs |
 | `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
 | `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
 

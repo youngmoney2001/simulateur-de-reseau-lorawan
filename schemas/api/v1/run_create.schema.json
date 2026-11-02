@@ -925,6 +925,28 @@
           "title": "Fcnt Up Start",
           "type": "integer"
         },
+        "join_accept_repetitions": {
+          "default": 1,
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Join Accept Repetitions",
+          "type": "integer"
+        },
+        "join_requests_s": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "title": "Join Requests S",
+          "type": "array"
+        },
+        "join_retries": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Join Retries",
+          "type": "integer"
+        },
         "retransmit_delay_ms": {
           "default": 3000,
           "maximum": 60000,

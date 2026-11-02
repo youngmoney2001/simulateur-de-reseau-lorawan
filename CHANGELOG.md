@@ -2,6 +2,28 @@
 
 ## 0.1.0 (non publiée)
 
+### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en descente
+- **`python/lsim/join.py`** : le Join-Request passe par le moteur causal comme une transmission de
+  23 octets (temps de vol, collisions, sensibilité, couverture) ; le Join-Accept est une descente de
+  33 octets émise à `JOIN_ACCEPT_DELAY1` (5 s), écoutée en RX1, avec copie éventuelle en RX2 (6 s).
+- **Une session n'est ouverte que si l'échange aboutit** : Join-Accept reçu, terminal à l'écoute,
+  `JoinNonce` supérieur au dernier accepté. Un Join-Request perdu, une collision ou un Join-Accept
+  non écouté ne remettent **aucun** compteur à zéro.
+- **Rejeu** : la copie RX2 du même Join-Accept est reçue puis refusée (`accept_replays`), sans
+  ouvrir de seconde session.
+- **Scénario** : `join_requests_s` (instants des Join-Request), `join_retries` (1 à 3, 10 s entre
+  deux essais), `join_accept_repetitions` (1 ou 2). Absents du hash à leur valeur par défaut ;
+  exclusifs avec le modèle déclaré `session_joins_s`.
+- **Trace** : `join_request` à l'instant réel avec l'issue du moteur (`received`, `lost_collision`,
+  `lost_sensitivity`), `join_accept` seulement si le Join-Request a été reçu.
+- **Mesures** : à 100 m, jointure reçue et session ouverte (`FCntUp` 0 → 0) ; à 20 km, requête perdue
+  et aucune session (`FCntUp` 0 puis 1) ; deux terminaux au même point, collision des deux requêtes ;
+  deux terminaux à 100 m et 300 m avec deux tentatives, jointure au second essai ; deux copies,
+  une seule session.
+- **Limites** : aucune cryptographie (ni clé, ni `MIC`, ni chiffrement), Join-Accept non opposé à
+  l'occupation de la passerelle, Join-Request non compté dans le rapport cyclique, pas de rejoint 1.1.
+  `docs/MAC_CONSOLIDATION.md` §9.
+
 ### Cycle de vie des sessions : jointures déclarées, compteurs remis à zéro, trames périmées
 - **`python/lsim/sessions.py`** : `SessionTimeline` ordonne les `Join-Accept` acceptés. Un `Join-Accept`
   rejoué (nonce non croissant, instant non postérieur) lève `JoinRejected` **sans** rien remettre à

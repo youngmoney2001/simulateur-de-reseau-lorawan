@@ -182,20 +182,32 @@ class RetransmissionsModel(_Strict):
     # La descente porte une charge utile applicative : elle consomme AFCntDown (`data_ack`).
     downlink_payload: bool = False
     # Instants (s) des Join-Accept acceptés : chacun ouvre une session et remet les compteurs à
-    # zéro. Vide : une seule session, ouverte avant le scénario.
+    # zéro. Vide : une seule session, ouverte avant le scénario. Modèle **déclaré**, sans radio.
     session_joins_s: list[int] = Field(default_factory=list, max_length=16)
+    # Instants (s) des Join-Request : la jointure passe alors par le moteur radio (temps de vol,
+    # collisions, sensibilité) et n'ouvre une session que si le Join-Accept est reçu.
+    join_requests_s: list[int] = Field(default_factory=list, max_length=16)
+    join_retries: int = Field(1, ge=1, le=3)
+    join_accept_repetitions: int = Field(1, ge=1, le=2)
 
-    @field_validator("session_joins_s")
+    @field_validator("session_joins_s", "join_requests_s")
     @classmethod
-    def _jointures_croissantes(cls, valeurs: list[int]) -> list[int]:
+    def _jointures_croissantes(cls, valeurs: list[int], info) -> list[int]:
+        nom = f"retransmissions.{info.field_name}"
         for valeur in valeurs:
             if not 0 <= valeur:
-                raise ValueError("retransmissions.session_joins_s : instants positifs attendus")
+                raise ValueError(f"{nom} : instants positifs attendus")
         for precedent, suivant in zip(valeurs, valeurs[1:]):
             if suivant <= precedent:
-                raise ValueError(
-                    "retransmissions.session_joins_s : instants strictement croissants attendus")
+                raise ValueError(f"{nom} : instants strictement croissants attendus")
         return valeurs
+
+    @model_validator(mode="after")
+    def _une_seule_forme_de_jointure(self):
+        if self.session_joins_s and self.join_requests_s:
+            raise ValueError("retransmissions : session_joins_s (déclaré) et join_requests_s "
+                             "(radio) ne peuvent pas être utilisés ensemble")
+        return self
     # Premier FCntUp de chaque terminal (compteur 32 bits, comme `lsim.session`).
     fcnt_up_start: int = Field(0, ge=0, le=2**32 - 1)
     # Premier compteur descendant de chaque terminal : départ des deux séries `NFCntDown` et
@@ -222,7 +234,10 @@ class RetransmissionsModel(_Strict):
                                      fcnt_up_start=self.fcnt_up_start,
                                      fcnt_down_start=self.fcnt_down_start,
                                      downlink_payload=self.downlink_payload,
-                                     session_joins_s=tuple(self.session_joins_s))
+                                     session_joins_s=tuple(self.session_joins_s),
+                                     join_requests_s=tuple(self.join_requests_s),
+                                     join_retries=self.join_retries,
+                                     join_accept_repetitions=self.join_accept_repetitions)
 
     @property
     def is_active(self) -> bool:
@@ -744,6 +759,12 @@ class Scenario:
                 bloc.pop("downlink_payload", None)
             if not model.retransmissions.session_joins_s:
                 bloc.pop("session_joins_s", None)
+            if not model.retransmissions.join_requests_s:
+                bloc.pop("join_requests_s", None)
+            if model.retransmissions.join_retries == 1:
+                bloc.pop("join_retries", None)
+            if model.retransmissions.join_accept_repetitions == 1:
+                bloc.pop("join_accept_repetitions", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

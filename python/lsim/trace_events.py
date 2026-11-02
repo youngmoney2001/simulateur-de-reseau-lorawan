@@ -668,8 +668,22 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
                        to_id=hop.to_id.replace(f"dev:{index}", f"dev:{physique}"))
             for hop in evenement.hops)
         remappes.append(_remplacer(evenement, device_index=physique, hops=hops))
-    # Jointures declarees : elles ouvrent une session, donc remettent les compteurs a zero.
-    # Le Join-Request precede le Join-Accept de JOIN_ACCEPT_DELAY1 (5 s), borne a l'origine.
+    # Jointures radio : chaque tentative est un evenement, avec l'issue que le moteur a rendue.
+    # Le Join-Accept n'apparait que si le Join-Request a ete recu (sinon rien n'a ete emis).
+    for tentative in getattr(resultat, "joins", ()):
+        radio = radios[tentative.device]
+        remappes.append(ProtocolEvent(
+            0, tentative.request_ns, "join_request", tentative.device, 0,
+            (HopEvent(_dev(tentative.device), "gw:0", tentative.request_ns, radio.freq_hz,
+                      radio.dr, None, tentative.request_outcome),), tentative.request_outcome))
+        if tentative.accept_ns is not None:
+            remappes.append(ProtocolEvent(
+                0, tentative.accept_ns, "join_accept", tentative.device, 0,
+                (HopEvent("gw:0", _dev(tentative.device), tentative.accept_ns, radio.rx1_hz,
+                          None, None, tentative.accept_outcome),), tentative.accept_outcome))
+
+    # Jointures declarees (sans radio) : elles ouvrent une session, donc remettent les compteurs a
+    # zero. Le Join-Request precede le Join-Accept de JOIN_ACCEPT_DELAY1 (5 s), borne a l'origine.
     for t_s in etat.session_joins_s:
         instant_accept = t_s * 1_000_000_000
         instant_demande = max(0, instant_accept - JOIN_ACCEPT_DELAY1_NS)

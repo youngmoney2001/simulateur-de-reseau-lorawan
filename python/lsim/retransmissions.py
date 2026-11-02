@@ -105,6 +105,10 @@ class RetransmissionOptions:
     fcnt_down_start: int = 0
     # Instants (s) des `Join-Accept` acceptés. Vide : une seule session, celle du scénario.
     session_joins_s: tuple[int, ...] = ()
+    # Jointures **radio** : instants (s) des Join-Request, tentatives, copies du Join-Accept.
+    join_requests_s: tuple[int, ...] = ()
+    join_retries: int = 1
+    join_accept_repetitions: int = 1
 
     def __post_init__(self) -> None:
         if not 0 <= self.fcnt_up_start < 2**32:
@@ -112,6 +116,7 @@ class RetransmissionOptions:
         if not 0 <= self.fcnt_down_start < 2**32:
             raise ValueError("fcnt_down_start doit être dans [0, 2**32)")
         self.timeline        # valide les instants de jointure (croissants, positifs)
+        self.join_options    # valide les jointures radio (bornes, ordre, exclusions)
         if not 0 <= self.retries <= MAX_RETRIES:
             raise ValueError(f"retries doit être dans [0, {MAX_RETRIES}]")
         if self.retransmit_delay_ms < RX2_DELAY_NS // 1_000_000:
@@ -120,6 +125,16 @@ class RetransmissionOptions:
                 f"({RX2_DELAY_NS // 1_000_000} ms au minimum)")
         from lsim.ack_mac import AckTiming as _AckTiming
         _AckTiming(delay_ms=self.ack_delay_ms, repetitions=self.ack_repetitions)  # bornes
+
+    @property
+    def join_options(self):
+        """Jointures radio déclarées, validées."""
+        from lsim.join import JoinRadioOptions
+
+        if self.session_joins_s and self.join_requests_s:
+            raise ValueError("session_joins_s (déclaré) et join_requests_s (radio) sont exclusifs")
+        return JoinRadioOptions(requests_s=self.join_requests_s, retries=self.join_retries,
+                                accept_repetitions=self.join_accept_repetitions)
 
     @property
     def timeline(self) -> SessionTimeline:
@@ -203,6 +218,7 @@ class RetransmissionResult:
     gateway_tx: tuple = ()  # émissions passerelle planifiées, en ns
     ack_gap: int = 0        # ACK reçus puis rejetés par la fenêtre de rejeu
     rejected_stale_session: int = 0   # réémissions refusées : session déjà remplacée
+    joins: tuple = ()       # tentatives de jointure radio (vide si jointure déclarée ou absente)
 
     @property
     def delivery_ratio(self) -> float:
@@ -231,9 +247,23 @@ def _airtime_ns(device) -> int:
     return time_on_air_ns(config, device.payload_bytes)
 
 
+def _session_at(timelines, device: int, t_ns: int) -> int:
+    """Numéro de session d'un terminal : chaque terminal a sa propre horloge de sessions."""
+    if not timelines:
+        return 0
+    timeline = timelines.get(device)
+    return 0 if timeline is None else timeline.session_at(t_ns)
+
+
+def _is_stale(timelines, device: int, session: int, t_ns: int) -> bool:
+    if not timelines:
+        return False
+    timeline = timelines.get(device)
+    return timeline is not None and timeline.is_stale(session, t_ns)
+
+
 def _base_schedule(devices, gateway, propagation, radios, options, environment=None,
-                   fcnt_start: int = 0,
-                   timeline: SessionTimeline = SessionTimeline()) -> list[Attempt]:
+                   fcnt_start: int = 0, timelines=None) -> list[Attempt]:
     """Émissions initiales, telles que le moteur les place réellement."""
     if not devices:
         return []
@@ -244,7 +274,7 @@ def _base_schedule(devices, gateway, propagation, radios, options, environment=N
     attempts = []
     for record in result.records:
         device = record.device_index
-        session = timeline.session_at(record.start_ns)
+        session = _session_at(timelines, device, record.start_ns)
         cle = (device, session)
         compteur = rang.get(cle, 0)
         attempts.append(Attempt(device=device, frame=compteur, attempt=0,
@@ -431,11 +461,12 @@ def _mac_ack_events(records, plan, radios, payload: bool = False):
 
 # --- simulation ----------------------------------------------------------------------------
 
-def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, options,
-                               retransmit: RetransmissionOptions = RetransmissionOptions(),
-                               energy_profile: Optional[str] = None, environment=None,
-                               with_engine_output: bool = False,
-                               device_classes: Optional[Sequence[str]] = None) -> RetransmissionResult:
+def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options,
+                        retransmit: RetransmissionOptions = RetransmissionOptions(),
+                        energy_profile: Optional[str] = None, environment=None,
+                        with_engine_output: bool = False,
+                        device_classes: Optional[Sequence[str]] = None,
+                        timelines=None) -> RetransmissionResult:
     """Uplinks confirmés avec réémissions ; renvoie les compteurs mesurés.
 
     `devices`, `radios` : un élément par terminal, même ordre (comme `simulate_causal`).
@@ -460,9 +491,12 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             raise ValueError("une classe d'écoute par dispositif")
 
     options = _replace(options, confirmed_uplinks=True)
-    timeline = retransmit.timeline
+    if timelines is None:
+        partage = retransmit.timeline          # jointures déclarées : une horloge commune
+        timelines = ({device: partage for device in range(len(devices))}
+                     if partage.sessions else {})
     schedule = _base_schedule(devices, gateway, propagation, radios, options, environment,
-                              fcnt_start=retransmit.fcnt_up_start, timeline=timeline)
+                              fcnt_start=retransmit.fcnt_up_start, timelines=timelines)
     if not schedule:
         return RetransmissionResult(
             attempts=(), frames=0, transmissions=0, retransmissions=0, received=0,
@@ -571,7 +605,7 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             if cle in acquittees or attempt.attempt >= budget:
                 continue
             debut = attempt.end_ns + retransmit.retransmit_delay_ms * 1_000_000
-            if timeline.is_stale(attempt.session, debut):
+            if _is_stale(timelines, attempt.device, attempt.session, debut):
                 # Une jointure a ouvert une nouvelle session : une trame de l'ancienne ne peut plus
                 # être reçue (les clés ont changé). Elle n'est ni émise ni acquittée.
                 perimees += 1
@@ -662,3 +696,45 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         gateway_tx=tuple(planned) if with_engine_output else (),
         rejected_stale_session=perimees,
     )
+
+
+def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, options,
+                               retransmit: RetransmissionOptions = RetransmissionOptions(),
+                               energy_profile: Optional[str] = None, environment=None,
+                               with_engine_output: bool = False,
+                               device_classes: Optional[Sequence[str]] = None) -> RetransmissionResult:
+    """Uplinks confirmés, avec jointures radio quand `join_requests_s` est déclaré.
+
+    Sans `join_requests_s`, l'appel est exactement celui de `_simulate_confirmed` : aucune jointure
+    n'est jouée et le résultat ne porte pas de `joins`. Avec, les Join-Request passent par le moteur
+    causal (temps de vol, collision, sensibilité), les Join-Accept par la fenêtre RX1/RX2 du
+    terminal, et une session n'est ouverte que si le Join-Accept est reçu et non rejoué. Les
+    compteurs ne sont donc remis à zéro que dans ce cas.
+    """
+    if not retransmit.join_options.enabled:
+        return _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
+                                   energy_profile, environment, with_engine_output,
+                                   device_classes)
+
+    from lsim.join import simulate_joins
+
+    devices = list(devices)
+    radios = list(radios)
+    options = _replace(options, confirmed_uplinks=True)
+    demandes = retransmit.join_options.requests(range(len(devices)))
+    timelines: dict = {}
+    result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
+                                 energy_profile, environment, with_engine_output,
+                                 device_classes, timelines=timelines)
+    jointures = None
+    for _ in range(3):
+        jointures = simulate_joins(devices, gateway, propagation, radios, options, environment,
+                                   demandes, timelines, data_attempts=result.attempts,
+                                   join_options=retransmit.join_options)
+        if jointures.timelines == timelines:
+            break
+        timelines = jointures.timelines
+        result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
+                                     energy_profile, environment, with_engine_output,
+                                     device_classes, timelines=timelines)
+    return _replace(result, joins=jointures.attempts if jointures is not None else ())

@@ -250,7 +250,8 @@ existant (`EventKind.join_request`, `EventKind.join_accept`) :
 
 `JOIN_ACCEPT_DELAY1` est la constante de la spécification (`lsim.gwmp_server`), pas une invention du
 simulateur. Aucune trame n'est modélisée dans l'intervalle : le `Join-Request` n'occupe pas la
-passerelle, et le `Join-Accept` ne consomme aucun compteur.
+passerelle, et le `Join-Accept` ne consomme aucun compteur. Pour un échange réellement transporté
+(temps de vol, collisions, fenêtres), voir §9.
 
 ### 8.3 Mesures de bout en bout
 
@@ -282,7 +283,64 @@ distinctes, pas un rejeu.
 - **Ni cryptographie ni `JoinNonce` réel** : le nonce est un rang, pas un compteur réseau vérifié
   contre une clé. Un `Join-Accept` rejoué est refusé parce que son rang n'avance pas, pas parce que
   son `MIC` est faux.
-- **Pas de `Join-Request` dans le moteur radio** : l'échange n'occupe pas la passerelle, ne consomme
-  pas de temps de vol et ne subit pas de collision. Les deux événements de trace sont déterministes.
+- **Pas de `Join-Request` dans le moteur radio** dans ce modèle **déclaré** : l'échange n'occupe
+  pas la passerelle et ne subit pas de collision. Le modèle **radio** correspondant est décrit en §9
+  (`join_requests_s`) : c'est lui qu'il faut utiliser pour éprouver les pertes et les collisions.
 - **Pas de rejoint (LoRaWAN 1.1)** : `rejoin_request` / `rejoin_accept` ne sont pas distingués des
   jointures ; une trame ne peut pas migrer d'une session à l'autre avec des compteurs conservés.
+
+## 9. Jointure OTAA dans le moteur radio
+
+`join_requests_s` remplace le modèle **déclaré** de §8 par un échange réellement transporté : le
+Join-Request est une émission uplink, le Join-Accept une descente. Une session n'est ouverte que si
+l'échange aboutit (`python/lsim/join.py`).
+
+| Étape | Modélisé | Non modélisé |
+|---|---|---|
+| Join-Request | 23 octets (`lsim_encode_join_request`), temps de vol, collisions, sensibilité, couverture, placement causal | `DevNonce`, `DevEUI`, `MIC` : aucun octet n'est construit ni vérifié |
+| Join-Accept | 33 octets, émis à `JOIN_ACCEPT_DELAY1` (5 s), écouté en RX1 ; copie à 6 s en RX2 | occupation de la passerelle par les ACK, temps de vol des autres descentes, CFList |
+| Session | ouverte si un Join-Accept est **reçu** et si son `JoinNonce` dépasse le dernier accepté | dérivation de clés, chiffrement, rejoint 1.1 |
+
+### 9.1 Ce que le moteur décide
+
+| Situation | `request_outcome` | `accept_outcome` | Session |
+|---|---|---|---|
+| tout passe | `received` | `delivered` | ouverte à la fin du Join-Accept |
+| terminal hors couverture montante | `lost_sensitivity` | — (rien n'est émis) | aucune |
+| deux Join-Request simultanés, même SF | `lost_collision` | — | aucune |
+| terminal en émission à l'instant du Join-Accept | `received` | `not_listened` | aucune |
+| descente sous la sensibilité du terminal | `received` | `lost_sensitivity` | aucune |
+| copie RX2 reçue du même Join-Accept | `received` | `delivered` + 1 `accept_replays` | une seule |
+
+Un Join-Accept rejoué ne rouvre pas de session : le nonce n'avance pas (`SessionTimeline.accept`).
+`JoinNonce` est un **rang attribué par le simulateur**, pas une valeur dérivée d'une clé.
+
+### 9.2 Mesures
+
+Scénario `docs/exemples/retransmissions_ack_tardif.yaml`, `ack_delay_ms: 0`, un Join-Request à 10 s :
+
+| Réglage | `request_outcome` | `accept_outcome` | Sessions des trames |
+|---|---|---|---|
+| terminal à 100 m | `received` | `delivered` (15,45 s) | 0 puis 1, `FCntUp` 0 puis 0 |
+| terminal à 20 km | `lost_sensitivity` | — | 0 seulement, `FCntUp` 0 et 1 |
+| deux terminaux au même point | `lost_collision` ×2 | — | 0 seulement |
+| deux terminaux à 100 m et 300 m, `join_retries: 2` | `received`, `lost_collision` puis `received` | `delivered` ×2 | 0 puis 1 par terminal |
+| `join_accept_repetitions: 2` | `received` | `delivered`, 1 rejeu | une seule session |
+
+### 9.3 Trace
+
+Chaque tentative produit un événement `join_request` à son instant réel, avec l'issue du moteur
+(`received`, `lost_collision`, `lost_sensitivity`). Le `join_accept` n'apparaît que si le
+Join-Request a été reçu, à l'instant d'émission du Join-Accept. Aucune valeur nouvelle au contrat :
+ces issues existent déjà dans `HopOutcome`.
+
+### 9.4 Limites explicites
+
+- **Aucune cryptographie** : ni clé, ni `MIC`, ni chiffrement. « Reçu » veut dire « décodable au
+  niveau radio », pas « authentifié ».
+- **Le Join-Accept n'occupe pas la passerelle** : il n'est opposé ni aux ACK de données ni aux
+  autres descentes ; seul le fait que le terminal écoute est vérifié.
+- **Le Join-Request ne consomme pas le rapport cyclique du terminal** : il est simulé comme une
+  transmission isolée (même mécanisme que les réémissions).
+- **Une seule jointure par terminal** : `join_requests_s` ne modélise pas le rejoint 1.1 ni un
+  changement de session pendant que des trames sont en vol.
