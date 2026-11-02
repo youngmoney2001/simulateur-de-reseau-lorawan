@@ -87,6 +87,11 @@ class RetransmissionOptions:
     retries: int = 3
     retransmit_delay_ms: int = 3_000   # après la fin de l'émission, donc après RX2
     enforce_duty_cycle: bool = True
+    # Comportement du réseau vis-à-vis de l'ACK. Valeurs par défaut : planificateur du cœur.
+    # Les changer active la couche MAC (`lsim.ack_mac`), seule à pouvoir produire un ACK tardif
+    # ou dupliqué : le cœur, lui, abandonne la descente hors fenêtre RX1.
+    ack_delay_ms: int = 0
+    ack_repetitions: int = 1
 
     def __post_init__(self) -> None:
         if not 0 <= self.retries <= MAX_RETRIES:
@@ -95,10 +100,21 @@ class RetransmissionOptions:
             raise ValueError(
                 f"retransmit_delay_ms doit couvrir la fenêtre RX2 "
                 f"({RX2_DELAY_NS // 1_000_000} ms au minimum)")
+        from lsim.ack_mac import AckTiming as _AckTiming
+        _AckTiming(delay_ms=self.ack_delay_ms, repetitions=self.ack_repetitions)  # bornes
 
     @property
     def effective_retries(self) -> int:
         return self.retries if self.enabled else 0
+
+    @property
+    def uses_ack_mac(self) -> bool:
+        """Vrai quand la couche MAC est nécessaire (ACK retardé ou répété)."""
+        return self.ack_delay_ms != 0 or self.ack_repetitions != 1
+
+    def ack_timing(self):
+        from lsim.ack_mac import AckTiming
+        return AckTiming(delay_ms=self.ack_delay_ms, repetitions=self.ack_repetitions)
 
 
 @dataclass(frozen=True)
@@ -114,6 +130,7 @@ class Attempt:
     delivery: DownlinkDelivery     # verdict du planificateur sur la descente RX1
     ack: AckReception              # ce que le terminal a effectivement reçu
     acked: bool                    # cette trame est logiquement acquittée après cet essai
+    ack_ns: Optional[int] = None   # instant d'émission de l'ACK retenu (None : aucun)
 
     @property
     def ack_frame(self) -> Optional[AckFrame]:
@@ -132,8 +149,9 @@ class RetransmissionResult:
     frames_delivered: int          # trames acquittées au moins une fois (bout en bout)
     duplicates: int                # réceptions au-delà de la première d'une même trame
     blocked_by_duty_cycle: int     # réémissions refusées par le rapport cyclique
-    acks_planned: int
+    acks_planned: int              # transmissions d'ACK effectivement émises
     acks_received: int
+    ack_duplicates_ignored: int      # copies d'ACK reçues puis écartées (même FCntDown)
     lost_sensitivity: int
     lost_collision: int
     lost_gateway_busy: int
@@ -270,19 +288,39 @@ def _prune_acknowledged(schedule):
                 continue  # ACK déjà reçu à cet instant : pas de réémission
             garde.append(essai)
             if essai.acked:
-                ack_avant = essai.end_ns + RX1_DELAY_NS
+                ack_avant = essai.ack_ns if essai.ack_ns is not None else essai.end_ns + RX1_DELAY_NS
     garde.sort(key=lambda a: (a.start_ns, a.device, a.attempt))
     return garde
 
 
-def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None):
+def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
+              timing=None, busy=None):
+    """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
+
+    Avec `timing` (ACK retardé ou répété) : les transmissions sont simulées avec une occupation
+    passerelle **imposée**, puis la couche `ack_mac` recalcule les ACK et la nouvelle occupation.
+    C'est le seul moyen de faire exister un ACK hors fenêtre sans modifier le cœur, dont le
+    planificateur abandonne ces descentes par construction.
+    """
     if not schedule:
-        return None, (), ()
+        return None, (), (), None
     virt = [_virtual(devices[a.device], a.start_ns) for a in schedule]
     vrad = [radios[a.device] for a in schedule]
-    result, _busy = simulate_causal(virt, gateway, propagation, environment, vrad, options)
-    events, planned = plan_native(result.records, vrad, options)
-    return result, events, planned
+    if timing is None:
+        result, _busy = simulate_causal(virt, gateway, propagation, environment, vrad, options)
+        events, planned = plan_native(result.records, vrad, options)
+        return result, events, planned, None
+
+    from lsim.ack_mac import plan_acks
+    from lsim.simulator import simulate_uplinks_trace
+
+    result = simulate_uplinks_trace(virt, gateway, propagation, environment,
+                                    gateway_busy=tuple(busy or ()), device_rf=None)
+    radios_par_enregistrement = [vrad[record.device_index] for record in result.records]
+    plan = plan_acks(result.records, radios_par_enregistrement, options, timing)
+    events, _planned = plan_native(result.records, [vrad[r.device_index]
+                                                    for r in result.records], options)
+    return result, events, plan.busy, plan
 
 
 # --- simulation ----------------------------------------------------------------------------
@@ -309,7 +347,7 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     options = _replace(options, confirmed_uplinks=True)
     schedule = _base_schedule(devices, gateway, propagation, radios, options, environment)
     if not schedule:
-        return RetransmissionResult((), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0.0)
+        return RetransmissionResult((), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0.0, 0)
 
     frames = len(schedule)
     blocked: set[tuple[int, int, int]] = set()
@@ -319,12 +357,42 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     events: tuple = ()
     planned: tuple = ()
 
+    timing = retransmit.ack_timing() if retransmit.uses_ack_mac else None
+    occupation: tuple = ()
+    mac_plan = None
     for _iteration in range(MAX_ITERATIONS):
-        result, events, planned = _simulate(schedule, devices, gateway, propagation, radios,
-                                            options, environment)
+        result, events, planned, mac_plan = _simulate(
+            schedule, devices, gateway, propagation, radios, options, environment,
+            timing=timing, busy=occupation)
         recues = {record.device_index for record in result.records if record.outcome == 2}
-        livraisons = _deliveries(events, recues, len(schedule))
-        recus = _match_ack(schedule, events)
+
+        if mac_plan is None:
+            livraisons = _deliveries(events, recues, len(schedule))
+            recus = _match_ack(schedule, events)
+            instants = {}
+        else:
+            from lsim.ack_mac import AckWindow
+            # `LATE` (émis, mais après la fermeture de RX2) n'a pas de verdict propre dans
+            # `DownlinkDelivery` : il est rangé avec les pertes de sensibilité. L'information
+            # exacte reste disponible dans `AckOutcome.window`.
+            correspondance = {
+                AckWindow.RX1: DownlinkDelivery.DELIVERED,
+                AckWindow.RX2: DownlinkDelivery.DELIVERED,
+                AckWindow.LATE: DownlinkDelivery.LOST_SENSITIVITY,
+                AckWindow.NOT_DECODABLE: DownlinkDelivery.LOST_SENSITIVITY,
+                AckWindow.WINDOW_MISSED: DownlinkDelivery.DEVICE_TRANSMITTING,
+                AckWindow.NOT_SENT: DownlinkDelivery.NONE,
+            }
+            # Indices virtuels depuis la position dans les enregistrements.
+            livraisons, recus, instants = {}, set(), {}
+            for position, record in enumerate(result.records):
+                sortie = mac_plan.outcomes[position]
+                virtuel = record.device_index
+                livraisons[virtuel] = correspondance[sortie.window]
+                if sortie.received:
+                    recus.add(virtuel)
+                    instants[virtuel] = sortie.first_emission_ns
+            occupation = tuple(planned)
 
         mis_a_jour = []
         for index, attempt in enumerate(schedule):
@@ -340,7 +408,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             else:
                 ack = AckReception.NONE
             mis_a_jour.append(_replace(attempt, received=index in recues, delivery=delivery,
-                                       ack=ack, acked=ack is AckReception.RECEIVED))
+                                       ack=ack, acked=ack is AckReception.RECEIVED,
+                                       ack_ns=instants.get(index)))
         schedule = mis_a_jour
 
         acquittees = {(a.device, a.frame) for a in schedule if a.acked}
@@ -412,8 +481,10 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         frames_delivered=len(acquittees),
         duplicates=duplicates,
         blocked_by_duty_cycle=len(blocked),
-        acks_planned=sum(1 for a in schedule if a.delivery not in (
-            DownlinkDelivery.NONE, DownlinkDelivery.NOT_SCHEDULED)),
+        acks_planned=(mac_plan.emissions if mac_plan is not None else
+                      sum(1 for a in schedule if a.delivery not in (
+                          DownlinkDelivery.NONE, DownlinkDelivery.NOT_SCHEDULED))),
+        ack_duplicates_ignored=(mac_plan.duplicates_ignored if mac_plan is not None else 0),
         acks_received=sum(1 for a in schedule if a.ack is AckReception.RECEIVED),
         lost_sensitivity=result.totals.lost_sensitivity,
         lost_collision=result.totals.lost_collision,

@@ -298,6 +298,8 @@ retransmissions:
   retransmit_delay_ms: 3000  # >= 2000 : une réémission ne peut pas partir avant RX2
   enforce_duty_cycle: true   # refuse une réémission qui dépasserait le rapport cyclique
   energy_profile: rak4631    # facultatif : ajoute le relevé d'énergie
+  ack_delay_ms: 0            # 0 à 60000 : retard du réseau avant d'émettre l'ACK
+  ack_repetitions: 1         # 1 à 3 : copies du même ACK (même FCntDown)
 ```
 
 | Règle | Comportement |
@@ -307,6 +309,7 @@ retransmissions:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
+| `ack_delay_ms` / `ack_repetitions` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
 
 `build_trace` et `run_scenario` empruntent alors un chemin dédié qui renvoie une entrée de trace
 **par transmission**, avec les indices des terminaux du scénario, ainsi qu'un objet
@@ -324,14 +327,52 @@ Le cœur ne modélise pas le contenu de la trame ACK : l'appariement se fait par
 exact tant qu'un seul ACK est attendu par fenêtre. `AckFrame` porte déjà les champs
 (`frame_counter_up`, `frame_counter_down`) qu'une représentation MAC complète utilisera.
 
+### Couche MAC de l'ACK (`lsim.ack_mac`) — tardif et dupliqué, de bout en bout
+
+Le planificateur du cœur place la descente à `fin + RECEIVE_DELAY1` et **abandonne** celle qui ne
+tient pas dans RX1 : il ne peut produire ni ACK tardif ni ACK dupliqué. Deux réglages du bloc
+`retransmissions:` activent à la place une couche MAC Python, qui les rend possibles sans toucher
+au cœur ni à l'ABI.
+
+| Réglage | Effet mesuré (`build_trace`) |
+|---|---|
+| `ack_delay_ms: 2500` | 6 transmissions, 6 ACK émis, **0 reçu**, 0/2 livrée : l'ACK tombe après la fermeture de RX2 ; l'airtime est consommée et la passerelle occupée |
+| `ack_delay_ms: 1500` | l'ACK tombe dans RX2 (`fin + 2 s`, durée 1 s) et **est reçu** |
+| `ack_delay_ms: 0` (témoin) | 2 transmissions, 2 ACK reçus, 2/2 livrées — comportement du cœur |
+| `ack_repetitions: 2` | 2 transmissions, **4 ACK émis**, 2 reçus, **2 doublons ignorés**, 2/2 livrées |
+
+La réception n'est pas recalculée : la recette radio (réciprocité, sensibilité, marge du récepteur)
+est celle du cœur, et un test de parité vérifie que la couche MAC reproduit le planificateur natif
+quand elle est laissée à ses valeurs par défaut.
+
+L'émission de l'ACK commence à `fin + 1 s + delay_ms`. Frontières **mesurées** (balayage de 0 à
+2 500 ms, pas de 50 ms, sur `retransmissions_ack_tardif.yaml`) :
+
+| Fenêtre | Ouverture | Durée | `delay_ms` qui y tombe | Réception |
+|---|---|---|---|---|
+| RX1 | `fin + 1 s` | 1 s | 0 à 999 | reçu |
+| RX2 | `fin + 2 s` | 1 s | 1000 à 1999 | reçu |
+| aucune (`LATE`) | après RX2 | — | 2000 et au-delà : l'ACK est émis, jamais entendu |
+
+Une passerelle occupée peut repousser l'émission (`max(ouverture + delay, fin d'occupation)`) : un
+ACK prévu dans RX1 peut donc basculer en RX2, ou hors fenêtre, selon le trafic.
+
 ### Ce qui n'est pas modélisé
 
 - **Aucune perte d'ACK avec un récepteur nominal** : le planificateur causal livre l'ACK de toute
   trame qu'il reçoit. Observer une perte d'ACK exige une hypothèse de récepteur dégradé
   (`ProtocolOptions(device_rx_offset_db=...)`), pas un réglage du scénario.
-- L'ACK tardif et l'ACK dupliqué ne peuvent pas être produits par le planificateur : la règle est
-  appliquée et testée, mais aucun scénario ne les provoque.
+- L'ACK tardif et l'ACK dupliqué ne peuvent pas être produits par le planificateur du cœur ; ils le
+  sont par la couche MAC Python (`ack_delay_ms` / `ack_repetitions`), qui n'est **pas** dans le cœur
+  C++ et n'est appelée que lorsque l'un de ces deux réglages sort de sa valeur par défaut.
+- `ack_repetitions > 1` est une hypothèse de réseau (répétition du même ACK), pas un mécanisme
+  LoRaWAN standard : LoRaWAN 1.0.4 ne répète pas la trame d'acquittement en classe A.
+- Un ACK émis hors fenêtre (`LATE`) est rangé avec les pertes de sensibilité dans
+  `DownlinkDelivery`, qui n'a pas de verdict « hors fenêtre » ; la fenêtre exacte reste lisible
+  dans `AckOutcome.window`.
 - Le compteur de doublons déduplique côté réseau ; il ne remplace pas une trace MAC complète.
+- Aucun `FCntUp` / `FCntDown` n'est réellement décrémenté : l'identité de la trame est l'indice de
+  trame du scénario, pas un compteur de trame.
 - L'énergie n'est pas ventilée entre émission, écoute RX1/RX2 et veille.
 
 ### Exemples exécutables
@@ -342,6 +383,8 @@ exact tant qu'un seul ACK est attendu par fenêtre. `AckFrame` porte déjà les 
 | `docs/exemples/retransmissions_collision.yaml` | collision, réémission réussie, refus par rapport cyclique |
 | `docs/exemples/retransmissions_doublons.yaml` | trafic dense : réémissions et borne de tentatives |
 | `docs/exemples/retransmissions_ack_perdu.yaml` | ACK perdus et **doublons réseau** (avec récepteur à +10 dB) |
+| `docs/exemples/retransmissions_ack_tardif.yaml` | `ack_delay_ms: 2500` : ACK émis après RX2, jamais reçu, 0/2 livrée |
+| `docs/exemples/retransmissions_ack_duplique.yaml` | `ack_repetitions: 2` : 4 ACK émis, 2 reçus, 2 doublons ignorés |
 
 ## 6. Limites connues
 

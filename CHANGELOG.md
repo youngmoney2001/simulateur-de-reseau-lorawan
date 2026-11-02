@@ -2,6 +2,49 @@
 
 ## 0.1.0 (non publiée)
 
+### Couche MAC de l'ACK : tardif et dupliqué, produits de bout en bout
+- `lsim.ack_mac` (Python) rend possibles les deux seules situations que le planificateur du cœur ne
+  sait pas produire : `DownlinkScheduler::on_received` renvoie `nullopt` hors RX1 et n'émet qu'un
+  ACK par trame reçue. La couche ne touche **ni au cœur C++ ni à l'ABI** : elle replanifie l'instant
+  d'émission de l'ACK, réutilise `_downlink_airtime_ns` et `receiver_sensitivity_dbm` du cœur, et
+  décide si l'émission tombe dans une fenêtre écoutée (RX1, RX2, sinon `LATE`).
+- Deux réglages **facultatifs** du bloc `retransmissions:` : `ack_delay_ms` (0 à 60 000) et
+  `ack_repetitions` (1 à 3). À leurs valeurs par défaut, **rien ne change** : le chemin causal du
+  cœur est emprunté tel quel, et un test de parité vérifie que la couche MAC reproduit exactement le
+  planificateur natif. Hors bornes : `ValidationError`.
+- **Hash stable** : les deux champs à leur valeur par défaut sont retirés du hachage, comme les
+  champs ajoutés du bloc `mac`. Vérifié fichier par fichier contre le commit précédent :
+  `retransmissions_nominal` `312a19b1…`, `retransmissions_ack_perdu` `27ce1bd0…`,
+  `retransmissions_collision` `83d531e5…`, `retransmissions_doublons` `e0521e93…` — identiques. Un
+  test fige `312a19b1…` pour que la stabilité ne dépende pas d'une relecture.
+- Mesures `build_trace`, mêmes graines :
+
+  | scénario | réglage | transmissions | ACK émis | ACK reçus | livrées | doublons ignorés |
+  |---|---|---|---|---|---|---|
+  | `ack_tardif` | `ack_delay_ms: 2500` | 6 | 6 | **0** | 0/2 | 0 |
+  | `ack_tardif` | témoin `ack_delay_ms: 0` | 2 | 2 | 2 | 2/2 | 0 |
+  | `ack_duplique` | `ack_repetitions: 2` | 2 | **4** | 2 | 2/2 | **2** |
+
+  L'émission commence à `fin + 1 s + delay_ms`. Frontières balayées de 0 à 2 500 ms (pas de 50) :
+  `delay_ms` 0 à 999 tombent dans RX1, 1000 à 1999 dans RX2 (reçus), 2000 et au-delà après RX2 —
+  ACK émis, airtime consommée, jamais entendu. Une passerelle occupée repousse l'émission
+  (`max(ouverture + delay, fin d'occupation)`) et peut faire basculer un ACK de RX1 vers RX2 ou hors
+  fenêtre.
+- **Isolation de la dégradation du récepteur** (réserve d'évaluation) : trois tests. Le premier
+  compare les empreintes `(device_index, start_ns, end_ns, rssi, outcome)` des uplinks à 0, 5, 10 et
+  20 dB de marge — une seule empreinte distincte exigée : la liaison montante est **inchangée** au
+  bit près ; le deuxième montre que la réception de l'ACK, elle, bascule ; le troisième vérifie que
+  le premier passage (`retries: 0`) est identique, donc que le budget montant n'est pas touché.
+- Documentation corrigée là où elle affirmait le contraire : `docs/USAGE.md` disait « aucun scénario
+  ne les provoque » pour l'ACK tardif et l'ACK dupliqué ; le bloc `retransmissions:` y gagne les deux
+  clés, les tableaux de fenêtres mesurées et les deux exemples exécutables.
+- Limites énoncées, non masquées : `LATE` est rangé avec les pertes de sensibilité dans
+  `DownlinkDelivery` (pas de verdict « hors fenêtre » dans l'énumération existante) ; `ack_repetitions`
+  est une hypothèse de réseau, LoRaWAN 1.0.4 ne répète pas l'ACK en classe A ; aucun `FCntUp` /
+  `FCntDown` réel n'est décrémenté ; la couche est Python, hors du cœur C++.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; suites complètes **1 879 tests** Python
+  (dont 26 pour les scénarios de retransmission) et **685 282** vérifications C++.
+
 ### Retransmissions pilotées par le scénario, et modèle ACK explicite
 - Nouveau bloc `retransmissions:` **facultatif** dans le YAML (`retries` 0 à 7,
   `retransmit_delay_ms` >= 2000, `enforce_duty_cycle`, `energy_profile`, `enabled`). Absent :

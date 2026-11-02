@@ -860,6 +860,20 @@
       "additionalProperties": false,
       "description": "Retransmissions des uplinks confirmés (bloc `retransmissions:` du scénario).\n\nAbsent : aucune réémission, comportement historique, hash inchangé. Présent : le scénario force\nles uplinks confirmés et réémet tant que l'ACK n'est pas reçu.\n\n`retries: 0` est accepté et n'ajoute aucune transmission : c'est le moteur actuel.",
       "properties": {
+        "ack_delay_ms": {
+          "default": 0,
+          "maximum": 60000,
+          "minimum": 0,
+          "title": "Ack Delay Ms",
+          "type": "integer"
+        },
+        "ack_repetitions": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Ack Repetitions",
+          "type": "integer"
+        },
         "enabled": {
           "default": true,
           "title": "Enabled",

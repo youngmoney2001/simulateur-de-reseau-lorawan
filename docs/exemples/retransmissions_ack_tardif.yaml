@@ -1,0 +1,35 @@
+# Cas 4 — ACK tardif : le réseau répond après la fermeture des deux fenêtres.
+#
+# Le serveur de réseau met 2,5 s à répondre ; le terminal écoute RX1 (fin + 1 s) puis RX2
+# (fin + 2 s), soit jusqu'à fin + 3 s. L'ACK part à fin + 3,5 s : il est bien émis — il occupe la
+# passerelle et bloque d'autres trames — mais plus personne ne l'écoute. La trame est donc réémise
+# jusqu'à la borne, et l'ACK tardif de chaque tentative est perdu de la même façon.
+#
+# Sans ce retard (`ack_delay_ms: 0`), le planificateur du cœur place l'ACK à fin + 1 s et toutes
+# les trames sont acquittées : le cas n'existe pas.
+schema_version: 1
+name: Réémissions — ACK tardif hors fenêtre
+seed: 1
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 2
+  ack_delay_ms: 2500
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: terminal
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 9
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 2
+    start_spread_s: 10

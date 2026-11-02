@@ -175,6 +175,10 @@ class RetransmissionsModel(_Strict):
     enforce_duty_cycle: bool = True
     # Profil énergétique utilisé pour le relevé d'énergie de la simulation (None : pas de relevé).
     energy_profile: Optional[str] = None
+    # Comportement du réseau vis-à-vis de l'ACK. Par défaut : planificateur du cœur (RX1, un envoi).
+    # Une valeur non nulle de `ack_delay_ms`, ou `ack_repetitions` > 1, active la couche MAC.
+    ack_delay_ms: int = Field(0, ge=0, le=60_000)
+    ack_repetitions: int = Field(1, ge=1, le=3)
 
     @model_validator(mode="after")
     def _known_energy_profile(self) -> "RetransmissionsModel":
@@ -190,7 +194,9 @@ class RetransmissionsModel(_Strict):
         from lsim.retransmissions import RetransmissionOptions
         return RetransmissionOptions(enabled=self.enabled, retries=self.retries,
                                      retransmit_delay_ms=self.retransmit_delay_ms,
-                                     enforce_duty_cycle=self.enforce_duty_cycle)
+                                     enforce_duty_cycle=self.enforce_duty_cycle,
+                                     ack_delay_ms=self.ack_delay_ms,
+                                     ack_repetitions=self.ack_repetitions)
 
     @property
     def is_active(self) -> bool:
@@ -678,6 +684,14 @@ class Scenario:
         """Retire du hachage les blocs `rf:` absents : hash des scénarios antérieurs inchangé."""
         if model.retransmissions is None:
             dumped.pop("retransmissions", None)
+        else:
+            # Champs ajoutés par la couche MAC, à leur valeur par défaut : retirés du hachage,
+            # comme pour `mac` — le hash des scénarios écrits avant eux reste inchangé.
+            bloc = dumped["retransmissions"]
+            if model.retransmissions.ack_delay_ms == 0:
+                bloc.pop("ack_delay_ms", None)
+            if model.retransmissions.ack_repetitions == 1:
+                bloc.pop("ack_repetitions", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

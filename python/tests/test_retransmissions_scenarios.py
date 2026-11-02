@@ -15,10 +15,12 @@ Les autres sont construites dans ce fichier, faute d'un modèle de trame ACK com
 | 7. rapport cyclique dépassé | YAML `retransmissions_collision`, groupe `limite` |
 | 8. limite de tentatives atteinte | scénarios 2 et 6 |
 
-Les cas 4 et 5 ne peuvent pas être produits par le moteur : `DownlinkScheduler` place toujours la
-descente à `fin + RECEIVE_DELAY1` et n'émet qu'un ACK par trame reçue. Les valider « en scénario »
-demanderait un modèle de trame ACK que le cœur n'a pas. Ils sont donc validés au niveau de la
-décision — c'est-à-dire là où la règle est effectivement appliquée — sans prétendre à davantage.
+Les cas 4 et 5 sont validés à deux niveaux. Au niveau de la décision d'abord, sur des événements
+réels décalés ou dupliqués. De bout en bout ensuite : `DownlinkScheduler` du cœur place toujours la
+descente à `fin + RECEIVE_DELAY1` et n'émet qu'un ACK par trame reçue, donc il ne peut produire ni
+ACK tardif ni ACK dupliqué ; la couche `lsim.ack_mac` les produit à sa place, en réutilisant la
+sensibilité et l'airtime du cœur (`_downlink_airtime_ns`, `receiver_sensitivity_dbm`), et
+`build_trace` l'expose par `ack_delay_ms` / `ack_repetitions`. Le cœur C++ reste inchangé.
 """
 
 import pytest
@@ -276,6 +278,31 @@ def test_the_block_is_excluded_from_the_hash_when_absent():
     assert sans.sha256 == Scenario(model=ScenarioModel.model_validate(base)).sha256
 
 
+def test_the_ack_defaults_are_excluded_from_the_hash():
+    """Les champs ACK à leur valeur par défaut ne changent pas le hash d'un scénario existant."""
+    base = {
+        "schema_version": 1, "name": "hash", "seed": 1, "gateway": {"x_m": 0, "y_m": 0},
+        "propagation": {"frequency_hz": 868_100_000, "reference_distance_m": 1.0,
+                        "exponent": 2.7},
+        "groups": [{"name": "g", "count": 1, "placement": {"type": "disk", "radius_m": 10}}],
+    }
+    implicite = Scenario(model=ScenarioModel.model_validate(
+        {**base, "retransmissions": {"retries": 2}}))
+    explicite = Scenario(model=ScenarioModel.model_validate(
+        {**base, "retransmissions": {"retries": 2, "ack_delay_ms": 0, "ack_repetitions": 1}}))
+    assert explicite.sha256 == implicite.sha256
+    # Une valeur non par défaut, elle, décrit un autre scénario.
+    tardif = Scenario(model=ScenarioModel.model_validate(
+        {**base, "retransmissions": {"retries": 2, "ack_delay_ms": 2_500}}))
+    duplique = Scenario(model=ScenarioModel.model_validate(
+        {**base, "retransmissions": {"retries": 2, "ack_repetitions": 2}}))
+    assert tardif.sha256 != implicite.sha256
+    assert duplique.sha256 != implicite.sha256
+    # Référence figée : le hash de l'exemple écrit avant la couche MAC.
+    assert load_scenario(f"{EXEMPLES}/retransmissions_nominal.yaml").sha256 == \
+        "312a19b13190b0f9d76f0ffa677a4f44b6f7901e0501b0ebd07211eb0b11a948"
+
+
 def test_the_energy_profile_of_the_scenario_is_used():
     scenario = load_scenario(f"{EXEMPLES}/retransmissions_doublons.yaml")
     devices, _n, _i = scenario.deploy()
@@ -288,3 +315,150 @@ def test_the_energy_profile_of_the_scenario_is_used():
                                       energy_profile="rak4631")
     assert base.energy_j == 0.0
     assert avec.energy_j > 0.0
+
+
+# --- cas 4 et 5 de bout en bout : couche MAC de l'ACK ---------------------------------------
+
+def test_case_4_a_late_ack_is_lost_end_to_end():
+    """ACK émis après RX2 : transmis, consommé, jamais entendu, trame réémise jusqu'à la borne."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_tardif.yaml")
+    trace = build_trace(scenario)
+    res = trace.retransmissions
+
+    assert res.frames == 2 and res.transmissions == 6      # 2 trames, 1 + 2 réémissions
+    # Chaque tentative a bien déclenché un ACK : le réseau répond, mais trop tard.
+    assert res.acks_planned == 6
+    assert res.acks_received == 0
+    assert res.frames_delivered == 0
+    # L'ACK tardif occupe quand même la passerelle : c'est le coût du retard.
+    assert trace.gateway_tx and len(trace.gateway_tx) == 6
+
+
+def test_case_4_the_same_scenario_without_delay_delivers_everything():
+    """Témoin : sans retard, le même scénario acquitte toutes ses trames. Le retard est la cause."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_tardif.yaml")
+    devices, _n, _i = scenario.deploy()
+    sans_retard = simulate_confirmed_uplinks(
+        devices, scenario.gateway(), scenario.propagation(), device_radios(scenario),
+        ProtocolOptions(), RetransmissionOptions(retries=2, ack_delay_ms=0))
+    assert sans_retard.transmissions == 2
+    assert sans_retard.acks_received == 2
+    assert sans_retard.frames_delivered == 2
+
+
+def test_case_4_a_moderate_delay_lands_in_rx2_and_is_received():
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_tardif.yaml")
+    devices, _n, _i = scenario.deploy()
+    for retard, fenetre in ((1_000, "rx2"), (1_500, "rx2")):
+        res = simulate_confirmed_uplinks(
+            devices, scenario.gateway(), scenario.propagation(), device_radios(scenario),
+            ProtocolOptions(), RetransmissionOptions(retries=2, ack_delay_ms=retard))
+        assert res.acks_received == res.frames, (retard, res)
+        assert res.transmissions == res.frames
+
+
+def test_case_5_a_duplicated_ack_acknowledges_once_end_to_end():
+    """ACK émis deux fois : deux réceptions, **un seul** acquittement, aucune réémission."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_duplique.yaml")
+    trace = build_trace(scenario)
+    res = trace.retransmissions
+
+    assert res.frames == 2
+    assert res.transmissions == 2                 # aucun doublon d'uplink provoqué
+    assert res.acks_planned == 4                  # deux émissions d'ACK par trame
+    assert res.acks_received == 2                 # une par trame
+    assert res.ack_duplicates_ignored == 2        # la seconde copie est écartée
+    assert res.frames_delivered == 2
+    assert res.duplicates == 0                    # et aucune duplication d'uplink côté réseau
+
+
+def test_case_5_the_duplicate_costs_airtime():
+    """Témoin : la répétition n'est pas gratuite, elle consomme la passerelle."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_duplique.yaml")
+    devices, _n, _i = scenario.deploy()
+    simple = simulate_confirmed_uplinks(
+        devices, scenario.gateway(), scenario.propagation(), device_radios(scenario),
+        ProtocolOptions(), RetransmissionOptions(retries=2, ack_repetitions=1))
+    double = simulate_confirmed_uplinks(
+        devices, scenario.gateway(), scenario.propagation(), device_radios(scenario),
+        ProtocolOptions(), RetransmissionOptions(retries=2, ack_repetitions=2))
+    assert double.acks_planned == 2 * simple.acks_planned
+    assert double.ack_duplicates_ignored == double.acks_received
+    assert double.gateway_utilization >= simple.gateway_utilization
+
+
+def test_the_ack_mac_layer_reproduces_the_core_when_left_at_defaults():
+    """Parité : à retard nul et sans répétition, la couche MAC redonne l'occupation du cœur."""
+    from lsim.ack_mac import AckTiming, plan_acks
+    from lsim.downlink_plan import simulate_causal
+
+    for exemple in ("retransmissions_nominal", "retransmissions_collision"):
+        scenario = load_scenario(f"{EXEMPLES}/{exemple}.yaml")
+        devices, _n, _i = scenario.deploy()
+        radios = device_radios(scenario)
+        options = ProtocolOptions(confirmed_uplinks=True)
+        _res, busy_moteur = simulate_causal(devices, scenario.gateway(),
+                                            scenario.propagation(), None, radios, options)
+        resultat, _ = simulate_causal(devices, scenario.gateway(), scenario.propagation(), None,
+                                      radios, options)
+        radios_par_enregistrement = [radios[r.device_index] for r in resultat.records]
+        plan = plan_acks(resultat.records, radios_par_enregistrement, options, AckTiming())
+        assert sorted(plan.busy) == sorted(busy_moteur), exemple
+        assert plan.received == sum(1 for r in resultat.records if r.outcome == 2)
+
+
+# --- réserve 2 : la dégradation du récepteur n'affecte que la descente ----------------------
+
+def test_receiver_degradation_only_affects_the_downlink():
+    """`device_rx_offset_db` dégrade la réception **descendante** et rien d'autre.
+
+    Contrôle direct : à entrée identique, toutes les émissions montantes (instant, RSSI, issue)
+    doivent être identiques quel que soit l'écart, et seuls les ACK changent.
+    """
+    from lsim.downlink_plan import simulate_causal
+
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_perdu.yaml")
+    devices, _n, _i = scenario.deploy()
+    radios = device_radios(scenario)
+
+    empreintes = []
+    for offset in (0.0, 5.0, 10.0, 20.0):
+        resultat, _busy = simulate_causal(devices, scenario.gateway(), scenario.propagation(),
+                                          None, radios,
+                                          ProtocolOptions(confirmed_uplinks=True,
+                                                          device_rx_offset_db=offset))
+        empreintes.append(tuple((r.device_index, r.start_ns, r.end_ns, round(r.rssi_dbm, 9),
+                                 r.outcome) for r in resultat.records))
+    # Une seule empreinte distincte : le montant est strictement insensible à l'écart.
+    assert len(set(empreintes)) == 1
+
+
+def test_receiver_degradation_changes_the_ack_reception():
+    """Contrepartie du test précédent : lui, il change bien quelque chose — la descente."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_perdu.yaml")
+    devices, _n, _i = scenario.deploy()
+    radios = device_radios(scenario)
+    mesures = []
+    for offset in (0.0, 10.0):
+        res = simulate_confirmed_uplinks(devices, scenario.gateway(), scenario.propagation(),
+                                         radios, ProtocolOptions(device_rx_offset_db=offset),
+                                         RetransmissionOptions(retries=3))
+        mesures.append((res.received, res.acks_received))
+    # Les réémissions diffèrent d'un cas à l'autre : on ne compare donc que les ACK, seule
+    # grandeur censée dépendre de l'écart de réception descendante.
+    assert mesures[0][1] > mesures[1][1]
+
+
+def test_receiver_degradation_never_touches_the_uplink_budget():
+    """Vérification par la porte d'entrée du module : mêmes uplinks initiaux, mêmes issues."""
+    scenario = load_scenario(f"{EXEMPLES}/retransmissions_ack_perdu.yaml")
+    devices, _n, _i = scenario.deploy()
+    radios = device_radios(scenario)
+    initiaux = []
+    for offset in (0.0, 20.0):
+        res = simulate_confirmed_uplinks(devices, scenario.gateway(), scenario.propagation(),
+                                         radios, ProtocolOptions(device_rx_offset_db=offset),
+                                         RetransmissionOptions(retries=0))
+        initiaux.append(tuple((a.device, a.frame, a.start_ns, a.end_ns, a.received)
+                              for a in res.attempts))
+    assert initiaux[0] == initiaux[1]
