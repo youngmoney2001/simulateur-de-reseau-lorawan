@@ -1,48 +1,59 @@
-"""Jointure OTAA dans le moteur radio : transport, pertes, collisions, rejeu.
+"""Jointure OTAA dans le moteur radio : transport, fenêtres RX1/RX2, pertes, rejeu.
 
 Ce qui est vérifié ici est le **transport** de la jointure, pas son authentification : aucun test
-n'affirme qu'un `MIC` est validé ni qu'une clé est dérivée. Les scénarios s'appuient sur les fichiers
-de `docs/exemples/` ; les cas qui exigent une condition impossible à écrire en YAML (terminal en
-émission au moment du Join-Accept) sont construits à la main et signalés comme tels.
+n'affirme qu'un `MIC` est validé ni qu'une clé est dérivée.
+
+**Fenêtres.** RX1 (`JOIN_ACCEPT_DELAY1`, 5 s) puis RX2 (`JOIN_ACCEPT_DELAY2`, 6 s) : RX2 n'est émise
+que si RX1 n'a pas abouti. Si RX1 est reçue, il n'y a **aucune** émission RX2. Le rejeu d'un
+Join-Accept est un autre mécanisme : une émission supplémentaire du même message, reçue puis refusée.
 
 | Ce qui est vérifié | Test |
 |---|---|
 | Join-Request de 23 octets, reçu, session ouverte | `test_a_join_request_received_opens_a_session` |
+| RX1 reçue : une seule émission, aucune RX2 | `test_rx1_delivered_emits_no_rx2` |
+| RX1 manquée : RX2 en secours, session ouverte | `test_rx1_missed_falls_back_to_rx2` |
+| RX1 et RX2 manquées : aucune session | `test_both_windows_missed_open_nothing` |
+| Rejeu : copie reçue puis refusée, pas de seconde session | `test_a_replayed_accept_does_not_renew` |
+| Un terminal joint, un autre non | `test_terminals_join_independently` |
+| Une seule jointure acceptée = une seule session | `test_one_accepted_join_opens_exactly_one_session` |
 | Join-Request perdu : aucune session, compteurs intacts | `test_a_lost_join_request_renews_nothing` |
 | Collision de deux Join-Request simultanés | `test_colliding_join_requests_open_nothing` |
-| Tentatives répétées : une seule session par terminal | `test_a_retry_joins_after_a_collision` |
-| Join-Accept rejoué (copie RX2) : une seule session | `test_a_replayed_join_accept_is_rejected` |
-| Terminal en émission : le Join-Accept n'est pas écouté | `test_an_accept_is_missed_when_the_device_transmits` |
+| Deux tentatives : une seule session par terminal | `test_a_retry_joins_after_a_collision` |
 | Événements `join_request` / `join_accept` et leurs issues | `test_the_trace_carries_the_radio_join` |
 | Empreinte et validation du scénario | `test_the_hash_and_the_validation` |
 """
 
-import dataclasses
 import types
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
-from lsim.join import (JOIN_ACCEPT_BYTES, JOIN_REQUEST_BYTES, JoinRadioOptions,
-                       accept_airtime_ns, simulate_joins, join_request_device)
+from lsim.join import (JOIN_ACCEPT_BYTES, JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS,
+                       JOIN_REQUEST_BYTES, JoinRadioOptions, accept_airtime_ns,
+                       join_request_device, simulate_joins)
 from lsim.scenario import load_scenario
+from lsim.sessions import SessionTimeline
 from lsim.trace_events import ProtocolOptions, build_trace, device_radios
 
 EXEMPLE = "docs/exemples/retransmissions_ack_tardif.yaml"
 
 
-def _scenario(modifier=None, **reglages):
-    data = yaml.safe_load(open(EXEMPLE, encoding="utf-8"))
+def _brut(modifier=None, exemple=EXEMPLE, **reglages):
+    data = yaml.safe_load(open(exemple, encoding="utf-8"))
     if modifier is not None:
         modifier(data)
     reglages.setdefault("join_requests_s", [10])
     data["retransmissions"].update({"ack_delay_ms": 0, **reglages})
-    return load_scenario(yaml.safe_dump(data))
+    return data
 
 
-def _trace(modifier=None, **reglages):
-    return build_trace(_scenario(modifier, **reglages))
+def _scenario(modifier=None, exemple=EXEMPLE, **reglages):
+    return load_scenario(yaml.safe_dump(_brut(modifier, exemple, **reglages)))
+
+
+def _trace(modifier=None, exemple=EXEMPLE, options=ProtocolOptions(), **reglages):
+    return build_trace(_scenario(modifier, exemple, **reglages), options)
 
 
 def _loin(data):
@@ -57,6 +68,13 @@ def _deux(positions):
     return modifier
 
 
+def _lent(data):
+    """Trames de 51 octets en SF12 : une transmission couvre plus d'une seconde."""
+    data["groups"][0].update({"spreading_factor": 12, "payload_bytes": 51, "period_s": 60,
+                              "messages": 3, "start_spread_s": 4})
+    data["retransmissions"].update({"ack_delay_ms": 2500, "retries": 2})
+
+
 # --- transport ----------------------------------------------------------------------------------
 
 def test_the_join_request_goes_through_the_radio_engine():
@@ -66,34 +84,121 @@ def test_the_join_request_goes_through_the_radio_engine():
     clone = join_request_device(devices[0], 10_000_000_000)
     assert clone.payload_bytes == JOIN_REQUEST_BYTES == 23
     assert clone.messages == 1 and clone.start_offset_ns == 10_000_000_000
-    # Le Join-Request est plus long qu'une trame de données du scénario : il occupe l'air.
     assert clone.payload_bytes > devices[0].payload_bytes
     assert accept_airtime_ns(radio) > 0 and JOIN_ACCEPT_BYTES == 33
 
 
 def test_a_join_request_received_opens_a_session():
     trace = _trace()
-    joints = trace.retransmissions.joins
-    assert len(joints) == 1
-    tentative = joints[0]
+    tentatives = trace.retransmissions.joins
+    assert len(tentatives) == 1
+    tentative = tentatives[0]
     assert tentative.request_outcome == "received"
     assert tentative.accept_outcome == "delivered"
     assert tentative.session == 1
-    # Le Join-Accept part JOIN_ACCEPT_DELAY1 après la fin du Join-Request.
-    assert tentative.accept_ns == tentative.request_end_ns + 5_000_000_000
-    # Les trames d'avant la jointure restent en session 0, celles d'après en session 1.
     assert [a.session for a in trace.retransmissions.attempts] == [0, 1]
-    # Une session neuve : FCntUp repart de zéro.
     assert [a.f_cnt_up for a in trace.retransmissions.attempts] == [0, 0]
 
+
+# --- fenêtres RX1 / RX2 -------------------------------------------------------------------------
+
+def test_rx1_delivered_emits_no_rx2():
+    tentative = _trace().retransmissions.joins[0]
+    assert [e.window for e in tentative.accepts] == ["rx1"]
+    assert tentative.accepts[0].outcome == "delivered"
+    # RX1 tombe exactement JOIN_ACCEPT_DELAY1 après la fin du Join-Request.
+    assert tentative.accepts[0].at_ns == tentative.request_end_ns + JOIN_ACCEPT_DELAY1_NS
+    assert tentative.accept_window == "rx1"
+
+
+def test_rx1_missed_falls_back_to_rx2():
+    """Le terminal émet une trame de 51 octets en SF12 : elle couvre l'instant de RX1.
+
+    La requête est placée à 56 s, dans un trou du calendrier ; RX1 à 62,48 s tombe dans la trame
+    émise de 60,54 à 63,00 s, RX2 à 63,48 s est libre. Cas de bout en bout, sans calendrier fabriqué.
+    """
+    trace = _trace(_lent, join_requests_s=[56])
+    tentative = trace.retransmissions.joins[0]
+    assert tentative.request_outcome == "received"
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", "not_listened"), ("rx2", "delivered")]
+    assert tentative.accepts[1].at_ns == tentative.request_end_ns + JOIN_ACCEPT_DELAY2_NS
+    assert tentative.accept_window == "rx2"
+    assert tentative.session == 1
+    # Les événements de trace suivent les émissions réellement faites, fenêtre par fenêtre.
+    emissions = [(e.t_ns, e.hops[0].outcome) for e in trace.events if e.kind == "join_accept"]
+    assert emissions == [(tentative.accepts[0].at_ns, "not_listened"),
+                         (tentative.accepts[1].at_ns, "delivered")]
+
+
+def test_both_windows_missed_open_nothing():
+    """Terminal à 9 km avec récepteur dégradé de 10 dB : requête reçue, descente sous la sensibilité."""
+    def loin(data):
+        data["groups"][0]["placement"] = {"type": "explicit", "positions": [[9000.0, 0.0]]}
+
+    trace = _trace(loin, options=ProtocolOptions(device_rx_offset_db=10))
+    tentative = trace.retransmissions.joins[0]
+    assert tentative.request_outcome == "received"
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", "lost_sensitivity"), ("rx2", "lost_sensitivity")]
+    assert tentative.session == 0
+    assert {a.session for a in trace.retransmissions.attempts} == {0}
+    # Deux émissions ont bien eu lieu, aucune n'a été écoutée.
+    evenements = [e for e in trace.events if e.kind == "join_accept"]
+    assert len(evenements) == 2 and all(e.hops[0].outcome == "lost_sensitivity"
+                                        for e in evenements)
+
+
+def test_the_rx2_fallback_can_be_disabled():
+    trace = _trace(_lent, join_requests_s=[56], join_accept_rx2_fallback=False)
+    tentative = trace.retransmissions.joins[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [("rx1", "not_listened")]
+    assert tentative.session == 0
+    assert [e.kind for e in trace.events if e.kind == "join_accept"] == ["join_accept"]
+
+
+def test_a_replayed_accept_does_not_renew():
+    trace = _trace(join_accept_replays=1)
+    tentative = trace.retransmissions.joins[0]
+    assert [e.window for e in tentative.accepts] == ["rx1", "replay"]
+    assert tentative.accept_replays == 1              # émission reçue puis refusée
+    assert tentative.session == 1
+    assert {a.session for a in trace.retransmissions.attempts} == {0, 1}
+    # Le rejeu apparaît en trace comme une émission refusée, pas comme une seconde jointure.
+    rejeux = [e for e in trace.events if e.kind == "join_accept"
+              and e.hops[0].outcome == "suppressed"]
+    assert len(rejeux) == 1
+
+
+# --- plusieurs terminaux ------------------------------------------------------------------------
+
+def test_terminals_join_independently():
+    trace = _trace(_deux([[100.0, 0.0], [20000.0, 0.0]]))
+    par_terminal = {j.device: (j.request_outcome, j.session) for j in trace.retransmissions.joins}
+    assert par_terminal == {0: ("received", 1), 1: ("lost_sensitivity", 0)}
+    # Le terminal joint change de session ; l'autre reste en session 0.
+    assert {(a.device, a.session) for a in trace.retransmissions.attempts} == {(0, 0), (0, 1),
+                                                                              (1, 0)}
+
+
+def test_one_accepted_join_opens_exactly_one_session():
+    trace = _trace(join_accept_replays=2)
+    tentative = trace.retransmissions.joins[0]
+    assert tentative.session == 1
+    assert tentative.accept_replays == 2
+    # Une seule session ouverte : la trace ne contient qu'une transition 0 → 1.
+    sessions = [a.session for a in trace.retransmissions.attempts]
+    assert sessions.count(1) >= 1 and max(sessions) == 1
+
+
+# --- pertes et collisions -----------------------------------------------------------------------
 
 def test_a_lost_join_request_renews_nothing():
     trace = _trace(_loin)
     tentative = trace.retransmissions.joins[0]
     assert tentative.request_outcome == "lost_sensitivity"
-    assert tentative.accept_ns is None and tentative.session == 0
+    assert tentative.accepts == () and tentative.session == 0
     assert {a.session for a in trace.retransmissions.attempts} == {0}
-    # Aucune remise à zéro : les deux trames gardent leurs compteurs, réémissions comprises.
     assert sorted({a.f_cnt_up for a in trace.retransmissions.attempts}) == [0, 1]
 
 
@@ -108,47 +213,35 @@ def test_colliding_join_requests_open_nothing():
 def test_a_retry_joins_after_a_collision():
     trace = _trace(_deux([[100.0, 0.0], [300.0, 0.0]]), join_retries=2)
     joints = trace.retransmissions.joins
-    # Trois tentatives : device 0 joint du premier coup, device 1 au second essai.
     assert [(j.device, j.request_ns // 1_000_000_000, j.request_outcome) for j in joints] == [
         (0, 10, "received"), (1, 10, "lost_collision"), (1, 20, "received")]
-    # Chaque terminal a sa propre horloge : les deux ouvertures sont « session 1 » du terminal,
-    # et aucune tentative réussie n'ouvre une deuxième session pour le même terminal.
     assert sorted({j.session for j in joints if j.session}) == [1]
     assert {a.session for a in trace.retransmissions.attempts} == {0, 1}
 
 
-def test_a_replayed_join_accept_is_rejected():
-    trace = _trace(join_accept_repetitions=2)
-    tentative = trace.retransmissions.joins[0]
-    assert tentative.accept_outcome == "delivered"
-    assert tentative.accept_replays == 1          # la copie RX2 a été reçue puis refusée
-    assert tentative.session == 1
-    assert {a.session for a in trace.retransmissions.attempts} == {0, 1}
+# --- cas construit ------------------------------------------------------------------------------
 
-
-def test_an_accept_is_missed_when_the_device_transmits():
-    """Cas construit : aucune trame de données ne tombe à 15,2 s dans les exemples livrés.
-
-    Le calendrier de données est fabriqué à la main pour couvrir la fenêtre RX1 : c'est le seul
-    moyen d'obtenir `not_listened` sans inventer un scénario irréaliste.
-    """
+def test_a_window_can_be_closed_by_a_transmission():
+    """Cas construit : le calendrier de données est fabriqué pour couvrir RX1 seulement."""
     scenario = _scenario()
     devices, _, _ = scenario.deploy()
     radios = device_radios(scenario)
+
     def joue(occupation=()):
         return simulate_joins(devices, scenario.gateway(), scenario.propagation(), radios,
                               ProtocolOptions(), scenario.environment, [(0, 10_000_000_000)],
                               {}, data_attempts=occupation,
                               join_options=JoinRadioOptions(requests_s=(10,)))
 
-    accept = joue().attempts[0].accept_ns                    # instant réel du Join-Accept
-    occupation = [types.SimpleNamespace(device=0, start_ns=accept - 100_000_000,
-                                        end_ns=accept + 100_000_000)]
+    rx1 = None
+    premiere = joue()
+    rx1 = premiere.attempts[0].accepts[0].at_ns
+    occupation = [types.SimpleNamespace(device=0, start_ns=rx1 - 100_000_000,
+                                        end_ns=rx1 + 100_000_000)]
     resultat = joue(occupation)
-    assert resultat.attempts[0].request_outcome == "received"
-    assert resultat.attempts[0].accept_outcome == "not_listened"
-    assert resultat.attempts[0].session == 0
-    assert resultat.timelines == {}
+    assert [(e.window, e.outcome) for e in resultat.attempts[0].accepts] == [
+        ("rx1", "not_listened"), ("rx2", "delivered")]
+    assert resultat.attempts[0].session == 1
 
 
 # --- trace --------------------------------------------------------------------------------------
@@ -163,8 +256,7 @@ def test_the_trace_carries_the_radio_join():
 
 def test_a_lost_request_leaves_no_accept_event():
     trace = _trace(_loin)
-    evenements = [e.kind for e in trace.events if e.kind.startswith("join")]
-    assert evenements == ["join_request"]
+    assert [e.kind for e in trace.events if e.kind.startswith("join")] == ["join_request"]
     assert trace.events[0].hops[0].outcome == "lost_sensitivity"
 
 
@@ -176,7 +268,6 @@ def test_the_hash_and_the_validation():
         {**data, "retransmissions": {**data["retransmissions"], "ack_delay_ms": 0}}))
     sans = _scenario(join_requests_s=[])
     avec = _scenario()
-    # Une liste vide est retirée du hash ; une jointure déclarée le change.
     assert sans.sha256 == reference.sha256
     assert avec.sha256 != reference.sha256
 
@@ -185,6 +276,12 @@ def test_the_hash_and_the_validation():
     with pytest.raises(ValidationError):
         _scenario(join_retries=4)
     with pytest.raises(ValidationError):
-        _scenario(join_accept_repetitions=3)
+        _scenario(join_accept_replays=3)
     with pytest.raises(ValidationError, match="croissants"):
         _scenario(join_requests_s=[20, 10])
+
+
+def test_the_options_validate_the_windows():
+    assert JoinRadioOptions(requests_s=(10,)).rx2_fallback is True
+    with pytest.raises(ValueError, match="join_accept_replays"):
+        JoinRadioOptions(requests_s=(10,), accept_replays=3)

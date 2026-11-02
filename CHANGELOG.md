@@ -2,24 +2,28 @@
 
 ## 0.1.0 (non publiée)
 
-### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en descente
+### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en RX1/RX2
 - **`python/lsim/join.py`** : le Join-Request passe par le moteur causal comme une transmission de
   23 octets (temps de vol, collisions, sensibilité, couverture) ; le Join-Accept est une descente de
-  33 octets émise à `JOIN_ACCEPT_DELAY1` (5 s), écoutée en RX1, avec copie éventuelle en RX2 (6 s).
-- **Une session n'est ouverte que si l'échange aboutit** : Join-Accept reçu, terminal à l'écoute,
-  `JoinNonce` supérieur au dernier accepté. Un Join-Request perdu, une collision ou un Join-Accept
-  non écouté ne remettent **aucun** compteur à zéro.
-- **Rejeu** : la copie RX2 du même Join-Accept est reçue puis refusée (`accept_replays`), sans
-  ouvrir de seconde session.
+  33 octets émise en **RX1** (`JOIN_ACCEPT_DELAY1`, 5 s).
+- **RX2 est une fenêtre de secours, pas une copie.** RX2 (`JOIN_ACCEPT_DELAY2`, 6 s) n'est émise que
+  si RX1 n'a pas abouti ; si RX1 est reçue, aucune émission RX2 n'a lieu
+  (`join_accept_rx2_fallback: false` la supprime entièrement). Le rejeu d'un Join-Accept est un
+  mécanisme distinct (`join_accept_replays`) : le même message est réémis après acceptation, reçu
+  puis refusé, et ne rouvre aucune session.
+- **Une session n'est ouverte que si l'échange aboutit** : Join-Accept reçu dans une fenêtre,
+  terminal à l'écoute, `JoinNonce` supérieur au dernier accepté. Un Join-Request perdu, une
+  collision, RX1 et RX2 perdues ne remettent **aucun** compteur à zéro.
 - **Scénario** : `join_requests_s` (instants des Join-Request), `join_retries` (1 à 3, 10 s entre
-  deux essais), `join_accept_repetitions` (1 ou 2). Absents du hash à leur valeur par défaut ;
-  exclusifs avec le modèle déclaré `session_joins_s`.
-- **Trace** : `join_request` à l'instant réel avec l'issue du moteur (`received`, `lost_collision`,
-  `lost_sensitivity`), `join_accept` seulement si le Join-Request a été reçu.
-- **Mesures** : à 100 m, jointure reçue et session ouverte (`FCntUp` 0 → 0) ; à 20 km, requête perdue
-  et aucune session (`FCntUp` 0 puis 1) ; deux terminaux au même point, collision des deux requêtes ;
-  deux terminaux à 100 m et 300 m avec deux tentatives, jointure au second essai ; deux copies,
-  une seule session.
+  deux essais), `join_accept_rx2_fallback`, `join_accept_replays` (0 à 2). Absents du hash à leur
+  valeur par défaut ; exclusifs avec le modèle déclaré `session_joins_s`.
+- **Trace** : `join_request` à l'instant réel avec l'issue du moteur ; un `join_accept` **par
+  émission réellement faite** — un seul si RX1 aboutit, deux si RX2 sert de secours, plus un
+  événement `suppressed` par rejeu reçu.
+- **Mesures** : à 100 m, RX1 reçue et session ouverte (`FCntUp` 0 → 0) ; à 20 km, requête perdue,
+  aucune session (`FCntUp` 0 puis 1) ; à 9 km avec récepteur dégradé, RX1 et RX2 perdues ; trame de
+  51 octets en SF12 couvrant RX1, RX2 reçue à 63,48 s ; deux terminaux au même point, collision ;
+  deux tentatives sur deux terminaux, une session par terminal ; rejeu, une seule session.
 - **Limites** : aucune cryptographie (ni clé, ni `MIC`, ni chiffrement), Join-Accept non opposé à
   l'occupation de la passerelle, Join-Request non compté dans le rapport cyclique, pas de rejoint 1.1.
   `docs/MAC_CONSOLIDATION.md` §9.

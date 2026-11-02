@@ -925,12 +925,17 @@
           "title": "Fcnt Up Start",
           "type": "integer"
         },
-        "join_accept_repetitions": {
-          "default": 1,
+        "join_accept_replays": {
+          "default": 0,
           "maximum": 2,
-          "minimum": 1,
-          "title": "Join Accept Repetitions",
+          "minimum": 0,
+          "title": "Join Accept Replays",
           "type": "integer"
+        },
+        "join_accept_rx2_fallback": {
+          "default": true,
+          "title": "Join Accept Rx2 Fallback",
+          "type": "boolean"
         },
         "join_requests_s": {
           "items": {

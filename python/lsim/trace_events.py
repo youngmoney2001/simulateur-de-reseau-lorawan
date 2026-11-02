@@ -676,11 +676,14 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
             0, tentative.request_ns, "join_request", tentative.device, 0,
             (HopEvent(_dev(tentative.device), "gw:0", tentative.request_ns, radio.freq_hz,
                       radio.dr, None, tentative.request_outcome),), tentative.request_outcome))
-        if tentative.accept_ns is not None:
+        # Une émission par Join-Accept réellement transmis : RX1, puis RX2 en secours, puis rejeux.
+        # Le rejeu reçu est « suppressed » au contrat : le terminal le décode et le refuse.
+        for emission in tentative.accepts:
+            issue = "suppressed" if emission.outcome == "replayed" else emission.outcome
             remappes.append(ProtocolEvent(
-                0, tentative.accept_ns, "join_accept", tentative.device, 0,
-                (HopEvent("gw:0", _dev(tentative.device), tentative.accept_ns, radio.rx1_hz,
-                          None, None, tentative.accept_outcome),), tentative.accept_outcome))
+                0, emission.at_ns, "join_accept", tentative.device, 0,
+                (HopEvent("gw:0", _dev(tentative.device), emission.at_ns, radio.rx1_hz,
+                          None, None, issue),), issue))
 
     # Jointures declarees (sans radio) : elles ouvrent une session, donc remettent les compteurs a
     # zero. Le Join-Request precede le Join-Accept de JOIN_ACCEPT_DELAY1 (5 s), borne a l'origine.

@@ -298,41 +298,51 @@ l'échange aboutit (`python/lsim/join.py`).
 | Étape | Modélisé | Non modélisé |
 |---|---|---|
 | Join-Request | 23 octets (`lsim_encode_join_request`), temps de vol, collisions, sensibilité, couverture, placement causal | `DevNonce`, `DevEUI`, `MIC` : aucun octet n'est construit ni vérifié |
-| Join-Accept | 33 octets, émis à `JOIN_ACCEPT_DELAY1` (5 s), écouté en RX1 ; copie à 6 s en RX2 | occupation de la passerelle par les ACK, temps de vol des autres descentes, CFList |
+| Join-Accept | 33 octets, émis en **RX1** (`JOIN_ACCEPT_DELAY1`, 5 s) ; **RX2** (6 s) n'est émise que si RX1 n'a pas abouti | occupation de la passerelle par les ACK, temps de vol des autres descentes, CFList |
 | Session | ouverte si un Join-Accept est **reçu** et si son `JoinNonce` dépasse le dernier accepté | dérivation de clés, chiffrement, rejoint 1.1 |
 
 ### 9.1 Ce que le moteur décide
 
-| Situation | `request_outcome` | `accept_outcome` | Session |
-|---|---|---|---|
-| tout passe | `received` | `delivered` | ouverte à la fin du Join-Accept |
-| terminal hors couverture montante | `lost_sensitivity` | — (rien n'est émis) | aucune |
-| deux Join-Request simultanés, même SF | `lost_collision` | — | aucune |
-| terminal en émission à l'instant du Join-Accept | `received` | `not_listened` | aucune |
-| descente sous la sensibilité du terminal | `received` | `lost_sensitivity` | aucune |
-| copie RX2 reçue du même Join-Accept | `received` | `delivered` + 1 `accept_replays` | une seule |
+| Situation | Fenêtres émises | Session |
+|---|---|---|
+| tout passe | RX1 seule, `delivered` | ouverte à la fin de RX1 |
+| RX1 non écoutée (terminal en émission) | RX1 `not_listened` **puis** RX2 `delivered` | ouverte à la fin de RX2 |
+| RX1 sous la sensibilité | RX1 `lost_sensitivity` **puis** RX2, même issue | ouverte seulement si RX2 passe |
+| RX1 et RX2 perdues | RX1 puis RX2, toutes deux perdues | aucune |
+| requête perdue | aucune émission | aucune |
+| deux Join-Request simultanés | aucune émission | aucune |
+| Join-Accept rejoué (`join_accept_replays`) | RX1 `delivered` **puis** réémission `replayed` | une seule, le rejeu est refusé |
 
-Un Join-Accept rejoué ne rouvre pas de session : le nonce n'avance pas (`SessionTimeline.accept`).
+**RX2 est une fenêtre de secours, pas une seconde copie.** Si RX1 est reçue, aucune émission RX2
+n'a lieu (`join_accept_rx2_fallback: false` supprime même la possibilité de secours). Le rejeu est
+un mécanisme distinct : c'est une réémission du **même** Join-Accept, que le terminal reçoit et
+refuse parce que son `JoinNonce` n'avance pas (`SessionTimeline.accept`) ; elle est comptée dans
+`JoinAttempt.accept_replays` et apparaît en trace comme `suppressed`.
+
 `JoinNonce` est un **rang attribué par le simulateur**, pas une valeur dérivée d'une clé.
 
 ### 9.2 Mesures
 
 Scénario `docs/exemples/retransmissions_ack_tardif.yaml`, `ack_delay_ms: 0`, un Join-Request à 10 s :
 
-| Réglage | `request_outcome` | `accept_outcome` | Sessions des trames |
-|---|---|---|---|
-| terminal à 100 m | `received` | `delivered` (15,45 s) | 0 puis 1, `FCntUp` 0 puis 0 |
-| terminal à 20 km | `lost_sensitivity` | — | 0 seulement, `FCntUp` 0 et 1 |
-| deux terminaux au même point | `lost_collision` ×2 | — | 0 seulement |
-| deux terminaux à 100 m et 300 m, `join_retries: 2` | `received`, `lost_collision` puis `received` | `delivered` ×2 | 0 puis 1 par terminal |
-| `join_accept_repetitions: 2` | `received` | `delivered`, 1 rejeu | une seule session |
+| Réglage | Fenêtres | Sessions des trames |
+|---|---|---|
+| terminal à 100 m | RX1 `delivered` (15,45 s), pas de RX2 | 0 puis 1, `FCntUp` 0 puis 0 |
+| terminal à 20 km | aucune émission (requête perdue) | 0 seulement, `FCntUp` 0 et 1 |
+| 9 km, récepteur dégradé de 10 dB | RX1 puis RX2, `lost_sensitivity` | 0 seulement |
+| trame de 51 octets en SF12 couvrant RX1 (requête à 56 s) | RX1 `not_listened` (62,48 s), RX2 `delivered` (63,48 s) | 0 puis 1 |
+| deux terminaux au même point | aucune émission (collision) | 0 seulement |
+| deux terminaux à 100 m et 300 m, `join_retries: 2` | RX1 `delivered` ×2 | 0 puis 1 par terminal |
+| `join_accept_replays: 1` | RX1 `delivered` puis 1 rejeu refusé | une seule session |
 
 ### 9.3 Trace
 
 Chaque tentative produit un événement `join_request` à son instant réel, avec l'issue du moteur
-(`received`, `lost_collision`, `lost_sensitivity`). Le `join_accept` n'apparaît que si le
-Join-Request a été reçu, à l'instant d'émission du Join-Accept. Aucune valeur nouvelle au contrat :
-ces issues existent déjà dans `HopOutcome`.
+(`received`, `lost_collision`, `lost_sensitivity`). Le `join_accept` apparaît **une fois par émission
+réellement faite** : un seul événement si RX1 a abouti, deux si RX2 a servi de secours, plus un
+événement `suppressed` par rejeu reçu. L'instant de l'événement identifie la fenêtre
+(`fin de la requête + 5 s` pour RX1, `+ 6 s` pour RX2). Aucune valeur nouvelle au contrat : ces
+issues existent déjà dans `HopOutcome`.
 
 ### 9.4 Limites explicites
 

@@ -188,7 +188,10 @@ class RetransmissionsModel(_Strict):
     # collisions, sensibilité) et n'ouvre une session que si le Join-Accept est reçu.
     join_requests_s: list[int] = Field(default_factory=list, max_length=16)
     join_retries: int = Field(1, ge=1, le=3)
-    join_accept_repetitions: int = Field(1, ge=1, le=2)
+    # RX2 est la fenêtre de secours de RX1 : elle n'est émise que si RX1 n'a pas abouti.
+    join_accept_rx2_fallback: bool = True
+    # Join-Accept rejoués après acceptation (même JoinNonce) : reçus puis refusés.
+    join_accept_replays: int = Field(0, ge=0, le=2)
 
     @field_validator("session_joins_s", "join_requests_s")
     @classmethod
@@ -237,7 +240,8 @@ class RetransmissionsModel(_Strict):
                                      session_joins_s=tuple(self.session_joins_s),
                                      join_requests_s=tuple(self.join_requests_s),
                                      join_retries=self.join_retries,
-                                     join_accept_repetitions=self.join_accept_repetitions)
+                                     join_accept_rx2_fallback=self.join_accept_rx2_fallback,
+                                     join_accept_replays=self.join_accept_replays)
 
     @property
     def is_active(self) -> bool:
@@ -763,8 +767,10 @@ class Scenario:
                 bloc.pop("join_requests_s", None)
             if model.retransmissions.join_retries == 1:
                 bloc.pop("join_retries", None)
-            if model.retransmissions.join_accept_repetitions == 1:
-                bloc.pop("join_accept_repetitions", None)
+            if model.retransmissions.join_accept_rx2_fallback:
+                bloc.pop("join_accept_rx2_fallback", None)
+            if model.retransmissions.join_accept_replays == 0:
+                bloc.pop("join_accept_replays", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

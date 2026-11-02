@@ -108,7 +108,8 @@ class RetransmissionOptions:
     # Jointures **radio** : instants (s) des Join-Request, tentatives, copies du Join-Accept.
     join_requests_s: tuple[int, ...] = ()
     join_retries: int = 1
-    join_accept_repetitions: int = 1
+    join_accept_rx2_fallback: bool = True
+    join_accept_replays: int = 0
 
     def __post_init__(self) -> None:
         if not 0 <= self.fcnt_up_start < 2**32:
@@ -134,7 +135,8 @@ class RetransmissionOptions:
         if self.session_joins_s and self.join_requests_s:
             raise ValueError("session_joins_s (déclaré) et join_requests_s (radio) sont exclusifs")
         return JoinRadioOptions(requests_s=self.join_requests_s, retries=self.join_retries,
-                                accept_repetitions=self.join_accept_repetitions)
+                                rx2_fallback=self.join_accept_rx2_fallback,
+                                accept_replays=self.join_accept_replays)
 
     @property
     def timeline(self) -> SessionTimeline:
