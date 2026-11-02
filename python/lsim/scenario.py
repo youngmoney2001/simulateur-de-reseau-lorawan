@@ -179,6 +179,8 @@ class RetransmissionsModel(_Strict):
     # Une valeur non nulle de `ack_delay_ms`, ou `ack_repetitions` > 1, active la couche MAC.
     ack_delay_ms: int = Field(0, ge=0, le=60_000)
     ack_repetitions: int = Field(1, ge=1, le=3)
+    # La descente porte une charge utile applicative : elle consomme AFCntDown (`data_ack`).
+    downlink_payload: bool = False
     # Premier FCntUp de chaque terminal (compteur 32 bits, comme `lsim.session`).
     fcnt_up_start: int = Field(0, ge=0, le=2**32 - 1)
     # Premier compteur descendant de chaque terminal : départ des deux séries `NFCntDown` et
@@ -203,7 +205,8 @@ class RetransmissionsModel(_Strict):
                                      ack_delay_ms=self.ack_delay_ms,
                                      ack_repetitions=self.ack_repetitions,
                                      fcnt_up_start=self.fcnt_up_start,
-                                     fcnt_down_start=self.fcnt_down_start)
+                                     fcnt_down_start=self.fcnt_down_start,
+                                     downlink_payload=self.downlink_payload)
 
     @property
     def is_active(self) -> bool:
@@ -721,6 +724,8 @@ class Scenario:
                 bloc.pop("fcnt_up_start", None)
             if model.retransmissions.fcnt_down_start == 0:
                 bloc.pop("fcnt_down_start", None)
+            if not model.retransmissions.downlink_payload:
+                bloc.pop("downlink_payload", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

@@ -62,7 +62,7 @@ from enum import Enum
 from typing import Optional, Sequence
 
 from lsim.radio import receiver_sensitivity_dbm
-from lsim.fcnt import NF, MODULUS_16, MODULUS_32, CounterSeries, CounterVerdict
+from lsim.fcnt import AF, NF, MODULUS_16, MODULUS_32, CounterSeries, CounterVerdict
 from lsim.trace_events import DeviceRadio
 
 RX1_DELAY_NS = 1_000_000_000
@@ -152,6 +152,7 @@ class AckOutcome:
     sort: AckSort = AckSort.NOT_SENT
     series: str = NF             # série consommée : NFCntDown (ACK seul) ou AFCntDown
     counter: Optional[CounterVerdict] = None   # verdict du contrôle de compteur (None : pas d'ACK)
+    session: int = 0             # session du terminal : un Join-Accept en ouvre une nouvelle
 
     @property
     def first_emission_ns(self) -> Optional[int]:
@@ -245,7 +246,9 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
               classes: Optional[Sequence[str]] = None,
               fcnt_up: Optional[Sequence[int]] = None,
               fcnt_down_start: int = 0, uses_nf: bool = True,
-              devices: Optional[Sequence[int]] = None) -> AckPlan:
+              devices: Optional[Sequence[int]] = None,
+              sessions: Optional[Sequence[int]] = None,
+              payload: bool = False) -> AckPlan:
     """Planifie les ACK de `records` (réceptions montantes), selon `timing`.
 
     `records` : `TxRecord` du moteur, dans l'ordre de la trace. Seuls les uplinks reçus
@@ -261,6 +264,11 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
     entrée (chemin des réémissions). Par défaut, `record.device_index`. **Les compteurs et l'écoute
     continue se lisent sur le terminal physique** : deux tentatives d'une même trame ne doivent pas
     ouvrir deux séries descendantes.
+    `sessions` : numéro de session de chaque entrée (0 par défaut). Deux sessions d'un même terminal
+    ont des séries **indépendantes** : une nouvelle jointure remet les compteurs à zéro sans que la
+    nouvelle session soit rejetée comme rejeu de l'ancienne.
+    `payload` : la trame descendante porte une charge utile applicative (descente confirmée) au lieu
+    d'un ACK seul. Elle consomme alors `AFCntDown`, et l'événement de trace est `data_ack`.
 
     Le terminal ne lit **pas** le compteur 32 bits du réseau : il reçoit le champ de 16 bits et le
     replace dans sa série (`lsim.fcnt.CounterSeries.reconstruct`). Le doublon et la
@@ -277,6 +285,8 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         raise ValueError("un compteur montant par enregistrement")
     if devices is not None and len(devices) != len(records):
         raise ValueError("un terminal physique par enregistrement")
+    if sessions is not None and len(sessions) != len(records):
+        raise ValueError("une session par enregistrement")
 
     for classe in (classes or ()):
         if classe not in DEVICE_CLASSES:
@@ -284,6 +294,11 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
 
     appareils = [record.device_index if devices is None else int(devices[index])
                  for index, record in enumerate(records)]
+    sessions_lues = ([0] * len(records) if sessions is None
+                     else [int(sessions[index]) for index in range(len(records))])
+    if payload:
+        uses_nf = False                      # descente applicative : AFCntDown
+    serie_utilisee = NF if uses_nf else AF
 
     # Indices des transmissions de chaque terminal physique, pour l'écoute en continu.
     par_dispositif: dict[int, list[int]] = {}
@@ -293,9 +308,9 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
     busy_until = 0
     busy: list[tuple[int, int]] = []
     outcomes: list[AckOutcome] = []
-    fcnt_down_suivant: dict[int, int] = {}      # série de descentes, **par terminal**
-    # Contrôle de rejeu : dernier compteur 32 bits accepté, par terminal et par série descendante.
-    dernier_accepte: dict[int, int] = {}
+    # Séries de descentes et contrôle de rejeu, **par terminal et par session**.
+    fcnt_down_suivant: dict[tuple[int, int], int] = {}
+    dernier_accepte: dict[tuple[int, int], int] = {}
 
     # `fcnt_up` par défaut : rang de la trame du terminal (une entrée = une transmission).
     rangs: dict[int, int] = {}
@@ -310,24 +325,27 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
 
     for index, record in enumerate(records):
         appareil = appareils[index]
+        session = sessions_lues[index]
+        cle = (appareil, session)
         classe = "A" if classes is None else classes[index]
         montant = compteurs[index]
         if record.outcome != 2:  # 2 = received
             outcomes.append(AckOutcome(index, appareil, montant, None, (), AckWindow.NOT_SENT,
-                                       False, 0, AckSort.NOT_SENT))
+                                       False, 0, AckSort.NOT_SENT, serie_utilisee, None, session))
             continue
         radio = radios[index]  # même ordre que `records`
         airtime = _ack_airtime_ns(radio)
         t_open = record.end_ns + RX1_DELAY_NS
         premiere = max(t_open + timing.delay_ms * 1_000_000, busy_until)
-        f_cnt_down = fcnt_down_suivant.get(appareil, fcnt_down_start)
+        f_cnt_down = fcnt_down_suivant.get(cle, fcnt_down_start)
         if f_cnt_down >= MODULUS_32:
             # Série épuisée à 2^32 : le réseau ne peut plus numéroter de descente. La spécification
             # impose une nouvelle jointure ; la couche n'en invente pas, elle n'émet rien.
             outcomes.append(AckOutcome(index, appareil, montant, None, (), AckWindow.NOT_SENT,
-                                       False, 0, AckSort.NOT_SENT, NF, CounterVerdict.EXHAUSTED))
+                                       False, 0, AckSort.NOT_SENT, serie_utilisee,
+                                       CounterVerdict.EXHAUSTED, session))
             continue
-        fcnt_down_suivant[appareil] = f_cnt_down + 1
+        fcnt_down_suivant[cle] = f_cnt_down + 1
 
         creneaux: list[tuple[int, int]] = []
         for copie in range(timing.repetitions):
@@ -359,7 +377,7 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
             return None if fenetre is AckWindow.LATE else fenetre
 
         decodable = _decodable(record.rssi_dbm, radio, options)
-        serie = CounterSeries(start=fcnt_down_start, last=dernier_accepte.get(appareil))
+        serie = CounterSeries(start=fcnt_down_start, last=dernier_accepte.get(cle))
         verdict_compteur: Optional[CounterVerdict] = None
         emissions: list[AckEmission] = []
         fenetre_retenue: AckWindow = AckWindow.LATE
@@ -391,7 +409,7 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                                          debut, fin, classe_emission))
 
         if accepte:
-            dernier_accepte[appareil] = serie.last
+            dernier_accepte[cle] = serie.last
             verdict_compteur = CounterVerdict.OK
         else:
             premiere = emissions[0]
@@ -401,8 +419,8 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
 
         verdict = AckSort.STANDARD if accepte else emissions[0].sort
         outcomes.append(AckOutcome(index, appareil, montant, f_cnt_down, tuple(emissions),
-                                   fenetre_retenue, accepte, ignorees, verdict, NF,
-                                   verdict_compteur))
+                                   fenetre_retenue, accepte, ignorees, verdict, serie_utilisee,
+                                   verdict_compteur, session))
 
     busy.sort()
     return AckPlan(tuple(outcomes), tuple(busy))

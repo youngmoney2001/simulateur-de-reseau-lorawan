@@ -884,6 +884,11 @@
           "title": "Ack Repetitions",
           "type": "integer"
         },
+        "downlink_payload": {
+          "default": false,
+          "title": "Downlink Payload",
+          "type": "boolean"
+        },
         "enabled": {
           "default": true,
           "title": "Enabled",

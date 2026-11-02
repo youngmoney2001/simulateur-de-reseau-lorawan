@@ -302,6 +302,7 @@ retransmissions:
   ack_repetitions: 1         # 1 à 3 : copies du même ACK (même FCntDown)
   fcnt_up_start: 0           # premier FCntUp de chaque terminal (0 à 2^32-1)
   fcnt_down_start: 0         # premier compteur descendant (NFCntDown et AFCntDown)
+  downlink_payload: false    # la descente porte une charge utile : AFCntDown, événement data_ack
 ```
 
 La classe d'écoute est une propriété du groupe :
@@ -319,7 +320,7 @@ groups:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
-| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
 | `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
 | `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
 
@@ -334,6 +335,13 @@ Le terminal ne reçoit que le champ `FCnt` de **16 bits** ; il le replace dans s
 | `REPLAY` | champ identique à celui du dernier ACK accepté | copie ignorée (`DUPLICATE`), série inchangée |
 | `GAP` | écart supérieur à 16 384 | ACK rejeté (`GAP`), série inchangée |
 | `EXHAUSTED` | série arrivée à 2^32 | aucun ACK numéroté ; nouvelle jointure, hors modèle |
+
+**Deux séries, deux événements.** Un ACK seul consomme `NFCntDown` et apparaît en `ack_only` ; avec
+`downlink_payload: true`, la descente porte une charge utile, consomme `AFCntDown` et apparaît en
+`data_ack`. Les deux séries partent du même `fcnt_down_start` mais avancent séparément. Une nouvelle
+**session** repart de zéro : `plan_acks(sessions=...)` et `DeviceCounters.renew_session()` le
+modélisent, et le compteur 0 de la nouvelle session n'est pas rejeté comme rejeu de l'ancienne. Aucun
+`Join-Accept` de scénario ne déclenche encore ce renouvellement : il est fourni par l'appelant.
 
 **Statut des règles** : la reconstruction 16 → 32 bits et le rejeu strictement croissant sont des
 règles de la spécification. La borne de 16 384 est la valeur historique `MAX_FCNT_GAP` des versions

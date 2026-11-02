@@ -2,6 +2,23 @@
 
 ## 0.1.0 (non publiée)
 
+### Validation opérationnelle des compteurs : `AFCntDown`, sessions, interactions
+- **`NFCntDown` et `AFCntDown` exercées de bout en bout.** `downlink_payload: true` fait porter une
+  charge utile à la descente : elle consomme `AFCntDown` et son événement de trace est `data_ack`,
+  au lieu d'`ack_only` et `NFCntDown`. Mêmes transmissions, même livraison, seule la série change
+  (mesuré sur le scénario à deux trames : `FCntDown` `[0, 1]` dans les deux modes).
+- **Sessions.** `plan_acks(sessions=...)` et `DeviceCounters.renew_session()` : deux sessions d'un
+  même terminal ont des séries indépendantes ; le compteur 0 de la session 1 n'est **pas** un rejeu
+  de celui de la session 0. Le terminal (identité) et la session (compteurs) sont distincts.
+- **Interactions vérifiées** : ACK tardif en mode applicatif (`6 LATE`, 0 reçu), copies
+  (`2 data_ack` + 2 `suppressed`), réémissions inchangées (6 transmissions, 4 réémissions), série
+  épuisée (un seul ACK numéroté, `ack_not_sent` compte les trames sans ACK), et cohérence
+  trace ↔ compteurs ↔ `gateway_tx` dans les deux séries.
+- **Limites maintenues** : aucun scénario ne déclenche de `Join-Accept` (la session est fournie par
+  l'appelant), `GAP` reste couvert par un test construit, et les scénarios livrés gardent leur
+  empreinte (`downlink_payload` absent du hash à sa valeur par défaut).
+- **Tests** : `python/tests/test_mac_counters_operational.py` (12 tests).
+
 ### Compteurs de trame complets : rejeu, désynchronisation, débordement
 - **`python/lsim/fcnt.py`** : primitives testées seules — `CounterSeries` (reconstruction du champ
   16 bits dans la série 32 bits, rejeu, borne d'écart, épuisement à 2^32) et `DownlinkCounters`

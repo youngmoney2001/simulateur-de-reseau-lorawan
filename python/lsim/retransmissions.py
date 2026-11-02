@@ -93,6 +93,9 @@ class RetransmissionOptions:
     # ou dupliqué : le cœur, lui, abandonne la descente hors fenêtre RX1.
     ack_delay_ms: int = 0
     ack_repetitions: int = 1
+    # La descente porte une charge utile applicative (descente confirmée) au lieu d'un ACK seul :
+    # elle consomme alors AFCntDown et son événement de trace est `data_ack`.
+    downlink_payload: bool = False
     # Premier FCntUp d'un terminal (après jointure, le compteur ne repart pas de zéro).
     # Les réémissions d'une même trame réutilisent le même FCntUp : c'est l'identité de la trame.
     fcnt_up_start: int = 0
@@ -318,7 +321,8 @@ def _prune_acknowledged(schedule):
 
 
 def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
-              timing=None, busy=None, classes=None, fcnt_down_start: int = 0):
+              timing=None, busy=None, classes=None, fcnt_down_start: int = 0,
+              payload: bool = False):
     """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
 
     Avec `timing` (ACK retardé ou répété) : les transmissions sont simulées avec une occupation
@@ -348,12 +352,12 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
                       for record in result.records],
                      fcnt_up=[schedule[record.device_index].f_cnt_up
                               for record in result.records],
-                     fcnt_down_start=fcnt_down_start,
+                     fcnt_down_start=fcnt_down_start, payload=payload,
                      devices=[schedule[record.device_index].device
                               for record in result.records])
     # Les ACK de la trace sont ceux que la couche a réellement émis, pas ceux du planificateur
     # du cœur : instants, copies et verdicts viennent du même plan que les compteurs.
-    events = _mac_ack_events(result.records, plan, radios_par_enregistrement)
+    events = _mac_ack_events(result.records, plan, radios_par_enregistrement, payload=payload)
     return result, events, plan.busy, plan
 
 
@@ -372,7 +376,7 @@ _MAC_ACK_EVENT = {
 }
 
 
-def _mac_ack_events(records, plan, radios):
+def _mac_ack_events(records, plan, radios, payload: bool = False):
     """Un événement `ack` par émission réellement faite, aux instants de la couche MAC.
 
     Les indices sont ceux des enregistrements moteur (virtuels) : `_build_trace_retransmissions`
@@ -388,6 +392,8 @@ def _mac_ack_events(records, plan, radios):
         for emission in sortie.emissions:
             if emission.sort is AckSort.LOST and sortie.window is AckWindow.WINDOW_MISSED:
                 issue, saut = "device_transmitting", "not_listened"
+            elif payload and emission.sort is AckSort.STANDARD:
+                issue, saut = "data_ack", "delivered"   # descente confirmée qui acquitte
             else:
                 issue, saut = _MAC_ACK_EVENT[emission.sort.value]
             hop = HopEvent("gw:0", _dev(record.device_index), emission.start_ns, radio.rx1_hz,
@@ -455,7 +461,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
             timing=timing, busy=occupation, classes=device_classes,
-            fcnt_down_start=retransmit.fcnt_down_start)
+            fcnt_down_start=retransmit.fcnt_down_start,
+            payload=retransmit.downlink_payload)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:

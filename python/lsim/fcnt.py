@@ -202,3 +202,34 @@ def on_air(counter32: int) -> int:
     if not 0 <= counter32 < MODULUS_32:
         raise ValueError("counter32 doit être dans [0, 2^32)")
     return counter32 % MODULUS_16
+
+@dataclass(frozen=True)
+class DeviceCounters:
+    """Compteurs d'un terminal : une série montante, deux descendantes, et sa session.
+
+    La **session** est l'unité de remise à zéro : un `Join-Accept` remet `FCntUp`, `NFCntDown` et
+    `AFCntDown` à zéro **sans changer l'identité du terminal**. `renew_session()` fait exactement
+    cela : les compteurs repartent de zéro, `session` avance, et rien de l'ancienne session ne
+    filtre dans la nouvelle — sinon le premier ACK de la nouvelle session serait rejeté comme rejeu
+    du compteur 0 de la précédente.
+    """
+
+    uplink: CounterSeries = CounterSeries()
+    nfcnt_down: CounterSeries = CounterSeries()
+    afcnt_down: CounterSeries = CounterSeries()
+    session: int = 0
+
+    @classmethod
+    def of(cls, device_start_up: int = 0, downlink_start: int = 0,
+           session: int = 0) -> "DeviceCounters":
+        return cls(CounterSeries(start=device_start_up), CounterSeries(start=downlink_start),
+                   CounterSeries(start=downlink_start), session)
+
+    def renew_session(self) -> "DeviceCounters":
+        """Nouvelle jointure : les trois séries repartent de zéro, la session avance."""
+        return DeviceCounters(CounterSeries(), CounterSeries(), CounterSeries(),
+                              session=self.session + 1)
+
+    def series(self, uses_nf: bool) -> CounterSeries:
+        return self.nfcnt_down if uses_nf else self.afcnt_down
+

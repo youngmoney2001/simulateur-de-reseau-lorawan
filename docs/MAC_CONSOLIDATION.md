@@ -146,12 +146,18 @@ tableau.
 « Codec seul » signifie : encodage/décodage validés, **aucun effet simulé**. C'est une limite
 explicite, pas un oubli.
 
+Ce qui est réellement vérifié : `python/tests/test_mac.py` (20 tests) couvre les octets sur l'air, les
+bornes, les bits RFU et le décodage d'un flux mixte ; `python/tests/test_mac_commands_inventory.py`
+(4 tests) vérifie l'inventaire complet dans les deux sens ; `python/tests/test_mac_loop.py` couvre
+LinkADR et DutyCycle dans la boucle fermée. Les autres commandes n'ont **pas** de test d'effet,
+puisqu'elles n'en ont pas.
+
 ## 6. Ce qui reste à faire
 
-1. **Compteurs d'une session réelle** : reconstruction depuis un journal de paquets (le simulateur
-   tient les 32 bits), remise à zéro des deux séries par une nouvelle jointure (`Join-Accept`), et
-   `AFCntDown` exercé de bout en bout par une descente applicative — la couche ACK ne produit que
-   des trames sans charge utile, donc `NFCntDown`.
+1. **Compteurs d'une session réelle** : reconstruction depuis un journal de paquets réels (le
+   simulateur tient les 32 bits en mémoire) et jointure effectivement simulée — `plan_acks` sait
+   déjà recevoir un numéro de session et `DeviceCounters.renew_session()` remet les trois séries à
+   zéro, mais aucun scénario ne déclenche de `Join-Accept` dans cette couche.
 2. Brancher la classe C sur le moteur d'opportunités existant (`lsim.simulator.DownlinkRequests`)
    au lieu de la règle locale d'écoute continue.
 3. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
@@ -171,6 +177,8 @@ propre logique (`core/src/session.cpp`, inchangé). Chaque règle est marquée *
 | débordement | série épuisée à 2^32 → `EXHAUSTED`, aucun ACK numéroté ; la nouvelle jointure n'est pas simulée | standard pour la limite, hors périmètre pour la jointure | `test_a_series_ends_at_two_to_the_thirty_two`, `test_an_exhausted_series_emits_no_ack` |
 | séries descendantes | `NFCntDown` / `AFCntDown` indépendantes, même départ de session | 1.1 ; en 1.0.x une seule série, la couche n'utilise que `NFCntDown` | `test_the_two_downlink_series_do_not_move_together` |
 | réémission | même `FCntUp` pour toutes les tentatives d'une trame ; chaque ACK émis consomme un nouveau `FCntDown` | standard | `test_a_retransmission_consumes_a_new_downlink_counter` |
+| descente applicative | `downlink_payload: true` : la trame porte une charge utile (`data_ack`), elle consomme `AFCntDown` | standard (une trame à charge utile avance `AFCntDown`) | `test_a_downlink_with_payload_consumes_afcnt` |
+| sessions | deux sessions d'un même terminal ont des séries indépendantes ; la session 1 n'hérite pas des compteurs de la session 0 | standard (les compteurs repartent de zéro au `Join-Accept`) | `test_a_new_session_restarts_both_counters`, `test_a_second_session_does_not_inherit_the_first` |
 
 **Correction apportée par cet incrément.** Dans le chemin des réémissions, chaque tentative était
 représentée par un terminal virtuel : les compteurs descendants étaient donc clés par *transmission*
@@ -179,6 +187,21 @@ et non par *terminal*, et deux trames d'un même terminal recevaient le même `F
 (`devices=`), et les séries sont par terminal. Les mesures publiées ne changent pas (6 ACK tardifs ;
 2 `STANDARD` + 2 `DUPLICATE` ; classe C : 2 `STANDARD`), mais le compteur lu sur le cas « deux
 copies » passe de `[0, 0]` à `[0, 1]`.
+
+**Séries et sessions, mesurées.** `NFCntDown` et `AFCntDown` sont exercées de bout en bout, sur le
+même scénario de référence à deux trames (classe C) :
+
+| Réglage | Événement de trace | Série | `FCntDown` lu |
+|---|---|---|---|
+| défaut (ACK seul) | `ack_only` | `NF` | `[0, 1]` |
+| `downlink_payload: true` | `data_ack` | `AF` | `[0, 1]` |
+| `fcnt_down_start: 100` | `ack_only` | `NF` | `[100, 101]` |
+
+Les deux séries partent du même compteur de session mais avancent séparément
+(`test_the_two_series_are_counted_separately`). Une nouvelle session repart de zéro : le compteur 0
+de la session 1 n'est pas un rejeu de celui de la session 0 (`sessions=` dans `plan_acks`). **Ce qui
+n'est pas fait** : aucun `Join-Accept` de scénario ne crée cette nouvelle session ; elle est fournie
+par l'appelant.
 
 **Limite de mesure, à ne pas masquer** : `GAP` n'est produit par **aucun scénario livré**. La copie
 d'un ACK porte le même champ 16 bits : c'est un `DUPLICATE`, jamais un saut de 65 536. La
