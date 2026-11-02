@@ -13,8 +13,8 @@ scénario et la trace produite par `build_trace`. **Le cœur C++ et l'ABI ne son
 | Notion | Portée | Où elle vit | Sémantique |
 |---|---|---|---|
 | `FCntUp` | une trame de terminal | `Attempt.f_cnt_up`, `AckFrame.frame_counter_up` | incrémenté par **nouvelle** trame ; toutes les réémissions d'une trame partagent la valeur |
-| `FCntDown` | un terminal | `AckEmission.f_cnt_down`, `AckFrame.frame_counter_down` | série **par terminal** ; un ACK émis consomme un numéro, ses copies gardent le même |
-| contrôle de rejeu | un terminal | `plan_acks` (`dernier_accepte`) | un ACK n'est retenu que si son `FCntDown` est **strictement supérieur** au dernier accepté |
+| `FCntDown` | un terminal, **deux séries** (1.1) | `AckEmission.f_cnt_down`, `AckFrame.frame_counter_down`, `AckOutcome.series` | `NFCntDown` pour une trame sans charge utile (ACK seul), `AFCntDown` sinon ; un ACK émis consomme un numéro de sa série, ses copies gardent le même |
+| contrôle de rejeu | un terminal, par série | `lsim.fcnt.CounterSeries` | le champ **16 bits** est replacé dans la série 32 bits ; un ACK n'est retenu que si le compteur reconstruit est **strictement supérieur** au dernier accepté, et à moins de `MAX_FCNT_GAP` de lui |
 
 Conséquences vérifiées par `python/tests/test_mac_consolidation.py` :
 
@@ -28,8 +28,10 @@ Conséquences vérifiées par `python/tests/test_mac_consolidation.py` :
 `receive_downlink` → contrôle de rejeu). Ces compteurs ne sont pas un second modèle : le module les
 transporte dans la trace, avec les mêmes règles.
 
-**Ce qui n'est pas modélisé** : la fenêtre `MAX_FCNT_GAP`, la reconstruction 16 → 32 bits des trames
-réelles, et la distinction `NFCntDown` / `AFCntDown` de LoRaWAN 1.1 (une seule série ici).
+Ces trois mécanismes sont détaillés en §7. Ce qui reste hors périmètre : la reconstruction depuis un
+**journal de paquets réels** (le simulateur tient les 32 bits en mémoire), la remise à zéro par une
+nouvelle jointure dans la couche ACK (le scénario fixe les départs), et le compteur `AFCntDown` de
+bout en bout — un ACK ne portant pas de charge utile, la couche n'exerce que `NFCntDown`.
 
 ## 2. Taxonomie de l'ACK
 
@@ -41,17 +43,20 @@ sans recouvrement.
 | `STANDARD` | émise dans une fenêtre écoutée (RX1, RX2, ou écoute continue en classe C), décodable, `FCntDown` inédit | acquittée |
 | `LATE` | émise après la fermeture des fenêtres | non acquittée ; l'airtime est consommée et la passerelle occupée |
 | `LOST` | émise dans une fenêtre écoutée mais non décodable, ou terminal en train d'émettre | non acquittée |
-| `DUPLICATE` | même `FCntDown` qu'un ACK déjà accepté par ce terminal | ignorée : le rejeu est rejeté par le compteur, pas par une règle propre à l'ACK |
-| `NOT_SENT` | aucun ACK : l'uplink n'a pas été reçu | aucune |
+| `DUPLICATE` | champ 16 bits identique à celui d'un ACK déjà accepté par ce terminal | ignorée : le rejeu est rejeté par le compteur, pas par une règle propre à l'ACK |
+| `GAP` | reçue et décodable, mais à plus de `MAX_FCNT_GAP` du dernier accepté | rejetée : désynchronisation, la série n'avance pas |
+| `NOT_SENT` | aucun ACK : l'uplink n'a pas été reçu, ou la série descendante est épuisée (2^32) | aucune |
 
-`AckPlan.counts` donne les cinq totaux ; `RetransmissionResult` les expose en `ack_standard`,
-`ack_late`, `ack_lost`, `ack_duplicate`, `ack_not_sent`. Un test vérifie que
-`standard + late + lost + duplicate == acks_planned` pour les trois configurations de référence.
+`AckPlan.counts` donne les six totaux ; `RetransmissionResult` les expose en `ack_standard`,
+`ack_late`, `ack_lost`, `ack_duplicate`, `ack_gap`, `ack_not_sent`. Un test vérifie que
+`standard + late + lost + duplicate + gap == acks_planned` pour les trois configurations de
+référence. `GAP` n'apparaît dans aucun scénario livré : sur les exemples, la copie d'un ACK est un
+`DUPLICATE` (champ identique), jamais un saut de 65 536 — un test construit le vérifie.
 
 Le détail de réception reste disponible séparément (`AckWindow` : `RX1`, `RX2`, `CONTINUOUS`,
 `LATE`, `NOT_DECODABLE`, `WINDOW_MISSED`, `NOT_SENT`). Une seule conversion est lossy et elle est
-documentée : `LATE` est rangé avec les pertes de sensibilité dans `DownlinkDelivery`, qui n'a pas de
-verdict « hors fenêtre ».
+documentée : `LATE` et `GAP` sont rangés avec les pertes de sensibilité dans `DownlinkDelivery`, qui
+n'a pas de verdict « hors fenêtre » ni « rejeté par le compteur ».
 
 ## 3. Classes d'écoute A, B, C
 
@@ -80,7 +85,7 @@ dans la radio.
 |---|---|
 | Occupation passerelle | les intervalles d'ACK **émis par la couche MAC** sont imposés au moteur : les pertes montantes qu'ils provoquent sont réelles, et la trace les contient (`gateway_tx`) |
 | Résultat de réémission | `acks_planned` = nombre d'émissions réelles (copies incluses), pas le nombre de réponses logiques |
-| Compteurs de trace | `ack_standard` / `late` / `lost` / `duplicate` proviennent du même plan que les émissions |
+| Compteurs de trace | `ack_standard` / `late` / `lost` / `duplicate` / `gap` proviennent du même plan que les émissions |
 | Événements de trace | un `ProtocolEvent` de type `ack` par émission réelle de la couche MAC, aux mêmes instants que `gateway_tx`, avec les issues du contrat d'API (voir 4.1) |
 | Appariement | inchangé sur le chemin du cœur (`_match_ack` par fenêtre RX1) ; la couche MAC utilise `FCntUp` |
 
@@ -143,10 +148,39 @@ explicite, pas un oubli.
 
 ## 6. Ce qui reste à faire
 
-1. **Compteurs complets** : `fcnt_down_start`, `MAX_FCNT_GAP` et la distinction
-   `NFCntDown` / `AFCntDown` de LoRaWAN 1.1. Aujourd'hui une seule série descendante par terminal,
-   sans écart maximal toléré ni reconstruction 16 → 32 bits des trames réelles.
+1. **Compteurs d'une session réelle** : reconstruction depuis un journal de paquets (le simulateur
+   tient les 32 bits), remise à zéro des deux séries par une nouvelle jointure (`Join-Accept`), et
+   `AFCntDown` exercé de bout en bout par une descente applicative — la couche ACK ne produit que
+   des trames sans charge utile, donc `NFCntDown`.
 2. Brancher la classe C sur le moteur d'opportunités existant (`lsim.simulator.DownlinkRequests`)
    au lieu de la règle locale d'écoute continue.
 3. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
    comportement, en commençant par `RxParamSetupReq` (elle change RX2, donc la réception de l'ACK).
+
+## 7. Compteurs complets : rejeu, désynchronisation, débordement
+
+Les primitives vivent dans `python/lsim/fcnt.py` ; la couche ACK les applique, le cœur C++ garde sa
+propre logique (`core/src/session.cpp`, inchangé). Chaque règle est marquée **standard** ou
+**hypothèse** : c'est la distinction qui empêche de lire ce tableau comme une conformité.
+
+| Mécanisme | Règle appliquée | Statut | Test |
+|---|---|---|---|
+| reconstruction 16 → 32 bits | plus petit candidat strictement supérieur au dernier accepté ; champ identique = doublon | standard (champ `FCnt` de 16 bits) | `test_the_sixteen_bit_field_wraps_once` |
+| rejeu | compteur ≤ dernier accepté → `REPLAY`, série inchangée | standard | `test_a_consumed_counter_is_a_replay` |
+| désynchronisation | écart > 16 384 → `GAP`, série inchangée | **hypothèse** : `MAX_FCNT_GAP` est la valeur ≤ 1.0.3, **retirée de 1.0.4 et suivants** (RP002) ; appliquée ici comme politique de rejeu explicite | `test_the_gap_boundary_is_the_specification_value` |
+| débordement | série épuisée à 2^32 → `EXHAUSTED`, aucun ACK numéroté ; la nouvelle jointure n'est pas simulée | standard pour la limite, hors périmètre pour la jointure | `test_a_series_ends_at_two_to_the_thirty_two`, `test_an_exhausted_series_emits_no_ack` |
+| séries descendantes | `NFCntDown` / `AFCntDown` indépendantes, même départ de session | 1.1 ; en 1.0.x une seule série, la couche n'utilise que `NFCntDown` | `test_the_two_downlink_series_do_not_move_together` |
+| réémission | même `FCntUp` pour toutes les tentatives d'une trame ; chaque ACK émis consomme un nouveau `FCntDown` | standard | `test_a_retransmission_consumes_a_new_downlink_counter` |
+
+**Correction apportée par cet incrément.** Dans le chemin des réémissions, chaque tentative était
+représentée par un terminal virtuel : les compteurs descendants étaient donc clés par *transmission*
+et non par *terminal*, et deux trames d'un même terminal recevaient le même `FCntDown` — la seconde
+étant acceptée parce que sa série était neuve. `plan_acks` reçoit désormais le terminal physique
+(`devices=`), et les séries sont par terminal. Les mesures publiées ne changent pas (6 ACK tardifs ;
+2 `STANDARD` + 2 `DUPLICATE` ; classe C : 2 `STANDARD`), mais le compteur lu sur le cas « deux
+copies » passe de `[0, 0]` à `[0, 1]`.
+
+**Limite de mesure, à ne pas masquer** : `GAP` n'est produit par **aucun scénario livré**. La copie
+d'un ACK porte le même champ 16 bits : c'est un `DUPLICATE`, jamais un saut de 65 536. La
+désynchronisation n'est vérifiée qu'au niveau des primitives (`CounterSeries`) et du plan, jamais de
+bout en bout dans une trace.

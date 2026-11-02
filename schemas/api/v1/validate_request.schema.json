@@ -906,6 +906,13 @@
           "title": "Enforce Duty Cycle",
           "type": "boolean"
         },
+        "fcnt_down_start": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Fcnt Down Start",
+          "type": "integer"
+        },
         "fcnt_up_start": {
           "default": 0,
           "maximum": 4294967295,

@@ -96,10 +96,15 @@ class RetransmissionOptions:
     # Premier FCntUp d'un terminal (après jointure, le compteur ne repart pas de zéro).
     # Les réémissions d'une même trame réutilisent le même FCntUp : c'est l'identité de la trame.
     fcnt_up_start: int = 0
+    # Premier compteur descendant de chaque terminal : départ des séries
+    # `NFCntDown` / `AFCntDown` de la couche MAC.
+    fcnt_down_start: int = 0
 
     def __post_init__(self) -> None:
         if not 0 <= self.fcnt_up_start < 2**32:
             raise ValueError("fcnt_up_start doit être dans [0, 2**32)")
+        if not 0 <= self.fcnt_down_start < 2**32:
+            raise ValueError("fcnt_down_start doit être dans [0, 2**32)")
         if not 0 <= self.retries <= MAX_RETRIES:
             raise ValueError(f"retries doit être dans [0, {MAX_RETRIES}]")
         if self.retransmit_delay_ms < RX2_DELAY_NS // 1_000_000:
@@ -178,6 +183,7 @@ class RetransmissionResult:
     trace: object = None
     events: tuple = ()
     gateway_tx: tuple = ()  # émissions passerelle planifiées, en ns
+    ack_gap: int = 0        # ACK reçus puis rejetés par la fenêtre de rejeu
 
     @property
     def delivery_ratio(self) -> float:
@@ -312,7 +318,7 @@ def _prune_acknowledged(schedule):
 
 
 def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
-              timing=None, busy=None, classes=None):
+              timing=None, busy=None, classes=None, fcnt_down_start: int = 0):
     """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
 
     Avec `timing` (ACK retardé ou répété) : les transmissions sont simulées avec une occupation
@@ -341,6 +347,9 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
                      [classes[schedule[record.device_index].device]
                       for record in result.records],
                      fcnt_up=[schedule[record.device_index].f_cnt_up
+                              for record in result.records],
+                     fcnt_down_start=fcnt_down_start,
+                     devices=[schedule[record.device_index].device
                               for record in result.records])
     # Les ACK de la trace sont ceux que la couche a réellement émis, pas ceux du planificateur
     # du cœur : instants, copies et verdicts viennent du même plan que les compteurs.
@@ -359,6 +368,7 @@ _MAC_ACK_EVENT = {
     "late": ("not_listened", "not_listened"),
     "lost": ("lost_sensitivity", "lost_sensitivity"),
     "duplicate": ("suppressed", "delivered"),
+    "gap": ("suppressed", "delivered"),
 }
 
 
@@ -425,7 +435,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             attempts=(), frames=0, transmissions=0, retransmissions=0, received=0,
             network_frames=0, frames_delivered=0, duplicates=0, blocked_by_duty_cycle=0,
             acks_planned=0, acks_received=0, ack_duplicates_ignored=0,
-            ack_standard=0, ack_late=0, ack_lost=0, ack_duplicate=0, ack_not_sent=0,
+            ack_standard=0, ack_late=0, ack_lost=0, ack_duplicate=0, ack_gap=0,
+            ack_not_sent=0,
             lost_sensitivity=0, lost_collision=0, lost_gateway_busy=0,
             gateway_utilization=0.0, observation_ns=0, energy_j=0.0)
 
@@ -443,7 +454,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     for _iteration in range(MAX_ITERATIONS):
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
-            timing=timing, busy=occupation, classes=device_classes)
+            timing=timing, busy=occupation, classes=device_classes,
+            fcnt_down_start=retransmit.fcnt_down_start)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:
@@ -469,6 +481,7 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                 AckSort.LATE: DownlinkDelivery.LOST_SENSITIVITY,
                 AckSort.LOST: DownlinkDelivery.LOST_SENSITIVITY,
                 AckSort.DUPLICATE: DownlinkDelivery.DELIVERED,
+                AckSort.GAP: DownlinkDelivery.LOST_SENSITIVITY,
                 AckSort.NOT_SENT: DownlinkDelivery.NONE,
             }
             # Indices virtuels depuis la position dans les enregistrements.
@@ -593,7 +606,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                           DownlinkDelivery.NONE, DownlinkDelivery.NOT_SCHEDULED))),
         ack_duplicates_ignored=(mac_plan.duplicates_ignored if mac_plan is not None else 0),
         ack_standard=_comptes.standard, ack_late=_comptes.late, ack_lost=_comptes.lost,
-        ack_duplicate=_comptes.duplicate, ack_not_sent=_comptes.not_sent,
+        ack_duplicate=_comptes.duplicate, ack_gap=_comptes.gap,
+        ack_not_sent=_comptes.not_sent,
         acks_received=sum(1 for a in schedule if a.ack is AckReception.RECEIVED),
         lost_sensitivity=result.totals.lost_sensitivity,
         lost_collision=result.totals.lost_collision,

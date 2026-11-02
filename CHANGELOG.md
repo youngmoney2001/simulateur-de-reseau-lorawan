@@ -2,6 +2,39 @@
 
 ## 0.1.0 (non publiée)
 
+### Compteurs de trame complets : rejeu, désynchronisation, débordement
+- **`python/lsim/fcnt.py`** : primitives testées seules — `CounterSeries` (reconstruction du champ
+  16 bits dans la série 32 bits, rejeu, borne d'écart, épuisement à 2^32) et `DownlinkCounters`
+  (`NFCntDown` / `AFCntDown` indépendantes, même départ de session).
+- **Le terminal lit un champ de 16 bits.** `plan_acks` ne compare plus deux compteurs 32 bits : il
+  reconstruit (`CounterSeries.reconstruct`) puis contrôle. `DUPLICATE` (champ identique — rejeu,
+  copie) et `GAP` (> 16 384 — désynchronisation) deviennent des **verdicts de compteur**, exposés par
+  `AckOutcome.counter` ; la classe `GAP` s'ajoute à la taxonomie, `AckCounts.gap` et
+  `RetransmissionResult.ack_gap` la comptent, et l'invariant devient
+  `standard + late + lost + duplicate + gap == acks_planned`.
+- **`fcnt_down_start`** (0 à 2^32-1) fixe le premier compteur descendant de chaque terminal ; absent
+  du hash à sa valeur par défaut, comme `fcnt_up_start`.
+- **Correction de clé.** Les compteurs étaient clés par *transmission* dans le chemin des
+  réémissions : deux trames d'un même terminal recevaient le même `FCntDown`, la seconde étant
+  acceptée parce que sa série était neuve. `plan_acks(devices=...)` reçoit désormais le terminal
+  physique ; les séries et l'écoute continue sont par terminal. Mesures des scénarios livrés
+  inchangées (6 `LATE` ; 2 `STANDARD` + 2 `DUPLICATE` ; classe C : 2 `STANDARD`), mais `FCntDown`
+  passe de `[0, 0]` à `[0, 1]` sur le cas « deux copies ».
+- **Schémas d'API** : `fcnt_down_start` est ajouté au modèle de scénario (`schemas/api/v1`, trois
+  fichiers, sept lignes chacun). Changement **additif** : aucune valeur de `EventKind` ni de
+  `HopOutcome` ne bouge.
+- **Statut normatif, écrit dans le code et la doc** : la reconstruction 16 → 32 bits et le rejeu
+  strictement croissant sont des règles de la spécification ; la borne de 16 384 est la valeur
+  historique `MAX_FCNT_GAP` des versions ≤ 1.0.3, **retirée de LoRaWAN 1.0.4 et suivants** (RP002),
+  appliquée ici comme politique de rejeu explicite. Limites : `GAP` n'est produit par **aucun**
+  scénario livré (la copie d'un ACK est un `DUPLICATE`), `AFCntDown` n'est pas exercé de bout en
+  bout (un ACK ne porte pas de charge utile), et la remise à zéro par une nouvelle jointure reste
+  hors modèle.
+- **Tests** : `python/tests/test_fcnt_counters.py` (11 tests) — rejeu, borne exacte 16 384/16 385,
+  débordement, bascule du champ 16 bits, séries NF/AF, `fcnt_down_start`, série épuisée, copie
+  reconnue comme rejeu et non comme saut, réémission, neutralité du hash. Validation : **1 914**
+  tests Python, **685 282/685 282** C++, empreintes `d2cb0fac…` / `ed126d7f…` inchangées.
+
 ### ACK de la couche MAC dans la trace
 - **Un `ProtocolEvent` par ACK réellement émis.** `_mac_ack_events`
   (`python/lsim/retransmissions.py`) convertit les `AckEmission` du plan MAC en événements `ack` :

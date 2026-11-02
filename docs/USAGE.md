@@ -301,6 +301,7 @@ retransmissions:
   ack_delay_ms: 0            # 0 à 60000 : retard du réseau avant d'émettre l'ACK
   ack_repetitions: 1         # 1 à 3 : copies du même ACK (même FCntDown)
   fcnt_up_start: 0           # premier FCntUp de chaque terminal (0 à 2^32-1)
+  fcnt_down_start: 0         # premier compteur descendant (NFCntDown et AFCntDown)
 ```
 
 La classe d'écoute est une propriété du groupe :
@@ -318,9 +319,28 @@ groups:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
-| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
 | `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
-| `FCntDown` | série **par terminal** ; un ACK émis consomme un numéro, ses copies le conservent |
+| `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
+
+### Compteurs : rejeu, désynchronisation, débordement
+
+Le terminal ne reçoit que le champ `FCnt` de **16 bits** ; il le replace dans sa série 32 bits
+(`lsim.fcnt.CounterSeries`). Quatre verdicts en sortent, visibles dans `AckOutcome.counter` :
+
+| Verdict | Quand | Effet |
+|---|---|---|
+| `OK` | compteur reconstruit strictement supérieur au dernier accepté | ACK retenu (`STANDARD`) |
+| `REPLAY` | champ identique à celui du dernier ACK accepté | copie ignorée (`DUPLICATE`), série inchangée |
+| `GAP` | écart supérieur à 16 384 | ACK rejeté (`GAP`), série inchangée |
+| `EXHAUSTED` | série arrivée à 2^32 | aucun ACK numéroté ; nouvelle jointure, hors modèle |
+
+**Statut des règles** : la reconstruction 16 → 32 bits et le rejeu strictement croissant sont des
+règles de la spécification. La borne de 16 384 est la valeur historique `MAX_FCNT_GAP` des versions
+≤ 1.0.3, **retirée de LoRaWAN 1.0.4 et suivants** (RP002) : le simulateur l'applique comme
+**politique de rejeu explicite**, parce qu'il rejoue des trames à champ 16 bits. Ce n'est pas une
+exigence de 1.0.4, et c'est écrit ainsi dans le code (`lsim/fcnt.py`). Limite : aucun scénario livré
+ne produit `GAP` — la copie d'un ACK est un `DUPLICATE`, jamais un saut de 65 536.
 
 `build_trace` et `run_scenario` empruntent alors un chemin dédié qui renvoie une entrée de trace
 **par transmission**, avec les indices des terminaux du scénario, ainsi qu'un objet
