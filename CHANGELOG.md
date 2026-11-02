@@ -2,6 +2,13 @@
 
 ## 0.1.0 (non publiée)
 
+### Point fixe uplinks ↔ descentes : borne portée à 64 itérations, cycles signalés (F1)
+- `MAX_ITERATIONS` passe de **12 à 64**. Mesure sur les 120 configurations de référence de D3.2 (40 graines × 3 jeux, `quartier_sf9.yaml` à 2 000 dispositifs) : le point fixe est atteint en **9 à 21 itérations** ; les **69** configurations qui échouaient en `RuntimeError` en demandaient **13 à 21**. Les **51** configurations déjà convergentes ne changent pas d'un octet : même nombre d'itérations, empreinte du résultat complet (`records`, `gateway_tx`, totaux, compteurs par dispositif) identique.
+- Un état qui se répète à l'identique est signalé immédiatement (`cycle de période N`) au lieu d'épuiser la borne : une répétition exacte ne peut pas converger. Le message d'échec indique le nombre d'itérations effectuées. `build_protocol_events` (jointures seules) suit le même critère.
+- Aucun résultat approximatif : la trace n'est renvoyée que si l'égalité exacte de l'état est vérifiée ; la borne ne sert qu'à borner le travail.
+- Effet de bord mesuré : les scénarios denses 11 et 38 de `test_downlink_plan_parity.py`, réputés sans point fixe, convergent désormais (la trace causale et le point fixe Python coïncident) ; la garde `except RuntimeError` du test reste en place.
+- Tests : `test_fixed_point_converges_beyond_twelve_iterations` (1 300 dispositifs, graine 5, point fixe à la 16e itération — échouait avant la correction) et `test_fixed_point_cycle_is_reported_immediately` (cycle de période 2 détecté au 3e tour).
+
 ### Frontal RF v4 : gain et perte par terminal et par passerelle (ABI additive)
 - Quatre points d'entrée ajoutés sans modifier les 91 existants : `lsim_simulate_uplinks_trace_v3`, `lsim_simulate_uplinks_trace_gw2_v2`, `lsim_simulate_uplinks_multi_dl_v2`, `lsim_simulate_closed_loop_v4` (95 symboles exportés).
 - `lsim_device_rf` / `lsim_gateway_rf` : `present` à bits indépendants (`LSIM_RF_HAS_ANTENNA_GAIN`, `LSIM_RF_HAS_CABLE_LOSS`). Un champ absent n'est pas lu ; un bit inconnu, une valeur hors bornes (`|G| <= 40 dBi`, `0 <= L <= 40 dB`) ou une table partielle sont refusés (statut 301).

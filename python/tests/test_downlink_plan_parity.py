@@ -127,7 +127,9 @@ def _dense_scenario(seed):
     return scenario, options
 
 
-# Scénarios denses : 11 et 38 n'atteignaient pas le point fixe de la version Python (S0).
+# Scénarios denses. 11 et 38 n'atteignaient pas le point fixe de la version Python avec l'ancienne
+# borne de 12 itérations ; depuis D3.2 (`MAX_ITERATIONS = 64`) ils convergent, et la garde
+# ci-dessous reste utile pour tout scénario qui n'aurait réellement pas de point fixe.
 @pytest.mark.parametrize("seed", range(40))
 def test_causal_trace_equals_python_fixed_point_when_it_converges(seed):
     from lsim.trace_events import _build_trace_python, build_trace
@@ -147,7 +149,7 @@ def test_causal_trace_equals_python_fixed_point_when_it_converges(seed):
 
 
 @pytest.mark.parametrize("seed", [11, 38])
-def test_causal_trace_resolves_scenarios_without_fixed_point(seed):
+def test_causal_trace_resolves_dense_scenarios(seed):
     from lsim.trace_events import build_trace
     scenario, options = _dense_scenario(seed)
     run = build_trace(scenario, options)

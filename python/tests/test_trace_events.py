@@ -320,3 +320,58 @@ def test_downlink_payload_and_offset_bounds():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         ProtocolOptionsIn(downlink_payload_bytes=300)
+
+
+def _assert_point_fixe(run) -> None:
+    """Invariants du point fixe : émissions sérialisées, aucune trame reçue en collision."""
+    tx = sorted(run.gateway_tx)
+    assert tx, "aucune émission passerelle : le point fixe n'a pas été évalué"
+    assert all(a_end <= b_start for (_, a_end), (b_start, _) in zip(tx, tx[1:]))
+    for r in run.records:
+        overlapping = any(s < r.end_ns and r.start_ns < e for s, e in tx)
+        if r.outcome == TxRecord.OUTCOME_RECEIVED:
+            assert not overlapping
+        if r.outcome == TxRecord.OUTCOME_LOST_GATEWAY_BUSY:
+            assert overlapping
+
+
+def test_fixed_point_converges_beyond_twelve_iterations(tmp_path):
+    # Régression D3.2/F1 : 1 300 dispositifs, graine 5, `join + confirmed + downlink_every=1`.
+    # Le point fixe existe mais n'est atteint qu'à la 16e itération ; l'ancienne borne de 12
+    # levait `RuntimeError: pas de point fixe ... après 12 itérations`.
+    text = EXAMPLE.read_text(encoding="utf-8").replace("count: 500", "count: 1300", 1)
+    text = text.replace("seed: 42", "seed: 5", 1)
+    path = tmp_path / "n1300_dl1_seed5.yaml"
+    path.write_text(text, encoding="utf-8")
+    run = build_trace(load_scenario(path), ProtocolOptions(join=True, confirmed_uplinks=True,
+                                                           downlink_every=1))
+    assert len(run.records) == run.totals.sent
+    _assert_point_fixe(run)
+    assert run.totals.lost_gateway_busy > 0
+
+
+def test_fixed_point_cycle_is_reported_immediately(monkeypatch):
+    # Un état qui se répète à l'identique ne peut pas converger : la boucle doit s'arrêter dès
+    # la répétition (ici au 3e tour) au lieu d'épuiser la borne de 64 itérations.
+    import lsim.trace_events as te
+
+    etats = [([(0, 10)], {0: 5}), ([(0, 20)], {0: 5})]
+    appels = {"n": 0}
+
+    class _ResultatVide:
+        records: tuple = ()
+
+    def faux_simulate(*_args, **_kwargs):
+        return _ResultatVide()
+
+    def faux_plan(_records, _radios, _options, _joined, _mac=None):
+        busy, joined = etats[appels["n"] % 2]
+        appels["n"] += 1
+        return [], [], [], busy, joined
+
+    monkeypatch.setattr(te, "simulate_uplinks_trace", faux_simulate)
+    monkeypatch.setattr(te, "_plan", faux_plan)
+    with pytest.raises(RuntimeError, match="cycle de période 2"):
+        te._build_trace_python([], (), None, None, None, None,
+                               ProtocolOptions(join=True), None)
+    assert appels["n"] == 3
