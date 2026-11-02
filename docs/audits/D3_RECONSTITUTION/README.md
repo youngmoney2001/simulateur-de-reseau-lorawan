@@ -1,20 +1,28 @@
 # D3 — Reconstitution des preuves de l'audit D3.1
 
-> **Ce dossier ne contient aucun document original.** Le rapport D3.1 a été détruit le 2026-11-02
-> avec l'environnement de travail `/home/user/d3_work` ; aucune empreinte SHA-256 n'en avait été
-> conservée. Les documents ici présents sont des **reconstitutions**, étiquetées comme telles, et
+> **Ce dossier ne contient aucun document provenant du D3.1 original.** Le rapport D3.1 a été
+> détruit le 2026-11-02 avec l'environnement de travail `/home/user/d3_work` ; aucune empreinte
+> SHA-256 n'en avait été conservée. Les documents de reconstitution sont **étiquetés comme tels** et
 > n'ont aucune prétention d'identité avec les fichiers perdus.
+>
+> **Seule exception, explicitement identifiée :** `D3_HANDOFF_v1.md` n'est pas une reconstitution.
+> C'est la **copie à l'octet près** du handoff D3.2 réellement produit le 2026-11-02, d'empreinte
+> `186d346fb46e7737f7b6905130b5205b4ddb7f5cad75da06f20d3039f5ef1648`, conservée ici comme
+> référence historique après la mise à jour en version 2.
 
 ## 1. Contenu
 
 | Fichier | Nature |
 |---|---|
 | `RAPPORT_D3_1_RECONSTITUE.md` | Reconstitution des conclusions de D3.1 (15 sections + 2 annexes) |
+| `SUIVI_ANOMALIES_POST_D3.md` | Suivi des 15 anomalies : statut Phase A, résultats D3, preuves, incertitudes, statut proposé |
+| `D3_HANDOFF.md` | Fichier de reprise, **version 2** (2026-11-02, base `fd5cdb5`) |
+| `D3_HANDOFF_v1.md` | Version 1 **originale** (D3.2, 139 l.), conservée à l'octet près — `186d346f…` |
 | `logs/10_sonde_d0_rejeu.log` | Rejeu de `scripts/preuves/sonde_d0.py` — F6 / M2 |
 | `logs/11_f1b_amortissement.log` | Rejeu du rejet des amortissements — F1-b |
 | `logs/f1b_amortissement.json` | Sortie structurée de la même sonde (6 configurations × 3 variantes) |
 | `logs/12_d0_marge.log` | Modèle `d0` et marges réelles de l'exemple — M2 |
-| `EMPREINTES.sha256` | Empreintes des 6 fichiers de ce dossier + 2 sondes, relatives à la racine du dépôt |
+| `EMPREINTES.sha256` | Empreintes des 9 fichiers de ce dossier + 2 sondes, relatives à la racine du dépôt |
 
 Les sondes associées sont versionnées avec les autres preuves :
 
@@ -22,6 +30,18 @@ Les sondes associées sont versionnées avec les autres preuves :
 |---|---|
 | `scripts/preuves/p_f1b_amortissement.py` | Boucle à point fixe réimplémentée à l'identique, variantes `none` / `inter` / `union` |
 | `scripts/preuves/p_d0_marge.py` | Écart de `PL` selon `d0`, et marge des trames avant la sensibilité |
+
+### 1.1 Les deux versions du handoff
+
+| Fichier | Version | Base décrite | Empreinte | Statut |
+|---|---|---|---|---|
+| `D3_HANDOFF_v1.md` | D3.2 | `dff67ba` | `186d346f…` | **original**, conservé tel quel |
+| `D3_HANDOFF.md` | v2 | `fd5cdb5` | voir `EMPREINTES.sha256` | mise à jour du 2026-11-02 |
+
+La version 1 est **périmée** sur deux points qu'elle ne pouvait pas connaître : elle indique « push
+non autorisé » alors que `dff67ba` a été poussé, et elle ignore `fd5cdb5`. La version 2 corrige ces
+deux points et conserve la distinction entre faits vérifiés, résultats rapportés et éléments non
+vérifiables. Aucune des deux ne représente le handoff D3.1 (198 l.), perdu et **non reconstitué**.
 
 ## 2. Distinction des qualités de preuve
 
