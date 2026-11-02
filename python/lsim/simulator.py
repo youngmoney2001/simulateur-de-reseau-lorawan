@@ -109,6 +109,9 @@ class EndDevice:
     messages: int = 1
     duty_cycle: float = 1.0  # rapport cyclique maximal, ]0, 1] ; 1 = sans limite
     downlink: Optional[DownlinkRequests] = None  # requêtes de downlink (None = aucune)
+    # Frontal RF v4 du terminal (None = neutre). Un frontal déclaré ici est utilisé par
+    # `simulate_uplinks_trace` quand l'appelant ne fournit pas `device_rf`.
+    rf: Optional[DeviceRf] = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.duty_cycle <= 1.0:
@@ -137,6 +140,9 @@ class Gateway:
     rx_sensitivity_offset_db: float = 0.0   # 0 sans profil ; voir gateway_profiles.rx_sensitivity_offset_db
     # Sensibilité absolue (modèle sensibilite-par-sf-v2, ABI v2) ; None = modèle relatif (ABI v1).
     absolute_sensitivity: Optional[AbsoluteSensitivity] = None
+    # Frontal RF v4 de la passerelle (None = neutre). Le gain présent remplace `antenna_gain_dbi`,
+    # la perte de câble s'ajoute (sémantique du cœur, `apply_gateway_rf`).
+    rf: Optional[GatewayRf] = None
 
 
 @dataclass(frozen=True)
@@ -389,6 +395,21 @@ def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
     return c_devs
 
 
+def effective_frontends(devices, gateway, device_rf=None, gateway_rf=None):
+    """Frontaux effectifs : l'argument explicite l'emporte, sinon ceux déclarés sur les objets.
+
+    Renvoie `(device_rf, gateway_rf)`. `device_rf` reste `None` si aucun terminal ne déclare de
+    frontal : l'appelant garde alors le chemin d'origine, à l'octet près.
+    """
+    if device_rf is None:
+        declared = [d.rf for d in devices]
+        if any(f is not None for f in declared):
+            device_rf = [f if f is not None else DeviceRf() for f in declared]
+    if gateway_rf is None:
+        gateway_rf = gateway.rf
+    return device_rf, gateway_rf
+
+
 def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
                            propagation: Propagation,
                            environment: Optional[Environment] = None,
@@ -410,7 +431,12 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
     `device_rf` / `gateway_rf` (v4) : frontaux RF. `device_rf` est une séquence d'un `DeviceRf`
     par dispositif, ou None. Dès qu'un frontal est fourni, le pont appelle le point d'entrée v4
     (`trace_v3` ou `gw2_v2`) et jamais l'ancien.
+
+    Si `device_rf` est None, les frontaux déclarés sur les dispositifs (`EndDevice.rf`) sont
+    utilisés ; si aucun n'en déclare, le chemin reste celui de la base. Même règle pour
+    `gateway_rf` avec `Gateway.rf`.
     """
+    device_rf, gateway_rf = effective_frontends(devices, gateway, device_rf, gateway_rf)
     if len(reservations) > MAX_TRACE_RECORDS:
         raise ValueError("trop de réservations MAC")
     c_res = None

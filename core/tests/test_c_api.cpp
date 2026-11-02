@@ -210,6 +210,53 @@ void test_simulate_totals() {
 }
 
 
+void test_one_entry_per_transmission_matches_a_periodic_device() {
+    // Propriété dont dépend l'implémentation des réémissions (python/lsim/retransmissions.py) :
+    // un terminal périodique à k émissions équivaut à k entrées à une émission, aux mêmes
+    // instants. Le moteur ne prenant en entrée que des calendriers périodiques, une réémission —
+    // qui n'est pas périodique — est représentée de cette façon.
+    const lsim_gateway g{0.0, 0.0, 0.0, 0.0};
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
+
+    lsim_end_device periodic[2] = {
+        {10.0, 0.0, 7, 10, 14.0, 0, 60'000'000'000LL, 3, 1.0},
+        {2000.0, 0.0, 7, 10, 14.0, 30'000'000'000LL, 60'000'000'000LL, 3, 1.0},
+    };
+    lsim_device_stats per_ref[2]{};
+    lsim_sim_stats tot_ref{};
+    CHECK_EQ(lsim_simulate_uplinks(periodic, 2, &g, &p, per_ref, &tot_ref), 0);
+    CHECK_EQ(tot_ref.sent, uint64_t{6});
+
+    lsim_end_device une[6]{};
+    for (int i = 0; i < 2; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            lsim_end_device& d = une[i * 3 + k];
+            d = periodic[i];
+            d.start_offset_ns = periodic[i].start_offset_ns +
+                                static_cast<int64_t>(k) * 60'000'000'000LL;
+            d.messages = 1;
+        }
+    }
+    lsim_device_stats per_une[6]{};
+    lsim_sim_stats tot_une{};
+    CHECK_EQ(lsim_simulate_uplinks(une, 6, &g, &p, per_une, &tot_une), 0);
+
+    CHECK_EQ(tot_une.sent, tot_ref.sent);
+    CHECK_EQ(tot_une.received, tot_ref.received);
+    CHECK_EQ(tot_une.lost_sensitivity, tot_ref.lost_sensitivity);
+    CHECK_EQ(tot_une.lost_collision, tot_ref.lost_collision);
+    CHECK_EQ(tot_une.airtime_ns, tot_ref.airtime_ns);
+    for (int i = 0; i < 2; ++i) {
+        uint64_t recu = 0, perdu = 0;
+        for (int k = 0; k < 3; ++k) {
+            recu += per_une[i * 3 + k].received;
+            perdu += per_une[i * 3 + k].lost_collision + per_une[i * 3 + k].lost_sensitivity;
+        }
+        CHECK_EQ(recu, per_ref[i].received);
+        CHECK_EQ(perdu, per_ref[i].lost_collision + per_ref[i].lost_sensitivity);
+    }
+}
+
 void test_join_roundtrip_and_vectors() {
     const uint8_t key[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     const uint8_t eui[8] = {0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01};
@@ -357,4 +404,5 @@ void run_c_api_tests() {
     test_simulate_with_environment();
     test_join_roundtrip_and_vectors();
     test_gateway_v2_absolute_abi();
+    test_one_entry_per_transmission_matches_a_periodic_device();
 }

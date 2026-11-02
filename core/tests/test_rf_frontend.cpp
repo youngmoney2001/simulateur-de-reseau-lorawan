@@ -362,6 +362,125 @@ void test_closed_loop_v4_validates_its_arguments() {
     CHECK_EQ(static_cast<int>(lsim_simulate_closed_loop_v4(&args)), static_cast<int>(kInvalid));
 }
 
+
+// ---------------------------------------------------------------- 12. Chemin causal avec frontaux
+
+lsim_plan_options plan_options_neutres() {
+    lsim_plan_options o{};
+    o.downlink_payload_bytes = 8;
+    o.gateway_tx_power_dbm = 14.0;
+    return o;
+}
+
+lsim_plan_device radio_neutre() {
+    lsim_plan_device r{};
+    r.freq_hz = 868.1e6;
+    r.dr = 5;
+    r.rx1_hz = 868.1e6;
+    r.tx_power_dbm = 14.0;
+    r.rx1_sf = 9;
+    r.rx1_bw_hz = 125'000;
+    return r;
+}
+
+void test_causal_v2_without_frontends_matches_v1() {
+    const lsim_end_device d[2] = {device(0.0, 14.0), device(1000.0, 14.0)};
+    lsim_gateway g = gateway(2.15);
+    lsim_propagation p = propagation();
+    lsim_plan_device r[2] = {radio_neutre(), radio_neutre()};
+    lsim_plan_options o = plan_options_neutres();
+
+    lsim_device_stats s1[2]{}, s2[2]{};
+    lsim_sim_stats t1{}, t2{};
+    lsim_tx_record rec1[4]{}, rec2[4]{};
+    size_t n1 = 0, n2 = 0;
+    lsim_interval b1[4]{}, b2[4]{};
+    size_t nb1 = 0, nb2 = 0;
+
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v1(d, 2, &g, &p, nullptr, s1, &t1, rec1,
+                                                              4, &n1, r, &o, b1, 4, &nb1)), 0);
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 2, &g, &p, nullptr, s2, &t2, rec2,
+                                                              4, &n2, r, &o, b2, 4, &nb2,
+                                                              nullptr, 0, nullptr)), 0);
+    CHECK_EQ(n2, n1);
+    CHECK_EQ(nb2, nb1);
+    CHECK_EQ(static_cast<int>(t2.received), static_cast<int>(t1.received));
+    for (size_t k = 0; k < n1; ++k) {
+        CHECK_EQ(rec2[k].device_index, rec1[k].device_index);
+        CHECK_EQ(rec2[k].start_ns, rec1[k].start_ns);
+        CHECK_EQ(rec2[k].outcome, rec1[k].outcome);
+        CHECK_NEAR(rec2[k].rssi_dbm, rec1[k].rssi_dbm, 1e-12);
+    }
+    for (size_t k = 0; k < nb1; ++k) {
+        CHECK_EQ(b2[k].start_ns, b1[k].start_ns);
+        CHECK_EQ(b2[k].end_ns, b1[k].end_ns);
+    }
+}
+
+void test_causal_v2_applies_the_frontends() {
+    const lsim_end_device d[1] = {device(0.0, 14.0)};
+    lsim_gateway g = gateway(0.0);
+    lsim_propagation p = propagation();
+    lsim_plan_device r[1] = {radio_neutre()};
+    lsim_plan_options o = plan_options_neutres();
+
+    lsim_device_stats s[1]{};
+    lsim_sim_stats t{};
+    lsim_tx_record rec[1]{};
+    size_t n = 0;
+    lsim_interval b[1]{};
+    size_t nb = 0;
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 1, &g, &p, nullptr, s, &t, rec, 1,
+                                                              &n, r, &o, b, 1, &nb, nullptr, 0,
+                                                              nullptr)), 0);
+    const double sans = rec[0].rssi_dbm;
+
+    lsim_device_rf drf{};
+    // `present` est un masque : les deux champs doivent être annoncés pour être lus.
+    drf.present = LSIM_RF_HAS_ANTENNA_GAIN | LSIM_RF_HAS_CABLE_LOSS;
+    drf.antenna_gain_dbi = 3.0;
+    drf.cable_loss_db = 1.0;
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 1, &g, &p, nullptr, s, &t, rec, 1,
+                                                              &n, r, &o, b, 1, &nb, &drf, 1,
+                                                              nullptr)), 0);
+    CHECK_EQ(static_cast<long long>(std::llround((rec[0].rssi_dbm - sans) * 1000.0)), 2000LL);
+
+    lsim_gateway_rf grf{};
+    grf.present = LSIM_RF_HAS_CABLE_LOSS;
+    grf.cable_loss_db = 2.0;
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 1, &g, &p, nullptr, s, &t, rec, 1,
+                                                              &n, r, &o, b, 1, &nb, &drf, 1,
+                                                              &grf)), 0);
+    CHECK_EQ(static_cast<long long>(std::llround((rec[0].rssi_dbm - sans) * 1000.0)), 0LL);
+}
+
+void test_causal_v2_refuses_a_partial_rf_table() {
+    const lsim_end_device d[2] = {device(0.0, 14.0), device(1000.0, 14.0)};
+    lsim_gateway g = gateway(0.0);
+    lsim_propagation p = propagation();
+    lsim_plan_device r[2] = {radio_neutre(), radio_neutre()};
+    lsim_plan_options o = plan_options_neutres();
+    lsim_device_stats s[2]{};
+    lsim_sim_stats t{};
+    lsim_tx_record rec[4]{};
+    size_t n = 0;
+    lsim_interval b[4]{};
+    size_t nb = 0;
+    lsim_device_rf drf[1]{};
+    drf[0].present = LSIM_RF_HAS_ANTENNA_GAIN;
+    drf[0].antenna_gain_dbi = 1.0;
+
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 2, &g, &p, nullptr, s, &t, rec, 4,
+                                                              &n, r, &o, b, 4, &nb, drf, 1,
+                                                              nullptr)),
+             static_cast<int>(kInvalid));
+    CHECK_EQ(static_cast<int>(n), 0);
+    CHECK_EQ(static_cast<int>(lsim_simulate_uplinks_causal_v2(d, 2, &g, &p, nullptr, s, &t, rec, 4,
+                                                              &n, r, &o, b, 4, &nb, nullptr, 2,
+                                                              nullptr)),
+             static_cast<int>(kInvalid));
+}
+
 }  // namespace
 
 void run_rf_frontend_tests() {
@@ -376,4 +495,7 @@ void run_rf_frontend_tests() {
     test_unknown_bits_and_out_of_range_values_are_rejected();
     test_device_gain_is_counted_once_in_the_downlink();
     test_closed_loop_v4_validates_its_arguments();
+    test_causal_v2_without_frontends_matches_v1();
+    test_causal_v2_applies_the_frontends();
+    test_causal_v2_refuses_a_partial_rf_table();
 }

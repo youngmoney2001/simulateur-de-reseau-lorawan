@@ -1,0 +1,27 @@
+# Cas 1 — uplink reçu, ACK reçu : aucune réémission, quel que soit le nombre de tentatives.
+# Un terminal isolé, à 100 m, sans interférence : chaque trame est reçue puis acquittée.
+schema_version: 1
+name: Réémissions — cas nominal, aucun échec
+seed: 1
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 3
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: terminal
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 9
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 2
+    start_spread_s: 10

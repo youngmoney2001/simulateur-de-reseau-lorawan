@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from lsim.export import run_scenario
 from lsim.geo import to_geojson
-from lsim.scenario import ScenarioModel, load_scenario
+from lsim.scenario import Scenario, ScenarioModel, load_scenario
 from lsim.simulator import (
     simulate_multi_downlinks,
     simulate_uplinks,
@@ -46,11 +46,19 @@ def test_scenario_refuses_an_rf_key_at_root():
         ScenarioModel.model_validate(raw)
 
 
-def test_scenario_refuses_an_rf_key_inside_a_group():
+def test_scenario_accepts_an_rf_key_inside_a_group():
+    """Un groupe peut déclarer son frontal ; la racine, elle, reste refusée.
+
+    Le test figeait auparavant le refus : il vérifie désormais l'acceptation, sans quoi la
+    fonctionnalité serait documentée et contredite par sa propre suite.
+    """
     raw = _raw()
     raw["groups"][0]["rf"] = {"antenna_gain_dbi": 3.0}
-    with pytest.raises(ValidationError):
-        ScenarioModel.model_validate(raw)
+    scenario = Scenario(model=ScenarioModel.model_validate(raw))
+    devices, _names, _idx = scenario.deploy()
+    assert all(device.rf is not None for device in devices)
+    assert devices[0].rf.antenna_gain_dbi == pytest.approx(3.0)
+    assert devices[0].rf.cable_loss_db is None
 
 
 def test_uplink_paths_without_frontend_stay_without_one():

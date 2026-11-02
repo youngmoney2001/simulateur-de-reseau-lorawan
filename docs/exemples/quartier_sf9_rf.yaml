@@ -1,0 +1,35 @@
+# Variante de examples/quartier_sf9.yaml : frontaux RF déclarés dans le scénario.
+# Sans les blocs `rf:`, ce fichier produirait exactement le même résultat que quartier_sf9.yaml.
+#
+# Il vit sous docs/ et non sous examples/ À DESSEIN : scripts/mac_baseline_dump.py hache
+# `examples/*.yaml` en entier, donc tout fichier ajouté là-bas changerait les empreintes gelées
+# d2cb0fac… / ed126d7f…, qui doivent rester inchangées.
+schema_version: 1
+name: Quartier 500 compteurs SF9 avec frontaux RF
+seed: 42
+gateway:
+  x_m: 0
+  y_m: 0
+  antenna_gain_dbi: 2.15
+  rf:
+    cable_loss_db: 1.0        # perte de câble : s'ajoute au gain de la passerelle
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: compteurs
+    count: 500
+    placement:
+      type: disk
+      radius_m: 3000
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 900
+    messages: 10
+    start_spread_s: 900
+    rf:
+      antenna_gain_dbi: 2.0   # antenne réciproque du terminal, comptée une fois
+      cable_loss_db: 0.5

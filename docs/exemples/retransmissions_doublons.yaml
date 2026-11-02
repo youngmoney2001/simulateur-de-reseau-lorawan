@@ -1,0 +1,29 @@
+# Cas 3 — uplink reçu, ACK perdu : réémission sans double livraison réseau.
+# Huit terminaux dans 500 m, périodes de 4 s, trames de 40 octets : l'occupation de la fenêtre
+# RX1 fait perdre des ACK que l'uplink, lui, avait franchis. La trame est alors réémise et reçue
+# une seconde fois : le réseau la déduplique, elle n'est livrée qu'une fois.
+schema_version: 1
+name: Réémissions — ACK perdus et déduplication réseau
+seed: 24
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 3
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: parc
+    count: 8
+    placement:
+      type: disk
+      radius_m: 500
+    spreading_factor: 9
+    payload_bytes: 40
+    tx_power_dbm: 14
+    period_s: 4
+    messages: 3
+    start_spread_s: 12

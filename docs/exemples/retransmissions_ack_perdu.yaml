@@ -1,0 +1,36 @@
+# Cas 3 — uplink reçu, ACK perdu : réémission sans double livraison à l'application.
+#
+# Ce que fait ce scénario : huit terminaux répartis jusqu'à 9 km, trames de 40 octets, trois
+# messages toutes les 4 s. Les uplinks passent la sensibilité de la passerelle ; les descentes,
+# non — le terminal est au bord de la portée dans le sens descendant.
+#
+# Ce qu'il faut fournir pour l'observer : un récepteur dégradé de 10 dB
+# (`ProtocolOptions(device_rx_offset_db=10)`), qui est une hypothèse de matériel, pas un réglage
+# du scénario. Sans elle, le planificateur causal livre l'ACK de **toute** trame qu'il reçoit
+# (mesuré : 15 réceptions, 15 ACK, 0 doublon) : la perte d'ACK n'est alors pas représentable, et
+# ce fichier ne démontre rien de plus que le cas nominal.
+schema_version: 1
+name: Réémissions — ACK perdus au bord de portée
+seed: 24
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 3
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: parc
+    count: 8
+    placement:
+      type: disk
+      radius_m: 9000
+    spreading_factor: 9
+    payload_bytes: 40
+    tx_power_dbm: 14
+    period_s: 4
+    messages: 3
+    start_spread_s: 12

@@ -1,0 +1,42 @@
+# Cas 2, 7 et 8 — collision, réémission, rapport cyclique et limite de tentatives.
+# Deux terminaux à égale distance émettent à l'instant 0 : le seuil de capture (6 dB) n'est pas
+# atteint, les deux trames sont perdues. Le terminal `limite` a un rapport cyclique de 0,1 % : sa
+# réémission serait refusée. Celui de `nominal` réémet à +3 s, seul, et cette fois il est reçu.
+schema_version: 1
+name: Réémissions — collision puis récupération
+seed: 1
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 3
+  retransmit_delay_ms: 3000
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: nominal
+    count: 1
+    placement:
+      type: explicit
+      positions: [[500.0, 0.0]]
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 600
+    messages: 1
+    start_spread_s: 0
+  - name: limite
+    count: 1
+    placement:
+      type: explicit
+      positions: [[-500.0, 0.0]]
+    spreading_factor: 9
+    payload_bytes: 20
+    tx_power_dbm: 14
+    period_s: 600
+    messages: 1
+    start_spread_s: 0
+    duty_cycle: 0.001

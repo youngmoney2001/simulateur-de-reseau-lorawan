@@ -1522,6 +1522,43 @@ LSIM_API int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* ar
 
 /* Trace par transmission avec frontaux par terminal et par passerelle.
    Mêmes sorties, mêmes statuts et même contrat de tampon que `lsim_simulate_uplinks_trace_v2`. */
+/* Variante avec frontaux (v4) du chemin causal : mêmes sorties et statuts que causal_v1.
+ * `device_rf` compte `device_count` entrées (ou NULL avec `device_rf_count` nul) ;
+ * `gateway_rf` est facultatif. Sans frontal, le résultat est identique à causal_v1. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v2(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count,
+                                                 const lsim_device_rf* device_rf,
+                                                 size_t device_rf_count,
+                                                 const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue) avec frontaux du chemin causal. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v2(const lsim_end_device* devices,
+                                                     size_t device_count,
+                                                     const lsim_gateway_v2* gateway,
+                                                     const lsim_propagation* prop,
+                                                     const lsim_environment* env,
+                                                     lsim_device_stats* per_device,
+                                                     lsim_sim_stats* totals,
+                                                     lsim_tx_record* records,
+                                                     size_t record_capacity, size_t* record_count,
+                                                     const lsim_plan_device* radios,
+                                                     const lsim_plan_options* options,
+                                                     lsim_interval* busy_out, size_t busy_capacity,
+                                                     size_t* busy_count,
+                                                     const lsim_device_rf* device_rf,
+                                                     size_t device_rf_count,
+                                                     const lsim_gateway_rf* gateway_rf);
+
 LSIM_API int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices,
                                                 size_t device_count,
                                                 const lsim_gateway* gateway,

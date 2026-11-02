@@ -33,6 +33,7 @@
             "mesh": false,
             "name": null,
             "profile": null,
+            "rf": null,
             "sensitivity": null,
             "x_m": 0.0,
             "y_m": 0.0
@@ -101,6 +102,17 @@
             "shadowing_seed": null,
             "shadowing_sigma_db": 0.0
           }
+        },
+        "retransmissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetransmissionsModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "schema_version": {
           "const": 1,
@@ -319,6 +331,17 @@
           "default": null,
           "title": "Profile"
         },
+        "rf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RfModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "sensitivity": {
           "anyOf": [
             {
@@ -428,6 +451,17 @@
           ],
           "default": null,
           "title": "Region"
+        },
+        "rf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RfModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "spreading_factor": {
           "default": 7,
@@ -820,6 +854,86 @@
         }
       },
       "title": "ProtocolOptionsIn",
+      "type": "object"
+    },
+    "RetransmissionsModel": {
+      "additionalProperties": false,
+      "description": "Retransmissions des uplinks confirmés (bloc `retransmissions:` du scénario).\n\nAbsent : aucune réémission, comportement historique, hash inchangé. Présent : le scénario force\nles uplinks confirmés et réémet tant que l'ACK n'est pas reçu.\n\n`retries: 0` est accepté et n'ajoute aucune transmission : c'est le moteur actuel.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "energy_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Profile"
+        },
+        "enforce_duty_cycle": {
+          "default": true,
+          "title": "Enforce Duty Cycle",
+          "type": "boolean"
+        },
+        "retransmit_delay_ms": {
+          "default": 3000,
+          "maximum": 60000,
+          "minimum": 2000,
+          "title": "Retransmit Delay Ms",
+          "type": "integer"
+        },
+        "retries": {
+          "default": 3,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        }
+      },
+      "title": "RetransmissionsModel",
+      "type": "object"
+    },
+    "RfModel": {
+      "additionalProperties": false,
+      "description": "Frontal RF v4 d'un groupe ou d'une passerelle (ABI v4).\n\nLes deux champs sont **indépendants** : un champ absent n'est pas un champ nul, c'est une\ndonnée non fournie. Le bloc doit en déclarer au moins un.\n\n- terminal : la chaîne `gain - perte` s'applique au montant et au descendant (antenne\n  réciproque), comptée une fois ;\n- passerelle : le gain présent **remplace** `gateway.antenna_gain_dbi`, la perte de câble\n  s'ajoute (sémantique de `apply_gateway_rf` dans `core/src/c_api_ext.cpp`).",
+      "properties": {
+        "antenna_gain_dbi": {
+          "anyOf": [
+            {
+              "maximum": 40.0,
+              "minimum": -40.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Antenna Gain Dbi"
+        },
+        "cable_loss_db": {
+          "anyOf": [
+            {
+              "maximum": 40.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cable Loss Db"
+        }
+      },
+      "title": "RfModel",
       "type": "object"
     },
     "SensitivityModel": {

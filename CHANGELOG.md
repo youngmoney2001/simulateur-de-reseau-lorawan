@@ -2,6 +2,37 @@
 
 ## 0.1.0 (non publiée)
 
+### Retransmissions pilotées par le scénario, et modèle ACK explicite
+- Nouveau bloc `retransmissions:` **facultatif** dans le YAML (`retries` 0 à 7,
+  `retransmit_delay_ms` >= 2000, `enforce_duty_cycle`, `energy_profile`, `enabled`). Absent :
+  comportement historique et hash inchangé. `retries: 0` n'ajoute aucune transmission.
+  Paramètre hors bornes ou clé inconnue : `ValidationError`.
+- `build_trace` et `run_scenario` empruntent ce chemin : une entrée de trace **par transmission**,
+  indices des terminaux du scénario, et `trace.retransmissions` (essais, ACK, doublons, refus).
+- Le modèle ACK est découpé en trois notions distinctes — livraison de la descente
+  (`DownlinkDelivery`), réception de l'ACK (`AckReception`), acquittement logique — au lieu de
+  confondre « descente planifiée » et « trame ACK reçue ». `AckFrame` prépare une représentation
+  MAC complète sans toucher à l'ABI.
+- Quatre scénarios exécutables sous `docs/exemples/retransmissions_*.yaml` couvrent : aucun échec,
+  collision puis récupération, refus par rapport cyclique, et ACK perdus avec **doublons réseau
+  réels** (8 pour 20 réceptions).
+- Mesures comparatives, mêmes graines, scénario `ack_perdu` (récepteur +10 dB) :
+
+  | réémissions | transmises | reçues | ACK reçus | livrées | doublons | collisions | occupation | énergie |
+  |---|---|---|---|---|---|---|---|---|
+  | 0 | 24 | 11 | 8 | 8/24 | 0 | 6 | 0,296 | 2,232 J |
+  | 1 | 43 | 15 | 7 | 7/24 | 1 | 16 | 0,440 | 4,000 J |
+  | 3 | 83 | 20 | 5 | 5/24 | 8 | 31 | 0,543 | 7,720 J |
+
+  **Plus de réémissions ne veut pas dire plus de livraisons** : ici la livraison baisse (8 → 5)
+  parce que le trafic ajouté provoque des collisions. Aucun nombre de tentatives n'est un optimum
+  universel.
+- Fait mesuré, à ne pas masquer : avec un récepteur nominal, le planificateur causal livre l'ACK
+  de **toute** trame reçue (15 réceptions, 15 ACK, 0 doublon). La perte d'ACK exige une hypothèse de
+  récepteur dégradé ; elle n'est pas représentable par le seul scénario.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; suites complètes **1 869 tests** Python
+  et **685 282** vérifications C++.
+
 ### Point fixe uplinks ↔ descentes : borne portée à 64 itérations, cycles signalés (F1)
 - `MAX_ITERATIONS` passe de **12 à 64**. Mesure sur les 120 configurations de référence de D3.2 (40 graines × 3 jeux, `quartier_sf9.yaml` à 2 000 dispositifs) : le point fixe est atteint en **9 à 21 itérations** ; les **69** configurations qui échouaient en `RuntimeError` en demandaient **13 à 21**. Les **51** configurations déjà convergentes ne changent pas d'un octet : même nombre d'itérations, empreinte du résultat complet (`records`, `gateway_tx`, totaux, compteurs par dispositif) identique.
 - Un état qui se répète à l'identique est signalé immédiatement (`cycle de période N`) au lieu d'épuiser la borne : une répétition exacte ne peut pas converger. Le message d'échec indique le nombre d'itérations effectuées. `build_protocol_events` (jointures seules) suit le même critère.

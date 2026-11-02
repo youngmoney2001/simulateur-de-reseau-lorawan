@@ -95,6 +95,18 @@ class GatewayModel(_Strict):
     mesh: bool = False
     # Sensibilité absolue (modèle sensibilite-par-sf-v2). Absent = modèle relatif, hash inchangé.
     sensitivity: Optional[SensitivityModel] = None
+    # Frontal RF v4 de la passerelle (None = neutre). Le gain remplace `antenna_gain_dbi`.
+    rf: Optional[RfModel] = None
+
+    @model_validator(mode="after")
+    def _rf_gain_not_duplicated(self) -> "GatewayModel":
+        if (self.rf is not None and self.rf.antenna_gain_dbi is not None
+                and "antenna_gain_dbi" in self.model_fields_set
+                and abs(self.antenna_gain_dbi - self.rf.antenna_gain_dbi) > 1e-9):
+            raise ValueError(
+                "gateway : antenna_gain_dbi et rf.antenna_gain_dbi diffèrent — le gain du "
+                "frontal remplacerait le champ scalaire ; n'en déclarer qu'un")
+        return self
 
 
 class MeshModel(_Strict):
@@ -148,6 +160,75 @@ class ExplicitPlacement(_Strict):
 Placement = Annotated[Union[DiskPlacement, ExplicitPlacement], Field(discriminator="type")]
 
 
+class RetransmissionsModel(_Strict):
+    """Retransmissions des uplinks confirmés (bloc `retransmissions:` du scénario).
+
+    Absent : aucune réémission, comportement historique, hash inchangé. Présent : le scénario force
+    les uplinks confirmés et réémet tant que l'ACK n'est pas reçu.
+
+    `retries: 0` est accepté et n'ajoute aucune transmission : c'est le moteur actuel.
+    """
+
+    enabled: bool = True
+    retries: int = Field(3, ge=0, le=7)
+    retransmit_delay_ms: int = Field(3_000, ge=2_000, le=60_000)
+    enforce_duty_cycle: bool = True
+    # Profil énergétique utilisé pour le relevé d'énergie de la simulation (None : pas de relevé).
+    energy_profile: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _known_energy_profile(self) -> "RetransmissionsModel":
+        if self.energy_profile is not None:
+            from lsim.energy_report import profile_name
+            try:
+                profile_name(self.energy_profile)
+            except ValueError as exc:
+                raise ValueError(f"retransmissions.energy_profile : {exc}") from exc
+        return self
+
+    def options(self):
+        from lsim.retransmissions import RetransmissionOptions
+        return RetransmissionOptions(enabled=self.enabled, retries=self.retries,
+                                     retransmit_delay_ms=self.retransmit_delay_ms,
+                                     enforce_duty_cycle=self.enforce_duty_cycle)
+
+    @property
+    def is_active(self) -> bool:
+        """Vrai quand des réémissions sont possibles : sinon le chemin historique suffit."""
+        return self.enabled and self.retries > 0
+
+
+class RfModel(_Strict):
+    """Frontal RF v4 d'un groupe ou d'une passerelle (ABI v4).
+
+    Les deux champs sont **indépendants** : un champ absent n'est pas un champ nul, c'est une
+    donnée non fournie. Le bloc doit en déclarer au moins un.
+
+    - terminal : la chaîne `gain - perte` s'applique au montant et au descendant (antenne
+      réciproque), comptée une fois ;
+    - passerelle : le gain présent **remplace** `gateway.antenna_gain_dbi`, la perte de câble
+      s'ajoute (sémantique de `apply_gateway_rf` dans `core/src/c_api_ext.cpp`).
+    """
+
+    antenna_gain_dbi: Optional[float] = Field(None, ge=-40.0, le=40.0)
+    cable_loss_db: Optional[float] = Field(None, ge=0.0, le=40.0)
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> "RfModel":
+        if self.antenna_gain_dbi is None and self.cable_loss_db is None:
+            raise ValueError(
+                "rf : au moins un champ est requis (antenna_gain_dbi ou cable_loss_db)")
+        return self
+
+    def device(self):
+        from lsim.rf import DeviceRf
+        return DeviceRf(antenna_gain_dbi=self.antenna_gain_dbi, cable_loss_db=self.cable_loss_db)
+
+    def gateway(self):
+        from lsim.rf import GatewayRf
+        return GatewayRf(antenna_gain_dbi=self.antenna_gain_dbi, cable_loss_db=self.cable_loss_db)
+
+
 class GroupModel(_Strict):
     name: str = Field(min_length=1, max_length=64)
     count: Optional[int] = Field(default=None, ge=1, le=MAX_DEVICES)
@@ -166,6 +247,8 @@ class GroupModel(_Strict):
     # `channel_freq_hz` doit appartenir à cette sous-bande.
     sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
+    # Frontal RF v4 commun aux terminaux du groupe (None = neutre).
+    rf: Optional[RfModel] = None
 
     @property
     def effective_duty_cycle(self) -> float:
@@ -345,6 +428,8 @@ class ScenarioModel(_Strict):
     gateway: GatewayModel = GatewayModel()
     gateways: Optional[list[GatewayModel]] = Field(None, min_length=1, max_length=MAX_GATEWAYS)
     mesh: Optional[MeshModel] = None
+    # Retransmissions des uplinks confirmés. Absent : comportement historique.
+    retransmissions: Optional[RetransmissionsModel] = None
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
     energy: Optional[EnergyModel] = None
@@ -482,6 +567,9 @@ class Scenario:
         # Profil énergie absent : hash des scénarios antérieurs inchangé.
         if model.energy is None:
             dumped.pop("energy", None)
+        # Frontaux RF absents : hash des scénarios antérieurs inchangé. Un bloc présent reste
+        # haché (le scénario n'est alors plus identique à son équivalent sans RF, à dessein).
+        self._strip_absent_rf(model, dumped)
         # Bloc MAC absent : hash des scénarios antérieurs inchangé.
         if model.mac is None:
             dumped.pop("mac", None)
@@ -560,7 +648,8 @@ class Scenario:
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
-                    duty_cycle=g.effective_duty_cycle))
+                    duty_cycle=g.effective_duty_cycle,
+                    rf=g.rf.device() if g.rf is not None else None))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group
@@ -568,7 +657,8 @@ class Scenario:
     def gateway(self) -> Gateway:
         g = self.model.gateway
         return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
-                       absolute_sensitivity=None if g.sensitivity is None else g.sensitivity.absolute())
+                       absolute_sensitivity=None if g.sensitivity is None else g.sensitivity.absolute(),
+                       rf=g.rf.gateway() if g.rf is not None else None)
 
     def gateway_models(self) -> list[GatewayModel]:
         """Toutes les passerelles, dans l'ordre du fichier (une seule si « gateway »)."""
@@ -579,8 +669,28 @@ class Scenario:
     def gateways(self) -> list[Gateway]:
         return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
                         rx_sensitivity_offset_db=(rx_sensitivity_offset_db(get_profile(g.profile))
-                                                  if g.profile is not None else 0.0))
+                                                  if g.profile is not None else 0.0),
+                        rf=g.rf.gateway() if g.rf is not None else None)
                 for g in self.gateway_models()]
+
+    @staticmethod
+    def _strip_absent_rf(model, dumped) -> None:
+        """Retire du hachage les blocs `rf:` absents : hash des scénarios antérieurs inchangé."""
+        if model.retransmissions is None:
+            dumped.pop("retransmissions", None)
+        if model.gateway.rf is None:
+            dumped["gateway"].pop("rf", None)
+        for groupe, groupe_dump in zip(model.groups, dumped["groups"]):
+            if groupe.rf is None:
+                groupe_dump.pop("rf", None)
+        if model.gateways is not None:
+            for passerelle, passerelle_dump in zip(model.gateways, dumped["gateways"]):
+                if passerelle.rf is None:
+                    passerelle_dump.pop("rf", None)
+
+    def retransmission_options(self):
+        """Options de réémission du scénario, ou None si le bloc est absent ou désactivé."""
+        return None if self.model.retransmissions is None else self.model.retransmissions.options()
 
     @property
     def is_multi_gateway(self) -> bool:

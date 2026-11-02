@@ -160,6 +160,8 @@ class TraceRun:
     # Boucle fermée seulement (None sur le chemin historique) :
     mac_queue: Optional[MacQueueCounters] = None  # file MAC (commandes ponctuelles)
     mac_bytes: Optional[MacByteAccounting] = None  # octets réservés / émis / confirmés
+    # Retransmissions seulement (None sinon) : détail des essais, des ACK et des doublons.
+    retransmissions: Optional[object] = None
 
 
 @dataclass(frozen=True)
@@ -595,7 +597,10 @@ def _build_trace_native(devices, radios, gateway, propagation, environment,
     planificateur natif sur la trace obtenue (contrôle d'égalité, sans itération).
     """
     from lsim.downlink_plan import plan_native, simulate_causal
-    result, busy = simulate_causal(devices, gateway, propagation, environment, radios, options)
+    from lsim.simulator import effective_frontends
+    device_rf, gateway_rf = effective_frontends(devices, gateway)
+    result, busy = simulate_causal(devices, gateway, propagation, environment, radios, options,
+                                   device_rf=device_rf, gateway_rf=gateway_rf)
     events, plan_busy = plan_native(result.records, radios, options)
     if tuple(plan_busy) != tuple(busy):
         raise RuntimeError("occupation passerelle incohérente entre le moteur et le planificateur")
@@ -604,6 +609,70 @@ def _build_trace_native(devices, radios, gateway, propagation, environment,
     return TraceRun(per_device=result.per_device, totals=result.totals,
                     gateway=result.gateway, records=result.records, events=events,
                     gateway_tx=tuple(busy))
+
+
+def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation, environment,
+                                 options: ProtocolOptions) -> TraceRun:
+    """Trace d'un scénario à retransmissions : une entrée par transmission, indices physiques.
+
+    Le module `retransmissions` raisonne sur des terminaux virtuels (un par transmission) ; cette
+    fonction les ramène aux terminaux du scénario, seuls connus de l'appelant et de l'export.
+    """
+    from dataclasses import replace as _remplacer
+
+    from lsim.retransmissions import simulate_confirmed_uplinks
+
+    etat = scenario.model.retransmissions
+    resultat = simulate_confirmed_uplinks(
+        devices, gateway, propagation, radios, options, etat.options(),
+        energy_profile=etat.energy_profile, environment=environment, with_engine_output=True)
+    moteur, evenements = resultat.trace, resultat.events
+    if moteur is None:
+        raise RuntimeError("moteur sans sortie : trace de réémission impossible")
+    plan = resultat.attempts
+
+    records = tuple(
+        TxRecord(plan[r.device_index].device if r.device_index < len(plan) else r.device_index,
+                 r.start_ns, r.end_ns, r.spreading_factor, r.rssi_dbm, r.outcome)
+        for r in moteur.records)
+
+    # Compteurs par terminal physique : somme des transmissions qui lui appartiennent.
+    sent = [0] * len(devices)
+    recu = [0] * len(devices)
+    perdu_sens = [0] * len(devices)
+    perdu_coll = [0] * len(devices)
+    perdu_busy = [0] * len(devices)
+    airtime = [0] * len(devices)
+    for index, compteurs in enumerate(moteur.per_device):
+        physique = plan[index].device if index < len(plan) else index
+        sent[physique] += compteurs.sent
+        recu[physique] += compteurs.received
+        perdu_sens[physique] += compteurs.lost_sensitivity
+        perdu_coll[physique] += compteurs.lost_collision
+        perdu_busy[physique] += compteurs.lost_gateway_busy
+        airtime[physique] += compteurs.airtime_ns
+
+    per_device = tuple(
+        Counters(sent[i], recu[i], perdu_sens[i], perdu_coll[i], airtime[i], perdu_busy[i])
+        for i in range(len(devices)))
+    totaux = moteur.totals
+
+    # Événements : indices virtuels ramenés aux terminaux, hops renommés en conséquence.
+    remappes = []
+    for evenement in evenements:
+        index = evenement.device_index
+        physique = plan[index].device if index < len(plan) else index
+        hops = tuple(
+            _remplacer(hop, from_id=hop.from_id.replace(f"dev:{index}", f"dev:{physique}"),
+                       to_id=hop.to_id.replace(f"dev:{index}", f"dev:{physique}"))
+            for hop in evenement.hops)
+        remappes.append(_remplacer(evenement, device_index=physique, hops=hops))
+    remappes.sort(key=lambda e: e.t_ns)
+    evenements_finaux = tuple(_remplacer(e, seq=k) for k, e in enumerate(remappes))
+
+    return TraceRun(per_device=per_device, totals=totaux, gateway=moteur.gateway,
+                    records=records, events=evenements_finaux,
+                    gateway_tx=tuple(resultat.gateway_tx), retransmissions=resultat)
 
 
 def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> TraceRun:
@@ -620,6 +689,11 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
         raise ValueError(f"trace limitée à {MAX_TRACE_RECORDS} émissions par simulation")
     radios = device_radios(scenario)
     gateway, propagation, environment = scenario.gateway(), scenario.propagation(), scenario.environment
+    etat = scenario.model.retransmissions
+    if etat is not None and etat.is_active:
+        # Uplinks confirmés avec réémissions : chemin dédié, voir `_build_trace_retransmissions`.
+        return _build_trace_retransmissions(scenario, devices, radios, gateway, propagation,
+                                            environment, options)
     from lsim.mac_loop import closed_loop_applies  # import local : évite un cycle
     if closed_loop_applies(scenario):
         # LinkADR / DutyCycle : une seule exécution native, descentes créées par le moteur.

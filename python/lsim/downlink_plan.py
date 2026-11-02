@@ -13,16 +13,19 @@ from typing import Sequence
 from lsim.gateway_sensitivity import MODEL_ID, SensitivityError
 from lsim._native import (
     LIB,
+    _CDeviceRf,
     _CDeviceStats,
     _CEndDevice,
     _CEnvironment,
     _CGateway,
+    _CGatewayRf,
     _CGatewayV2,
     _CInterval,
     _CPropagation,
     _CSimStats,
     _CTxRecord,
 )
+from lsim.rf import device_table, gateway_entry
 from lsim.lora import StatusError
 from lsim.simulator import (
     MAX_END_DEVICES,
@@ -108,14 +111,32 @@ LIB.lsim_simulate_uplinks_causal_gw2.argtypes = [
     ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
     ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
 ]
+# Variantes v2 : mêmes entrées, plus les tables de frontaux (device_count entrées, complètes).
+for _nom in ("lsim_simulate_uplinks_causal_v2", "lsim_simulate_uplinks_causal_gw2_v2"):
+    _fn = getattr(LIB, _nom)
+    _fn.restype = ctypes.c_int32
+    _fn.argtypes = [
+        ctypes.POINTER(_CEndDevice), ctypes.c_size_t,
+        ctypes.POINTER(_CGatewayV2) if _nom.endswith("gw2_v2") else ctypes.POINTER(_CGateway),
+        ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+        ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+        ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
+        ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf),
+    ]
 
 
-def simulate_causal(devices, gateway, propagation, environment, radios, options):
+def simulate_causal(devices, gateway, propagation, environment, radios, options,
+                    device_rf=None, gateway_rf=None):
     """Boucle fermée causale (S1) : trace et occupation passerelle, en une seule exécution.
 
     Chaque trame reçue planifie sa descente à sa fin (`lsim_simulate_uplinks_causal_v1`). Renvoie
     `(TraceResult, occupation)`. Lève `StatusError` si le cœur refuse l'entrée.
     `devices` et `radios` : même ordre (un `DeviceRadio` par dispositif). Pas de MAC ni de jointure.
+
+    `device_rf` / `gateway_rf` (v4) : frontaux RF, comme `simulate_uplinks_trace`. Sans frontal,
+    l'entrée v1 est appelée : le résultat est celui de la base, à l'octet près.
     """
     n = len(devices)
     if n > MAX_END_DEVICES:
@@ -162,12 +183,22 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options)
     count = ctypes.c_size_t(0)
     n_busy = ctypes.c_size_t(0)
     busy = (_CInterval * cap_busy)()
-    causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2 if absolute is not None
-                 else LIB.lsim_simulate_uplinks_causal_v1)
-    status = causal_fn(
-        c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
-        c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
-        c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy))
+    # Frontaux : seules les tables effectivement demandées font basculer sur les entrées v2.
+    with_rf = device_rf is not None or gateway_rf is not None
+    c_dev_rf, n_dev_rf = device_table(device_rf, _CDeviceRf)
+    c_gw_rf = gateway_entry(gateway_rf)
+    if with_rf:
+        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2_v2 if absolute is not None
+                     else LIB.lsim_simulate_uplinks_causal_v2)
+    else:
+        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2 if absolute is not None
+                     else LIB.lsim_simulate_uplinks_causal_v1)
+    args = [c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
+            c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
+            c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy)]
+    if with_rf:
+        args += [c_dev_rf if n_dev_rf else None, n_dev_rf, c_gw_rf]
+    status = causal_fn(*args)
     del keep
     if status != 0:
         raise StatusError(status)

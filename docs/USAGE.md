@@ -287,6 +287,62 @@ Le studio appelle `/api` (proxy Vite vers `LSIM_API_URL`). Le jeton est saisi da
 dans l'onglet et n'apparaît jamais dans une URL. Tests : `npm test` (modules) et `npm run test:e2e`
 (Chromium réel ; variables `CHROME_PATH`, `LSIM_LIBRARY`, `PYTHON`).
 
+## 5octies. Retransmissions des uplinks confirmés
+
+Un bloc `retransmissions:` **facultatif** transforme les uplinks du scénario en uplinks confirmés :
+une trame non acquittée est réémise après RX2, dans la limite des tentatives.
+
+```yaml
+retransmissions:
+  retries: 3                 # 0 à 7 ; 0 = aucune réémission (moteur actuel)
+  retransmit_delay_ms: 3000  # >= 2000 : une réémission ne peut pas partir avant RX2
+  enforce_duty_cycle: true   # refuse une réémission qui dépasserait le rapport cyclique
+  energy_profile: rak4631    # facultatif : ajoute le relevé d'énergie
+```
+
+| Règle | Comportement |
+|---|---|
+| Bloc absent | aucune réémission, chemin historique, hash inchangé |
+| `retries: 0` | aucune transmission ajoutée : le scénario emprunte le chemin historique |
+| Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
+| Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
+| Bloc `enabled: false` | équivaut à `retries: 0` |
+
+`build_trace` et `run_scenario` empruntent alors un chemin dédié qui renvoie une entrée de trace
+**par transmission**, avec les indices des terminaux du scénario, ainsi qu'un objet
+`trace.retransmissions` (essais, ACK, doublons, tentatives bloquées).
+
+### Ce que le modèle distingue
+
+| Notion | Où elle vit |
+|---|---|
+| Livraison de la descente | verdict du planificateur : livrée, sous la sensibilité, non planifiée |
+| Réception de l'ACK | la descente tombe dans la fenêtre RX1 de **cette** trame |
+| Acquittement logique | la réception ci-dessus concerne bien cette trame |
+
+Le cœur ne modélise pas le contenu de la trame ACK : l'appariement se fait par fenêtre, ce qui est
+exact tant qu'un seul ACK est attendu par fenêtre. `AckFrame` porte déjà les champs
+(`frame_counter_up`, `frame_counter_down`) qu'une représentation MAC complète utilisera.
+
+### Ce qui n'est pas modélisé
+
+- **Aucune perte d'ACK avec un récepteur nominal** : le planificateur causal livre l'ACK de toute
+  trame qu'il reçoit. Observer une perte d'ACK exige une hypothèse de récepteur dégradé
+  (`ProtocolOptions(device_rx_offset_db=...)`), pas un réglage du scénario.
+- L'ACK tardif et l'ACK dupliqué ne peuvent pas être produits par le planificateur : la règle est
+  appliquée et testée, mais aucun scénario ne les provoque.
+- Le compteur de doublons déduplique côté réseau ; il ne remplace pas une trace MAC complète.
+- L'énergie n'est pas ventilée entre émission, écoute RX1/RX2 et veille.
+
+### Exemples exécutables
+
+| Fichier | Ce qu'il démontre |
+|---|---|
+| `docs/exemples/retransmissions_nominal.yaml` | uplink reçu, ACK reçu, aucune réémission |
+| `docs/exemples/retransmissions_collision.yaml` | collision, réémission réussie, refus par rapport cyclique |
+| `docs/exemples/retransmissions_doublons.yaml` | trafic dense : réémissions et borne de tentatives |
+| `docs/exemples/retransmissions_ack_perdu.yaml` | ACK perdus et **doublons réseau** (avec récepteur à +10 dB) |
+
 ## 6. Limites connues
 
 Voir `docs/ROADMAP.md`. Points notables pour l'usage :
