@@ -16,6 +16,13 @@ Les scripts qui chargent le cœur natif exigent `LSIM_LIBRARY` (chemin de `libls
 | `sonde_d0.py` | Effet de `reference_distance_m` avec et sans relief (F6 / M2) | sans relief : identique ; avec relief : différent |
 | `balayage_graines.py [--seeds N]` | Échecs de convergence du chemin de trace (F1) | 240 runs pour 40 graines × 3 exemples × 2 options, **0** échec — F1 reste **non reproduit** |
 | `verifier_sauvegarde.sh TAR [BUNDLE]` | Empreinte, extraction, arbre, commit, clone d'une sauvegarde | arbre identique, commit `68176d6`, 332 fichiers, 0 modifié |
+| `p_f1b_amortissement.py ROOT OUT [MAXIT]` | Amortissements du point fixe (`none`, `inter`, `union`), boucle réimplémentée à l'identique (F1-b) | `none` : 13, 13, 15, 16, 14, 21 itérations ; `inter` et `union` : **échec aux 6 configurations** à 128 itérations |
+| `p_d0_marge.py ROOT` | Écart de `PL` selon `d0`, puis marge de chaque trame avant la sensibilité (M2) | `d0` 1→10 : **−7,000000 dB** à `n = 2,7`, **0,000000 dB** à `n = 2` ; marge minimale **+20,047 dB** (sans relief) / **−35,712 dB** (avec relief) |
+
+Les deux sondes `p_f1b_amortissement.py` et `p_d0_marge.py` ont été ajoutées **après** le commit
+`68176d6` : leur colonne « attendu » vaut pour un arbre compilé au commit `dff67ba` ou ultérieur, avec
+`examples/` présent. Leur résultat détaillé et leurs journaux sont dans
+`docs/audits/D3_RECONSTITUTION/`.
 
 ### `verifier_sauvegarde.sh` — ce que le script contrôle, et dans quel ordre
 
@@ -52,6 +59,10 @@ bash   scripts/preuves/verifier_symboles.sh build/liblsim_core.so
 LSIM_LIBRARY=build/liblsim_core.so bash scripts/preuves/verifier_empreintes.sh
 LSIM_LIBRARY=build/liblsim_core.so python3 scripts/preuves/sonde_d0.py
 LSIM_LIBRARY=build/liblsim_core.so python3 scripts/preuves/balayage_graines.py --seeds 40
+
+# rejeux du 2026-11-02 (D3) — compter ~150 s pour F1-b
+LSIM_LIBRARY=build/liblsim_core.so python3 scripts/preuves/p_f1b_amortissement.py "$PWD" /tmp/f1b.json 128
+LSIM_LIBRARY=build/liblsim_core.so python3 scripts/preuves/p_d0_marge.py "$PWD"
 
 # sauvegarde
 bash scripts/preuves/verifier_sauvegarde.sh /home/user/sauvegardes/<archive>.tar.gz

@@ -106,3 +106,26 @@ binaire `lsim_tests` exécuté par commit.
 Les contrôles décrits dans ces rapports sont rejouables via `scripts/preuves/`
 (voir `scripts/preuves/README.md`) : symboles exportés, empreintes gelées, harnais ABI, tableau des
 14 assertions, sonde `d0`, balayage de graines, vérification d'une sauvegarde.
+
+## 6. D3 — reconstitution des preuves
+
+Le sous-répertoire `D3_RECONSTITUTION/` est **hors de l'index du §1** et n'est pas un livrable
+d'audit validé : il contient une **reconstitution** du rapport D3.1 — dont l'original a été détruit
+le 2026-11-02 sans qu'aucune empreinte n'en soit conservée — accompagnée des **journaux de rejeu**
+du 2026-11-02. Il est conservé ici parce qu'il documente l'état des anomalies F1, F6, M2 et M3 après
+les mesures de D3.1 et D3.2, et parce qu'il porte ses propres empreintes.
+
+| Élément | Nature |
+|---|---|
+| `D3_RECONSTITUTION/RAPPORT_D3_1_RECONSTITUE.md` | Reconstitution (15 sections + 2 annexes) — **pas** le rapport original |
+| `D3_RECONSTITUTION/logs/` | 4 journaux de rejeu, sortie brute des sondes |
+| `D3_RECONSTITUTION/README.md` | Provenance, limites, mode de reproduction, convention [R]/[M]/[NR] |
+| `D3_RECONSTITUTION/EMPREINTES.sha256` | 8 empreintes, vérifiables par `sha256sum -c` depuis la racine |
+
+Les deux sondes de rejeu sont versionnées avec les autres preuves : `scripts/preuves/p_f1b_amortissement.py`
+et `scripts/preuves/p_d0_marge.py`. Elles ne modifient aucun code de production.
+
+Les statuts du §1 (tableau de synthèse de `AUDIT_REGISTRE_ANOMALIES.md`) sont ceux établis **au
+moment de la Phase A** ; ils ne tiennent pas compte des mesures de D3.1 et D3.2. Ils n'ont pas été
+réécrits ici : l'écart est explicité dans le rapport reconstitué, il n'est pas corrigé dans le
+registre.

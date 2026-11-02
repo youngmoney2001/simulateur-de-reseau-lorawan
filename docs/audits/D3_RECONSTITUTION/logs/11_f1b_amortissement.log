@@ -1,0 +1,20 @@
+join            graine  7 none  converge=True  itérations=13
+join            graine  7 inter converge=False itérations=128
+join            graine  7 union converge=False itérations=128
+join            graine 19 none  converge=True  itérations=13
+join            graine 19 inter converge=False itérations=128
+join            graine 19 union converge=False itérations=128
+join            graine 36 none  converge=True  itérations=15
+join            graine 36 inter converge=False itérations=128
+join            graine 36 union converge=False itérations=128
+join+conf+dl1   graine  0 none  converge=True  itérations=16
+join+conf+dl1   graine  0 inter converge=False itérations=128
+join+conf+dl1   graine  0 union converge=False itérations=128
+join+conf+dl1   graine  7 none  converge=True  itérations=14
+join+conf+dl1   graine  7 inter converge=False itérations=128
+join+conf+dl1   graine  7 union converge=False itérations=128
+join+conf+dl1   graine 36 none  converge=True  itérations=21
+join+conf+dl1   graine 36 inter converge=False itérations=128
+join+conf+dl1   graine 36 union converge=False itérations=128
+
+JSON : /home/user/d3_restauration/logs/f1b_amortissement.json
