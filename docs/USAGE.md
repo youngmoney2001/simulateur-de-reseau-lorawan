@@ -300,6 +300,15 @@ retransmissions:
   energy_profile: rak4631    # facultatif : ajoute le relevé d'énergie
   ack_delay_ms: 0            # 0 à 60000 : retard du réseau avant d'émettre l'ACK
   ack_repetitions: 1         # 1 à 3 : copies du même ACK (même FCntDown)
+  fcnt_up_start: 0           # premier FCntUp de chaque terminal (0 à 2^32-1)
+```
+
+La classe d'écoute est une propriété du groupe :
+
+```yaml
+groups:
+  - name: terminaux
+    device_class: A          # A (défaut), B ou C — voir docs/MAC_CONSOLIDATION.md
 ```
 
 | Règle | Comportement |
@@ -309,7 +318,9 @@ retransmissions:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
-| `ack_delay_ms` / `ack_repetitions` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
+| `FCntDown` | série **par terminal** ; un ACK émis consomme un numéro, ses copies le conservent |
 
 `build_trace` et `run_scenario` empruntent alors un chemin dédié qui renvoie une entrée de trace
 **par transmission**, avec les indices des terminaux du scénario, ainsi qu'un objet
@@ -356,6 +367,23 @@ L'émission de l'ACK commence à `fin + 1 s + delay_ms`. Frontières **mesurées
 
 Une passerelle occupée peut repousser l'émission (`max(ouverture + delay, fin d'occupation)`) : un
 ACK prévu dans RX1 peut donc basculer en RX2, ou hors fenêtre, selon le trafic.
+
+### Taxonomie et classes d'écoute
+
+Chaque émission d'ACK reçoit une classe, exposée par `trace.retransmissions` :
+
+| Classe | Sens | Compteur |
+|---|---|---|
+| `STANDARD` | reçue dans une fenêtre écoutée, `FCntDown` inédit | `ack_standard` |
+| `LATE` | émise après la fermeture des fenêtres | `ack_late` |
+| `LOST` | dans une fenêtre mais non décodable, ou terminal en train d'émettre | `ack_lost` |
+| `DUPLICATE` | même `FCntDown` déjà accepté, rejeté par le contrôle de rejeu | `ack_duplicate` |
+| `NOT_SENT` | aucun ACK : uplink non reçu | `ack_not_sent` |
+
+Même scénario à `ack_delay_ms: 2500` : un terminal de **classe A** ne reçoit aucun ACK (6 tardifs,
+0/2 livrée) ; un terminal de **classe C**, qui écoute en continu, reçoit les deux (2/2 livrée).
+La classe B se comporte comme A pour l'ACK — ses *ping slots* sont un autre mécanisme, non
+modélisé ici. Détail et limites : `docs/MAC_CONSOLIDATION.md`.
 
 ### Ce qui n'est pas modélisé
 

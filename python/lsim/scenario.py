@@ -179,6 +179,8 @@ class RetransmissionsModel(_Strict):
     # Une valeur non nulle de `ack_delay_ms`, ou `ack_repetitions` > 1, active la couche MAC.
     ack_delay_ms: int = Field(0, ge=0, le=60_000)
     ack_repetitions: int = Field(1, ge=1, le=3)
+    # Premier FCntUp de chaque terminal (compteur 32 bits, comme `lsim.session`).
+    fcnt_up_start: int = Field(0, ge=0, le=2**32 - 1)
 
     @model_validator(mode="after")
     def _known_energy_profile(self) -> "RetransmissionsModel":
@@ -196,7 +198,8 @@ class RetransmissionsModel(_Strict):
                                      retransmit_delay_ms=self.retransmit_delay_ms,
                                      enforce_duty_cycle=self.enforce_duty_cycle,
                                      ack_delay_ms=self.ack_delay_ms,
-                                     ack_repetitions=self.ack_repetitions)
+                                     ack_repetitions=self.ack_repetitions,
+                                     fcnt_up_start=self.fcnt_up_start)
 
     @property
     def is_active(self) -> bool:
@@ -253,6 +256,10 @@ class GroupModel(_Strict):
     # `channel_freq_hz` doit appartenir à cette sous-bande.
     sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
+    # Classe LoRaWAN du terminal : A et B ouvrent RX1/RX2 après chaque uplink ; C écoute en
+    # continu. Les ping slots de la classe B ne sont pas modélisés ici : seul l'ACK (descente de
+    # classe A) dépend de ce champ.
+    device_class: Literal["A", "B", "C"] = "A"
     # Frontal RF v4 commun aux terminaux du groupe (None = neutre).
     rf: Optional[RfModel] = None
 
@@ -613,6 +620,8 @@ class Scenario:
             if group.get("region") is None:
                 group.pop("region", None)
                 group.pop("channel_freq_hz", None)
+            if group.get("device_class") == "A":
+                group.pop("device_class", None)
         # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
         for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
             for ob in env_dump.get("obstacles", []):
@@ -634,6 +643,18 @@ class Scenario:
     def energy_profile(self) -> Optional[str]:
         """Profil énergie déclaré dans le YAML, ou None."""
         return self.model.energy.profile if self.model.energy is not None else None
+
+    def device_classes(self) -> list[str]:
+        """Classe LoRaWAN de chaque terminal déployé, dans l'ordre de `deploy()`.
+
+        Le groupe porte la classe ; le déploiement énumère les groupes dans l'ordre du fichier,
+        donc l'alignement est direct. Aucune position n'est tirée : le compteur de chaque groupe
+        suffit, et aucune consommation du générateur aléatoire n'est ajoutée.
+        """
+        classes: list[str] = []
+        for groupe in self.model.groups:
+            classes.extend([groupe.device_class] * groupe.device_count)
+        return classes
 
     def deploy(self) -> tuple[list[EndDevice], list[str], list[int]]:
         """Retourne (dispositifs, nom de groupe par dispositif, index dans le groupe).
@@ -692,6 +713,8 @@ class Scenario:
                 bloc.pop("ack_delay_ms", None)
             if model.retransmissions.ack_repetitions == 1:
                 bloc.pop("ack_repetitions", None)
+            if model.retransmissions.fcnt_up_start == 0:
+                bloc.pop("fcnt_up_start", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

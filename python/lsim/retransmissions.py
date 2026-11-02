@@ -62,11 +62,12 @@ class AckReception(str, Enum):
 
 @dataclass(frozen=True)
 class AckFrame:
-    """Représentation minimale d'un ACK, prête pour une évolution MAC complète.
+    """Représentation minimale d'un ACK, avec l'identité de trame quand elle est connue.
 
-    Le cœur n'expose aujourd'hui ni `f_cnt_up` ni `f_cnt_down` : ces champs restent donc `None` et
-    l'appariement se fait par fenêtre. Les ajouter ne changera pas les structures ABI ; seule la
-    fonction `_match_ack` du module utilisera alors ces champs.
+    Le cœur n'expose ni `f_cnt_up` ni `f_cnt_down` : ces compteurs sont tenus par le module
+    (`Attempt.f_cnt_up`, `Attempt.f_cnt_down`), avec la sémantique de `lsim.session` — `FCntUp`
+    identifie la trame (toutes ses réémissions le partagent), `FCntDown` est la série de descentes
+    du terminal. `None` reste possible pour un appelant qui n'en fournit pas.
     """
 
     frame_counter_up: Optional[int] = None    # trame acquittée (None : non modélisé)
@@ -92,8 +93,13 @@ class RetransmissionOptions:
     # ou dupliqué : le cœur, lui, abandonne la descente hors fenêtre RX1.
     ack_delay_ms: int = 0
     ack_repetitions: int = 1
+    # Premier FCntUp d'un terminal (après jointure, le compteur ne repart pas de zéro).
+    # Les réémissions d'une même trame réutilisent le même FCntUp : c'est l'identité de la trame.
+    fcnt_up_start: int = 0
 
     def __post_init__(self) -> None:
+        if not 0 <= self.fcnt_up_start < 2**32:
+            raise ValueError("fcnt_up_start doit être dans [0, 2**32)")
         if not 0 <= self.retries <= MAX_RETRIES:
             raise ValueError(f"retries doit être dans [0, {MAX_RETRIES}]")
         if self.retransmit_delay_ms < RX2_DELAY_NS // 1_000_000:
@@ -131,11 +137,15 @@ class Attempt:
     ack: AckReception              # ce que le terminal a effectivement reçu
     acked: bool                    # cette trame est logiquement acquittée après cet essai
     ack_ns: Optional[int] = None   # instant d'émission de l'ACK retenu (None : aucun)
+    f_cnt_up: Optional[int] = None     # compteur montant de la trame (identique aux réémissions)
+    f_cnt_down: Optional[int] = None   # compteur descendant de l'ACK retenu (None : aucun)
 
     @property
     def ack_frame(self) -> Optional[AckFrame]:
-        """ACK associé, quand il y en a un. Aucun numéro de trame n'est inventé."""
-        return AckFrame() if self.ack is AckReception.RECEIVED else None
+        """ACK associé, quand il y en a un : il porte alors l'identité réelle de la trame."""
+        if self.ack is not AckReception.RECEIVED:
+            return None
+        return AckFrame(frame_counter_up=self.f_cnt_up, frame_counter_down=self.f_cnt_down)
 
 
 @dataclass(frozen=True)
@@ -152,6 +162,12 @@ class RetransmissionResult:
     acks_planned: int              # transmissions d'ACK effectivement émises
     acks_received: int
     ack_duplicates_ignored: int      # copies d'ACK reçues puis écartées (même FCntDown)
+    # Taxonomie de l'ACK (une seule classe par émission, voir `lsim.ack_mac.AckSort`).
+    ack_standard: int              # émissions acceptées par le terminal
+    ack_late: int                  # émissions hors fenêtre : airtime consommée, personne n'écoute
+    ack_lost: int                  # émissions dans une fenêtre écoutée mais non décodables
+    ack_duplicate: int             # copies reçues puis rejetées par le contrôle de rejeu
+    ack_not_sent: int              # trames sans ACK (uplink non reçu)
     lost_sensitivity: int
     lost_collision: int
     lost_gateway_busy: int
@@ -190,7 +206,8 @@ def _airtime_ns(device) -> int:
     return time_on_air_ns(config, device.payload_bytes)
 
 
-def _base_schedule(devices, gateway, propagation, radios, options, environment=None) -> list[Attempt]:
+def _base_schedule(devices, gateway, propagation, radios, options, environment=None,
+                   fcnt_start: int = 0) -> list[Attempt]:
     """Émissions initiales, telles que le moteur les place réellement."""
     if not devices:
         return []
@@ -203,7 +220,8 @@ def _base_schedule(devices, gateway, propagation, radios, options, environment=N
         attempts.append(Attempt(device=device, frame=rang[device], attempt=0,
                                 start_ns=record.start_ns, end_ns=record.end_ns,
                                 received=record.outcome == 2, delivery=DownlinkDelivery.NONE,
-                                ack=AckReception.NONE, acked=False))
+                                ack=AckReception.NONE, acked=False,
+                                f_cnt_up=fcnt_start + rang[device]))
         rang[device] += 1
     return attempts
 
@@ -294,7 +312,7 @@ def _prune_acknowledged(schedule):
 
 
 def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
-              timing=None, busy=None):
+              timing=None, busy=None, classes=None):
     """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
 
     Avec `timing` (ACK retardé ou répété) : les transmissions sont simulées avec une occupation
@@ -317,7 +335,13 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
     result = simulate_uplinks_trace(virt, gateway, propagation, environment,
                                     gateway_busy=tuple(busy or ()), device_rf=None)
     radios_par_enregistrement = [vrad[record.device_index] for record in result.records]
-    plan = plan_acks(result.records, radios_par_enregistrement, options, timing)
+    # Identité et classe suivent l'entrée de calendrier, pas la position dans la trace moteur.
+    plan = plan_acks(result.records, radios_par_enregistrement, options, timing,
+                     classes=None if classes is None else
+                     [classes[schedule[record.device_index].device]
+                      for record in result.records],
+                     fcnt_up=[schedule[record.device_index].f_cnt_up
+                              for record in result.records])
     events, _planned = plan_native(result.records, [vrad[r.device_index]
                                                     for r in result.records], options)
     return result, events, plan.busy, plan
@@ -328,7 +352,8 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
 def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, options,
                                retransmit: RetransmissionOptions = RetransmissionOptions(),
                                energy_profile: Optional[str] = None, environment=None,
-                               with_engine_output: bool = False) -> RetransmissionResult:
+                               with_engine_output: bool = False,
+                               device_classes: Optional[Sequence[str]] = None) -> RetransmissionResult:
     """Uplinks confirmés avec réémissions ; renvoie les compteurs mesurés.
 
     `devices`, `radios` : un élément par terminal, même ordre (comme `simulate_causal`).
@@ -338,16 +363,28 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     `with_engine_output=True` ajoute `trace` et `events` (moteur, indices **virtuels**) au
     résultat : c'est ce dont `build_trace` a besoin pour produire une `TraceRun` cohérente. Les
     indices virtuels y sont ceux du calendrier, pas ceux des terminaux.
+    `device_classes` : classe d'écoute (`A`, `B`, `C`) d'un élément par terminal, `None` = `A`.
     """
     devices = list(devices)
     radios = list(radios)
     if len(radios) != len(devices):
         raise ValueError("un paramètre radio par dispositif")
+    if device_classes is not None:
+        device_classes = list(device_classes)
+        if len(device_classes) != len(devices):
+            raise ValueError("une classe d'écoute par dispositif")
 
     options = _replace(options, confirmed_uplinks=True)
-    schedule = _base_schedule(devices, gateway, propagation, radios, options, environment)
+    schedule = _base_schedule(devices, gateway, propagation, radios, options, environment,
+                              fcnt_start=retransmit.fcnt_up_start)
     if not schedule:
-        return RetransmissionResult((), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0.0, 0)
+        return RetransmissionResult(
+            attempts=(), frames=0, transmissions=0, retransmissions=0, received=0,
+            network_frames=0, frames_delivered=0, duplicates=0, blocked_by_duty_cycle=0,
+            acks_planned=0, acks_received=0, ack_duplicates_ignored=0,
+            ack_standard=0, ack_late=0, ack_lost=0, ack_duplicate=0, ack_not_sent=0,
+            lost_sensitivity=0, lost_collision=0, lost_gateway_busy=0,
+            gateway_utilization=0.0, observation_ns=0, energy_j=0.0)
 
     frames = len(schedule)
     blocked: set[tuple[int, int, int]] = set()
@@ -363,35 +400,49 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     for _iteration in range(MAX_ITERATIONS):
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
-            timing=timing, busy=occupation)
+            timing=timing, busy=occupation, classes=device_classes)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:
             livraisons = _deliveries(events, recues, len(schedule))
             recus = _match_ack(schedule, events)
             instants = {}
+            # Série descendante du chemin du cœur : un FCntDown par ACK réellement émis, par
+            # terminal et dans l'ordre des émissions (le réseau numérote ses descentes).
+            descendants = {}
+            suivant: dict[int, int] = {}
+            for index in sorted(range(len(schedule)), key=lambda i: (schedule[i].end_ns, i)):
+                if livraisons.get(index) in (DownlinkDelivery.DELIVERED,
+                                             DownlinkDelivery.LOST_SENSITIVITY):
+                    appareil = schedule[index].device
+                    descendants[index] = suivant.get(appareil, 0)
+                    suivant[appareil] = descendants[index] + 1
         else:
-            from lsim.ack_mac import AckWindow
-            # `LATE` (émis, mais après la fermeture de RX2) n'a pas de verdict propre dans
-            # `DownlinkDelivery` : il est rangé avec les pertes de sensibilité. L'information
-            # exacte reste disponible dans `AckOutcome.window`.
+            from lsim.ack_mac import AckSort, AckWindow
+            # `LATE` n'a pas de verdict propre dans `DownlinkDelivery` : il est rangé avec les
+            # pertes de sensibilité. La classe exacte reste dans `AckOutcome.sort`.
             correspondance = {
-                AckWindow.RX1: DownlinkDelivery.DELIVERED,
-                AckWindow.RX2: DownlinkDelivery.DELIVERED,
-                AckWindow.LATE: DownlinkDelivery.LOST_SENSITIVITY,
-                AckWindow.NOT_DECODABLE: DownlinkDelivery.LOST_SENSITIVITY,
-                AckWindow.WINDOW_MISSED: DownlinkDelivery.DEVICE_TRANSMITTING,
-                AckWindow.NOT_SENT: DownlinkDelivery.NONE,
+                AckSort.STANDARD: DownlinkDelivery.DELIVERED,
+                AckSort.LATE: DownlinkDelivery.LOST_SENSITIVITY,
+                AckSort.LOST: DownlinkDelivery.LOST_SENSITIVITY,
+                AckSort.DUPLICATE: DownlinkDelivery.DELIVERED,
+                AckSort.NOT_SENT: DownlinkDelivery.NONE,
             }
             # Indices virtuels depuis la position dans les enregistrements.
-            livraisons, recus, instants = {}, set(), {}
+            livraisons, recus, instants, descendants = {}, set(), {}, {}
             for position, record in enumerate(result.records):
                 sortie = mac_plan.outcomes[position]
                 virtuel = record.device_index
-                livraisons[virtuel] = correspondance[sortie.window]
+                verdict = correspondance[sortie.sort]
+                if sortie.window is AckWindow.WINDOW_MISSED:
+                    verdict = DownlinkDelivery.DEVICE_TRANSMITTING
+                livraisons[virtuel] = verdict
                 if sortie.received:
                     recus.add(virtuel)
-                    instants[virtuel] = sortie.first_emission_ns
+                    retenue = sortie.accepted_emission
+                    instants[virtuel] = (retenue.start_ns if retenue is not None
+                                         else sortie.first_emission_ns)
+                    descendants[virtuel] = sortie.f_cnt_down
             occupation = tuple(planned)
 
         mis_a_jour = []
@@ -409,7 +460,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                 ack = AckReception.NONE
             mis_a_jour.append(_replace(attempt, received=index in recues, delivery=delivery,
                                        ack=ack, acked=ack is AckReception.RECEIVED,
-                                       ack_ns=instants.get(index)))
+                                       ack_ns=instants.get(index),
+                                       f_cnt_down=descendants.get(index)))
         schedule = mis_a_jour
 
         acquittees = {(a.device, a.frame) for a in schedule if a.acked}
@@ -436,7 +488,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                                      attempt=attempt.attempt + 1, start_ns=debut,
                                      end_ns=debut + (attempt.end_ns - attempt.start_ns),
                                      received=False, delivery=DownlinkDelivery.NONE,
-                                     ack=AckReception.NONE, acked=False))
+                                     ack=AckReception.NONE, acked=False,
+                                     f_cnt_up=attempt.f_cnt_up))
         if not nouvelles:
             break
         schedule = schedule + nouvelles
@@ -471,6 +524,17 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             if mesure.energy_per_message_j is not None:
                 energie += float(mesure.energy_per_message_j)
 
+    # Taxonomie : le plan MAC donne les quatre classes ; le chemin du cœur n'en produit aucune
+    # (il n'émet qu'un ACK standard par trame reçue, sans copie ni retard).
+    if mac_plan is not None:
+        _comptes = mac_plan.counts
+    else:
+        from lsim.ack_mac import AckCounts
+
+        _comptes = AckCounts(standard=sum(1 for a in schedule
+                                          if a.ack is AckReception.RECEIVED),
+                             not_sent=sum(1 for a in schedule if not a.received))
+
     return RetransmissionResult(
         attempts=tuple(schedule),
         frames=frames,
@@ -485,6 +549,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                       sum(1 for a in schedule if a.delivery not in (
                           DownlinkDelivery.NONE, DownlinkDelivery.NOT_SCHEDULED))),
         ack_duplicates_ignored=(mac_plan.duplicates_ignored if mac_plan is not None else 0),
+        ack_standard=_comptes.standard, ack_late=_comptes.late, ack_lost=_comptes.lost,
+        ack_duplicate=_comptes.duplicate, ack_not_sent=_comptes.not_sent,
         acks_received=sum(1 for a in schedule if a.ack is AckReception.RECEIVED),
         lost_sensitivity=result.totals.lost_sensitivity,
         lost_collision=result.totals.lost_collision,

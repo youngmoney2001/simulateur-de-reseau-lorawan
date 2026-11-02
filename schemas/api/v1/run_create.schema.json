@@ -390,6 +390,16 @@
           "default": null,
           "title": "Count"
         },
+        "device_class": {
+          "default": "A",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Device Class",
+          "type": "string"
+        },
         "duty_cycle": {
           "default": 1.0,
           "exclusiveMinimum": 0,
@@ -895,6 +905,13 @@
           "default": true,
           "title": "Enforce Duty Cycle",
           "type": "boolean"
+        },
+        "fcnt_up_start": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Fcnt Up Start",
+          "type": "integer"
         },
         "retransmit_delay_ms": {
           "default": 3000,

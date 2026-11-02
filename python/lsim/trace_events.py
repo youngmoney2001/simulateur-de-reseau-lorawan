@@ -625,7 +625,8 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
     etat = scenario.model.retransmissions
     resultat = simulate_confirmed_uplinks(
         devices, gateway, propagation, radios, options, etat.options(),
-        energy_profile=etat.energy_profile, environment=environment, with_engine_output=True)
+        energy_profile=etat.energy_profile, environment=environment, with_engine_output=True,
+        device_classes=scenario.device_classes())
     moteur, evenements = resultat.trace, resultat.events
     if moteur is None:
         raise RuntimeError("moteur sans sortie : trace de réémission impossible")

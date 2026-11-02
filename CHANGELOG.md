@@ -2,6 +2,46 @@
 
 ## 0.1.0 (non publiée)
 
+### Consolidation MAC : compteurs de trame, taxonomie de l'ACK, classes d'écoute
+- **Identité de trame réelle.** `FCntUp` identifie la trame et non la tentative : toutes les
+  réémissions la partagent. `fcnt_up_start` (0 à 2^32-1) fixe le premier compteur d'un terminal,
+  pour qu'il ne soit pas un rang de tableau. `FCntDown` est une série **par terminal** ; un ACK émis
+  consomme un numéro, ses copies le conservent. `AckFrame` porte désormais les deux
+  (`is_explicit` vrai) : l'appariement dispose de l'identité, même si le chemin du cœur continue de
+  s'apparier par fenêtre. Sémantique alignée sur `lsim.session` (`begin_uplink`, `receive_downlink`).
+- **Contrôle de rejeu.** Un ACK n'est accepté que si son `FCntDown` dépasse le dernier accepté par
+  ce terminal : la copie d'un ACK est un `DUPLICATE` rejeté par le compteur, plus par une règle
+  propre à la couche.
+- **Taxonomie explicite** (`AckSort`) : chaque émission reçoit exactement une classe —
+  `STANDARD`, `LATE`, `LOST`, `DUPLICATE` — et `AckPlan.counts` /
+  `RetransmissionResult.ack_standard|ack_late|ack_lost|ack_duplicate|ack_not_sent` les agrègent.
+  Un test vérifie `standard + late + lost + duplicate == acks_planned` sur les trois configurations
+  de référence (2 500 ms, témoin, deux copies).
+- **Classes d'écoute sans mélange.** `device_class` du groupe (`A` par défaut, `B`, `C`). A et B
+  ouvrent RX1/RX2 ; l'ACK étant une descente de classe A, B s'y comporte comme A et ses *ping slots*
+  restent hors périmètre. C écoute en continu. Mesure, même scénario `ack_delay_ms: 2500` :
+
+  | Classe | Transmissions | ACK émis | `standard` | `late` | Livrées |
+  |---|---|---|---|---|---|
+  | A | 6 | 6 | 0 | 6 | 0/2 |
+  | B | 6 | 6 | 0 | 6 | 0/2 |
+  | C | 2 | 2 | 2 | 0 | 2/2 |
+
+  Les émissions initiales sont identiques dans les trois cas (mêmes instants) : seule la réception de
+  l'ACK change, la radio montante n'est pas touchée.
+- **Cohérence des traces** : les intervalles d'ACK émis par la couche MAC sont imposés au moteur
+  (pertes montantes réelles) et présents dans `gateway_tx` — vérifié : six ACK tardifs ⇒ six
+  intervalles. **Limite énoncée** : ces ACK ne sont pas encore des `ProtocolEvent` de type `ack`.
+- **Inventaire des commandes MAC validé** : `python/tests/test_mac_commands_inventory.py` couvre les
+  **31** commandes du codec (encodage, décodage dans le bon sens, CID attendu, égalité des champs) et
+  échoue si une commande est ajoutée sans ligne. `docs/MAC_CONSOLIDATION.md` distingue celles qui
+  sont appliquées (LinkADR, DutyCycle, LinkCheck, DevStatus, DeviceTime, Rekey) de celles qui restent
+  des codecs sans effet simulé.
+- **Hash stable** : `fcnt_up_start: 0` et `device_class: A` sont retirés du hachage à leur valeur par
+  défaut. Vérifié : `retransmissions_ack_tardif` garde `cee60ffc…`, les autres exemples aussi.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; **1 896 tests** Python (dont 13 pour la
+  consolidation MAC et 4 pour l'inventaire des commandes) et **685 282** vérifications C++.
+
 ### Couche MAC de l'ACK : tardif et dupliqué, produits de bout en bout
 - `lsim.ack_mac` (Python) rend possibles les deux seules situations que le planificateur du cœur ne
   sait pas produire : `DownlinkScheduler::on_received` renvoie `nullopt` hors RX1 et n'émet qu'un

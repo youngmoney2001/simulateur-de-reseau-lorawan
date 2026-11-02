@@ -9,7 +9,32 @@ Cette couche les rend possibles, sans toucher au cœur ni à l'ABI :
 - le réseau peut répondre avec un retard (`delay_ms`) — un serveur lent ne sait pas que la fenêtre
   est fermée : il émet quand même, l'airtime est consommée et la passerelle est bloquée ;
 - le réseau peut répéter la trame d'acquittement (`repetitions`) — c'est le même `FCntDown` ; le
-  terminal ne doit en retenir qu'un seul, les copies suivantes sont ignorées.
+  terminal ne doit en retenir qu'un seul, les copies suivantes sont rejetées par le contrôle de
+  rejeu (`FCntDown` strictement croissant), pas par une règle propre à cette couche.
+
+**Identité de trame.** Chaque entrée porte un `f_cnt_up` fourni par l'appelant : toutes les
+réémissions d'une même trame partagent le même `f_cnt_up`, et deux trames distinctes ne peuvent pas
+le partager. Le réseau numérote ses descentes par terminal (`f_cnt_down`), pas globalement : deux
+terminaux ont chacun leur série. Ces sémantiques sont celles de `lsim.session.DeviceSession`
+(`begin_uplink` → `fcnt32`, `receive_downlink` → contrôle de rejeu) ; la couche ne crée pas de
+compteurs concurrents, elle les transporte dans la trace.
+
+**Taxonomie explicite.** Chaque *émission* d'ACK reçoit une classe, et les compteurs de la
+projection les agrègent :
+
+| Classe | Sens |
+|---|---|
+| `STANDARD` | émise dans une fenêtre écoutée (ou écoutée en continu), décodable, `FCntDown` inédit pour ce terminal |
+| `LATE` | émise après la fermeture des fenêtres : l'airtime est consommée, personne n'écoute |
+| `LOST` | émise dans une fenêtre écoutée mais non décodable, ou terminal indisponible (il émettait) |
+| `DUPLICATE` | même `FCntDown` qu'un ACK déjà accepté par ce terminal : rejeté par le contrôle de rejeu |
+| `NOT_SENT` | aucun ACK : l'uplink n'a pas été reçu par la passerelle |
+
+**Classes d'écoute.** A et B ouvrent RX1 puis RX2 après un uplink ; l'ACK étant une descente de
+classe A, B s'y comporte comme A — les *ping slots* de la classe B sont un autre mécanisme
+(`core/include/lsim/class_b.hpp`), qui n'intervient pas ici. C écoute en continu : toute émission
+postérieure à son uplink et hors de ses propres transmissions est reçue, sans contrainte de fenêtre.
+Les trois mécanismes ne sont pas mélangés : la classe ne change que la règle d'écoute.
 
 Trois fenêtres, conformes à la classe A de LoRaWAN 1.0.4 :
 
@@ -22,17 +47,21 @@ La réception n'est **pas** recalculée ici : la recette radio (réciprocité, s
 récepteur) est celle du cœur, reprise à l'identique et vérifiée par un test de parité contre
 `plan_native`. Cette couche ne fait que replacer la transmission dans le temps et décider si elle
 tombe dans une fenêtre écoutée.
+
+Ce qui n'est **pas** modélisé ici : la fenêtre `MAX_FCNT_GAP` (un saut de compteur trop grand est
+accepté), les compteurs 32 bits reconstruits depuis les 16 bits de la trame, et l'ACK `LATE` reste
+rangé avec les pertes de sensibilité dans `DownlinkDelivery`, qui n'a pas de verdict « hors
+fenêtre ».
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Sequence
 
-from lsim.trace_events import DeviceRadio
 from lsim.radio import receiver_sensitivity_dbm
+from lsim.trace_events import DeviceRadio
 
 RX1_DELAY_NS = 1_000_000_000
 RX1_WINDOW_NS = 1_000_000_000
@@ -41,6 +70,10 @@ RX2_WINDOW_NS = 1_000_000_000
 ACK_FRAME_BYTES = 12            # kAckFrameBytes du cœur
 MAX_ACK_DELAY_MS = 60_000
 MAX_ACK_REPETITIONS = 3
+MAX_FCNT = 2**32 - 1
+DEVICE_CLASSES = ("A", "B", "C")
+#: Classes qui ouvrent RX1/RX2 après un uplink (l'ACK est une descente de classe A).
+WINDOWED_CLASSES = ("A", "B")
 
 
 class AckWindow(str, Enum):
@@ -48,10 +81,21 @@ class AckWindow(str, Enum):
 
     RX1 = "rx1"
     RX2 = "rx2"
-    LATE = "late"                    # émise après la fermeture des deux fenêtres
+    CONTINUOUS = "continuous"        # classe C : écoute permanente, hors réception fenêtrée
+    LATE = "late"                    # émise après la fermeture des fenêtres
     NOT_DECODABLE = "not_decodable"  # sous la sensibilité du terminal
-    WINDOW_MISSED = "window_missed"  # le terminal émettait pendant les deux fenêtres
+    WINDOW_MISSED = "window_missed"  # le terminal émettait pendant les fenêtres
     NOT_SENT = "not_sent"            # aucune réponse planifiée (uplink non retenu)
+
+
+class AckSort(str, Enum):
+    """Taxonomie explicite d'une émission d'ACK — une seule classe par émission."""
+
+    STANDARD = "standard"
+    LATE = "late"
+    LOST = "lost"
+    DUPLICATE = "duplicate"
+    NOT_SENT = "not_sent"
 
 
 @dataclass(frozen=True)
@@ -82,10 +126,12 @@ class AckEmission:
 
     uplink_index: int
     device: int
-    frame_counter_down: int     # identique pour toutes les copies d'un même ACK
+    f_cnt_up: int               # trame acquittée : identique pour toutes ses réémissions
+    f_cnt_down: int             # série de descentes du terminal ; identique pour toutes les copies
     copy: int                   # 0 = première émission, 1.. = répétitions
     start_ns: int
     end_ns: int
+    sort: AckSort               # classe explicite de cette émission
 
 
 @dataclass(frozen=True)
@@ -94,14 +140,40 @@ class AckOutcome:
 
     uplink_index: int
     device: int
+    f_cnt_up: int
+    f_cnt_down: Optional[int]    # None quand aucun ACK n'est émis
     emissions: tuple[AckEmission, ...]
     window: AckWindow
     received: bool
-    duplicates_ignored: int      # copies reçues après la première, écartées par FCntDown
+    duplicates_ignored: int      # copies reçues après la première, rejetées par le contrôle de rejeu
+    sort: AckSort = AckSort.NOT_SENT
 
     @property
     def first_emission_ns(self) -> Optional[int]:
         return self.emissions[0].start_ns if self.emissions else None
+
+    @property
+    def accepted_emission(self) -> Optional[AckEmission]:
+        """L'émission retenue par le terminal (la première de classe `STANDARD`)."""
+        for emission in self.emissions:
+            if emission.sort is AckSort.STANDARD:
+                return emission
+        return None
+
+
+@dataclass(frozen=True)
+class AckCounts:
+    """Agrégat des classes d'émission : chaque émission compte dans exactement une classe."""
+
+    standard: int = 0
+    late: int = 0
+    lost: int = 0
+    duplicate: int = 0
+    not_sent: int = 0      # uplinks sans ACK : compte des trames, pas des émissions
+
+    @property
+    def emissions(self) -> int:
+        return self.standard + self.late + self.lost + self.duplicate
 
 
 @dataclass(frozen=True)
@@ -120,6 +192,18 @@ class AckPlan:
     @property
     def duplicates_ignored(self) -> int:
         return sum(o.duplicates_ignored for o in self.outcomes)
+
+    @property
+    def counts(self) -> AckCounts:
+        valeurs = {classe: 0 for classe in AckSort}
+        for outcome in self.outcomes:
+            if not outcome.emissions:
+                valeurs[AckSort.NOT_SENT] += 1
+            for emission in outcome.emissions:
+                valeurs[emission.sort] += 1
+        return AckCounts(standard=valeurs[AckSort.STANDARD], late=valeurs[AckSort.LATE],
+                         lost=valeurs[AckSort.LOST], duplicate=valeurs[AckSort.DUPLICATE],
+                         not_sent=valeurs[AckSort.NOT_SENT])
 
     def received_indices(self) -> set[int]:
         return {o.uplink_index for o in self.outcomes if o.received}
@@ -143,18 +227,41 @@ def _decodable(rssi_uplink_dbm: float, radio: DeviceRadio, options) -> bool:
     return rssi_down >= sensitivity + options.device_rx_offset_db
 
 
-def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options,
-              timing: AckTiming) -> AckPlan:
+def _fenetre(debut: int, rx1: tuple[int, int], rx2: tuple[int, int]) -> AckWindow:
+    if rx1[0] <= debut < rx1[1]:
+        return AckWindow.RX1
+    if rx2[0] <= debut < rx2[1]:
+        return AckWindow.RX2
+    return AckWindow.LATE
+
+
+def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing: AckTiming,
+              classes: Optional[Sequence[str]] = None,
+              fcnt_up: Optional[Sequence[int]] = None) -> AckPlan:
     """Planifie les ACK de `records` (réceptions montantes), selon `timing`.
 
     `records` : `TxRecord` du moteur, dans l'ordre de la trace. Seuls les uplinks reçus
     (`outcome == 2`) déclenchent une réponse, comme dans le cœur.
-    `radios` : un `DeviceRadio` par entrée de `records`, **dans le même ordre** — c'est
-    `radios[record.device_index]` côté appelant quand la trace est celle des terminaux réels.
+    `radios` : un `DeviceRadio` par entrée de `records`, **dans le même ordre**.
+    `classes` : classe d'écoute du terminal de chaque entrée (`A`, `B` ou `C`) ; `None` = `A`.
+    `fcnt_up` : compteur de trame montante de chaque entrée ; `None` = rang de la trame par
+    terminal, réémissions exclues (une entrée de même `f_cnt_up` = la même trame).
 
     Les intervalles renvoyés sont ceux des transmissions **réellement émises** : ils alimentent
     l'occupation passerelle, qui décide à son tour des pertes montantes.
     """
+    if len(radios) != len(records):
+        raise ValueError("un paramètre radio par enregistrement")
+    if classes is not None and len(classes) != len(records):
+        raise ValueError("une classe d'écoute par enregistrement")
+    if fcnt_up is not None and len(fcnt_up) != len(records):
+        raise ValueError("un compteur montant par enregistrement")
+
+    for classe in (classes or ()):
+        if classe not in DEVICE_CLASSES:
+            raise ValueError(f"classe de terminal inconnue : {classe!r}")
+
+    # Indices des transmissions de chaque terminal physique, pour l'écoute en continu.
     par_dispositif: dict[int, list[int]] = {}
     for index, record in enumerate(records):
         par_dispositif.setdefault(record.device_index, []).append(index)
@@ -162,65 +269,100 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options,
     busy_until = 0
     busy: list[tuple[int, int]] = []
     outcomes: list[AckOutcome] = []
-    compteur_fcnt = 0
+    fcnt_down_suivant: dict[int, int] = {}      # série de descentes, **par terminal**
+    dernier_accepte: dict[int, int] = {}        # contrôle de rejeu : FCntDown strictement croissant
+
+    # `fcnt_up` par défaut : rang de la trame du terminal (une entrée = une transmission).
+    rangs: dict[int, int] = {}
+    compteurs = []
+    for index, record in enumerate(records):
+        if fcnt_up is not None:
+            compteurs.append(int(fcnt_up[index]))
+            continue
+        valeur = rangs.get(record.device_index, 0)
+        rangs[record.device_index] = valeur + 1
+        compteurs.append(valeur)
 
     for index, record in enumerate(records):
+        appareil = record.device_index
+        classe = "A" if classes is None else classes[index]
+        montant = compteurs[index]
         if record.outcome != 2:  # 2 = received
-            outcomes.append(AckOutcome(index, record.device_index, (), AckWindow.NOT_SENT,
-                                       False, 0))
+            outcomes.append(AckOutcome(index, appareil, montant, None, (), AckWindow.NOT_SENT,
+                                       False, 0, AckSort.NOT_SENT))
             continue
         radio = radios[index]  # même ordre que `records`
         airtime = _ack_airtime_ns(radio)
         t_open = record.end_ns + RX1_DELAY_NS
         premiere = max(t_open + timing.delay_ms * 1_000_000, busy_until)
+        f_cnt_down = fcnt_down_suivant.get(appareil, 0)
+        fcnt_down_suivant[appareil] = f_cnt_down + 1
 
-        emissions: list[AckEmission] = []
+        creneaux: list[tuple[int, int]] = []
         for copie in range(timing.repetitions):
             debut = premiere + copie * airtime
-            emissions.append(AckEmission(index, record.device_index, compteur_fcnt, copie,
-                                         debut, debut + airtime))
+            creneaux.append((debut, debut + airtime))
             busy.append((debut, debut + airtime))
             busy_until = max(busy_until, debut + airtime)
-        compteur_fcnt += 1
 
-        # Le terminal écoutait-il ? RX1 puis RX2, à partir de la fin de SA trame.
+        # Le terminal écoutait-il ? RX1 puis RX2 pour A et B ; en continu pour C.
         rx1 = (record.end_ns + RX1_DELAY_NS, record.end_ns + RX1_DELAY_NS + RX1_WINDOW_NS)
         rx2 = (record.end_ns + RX2_DELAY_NS, record.end_ns + RX2_DELAY_NS + RX2_WINDOW_NS)
-        debut = emissions[0].start_ns
 
-        fenetre = AckWindow.LATE
-        if rx1[0] <= debut < rx1[1]:
-            fenetre = AckWindow.RX1
-        elif rx2[0] <= debut < rx2[1]:
-            fenetre = AckWindow.RX2
+        # Émissions du terminal lui-même : il ne peut pas écouter en émettant.
+        propres = [(records[k].start_ns, records[k].end_ns)
+                   for k in par_dispositif.get(appareil, []) if k != index]
 
-        if fenetre is AckWindow.LATE:
-            outcomes.append(AckOutcome(index, record.device_index, tuple(emissions),
-                                       AckWindow.LATE, False, 0))
-            continue
-        if not _decodable(record.rssi_dbm, radio, options):
-            outcomes.append(AckOutcome(index, record.device_index, tuple(emissions),
-                                       AckWindow.NOT_DECODABLE, False, 0))
-            continue
+        def emet_a(instant: int) -> bool:
+            return any(debut <= instant < fin for debut, fin in propres)
 
-        # Le terminal était-il en train d'émettre pendant cette fenêtre ? (classe A)
-        indices = par_dispositif.get(record.device_index, [])
-        suivants = [records[k].start_ns for k in indices if records[k].start_ns > record.end_ns]
-        if suivants and min(suivants) < rx2[0] + RX2_WINDOW_NS:
-            # Une trame suivante du même terminal commence avant la fin de RX2 : il ne peut pas
-            # écouter les deux fenêtres.
-            outcomes.append(AckOutcome(index, record.device_index, tuple(emissions),
-                                       AckWindow.WINDOW_MISSED, False, 0))
-            continue
+        def ecoute(instant: int) -> Optional[AckWindow]:
+            """Fenêtre dans laquelle le terminal écoute à cet instant (None : il n'écoute pas)."""
+            if classe == "C":
+                if instant >= record.end_ns and not emet_a(instant):
+                    return AckWindow.CONTINUOUS
+                return None
+            if emet_a(instant):
+                return None
+            fenetre = _fenetre(instant, rx1, rx2)
+            return None if fenetre is AckWindow.LATE else fenetre
 
-        # Copies supplémentaires tombant dans une fenêtre écoutée : ignorées par FCntDown.
+        decodable = _decodable(record.rssi_dbm, radio, options)
+        dernier = dernier_accepte.get(appareil, -1)
+        emissions: list[AckEmission] = []
+        fenetre_retenue: AckWindow = AckWindow.LATE
+        accepte = False
         ignorees = 0
-        for emission in emissions[1:]:
-            dans = any(a <= emission.start_ns < b for a, b in (rx1, rx2))
-            if dans:
+        for copie, (debut, fin) in enumerate(creneaux):
+            ou_ecoute = ecoute(debut)
+            if ou_ecoute is None:
+                # Le terminal émet : il ne peut pas écouter. Sinon, il n'écoutait pas encore
+                # (classe A/B hors fenêtre) : l'ACK est tardif.
+                classe_emission = AckSort.LOST if emet_a(debut) else AckSort.LATE
+            elif not decodable:
+                classe_emission = AckSort.LOST
+            elif f_cnt_down <= dernier:
+                classe_emission = AckSort.DUPLICATE
                 ignorees += 1
-        outcomes.append(AckOutcome(index, record.device_index, tuple(emissions), fenetre, True,
-                                   ignorees))
+            else:
+                classe_emission = AckSort.STANDARD
+                accepte = True
+                fenetre_retenue = ou_ecoute
+                dernier = f_cnt_down   # les copies suivantes du même FCntDown sont des doublons
+            emissions.append(AckEmission(index, appareil, montant, f_cnt_down, copie,
+                                         debut, fin, classe_emission))
+
+        if accepte:
+            dernier_accepte[appareil] = dernier
+        else:
+            premiere = emissions[0]
+            fenetre_retenue = (AckWindow.WINDOW_MISSED if emet_a(premiere.start_ns)
+                               else AckWindow.LATE if premiere.sort is AckSort.LATE
+                               else AckWindow.NOT_DECODABLE)
+
+        verdict = AckSort.STANDARD if accepte else emissions[0].sort
+        outcomes.append(AckOutcome(index, appareil, montant, f_cnt_down, tuple(emissions),
+                                   fenetre_retenue, accepte, ignorees, verdict))
 
     busy.sort()
     return AckPlan(tuple(outcomes), tuple(busy))
