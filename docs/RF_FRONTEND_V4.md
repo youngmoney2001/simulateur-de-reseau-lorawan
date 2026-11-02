@@ -112,6 +112,9 @@ dès qu'un frontal est fourni, l'ancien point d'entrée ne doit plus être appel
 4. **`geo.py`** : inchangé ; la géométrie de couverture garde ses propres paramètres.
 5. **ADR** : algorithme non modifié. Le frontal agit sur le bilan radio, pas sur les décisions.
 
+Tableau récapitulatif des chemins qui acceptent un frontal et de ceux qui n'en acceptent pas,
+avec les équations de propagation et les valeurs de référence : `docs/RF_MODEL.md` §7 et §10.
+
 ## 6. Compatibilité
 
 Sans table RF, les formules se réduisent **bit à bit** à celles de la base : empreintes gelées

@@ -273,4 +273,5 @@ Quatre points d'entrée additifs : `lsim_simulate_uplinks_trace_v3`,
 `lsim_simulate_closed_loop_v4`. Ils acceptent des tables `lsim_device_rf` / `lsim_gateway_rf`
 (gain d'antenne et perte de câble, présence indépendante). Sans table, le comportement est celui
 de la base. Le contrat complet (bilans, bornes, statuts, routage Python, limites) est dans
-`docs/RF_FRONTEND_V4.md`.
+`docs/RF_FRONTEND_V4.md` ; les équations de propagation, le périmètre par chemin (multi-passerelles,
+mesh, causale, YAML, GeoJSON) et les valeurs de référence sont dans `docs/RF_MODEL.md`.

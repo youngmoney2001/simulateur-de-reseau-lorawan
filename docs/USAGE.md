@@ -43,6 +43,10 @@ Champs principaux :
 Un groupe peut porter une région (`region`, ex. `EU868`) : le duty cycle effectif est alors le
 plus restrictif entre `duty_cycle` et la sous-bande de `channel_freq_hz`.
 
+Le YAML ne porte **aucun frontal RF** : ni `rf:` à la racine, ni `rf:` dans un groupe (champ
+refusé). Les gains d'antenne et pertes de câble se déclarent uniquement dans l'API Python, par
+`DeviceRf` / `GatewayRf`. Périmètre complet : `docs/RF_MODEL.md` §7 et §8.
+
 ## 3. Ligne de commande
 
 ```bash
