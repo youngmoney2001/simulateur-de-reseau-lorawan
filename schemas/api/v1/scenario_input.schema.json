@@ -750,6 +750,14 @@
           "minimum": 0,
           "title": "Retries",
           "type": "integer"
+        },
+        "session_joins_s": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "title": "Session Joins S",
+          "type": "array"
         }
       },
       "title": "RetransmissionsModel",

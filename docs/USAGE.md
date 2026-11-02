@@ -303,6 +303,7 @@ retransmissions:
   fcnt_up_start: 0           # premier FCntUp de chaque terminal (0 à 2^32-1)
   fcnt_down_start: 0         # premier compteur descendant (NFCntDown et AFCntDown)
   downlink_payload: false    # la descente porte une charge utile : AFCntDown, événement data_ack
+  session_joins_s: []        # instants (s) des Join-Accept acceptés ; [] = une seule session
 ```
 
 La classe d'écoute est une propriété du groupe :
@@ -320,7 +321,7 @@ groups:
 | Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
 | Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
 | Bloc `enabled: false` | équivaut à `retries: 0` |
-| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `session_joins_s` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
 | `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
 | `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
 
@@ -340,8 +341,10 @@ Le terminal ne reçoit que le champ `FCnt` de **16 bits** ; il le replace dans s
 `downlink_payload: true`, la descente porte une charge utile, consomme `AFCntDown` et apparaît en
 `data_ack`. Les deux séries partent du même `fcnt_down_start` mais avancent séparément. Une nouvelle
 **session** repart de zéro : `plan_acks(sessions=...)` et `DeviceCounters.renew_session()` le
-modélisent, et le compteur 0 de la nouvelle session n'est pas rejeté comme rejeu de l'ancienne. Aucun
-`Join-Accept` de scénario ne déclenche encore ce renouvellement : il est fourni par l'appelant.
+modélisent, et le compteur 0 de la nouvelle session n'est pas rejeté comme rejeu de l'ancienne. Une
+jointure déclarée dans le scénario (`session_joins_s`) ouvre cette nouvelle session : `FCntUp` et
+les deux séries descendantes repartent de zéro, et les trames de l'ancienne session cessent d'être
+réémises (voir `docs/MAC_CONSOLIDATION.md` §8).
 
 **Statut des règles** : la reconstruction 16 → 32 bits et le rejeu strictement croissant sont des
 règles de la spécification. La borne de 16 384 est la valeur historique `MAX_FCNT_GAP` des versions

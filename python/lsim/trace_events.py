@@ -668,6 +668,22 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
                        to_id=hop.to_id.replace(f"dev:{index}", f"dev:{physique}"))
             for hop in evenement.hops)
         remappes.append(_remplacer(evenement, device_index=physique, hops=hops))
+    # Jointures declarees : elles ouvrent une session, donc remettent les compteurs a zero.
+    # Le Join-Request precede le Join-Accept de JOIN_ACCEPT_DELAY1 (5 s), borne a l'origine.
+    for t_s in etat.session_joins_s:
+        instant_accept = t_s * 1_000_000_000
+        instant_demande = max(0, instant_accept - JOIN_ACCEPT_DELAY1_NS)
+        for appareil in range(len(devices)):
+            radio = radios[appareil]
+            remappes.append(ProtocolEvent(
+                0, instant_demande, "join_request", appareil, 0,
+                (HopEvent(_dev(appareil), "gw:0", instant_demande, radio.freq_hz, radio.dr,
+                          None, "delivered"),), "delivered"))
+            remappes.append(ProtocolEvent(
+                0, instant_accept, "join_accept", appareil, 0,
+                (HopEvent("gw:0", _dev(appareil), instant_accept, radio.rx1_hz, None, None,
+                          "delivered"),), "delivered"))
+
     remappes.sort(key=lambda e: e.t_ns)
     evenements_finaux = tuple(_remplacer(e, seq=k) for k, e in enumerate(remappes))
 

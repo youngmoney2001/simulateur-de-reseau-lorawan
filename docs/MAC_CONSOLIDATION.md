@@ -28,10 +28,10 @@ Conséquences vérifiées par `python/tests/test_mac_consolidation.py` :
 `receive_downlink` → contrôle de rejeu). Ces compteurs ne sont pas un second modèle : le module les
 transporte dans la trace, avec les mêmes règles.
 
-Ces trois mécanismes sont détaillés en §7. Ce qui reste hors périmètre : la reconstruction depuis un
-**journal de paquets réels** (le simulateur tient les 32 bits en mémoire), la remise à zéro par une
-nouvelle jointure dans la couche ACK (le scénario fixe les départs), et le compteur `AFCntDown` de
-bout en bout — un ACK ne portant pas de charge utile, la couche n'exerce que `NFCntDown`.
+Ces trois mécanismes sont détaillés en §7, les jointures en §8. Ce qui reste hors périmètre : la
+reconstruction depuis un **journal de paquets réels** (le simulateur tient les 32 bits en mémoire) et
+la cryptographie des jointures — le simulateur ordonne les sessions, il ne déchiffre pas un
+`Join-Accept`.
 
 ## 2. Taxonomie de l'ACK
 
@@ -199,11 +199,90 @@ même scénario de référence à deux trames (classe C) :
 
 Les deux séries partent du même compteur de session mais avancent séparément
 (`test_the_two_series_are_counted_separately`). Une nouvelle session repart de zéro : le compteur 0
-de la session 1 n'est pas un rejeu de celui de la session 0 (`sessions=` dans `plan_acks`). **Ce qui
-n'est pas fait** : aucun `Join-Accept` de scénario ne crée cette nouvelle session ; elle est fournie
-par l'appelant.
+de la session 1 n'est pas un rejeu de celui de la session 0 (`sessions=` dans `plan_acks`). **Ce
+qui a changé depuis** : une jointure déclarée dans le scénario (`session_joins_s`) crée cette
+nouvelle session — voir §8.
 
 **Limite de mesure, à ne pas masquer** : `GAP` n'est produit par **aucun scénario livré**. La copie
 d'un ACK porte le même champ 16 bits : c'est un `DUPLICATE`, jamais un saut de 65 536. La
 désynchronisation n'est vérifiée qu'au niveau des primitives (`CounterSeries`) et du plan, jamais de
 bout en bout dans une trace.
+
+## 8. Sessions et jointures
+
+Une **session** commence à un `Join-Accept` accepté et se termine au suivant. Elle porte trois
+conséquences, toutes appliquées par le même objet (`lsim.sessions.SessionTimeline`) :
+
+| Conséquence | Où elle se voit | Vérification |
+|---|---|---|
+| les compteurs repartent de zéro | `Attempt.f_cnt_up` et `Attempt.f_cnt_down` sont numérotés par `(terminal, session)` | `test_counters_restart_at_each_session` |
+| une trame de l'ancienne session n'est plus reçue | réémission supprimée, `RetransmissionResult.rejected_stale_session` l'incrémente | `test_a_stale_frame_is_not_retransmitted` |
+| un `Join-Accept` rejoué n'ouvre rien | `SessionTimeline.accept` lève `JoinRejected` | `test_a_replayed_join_is_rejected` |
+
+### 8.1 Ce qu'un scénario déclare
+
+`session_joins_s` liste les instants (en secondes) des `Join-Accept` **acceptés**. Les nonces sont
+déduits de l'ordre (0, 1, 2, …) : c'est la seule grandeur que le simulateur utilise, puisque la
+cryptographie n'est pas modélisée. Le champ est validé (entiers, strictement croissants) et **absent
+du hash** quand il est vide : un scénario écrit avant lui garde son empreinte.
+
+| Numéro de session | Signification |
+|---|---|
+| `0` | session ouverte avant le scénario (aucune jointure déclarée, ou trame antérieure à la première) |
+| `1`, `2`, … | sessions ouvertes par les jointures déclarées, dans l'ordre |
+
+```yaml
+retransmissions:
+  retries: 2
+  ack_delay_ms: 2500
+  session_joins_s: [5]      # un Join-Accept accepté à 5 s
+```
+
+### 8.2 Jointures dans la trace
+
+Chaque jointure déclarée produit **deux événements par terminal**, avec le vocabulaire du contrat
+existant (`EventKind.join_request`, `EventKind.join_accept`) :
+
+| Événement | Instant | Sens du saut |
+|---|---|---|
+| `join_request` | `Join-Accept − JOIN_ACCEPT_DELAY1` (5 s), borné à 0 | terminal → `gw:0` |
+| `join_accept` | l'instant déclaré | `gw:0` → terminal, sur `RX1` |
+
+`JOIN_ACCEPT_DELAY1` est la constante de la spécification (`lsim.gwmp_server`), pas une invention du
+simulateur. Aucune trame n'est modélisée dans l'intervalle : le `Join-Request` n'occupe pas la
+passerelle, et le `Join-Accept` ne consomme aucun compteur.
+
+### 8.3 Mesures de bout en bout
+
+Scénario `docs/exemples/retransmissions_ack_tardif.yaml`, `retries: 2`, `ack_delay_ms: 2500`,
+deux messages (`(session, début en s, tentative)`) :
+
+| Réglage | Transmissions | `rejected_stale_session` | ACK émis |
+|---|---|---|---|
+| témoin, sans jointure | `(0,1,0) (0,4,1) (0,7,2) (0,61,0) (0,64,1) (0,67,2)` | 0 | 6 |
+| `session_joins_s: [5]` | `(0,1,0) (0,4,1) (1,61,0) (1,64,1) (1,67,2)` | **2** | 5 |
+
+La jointure à 5 s rend périmées la tentative prévue à 7 s **et** la suivante : la trame de la
+session 0 s'arrête à sa deuxième émission, et le réseau n'émet pas d'ACK pour une trame qu'il ne
+sait plus déchiffrer. Le compteur de trames reste celui du scénario ; seule la réémission disparaît.
+
+Redémarrage des compteurs, scénario à trois messages et `session_joins_s: [0, 40]` :
+
+| Session | Trame | `FCntUp` | `FCntDown` |
+|---|---|---|---|
+| 1 | 0 | 0 | 0 |
+| 2 | 0 | 0 | 0 |
+| 2 | 1 | 1 | 1 |
+
+La trame de rang 0 de la session 2 porte le compteur 0, comme celle de la session 1 : deux séries
+distinctes, pas un rejeu.
+
+### 8.4 Ce qui n'est pas modélisé
+
+- **Ni cryptographie ni `JoinNonce` réel** : le nonce est un rang, pas un compteur réseau vérifié
+  contre une clé. Un `Join-Accept` rejoué est refusé parce que son rang n'avance pas, pas parce que
+  son `MIC` est faux.
+- **Pas de `Join-Request` dans le moteur radio** : l'échange n'occupe pas la passerelle, ne consomme
+  pas de temps de vol et ne subit pas de collision. Les deux événements de trace sont déterministes.
+- **Pas de rejoint (LoRaWAN 1.1)** : `rejoin_request` / `rejoin_accept` ne sont pas distingués des
+  jointures ; une trame ne peut pas migrer d'une session à l'autre avec des compteurs conservés.

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lsim.materials import MATERIAL_NAMES, traversal_loss
 from lsim.environment import (
@@ -181,6 +181,21 @@ class RetransmissionsModel(_Strict):
     ack_repetitions: int = Field(1, ge=1, le=3)
     # La descente porte une charge utile applicative : elle consomme AFCntDown (`data_ack`).
     downlink_payload: bool = False
+    # Instants (s) des Join-Accept acceptés : chacun ouvre une session et remet les compteurs à
+    # zéro. Vide : une seule session, ouverte avant le scénario.
+    session_joins_s: list[int] = Field(default_factory=list, max_length=16)
+
+    @field_validator("session_joins_s")
+    @classmethod
+    def _jointures_croissantes(cls, valeurs: list[int]) -> list[int]:
+        for valeur in valeurs:
+            if not 0 <= valeur:
+                raise ValueError("retransmissions.session_joins_s : instants positifs attendus")
+        for precedent, suivant in zip(valeurs, valeurs[1:]):
+            if suivant <= precedent:
+                raise ValueError(
+                    "retransmissions.session_joins_s : instants strictement croissants attendus")
+        return valeurs
     # Premier FCntUp de chaque terminal (compteur 32 bits, comme `lsim.session`).
     fcnt_up_start: int = Field(0, ge=0, le=2**32 - 1)
     # Premier compteur descendant de chaque terminal : départ des deux séries `NFCntDown` et
@@ -206,7 +221,8 @@ class RetransmissionsModel(_Strict):
                                      ack_repetitions=self.ack_repetitions,
                                      fcnt_up_start=self.fcnt_up_start,
                                      fcnt_down_start=self.fcnt_down_start,
-                                     downlink_payload=self.downlink_payload)
+                                     downlink_payload=self.downlink_payload,
+                                     session_joins_s=tuple(self.session_joins_s))
 
     @property
     def is_active(self) -> bool:
@@ -726,6 +742,8 @@ class Scenario:
                 bloc.pop("fcnt_down_start", None)
             if not model.retransmissions.downlink_payload:
                 bloc.pop("downlink_payload", None)
+            if not model.retransmissions.session_joins_s:
+                bloc.pop("session_joins_s", None)
         if model.gateway.rf is None:
             dumped["gateway"].pop("rf", None)
         for groupe, groupe_dump in zip(model.groups, dumped["groups"]):

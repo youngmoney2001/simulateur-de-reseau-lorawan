@@ -2,6 +2,26 @@
 
 ## 0.1.0 (non publiée)
 
+### Cycle de vie des sessions : jointures déclarées, compteurs remis à zéro, trames périmées
+- **`python/lsim/sessions.py`** : `SessionTimeline` ordonne les `Join-Accept` acceptés. Un `Join-Accept`
+  rejoué (nonce non croissant, instant non postérieur) lève `JoinRejected` **sans** rien remettre à
+  zéro ; une session ouverte porte un rang (1, 2, …) et une date.
+- **Le scénario déclare les jointures** : `retransmissions.session_joins_s` (instants en secondes,
+  strictement croissants, 16 au plus). Vide, il est absent du hash : les scénarios existants gardent
+  leur empreinte. Lorsqu'il est déclaré, il produit des événements `join_request` /
+  `join_accept` dans la trace, au vocabulaire déjà défini par le contrat — aucune valeur nouvelle.
+- **Les compteurs repartent de zéro** : `FCntUp` et les deux séries descendantes sont numérotés par
+  `(terminal, session)`. Mesuré sur trois trames et `session_joins_s: [0, 40]` :
+  `(session 1, trame 0, FCntUp 0, FCntDown 0)`, `(session 2, trame 0, 0, 0)`, `(session 2, trame 1, 1, 1)`.
+- **Les trames de l'ancienne session ne sont plus réémises** : la tentative prévue après la jointure
+  est supprimée et comptée dans `RetransmissionResult.rejected_stale_session`. Mesuré sur le cas
+  « ACK tardif » à deux messages, `retries: 2` : 6 transmissions sans jointure, **5** avec
+  `session_joins_s: [5]`, deux tentatives périmées, 5 ACK au lieu de 6.
+- **Tests** : `python/tests/test_mac_sessions.py` (9 tests), dont un qui vérifie que le hash ne change
+  pas quand `session_joins_s` est vide et qu'il change dès qu'une jointure est déclarée.
+- **Limites** : ni cryptographie ni `JoinNonce` réel (le nonce est un rang) ; le `Join-Request` n'est
+  pas modélisé dans le moteur radio ; pas de rejoint 1.1. `docs/MAC_CONSOLIDATION.md` §8.
+
 ### Validation opérationnelle des compteurs : `AFCntDown`, sessions, interactions
 - **`NFCntDown` et `AFCntDown` exercées de bout en bout.** `downlink_payload: true` fait porter une
   charge utile à la descente : elle consomme `AFCntDown` et son événement de trace est `data_ack`,

@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Optional, Sequence
 
 from lsim.downlink_plan import plan_native, simulate_causal
+from lsim.sessions import SessionTimeline
 
 RX1_DELAY_NS = 1_000_000_000       # RECEIVE_DELAY1 (cœur : downlink_plan.cpp)
 RX1_WINDOW_NS = 1_000_000_000      # durée de la fenêtre RX1 (hypothèse du cœur)
@@ -102,12 +103,15 @@ class RetransmissionOptions:
     # Premier compteur descendant de chaque terminal : départ des séries
     # `NFCntDown` / `AFCntDown` de la couche MAC.
     fcnt_down_start: int = 0
+    # Instants (s) des `Join-Accept` acceptés. Vide : une seule session, celle du scénario.
+    session_joins_s: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not 0 <= self.fcnt_up_start < 2**32:
             raise ValueError("fcnt_up_start doit être dans [0, 2**32)")
         if not 0 <= self.fcnt_down_start < 2**32:
             raise ValueError("fcnt_down_start doit être dans [0, 2**32)")
+        self.timeline        # valide les instants de jointure (croissants, positifs)
         if not 0 <= self.retries <= MAX_RETRIES:
             raise ValueError(f"retries doit être dans [0, {MAX_RETRIES}]")
         if self.retransmit_delay_ms < RX2_DELAY_NS // 1_000_000:
@@ -116,6 +120,11 @@ class RetransmissionOptions:
                 f"({RX2_DELAY_NS // 1_000_000} ms au minimum)")
         from lsim.ack_mac import AckTiming as _AckTiming
         _AckTiming(delay_ms=self.ack_delay_ms, repetitions=self.ack_repetitions)  # bornes
+
+    @property
+    def timeline(self) -> SessionTimeline:
+        """Sessions ouvertes par les `Join-Accept` déclarés (aucune par défaut)."""
+        return SessionTimeline.from_join_times(self.session_joins_s)
 
     @property
     def effective_retries(self) -> int:
@@ -147,6 +156,12 @@ class Attempt:
     ack_ns: Optional[int] = None   # instant d'émission de l'ACK retenu (None : aucun)
     f_cnt_up: Optional[int] = None     # compteur montant de la trame (identique aux réémissions)
     f_cnt_down: Optional[int] = None   # compteur descendant de l'ACK retenu (None : aucun)
+    session: int = 0                   # session de la trame ; FCntUp y repart de zéro
+
+    @property
+    def key(self) -> tuple[int, int, int]:
+        """Identité de la trame : terminal, session, rang. `FCntUp` y repart de zéro."""
+        return (self.device, self.session, self.frame)
 
     @property
     def ack_frame(self) -> Optional[AckFrame]:
@@ -187,6 +202,7 @@ class RetransmissionResult:
     events: tuple = ()
     gateway_tx: tuple = ()  # émissions passerelle planifiées, en ns
     ack_gap: int = 0        # ACK reçus puis rejetés par la fenêtre de rejeu
+    rejected_stale_session: int = 0   # réémissions refusées : session déjà remplacée
 
     @property
     def delivery_ratio(self) -> float:
@@ -216,22 +232,27 @@ def _airtime_ns(device) -> int:
 
 
 def _base_schedule(devices, gateway, propagation, radios, options, environment=None,
-                   fcnt_start: int = 0) -> list[Attempt]:
+                   fcnt_start: int = 0,
+                   timeline: SessionTimeline = SessionTimeline()) -> list[Attempt]:
     """Émissions initiales, telles que le moteur les place réellement."""
     if not devices:
         return []
     result, _busy = simulate_causal(list(devices), gateway, propagation, environment, radios,
                                     options)
-    rang = [0] * len(devices)
+    # Un rang par (terminal, session) : `FCntUp` repart de zéro à chaque nouvelle session.
+    rang: dict[tuple[int, int], int] = {}
     attempts = []
     for record in result.records:
         device = record.device_index
-        attempts.append(Attempt(device=device, frame=rang[device], attempt=0,
+        session = timeline.session_at(record.start_ns)
+        cle = (device, session)
+        compteur = rang.get(cle, 0)
+        attempts.append(Attempt(device=device, frame=compteur, attempt=0,
                                 start_ns=record.start_ns, end_ns=record.end_ns,
                                 received=record.outcome == 2, delivery=DownlinkDelivery.NONE,
                                 ack=AckReception.NONE, acked=False,
-                                f_cnt_up=fcnt_start + rang[device]))
-        rang[device] += 1
+                                f_cnt_up=fcnt_start + compteur, session=session))
+        rang[cle] = compteur + 1
     return attempts
 
 
@@ -305,7 +326,7 @@ def _prune_acknowledged(schedule):
     """
     par_trame: dict[tuple[int, int], list] = {}
     for attempt in schedule:
-        par_trame.setdefault((attempt.device, attempt.frame), []).append(attempt)
+        par_trame.setdefault(attempt.key, []).append(attempt)
     garde = []
     for essais in par_trame.values():
         essais.sort(key=lambda a: a.attempt)
@@ -354,7 +375,9 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
                               for record in result.records],
                      fcnt_down_start=fcnt_down_start, payload=payload,
                      devices=[schedule[record.device_index].device
-                              for record in result.records])
+                              for record in result.records],
+                     sessions=[schedule[record.device_index].session
+                               for record in result.records])
     # Les ACK de la trace sont ceux que la couche a réellement émis, pas ceux du planificateur
     # du cœur : instants, copies et verdicts viennent du même plan que les compteurs.
     events = _mac_ack_events(result.records, plan, radios_par_enregistrement, payload=payload)
@@ -423,6 +446,9 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     résultat : c'est ce dont `build_trace` a besoin pour produire une `TraceRun` cohérente. Les
     indices virtuels y sont ceux du calendrier, pas ceux des terminaux.
     `device_classes` : classe d'écoute (`A`, `B`, `C`) d'un élément par terminal, `None` = `A`.
+    `retransmit.session_joins_s` ouvre des sessions : `FCntUp` et les séries descendantes repartent
+    de zéro à chacune, et une trame dont la réémission tomberait après une jointure est abandonnée
+    (`RetransmissionResult.rejected_stale_session`).
     """
     devices = list(devices)
     radios = list(radios)
@@ -434,8 +460,9 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             raise ValueError("une classe d'écoute par dispositif")
 
     options = _replace(options, confirmed_uplinks=True)
+    timeline = retransmit.timeline
     schedule = _base_schedule(devices, gateway, propagation, radios, options, environment,
-                              fcnt_start=retransmit.fcnt_up_start)
+                              fcnt_start=retransmit.fcnt_up_start, timeline=timeline)
     if not schedule:
         return RetransmissionResult(
             attempts=(), frames=0, transmissions=0, retransmissions=0, received=0,
@@ -447,7 +474,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             gateway_utilization=0.0, observation_ns=0, energy_j=0.0)
 
     frames = len(schedule)
-    blocked: set[tuple[int, int, int]] = set()
+    blocked: set[tuple[int, int, int, int]] = set()
+    perimees = 0
     budget = retransmit.effective_retries
     vu: set[tuple] = set()
     result = None
@@ -472,13 +500,15 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
             # Série descendante du chemin du cœur : un FCntDown par ACK réellement émis, par
             # terminal et dans l'ordre des émissions (le réseau numérote ses descentes).
             descendants = {}
-            suivant: dict[int, int] = {}
+            suivant: dict[tuple[int, int], int] = {}
             for index in sorted(range(len(schedule)), key=lambda i: (schedule[i].end_ns, i)):
                 if livraisons.get(index) in (DownlinkDelivery.DELIVERED,
                                              DownlinkDelivery.LOST_SENSITIVITY):
-                    appareil = schedule[index].device
-                    descendants[index] = suivant.get(appareil, 0)
-                    suivant[appareil] = descendants[index] + 1
+                    # Série descendante par terminal **et par session** : une jointure remet
+                    # NFCntDown/AFCntDown à zéro, comme FCntUp.
+                    cle = (schedule[index].device, schedule[index].session)
+                    descendants[index] = suivant.get(cle, 0)
+                    suivant[cle] = descendants[index] + 1
         else:
             from lsim.ack_mac import AckSort, AckWindow
             # `LATE` n'a pas de verdict propre dans `DownlinkDelivery` : il est rangé avec les
@@ -527,37 +557,43 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                                        f_cnt_down=descendants.get(index)))
         schedule = mis_a_jour
 
-        acquittees = {(a.device, a.frame) for a in schedule if a.acked}
-        dernier: dict[tuple[int, int], int] = {}
+        acquittees = {a.key for a in schedule if a.acked}
+        dernier: dict[tuple[int, int, int], int] = {}
         for index, attempt in enumerate(schedule):
-            cle = (attempt.device, attempt.frame)
+            cle = attempt.key
             if cle not in dernier or attempt.attempt > schedule[dernier[cle]].attempt:
                 dernier[cle] = index
 
         nouvelles = []
         for index in sorted(dernier.values()):
             attempt = schedule[index]
-            cle = (attempt.device, attempt.frame)
+            cle = attempt.key
             if cle in acquittees or attempt.attempt >= budget:
                 continue
             debut = attempt.end_ns + retransmit.retransmit_delay_ms * 1_000_000
+            if timeline.is_stale(attempt.session, debut):
+                # Une jointure a ouvert une nouvelle session : une trame de l'ancienne ne peut plus
+                # être reçue (les clés ont changé). Elle n'est ni émise ni acquittée.
+                perimees += 1
+                continue
             if retransmit.enforce_duty_cycle and devices[attempt.device].duty_cycle < 1.0:
                 airtime = _airtime_ns(devices[attempt.device])
                 ecoule = sum(a.end_ns - a.start_ns for a in schedule if a.device == attempt.device)
                 if ecoule + airtime > devices[attempt.device].duty_cycle * debut:
-                    blocked.add((attempt.device, attempt.frame, attempt.attempt))
+                    blocked.add((attempt.device, attempt.session, attempt.frame,
+                                 attempt.attempt))
                     continue
             nouvelles.append(Attempt(device=attempt.device, frame=attempt.frame,
                                      attempt=attempt.attempt + 1, start_ns=debut,
                                      end_ns=debut + (attempt.end_ns - attempt.start_ns),
                                      received=False, delivery=DownlinkDelivery.NONE,
                                      ack=AckReception.NONE, acked=False,
-                                     f_cnt_up=attempt.f_cnt_up))
+                                     f_cnt_up=attempt.f_cnt_up, session=attempt.session))
         if not nouvelles:
             break
         schedule = schedule + nouvelles
         schedule = _prune_acknowledged(schedule)
-        signature = tuple((a.device, a.frame, a.attempt, a.start_ns) for a in schedule)
+        signature = tuple((a.device, a.session, a.frame, a.attempt, a.start_ns) for a in schedule)
         if signature in vu:
             raise RuntimeError("pas de point fixe des réémissions : calendrier répété à l'identique")
         vu.add(signature)
@@ -565,12 +601,11 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         raise RuntimeError(f"pas de point fixe des réémissions après {MAX_ITERATIONS} itérations")
 
     assert result is not None
-    acquittees = {(a.device, a.frame) for a in schedule if a.acked}
-    receptions: dict[tuple[int, int], int] = {}
+    acquittees = {a.key for a in schedule if a.acked}
+    receptions: dict[tuple[int, int, int], int] = {}
     for attempt in schedule:
         if attempt.received:
-            receptions[(attempt.device, attempt.frame)] = receptions.get(
-                (attempt.device, attempt.frame), 0) + 1
+            receptions[attempt.key] = receptions.get(attempt.key, 0) + 1
     # Déduplication réseau : une trame reçue plusieurs fois n'est livrée qu'une fois à
     # l'application. Le doublon compte les réceptions au-delà de la première — c'est un fait de
     # réseau, distinct de la réémission MAC qui l'a provoqué.
@@ -625,4 +660,5 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         trace=result if with_engine_output else None,
         events=events if with_engine_output else (),
         gateway_tx=tuple(planned) if with_engine_output else (),
+        rejected_stale_session=perimees,
     )
