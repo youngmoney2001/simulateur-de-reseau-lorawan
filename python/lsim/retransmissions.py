@@ -342,9 +342,52 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
                       for record in result.records],
                      fcnt_up=[schedule[record.device_index].f_cnt_up
                               for record in result.records])
-    events, _planned = plan_native(result.records, [vrad[r.device_index]
-                                                    for r in result.records], options)
+    # Les ACK de la trace sont ceux que la couche a réellement émis, pas ceux du planificateur
+    # du cœur : instants, copies et verdicts viennent du même plan que les compteurs.
+    events = _mac_ack_events(result.records, plan, radios_par_enregistrement)
     return result, events, plan.busy, plan
+
+
+# --- événements de trace des ACK de la couche MAC --------------------------------------------
+
+#: Classe d'ACK → (issue de l'événement, issue du saut passerelle → terminal).
+#: Le vocabulaire est celui des autres événements (`HopOutcome` de `lsim.api_contract`) :
+#: un ACK tardif n'est écouté par personne (`not_listened`), une copie reçue puis rejetée par le
+#: contrôle de rejeu est `suppressed` — le même mot que les doublons de maillage.
+_MAC_ACK_EVENT = {
+    "standard": ("ack_only", "delivered"),
+    "late": ("not_listened", "not_listened"),
+    "lost": ("lost_sensitivity", "lost_sensitivity"),
+    "duplicate": ("suppressed", "delivered"),
+}
+
+
+def _mac_ack_events(records, plan, radios):
+    """Un événement `ack` par émission réellement faite, aux instants de la couche MAC.
+
+    Les indices sont ceux des enregistrements moteur (virtuels) : `_build_trace_retransmissions`
+    les ramène aux terminaux du scénario, comme pour les autres événements du chemin.
+    """
+    from lsim.ack_mac import AckSort, AckWindow
+    from lsim.trace_events import HopEvent, ProtocolEvent, _dev
+
+    evenements = []
+    for position, record in enumerate(records):
+        sortie = plan.outcomes[position]
+        radio = radios[position]
+        for emission in sortie.emissions:
+            if emission.sort is AckSort.LOST and sortie.window is AckWindow.WINDOW_MISSED:
+                issue, saut = "device_transmitting", "not_listened"
+            else:
+                issue, saut = _MAC_ACK_EVENT[emission.sort.value]
+            hop = HopEvent("gw:0", _dev(record.device_index), emission.start_ns, radio.rx1_hz,
+                           None, None, saut)
+            evenements.append((emission.start_ns, record.device_index, emission.copy,
+                               ProtocolEvent(0, emission.start_ns, "ack", record.device_index, 0,
+                                             (hop,), issue)))
+    evenements.sort(key=lambda e: (e[0], e[1], e[2]))
+    return tuple(_replace(evenement, seq=k)
+                 for k, (_t, _d, _c, evenement) in enumerate(evenements))
 
 
 # --- simulation ----------------------------------------------------------------------------

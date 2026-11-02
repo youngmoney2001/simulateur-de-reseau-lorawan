@@ -385,6 +385,26 @@ Même scénario à `ack_delay_ms: 2500` : un terminal de **classe A** ne reçoit
 La classe B se comporte comme A pour l'ACK — ses *ping slots* sont un autre mécanisme, non
 modélisé ici. Détail et limites : `docs/MAC_CONSOLIDATION.md`.
 
+### Les ACK dans la trace
+
+Chaque émission d'ACK de la couche MAC devient un `ProtocolEvent` de type `ack`, à l'instant exact
+où elle commence et avec le même verdict que les compteurs. Le vocabulaire est celui du contrat
+(`lsim.api_contract`), sans valeur nouvelle :
+
+| Classe | `event.outcome` | `hops[0].outcome` | Sens |
+|---|---|---|---|
+| `STANDARD` | `ack_only` | `delivered` | reçu dans une fenêtre écoutée |
+| `LATE` | `not_listened` | `not_listened` | émis après RX2 : personne n'écoute |
+| `LOST` (fenêtre manquée) | `device_transmitting` | `not_listened` | le terminal émet au moment de l'ouverture |
+| `LOST` (non décodable) | `lost_sensitivity` | `lost_sensitivity` | sous la sensibilité du récepteur |
+| `DUPLICATE` | `suppressed` | `delivered` | copie reçue, rejetée par le contrôle de rejeu |
+| `NOT_SENT` | — | — | uplink non reçu : rien n'est émis |
+
+Une émission = un événement : sur `retransmissions_ack_tardif.yaml`, six ACK tardifs donnent six
+événements `not_listened` et six intervalles dans `gateway_tx`. Sans la couche MAC
+(`ack_delay_ms: 0`), la trace garde les événements du planificateur du cœur. Détail :
+`docs/MAC_CONSOLIDATION.md` §4.1.
+
 ### Ce qui n'est pas modélisé
 
 - **Aucune perte d'ACK avec un récepteur nominal** : le planificateur causal livre l'ACK de toute

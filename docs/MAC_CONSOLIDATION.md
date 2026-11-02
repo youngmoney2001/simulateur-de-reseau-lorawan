@@ -81,11 +81,43 @@ dans la radio.
 | Occupation passerelle | les intervalles d'ACK **émis par la couche MAC** sont imposés au moteur : les pertes montantes qu'ils provoquent sont réelles, et la trace les contient (`gateway_tx`) |
 | Résultat de réémission | `acks_planned` = nombre d'émissions réelles (copies incluses), pas le nombre de réponses logiques |
 | Compteurs de trace | `ack_standard` / `late` / `lost` / `duplicate` proviennent du même plan que les émissions |
-| Événements de trace | **limite** : les ACK de la couche MAC apparaissent dans l'occupation (`gateway_tx`), pas encore comme `ProtocolEvent` de type `ack` ; les événements restent ceux du planificateur du cœur |
+| Événements de trace | un `ProtocolEvent` de type `ack` par émission réelle de la couche MAC, aux mêmes instants que `gateway_tx`, avec les issues du contrat d'API (voir 4.1) |
 | Appariement | inchangé sur le chemin du cœur (`_match_ack` par fenêtre RX1) ; la couche MAC utilise `FCntUp` |
 
 Un test vérifie que six ACK tardifs donnent six intervalles d'occupation (`gateway_tx`), donc que la
-trace ne cache pas l'airtime consommée.
+trace ne cache pas l'airtime consommée ; un second vérifie qu'ils donnent aussi six événements
+`ack` (`python/tests/test_mac_trace_events.py`).
+
+### 4.1 Les ACK de la couche MAC dans la trace
+
+`_mac_ack_events` (`python/lsim/retransmissions.py`) convertit chaque émission réelle du plan MAC en
+`ProtocolEvent` de type `ack`. Le point de départ n'est pas le planificateur du cœur mais
+`AckEmission` : instants, nombre de copies et verdict appartiennent donc au **même** plan que
+`gateway_tx` et que les compteurs `ack_standard` / `ack_late` / `ack_lost` / `ack_duplicate`.
+
+| Classe du plan (`AckSort`) | Situation | `ProtocolEvent.outcome` | `Hop.outcome` (passerelle → terminal) |
+|---|---|---|---|
+| `STANDARD` | reçue dans une fenêtre écoutée, `FCntDown` inédit | `ack_only` | `delivered` |
+| `LATE` | émise après la fermeture des fenêtres | `not_listened` | `not_listened` |
+| `LOST` (fenêtre manquée) | terminal en émission au moment de l'ouverture | `device_transmitting` | `not_listened` |
+| `LOST` (non décodable) | dans une fenêtre, sous la sensibilité du récepteur | `lost_sensitivity` | `lost_sensitivity` |
+| `DUPLICATE` | copie reçue puis rejetée par le contrôle de rejeu | `suppressed` | `delivered` |
+| `NOT_SENT` | uplink non reçu : rien n'est émis | aucun événement | — |
+
+`suppressed` est déjà employé par les doublons de maillage ; `not_listened` et
+`device_transmitting` par l'appariement du cœur. **Aucune valeur nouvelle n'entre dans `EventKind`
+ni dans `HopOutcome`** (contrat `lsim.api_contract`, schémas `schemas/api/v1` inchangés) : un
+`ack_only` reste la seule issue d'un ACK effectivement reçu.
+
+Propriétés tenues par les tests (`python/tests/test_mac_trace_events.py`, 7 tests) :
+
+- une émission ↔ un événement : `len([e for e in events if e.kind == "ack"]) == acks_planned`, et
+  chaque `t_ns` est un début d'intervalle de `gateway_tx` ;
+- ordre stable `(t_ns, device_index, copie)` puis `seq` renumérotée comme sur tout le chemin, avec
+  les indices virtuels ramenés aux terminaux du scénario par `_build_trace_retransmissions` ;
+- la trace reste triée par `t_ns` et toutes les issues appartiennent au contrat ;
+- sans couche MAC (`ack_delay_ms: 0`), les événements restent ceux de `plan_native` : deux ACK
+  `ack_only` pour deux trames, aucun doublon d'événement.
 
 ## 5. Commandes MAC déjà disponibles
 
@@ -111,10 +143,10 @@ explicite, pas un oubli.
 
 ## 6. Ce qui reste à faire
 
-1. Faire apparaître les ACK de la couche MAC comme `ProtocolEvent` de la trace (aujourd'hui :
-   `gateway_tx` et compteurs seulement).
-2. `fcnt_down_start` et la distinction `NFCntDown` / `AFCntDown` si un scénario 1.1 l'exige.
-3. Brancher la classe C sur le moteur d'opportunités existant (`lsim.simulator.DownlinkRequests`)
+1. **Compteurs complets** : `fcnt_down_start`, `MAX_FCNT_GAP` et la distinction
+   `NFCntDown` / `AFCntDown` de LoRaWAN 1.1. Aujourd'hui une seule série descendante par terminal,
+   sans écart maximal toléré ni reconstruction 16 → 32 bits des trames réelles.
+2. Brancher la classe C sur le moteur d'opportunités existant (`lsim.simulator.DownlinkRequests`)
    au lieu de la règle locale d'écoute continue.
-4. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
+3. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
    comportement, en commençant par `RxParamSetupReq` (elle change RX2, donc la réception de l'ACK).

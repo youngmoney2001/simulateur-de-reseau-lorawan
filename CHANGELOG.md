@@ -2,6 +2,28 @@
 
 ## 0.1.0 (non publiée)
 
+### ACK de la couche MAC dans la trace
+- **Un `ProtocolEvent` par ACK réellement émis.** `_mac_ack_events`
+  (`python/lsim/retransmissions.py`) convertit les `AckEmission` du plan MAC en événements `ack` :
+  instants, nombre de copies et verdicts viennent du **même plan** que `gateway_tx` et que les
+  compteurs, au lieu des événements du planificateur du cœur. Les ACK tardif, dupliqué et non
+  décodable cessent d'être invisibles dans la trace.
+- **Aucune valeur nouvelle dans le contrat d'API.** Correspondance :
+  `STANDARD → ack_only`, `LATE → not_listened`, `LOST` (fenêtre manquée) `→ device_transmitting`,
+  `LOST` (non décodable) `→ lost_sensitivity`, `DUPLICATE → suppressed` (`suppressed` est déjà le
+  verdict des doublons de maillage). `EventKind`, `HopOutcome` et `schemas/api/v1` sont inchangés :
+  régénérer les schémas ne produit **aucun** diff. Un test refuse toute issue hors contrat.
+- **Chemins du cœur intacts.** Sans `ack_delay_ms` ni `ack_repetitions` actifs, les événements
+  restent ceux de `plan_native` : témoin à `ack_delay_ms: 0` → 2 trames, 2 événements `ack_only`,
+  aucun doublon. Mesures sur les scénarios de référence : tardif 2 500 ms → 6 émissions,
+  **6 événements `not_listened`** ; deux copies → 4 émissions, **2 `ack_only` + 2 `suppressed`** ;
+  classe C → 2 émissions, **2 `ack_only`**. Dans les trois cas, chaque `t_ns` d'événement est un
+  début d'intervalle de `gateway_tx` et `len(ack events) == acks_planned`.
+- **Tests** : `python/tests/test_mac_trace_events.py` (7 tests) — correspondance émission ↔
+  événement, tri et `seq`, trois scénarios de référence, cas construit `device_transmitting`,
+  vocabulaire du contrat, non-régression du chemin du cœur. Validation de l'incrément :
+  1 903 tests Python, 685 282/685 282 tests C++, empreintes `d2cb0fac…` / `ed126d7f…` inchangées.
+
 ### Consolidation MAC : compteurs de trame, taxonomie de l'ACK, classes d'écoute
 - **Identité de trame réelle.** `FCntUp` identifie la trame et non la tentative : toutes les
   réémissions la partagent. `fcnt_up_start` (0 à 2^32-1) fixe le premier compteur d'un terminal,
