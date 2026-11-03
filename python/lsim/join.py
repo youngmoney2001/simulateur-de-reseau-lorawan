@@ -272,10 +272,20 @@ def join_request_device(device, at_ns: int):
                    payload_bytes=JOIN_REQUEST_BYTES, rf=device.rf)
 
 
-def accept_airtime_ns(radio) -> int:
-    """Temps de vol du Join-Accept, au débit d'écoute RX1 du terminal."""
-    config = RadioConfig(spreading_factor=radio.rx1_sf, bandwidth_hz=radio.rx1_bw_hz,
-                         coding_rate=1, low_data_rate_optimize=radio.rx1_sf >= 11)
+def accept_airtime_ns(radio, window: str = RX1) -> int:
+    """Temps de vol du Join-Accept, au débit de la fenêtre dans laquelle il est émise.
+
+    RX2 est le repli régional : fréquence et débit **propres**, distincts de RX1 (`DLSettings`).
+    Un Join-Accept émis en RX2 au SF12 occupe l'émettre bien plus longtemps que le même en RX1 au
+    SF7 — le temps d'antenne suit donc la fenêtre réellement émise, sans quoi l'occupation de la
+    passerelle, et par suite son budget réglementaire, seraient sous-estimés.
+    Un rejeu réémettant la **même** trame, il garde le débit de la fenêtre qui l'a portée.
+    """
+    from lsim.trace_events import downlink_phy   # import local : évite un cycle d'importation
+
+    _freq, sf, bw = downlink_phy(radio, window)
+    config = RadioConfig(spreading_factor=sf, bandwidth_hz=bw, coding_rate=1,
+                         low_data_rate_optimize=bw > 0 and (2 ** sf) / bw > 0.016)
     return time_on_air_ns(config, JOIN_ACCEPT_BYTES)
 
 
@@ -337,7 +347,9 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
     Fonction séparée pour que chaque tentative ait sa propre fermeture : les réactions sont
     appelées pendant la résolution, donc bien après la boucle qui les a créées.
     """
-    airtime = accept_airtime_ns(radio)
+    # Le temps d'antenne suit la fenêtre émise : RX1 et RX2 n'ont ni le même débit ni la même
+    # fréquence. Un rejeu garde celui de la fenêtre qui a porté l'acceptation — même trame.
+    airtimes = {RX1: accept_airtime_ns(radio, RX1), RX2: accept_airtime_ns(radio, RX2)}
 
     def ecoute(instant: int) -> str:
         if _transmitting(data_attempts, device_index, instant):
@@ -346,14 +358,19 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
             return "lost_sensitivity"
         return "delivered"
 
-    def fenetre(instant: int) -> EmissionRequest:
+    def fenetre(instant: int, fenetre_emise: str = RX1) -> EmissionRequest:
         return EmissionRequest(label="join_accept", device=device_index, ready_ns=instant,
-                               duration_ns=airtime, window=(instant, instant + JOIN_WINDOW_NS))
+                               duration_ns=airtimes[fenetre_emise],
+                               window=(instant, instant + JOIN_WINDOW_NS))
 
-    def rejeux(deposer, depuis: int) -> None:
-        """Rejeu : mêmes octets, même JoinNonce, après l'acceptation. Reçu puis refusé."""
+    def rejeux(deposer, depuis: int, fenetre_source: str) -> None:
+        """Rejeu : mêmes octets, même JoinNonce, après l'acceptation. Reçu puis refusé.
+
+        Même fenêtre que l'acceptation : c'est la même trame, au même débit.
+        """
         for rang in range(join_options.accept_replays):
-            deposer(fenetre(depuis + (rang + 1) * JOIN_REPLAY_DELAY_NS), ensuite=apres_rejeu)
+            deposer(fenetre(depuis + (rang + 1) * JOIN_REPLAY_DELAY_NS, fenetre_source),
+                    ensuite=apres_rejeu)
 
     def apres_rejeu(emission, deposer) -> None:
         if not emission.emitted:
@@ -372,7 +389,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)
             accepte_par[device_index] = emission.start_ns
-            rejeux(deposer, emission.end_ns)
+            rejeux(deposer, emission.end_ns, RX2)
 
     def apres_rx1(emission, deposer) -> None:
         if not emission.emitted:
@@ -384,12 +401,12 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)
             accepte_par[device_index] = emission.start_ns
-            rejeux(deposer, emission.end_ns)
+            rejeux(deposer, emission.end_ns, RX1)
         elif join_options.rx2_fallback:
             # Fenêtre de secours : RX2 n'est émise que parce que RX1 n'a pas abouti.
-            deposer(fenetre(record.end_ns + JOIN_ACCEPT_DELAY2_NS), ensuite=apres_rx2)
+            deposer(fenetre(record.end_ns + JOIN_ACCEPT_DELAY2_NS, RX2), ensuite=apres_rx2)
 
-    demande = fenetre(record.end_ns + JOIN_ACCEPT_DELAY1_NS)
+    demande = fenetre(record.end_ns + JOIN_ACCEPT_DELAY1_NS, RX1)
     # Un terminal déjà joint dans cette passe ne reçoit pas de second Join-Accept : la condition
     # est évaluée au moment du placement, quand l'issue des tentatives précédentes est connue.
     arbitre.demand(replace(demande, condition=lambda: device_index not in accepte_par),

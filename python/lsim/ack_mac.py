@@ -217,11 +217,15 @@ class AckPlan:
         return {o.uplink_index for o in self.outcomes if o.received}
 
 
-def _ack_airtime_ns(radio: DeviceRadio) -> int:
-    """Temps d'antenne d'une trame ACK, par la fonction du planificateur (même formule)."""
+def _ack_airtime_ns(radio: DeviceRadio, window: str = "rx1") -> int:
+    """Temps d'antenne d'une trame ACK, au débit de la fenêtre visée (même formule qu'ailleurs).
+
+    RX2 est le repli régional : débit **propre**, distinct de RX1. Un ACK émis en RX2 au SF12
+    occupe l'émetteur bien plus longtemps que le même en RX1 au SF7.
+    """
     from lsim.trace_events import _downlink_airtime_ns
 
-    return _downlink_airtime_ns(radio, ACK_FRAME_BYTES)
+    return _downlink_airtime_ns(radio, ACK_FRAME_BYTES, window)
 
 
 def _decodable(rssi_uplink_dbm: float, radio: DeviceRadio, options) -> bool:
@@ -349,8 +353,16 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                                        False, 0, AckSort.NOT_SENT, serie_utilisee, None, session))
             continue
         radio = radios[index]  # même ordre que `records`
-        airtime = _ack_airtime_ns(radio)
         t_open = record.end_ns + RX1_DELAY_NS
+        # Fenêtre **visée** par le réseau : elle découle de l'instant prêt, donc connue avant le
+        # placement. Une copie retardée par l'émetteur peut glisser dans la fenêtre suivante ;
+        # l'airtime reste alors celui de la fenêtre visée (approximation documentée et testée :
+        # `test_l_airtime_suit_la_fenetre_visée`).
+        pret = t_open + timing.delay_ms * 1_000_000
+        cible = _fenetre(pret,
+                         (t_open, t_open + RX1_WINDOW_NS),
+                         (record.end_ns + RX2_DELAY_NS, record.end_ns + RX2_DELAY_NS + RX2_WINDOW_NS))
+        airtime = _ack_airtime_ns(radio, "rx2" if cible is AckWindow.RX2 else "rx1")
         f_cnt_down = fcnt_down_suivant.get(cle, fcnt_down_start)
         if f_cnt_down >= MODULUS_32:
             # Série épuisée à 2^32 : le réseau ne peut plus numéroter de descente. La spécification
@@ -364,8 +376,7 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         # réelle, que la couche classe `LATE` elle-même une fois l'instant connu. Les copies se
         # suivent parce qu'elles partagent le même instant prêt et que la file est monotone.
         tickets = arbitre.demand_all([
-            EmissionRequest(label="ack", device=appareil,
-                            ready_ns=t_open + timing.delay_ms * 1_000_000,
+            EmissionRequest(label="ack", device=appareil, ready_ns=pret,
                             duration_ns=airtime, window=None)
             for _copie in range(timing.repetitions)])
         deposees[index] = (tickets, radio, f_cnt_down)

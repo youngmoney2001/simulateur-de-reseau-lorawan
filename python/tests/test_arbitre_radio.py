@@ -54,7 +54,7 @@ import yaml
 from lsim.arbitre import (DUTY_CYCLE, EMITTED, LATE, NOT_NEEDED, WINDOW_MISSED, ArbitrationPolicy,
                           DutyCycleLedger, EmissionRequest, GatewayArbiter)
 from lsim.join import (BLOCKED_DUTY_CYCLE, JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS,
-                       JOIN_REPLAY_DELAY_NS,
+                       JOIN_REPLAY_DELAY_NS, RX2,
                        JOIN_WINDOW_NS, JoinRadioOptions, accept_airtime_ns, simulate_joins)
 from lsim.retransmissions import RetransmissionOptions, simulate_confirmed_uplinks
 from lsim.scenario import load_scenario
@@ -265,10 +265,11 @@ def test_un_ack_en_emission_quand_rx1_souvre():
     assert tentative.accepts[0].outcome == "gateway_busy"
     assert tentative.accepts[0].emitted is False
     # RX1 manquée n'a **rien** émis : une seule émission de Join-Accept dans l'occupation,
-    # et c'est celle de RX2, retardée d'autant.
+    # et c'est celle de RX2, retardée d'autant et chronométrée au débit **de RX2** (SF12 en
+    # EU868), jamais à celui de RX1.
     emises = arbitre.occupation_par_etiquette("join_accept")
     assert emises == ((tentative.accepts[1].at_ns, tentative.accepts[1].at_ns
-                       + accept_airtime_ns(device_radios(scenario)[0])),)
+                       + accept_airtime_ns(device_radios(scenario)[0], RX2)),)
     assert emises[0][0] == tentative.accepts[0].at_ns > rx1 + JOIN_WINDOW_NS
 
 
@@ -283,10 +284,12 @@ def test_rx1_impossible_puis_rx2_possible():
     assert [(e.window, e.outcome) for e in tentative.accepts] == [
         ("rx1", "gateway_busy"), ("rx2", "delivered")]
     assert tentative.accept_window == "rx2" and tentative.session == 1
-    # L'occupation imposée plus le Join-Accept de RX2, et rien pour RX1.
+    # L'occupation imposée plus le Join-Accept de RX2, et rien pour RX1. Le temps d'antenne est
+    # celui de RX2 : en EU868, un Join-Accept de 33 octets y occupe l'émetteur 1,81 s (SF12),
+    # contre 0,25 s au débit RX1 — d'où l'importance de ne pas confondre les deux fenêtres.
     join = arbitre.occupation_par_etiquette("join_accept")
     assert join == ((tentative.accepts[1].at_ns, tentative.accepts[1].at_ns
-                     + accept_airtime_ns(device_radios(scenario)[0])),)
+                     + accept_airtime_ns(device_radios(scenario)[0], RX2)),)
 
 
 def test_rx1_reussie_nemet_aucune_rx2():

@@ -117,7 +117,12 @@ class ProtocolOptions:
 
 @dataclass(frozen=True)
 class DeviceRadio:
-    """Paramètres radio d'un dispositif : fréquence, DR montant, RX1 et puissance d'émission."""
+    """Paramètres radio d'un dispositif : fréquence, DR montant, RX1, RX2 et puissance.
+
+    RX2 est le repli régional (`DLSettings`) : fréquence et débit **propres**, distincts de RX1.
+    `rx2_hz = 0` signale l'absence de plan régional : la fenêtre RX2 n'est alors pas renseignée, et
+    le débit de repli reste l'hypothèse du simulateur (SF12 BW125, valeur par défaut EU868).
+    """
 
     freq_hz: int
     dr: Optional[int]        # None si aucun plan régional
@@ -125,6 +130,9 @@ class DeviceRadio:
     tx_power_dbm: float = 14.0
     rx1_sf: int = 7          # SF du débit RX1 (récepteur du dispositif)
     rx1_bw_hz: int = 125_000
+    rx2_hz: int = 0          # fréquence de la fenêtre RX2 (0 : non renseignée)
+    rx2_sf: int = 12         # SF du débit RX2 (repli régional ; 12 = défaut EU868)
+    rx2_bw_hz: int = 125_000
 
 
 @dataclass(frozen=True)
@@ -205,8 +213,21 @@ def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> 
                 rx1_sf, rx1_bw_hz = int(m.group(1)), int(m.group(2)) * 1000
         except ValueError:
             rx1_hz = freq_hz
+    # RX2 : fréquence et débit du repli régional. Sans plan, ou si le plan ne les expose pas, on
+    # garde l'hypothèse du simulateur (SF12 BW125) et une fréquence non renseignée.
+    rx2_hz, rx2_sf, rx2_bw_hz = 0, 12, 125_000
+    if plan is not None:
+        try:
+            freq2_hz, rx2_datr = plan.rx2()
+            m2 = _DATR.match(rx2_datr)
+            if m2 is not None:
+                rx2_hz = int(freq2_hz)
+                rx2_sf, rx2_bw_hz = int(m2.group(1)), int(m2.group(2)) * 1000
+        except (ValueError, KeyError, IndexError):
+            rx2_hz, rx2_sf, rx2_bw_hz = 0, 12, 125_000
     return DeviceRadio(freq_hz=freq_hz, dr=dr, rx1_hz=rx1_hz, tx_power_dbm=tx_power_dbm,
-                       rx1_sf=rx1_sf, rx1_bw_hz=rx1_bw_hz)
+                       rx1_sf=rx1_sf, rx1_bw_hz=rx1_bw_hz,
+                       rx2_hz=rx2_hz, rx2_sf=rx2_sf, rx2_bw_hz=rx2_bw_hz)
 
 
 def _rx2_spreading_factor(scenario: Scenario) -> int:
@@ -243,9 +264,23 @@ def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
     return tuple(radios)
 
 
-def _downlink_airtime_ns(radio: DeviceRadio, payload_bytes: int) -> int:
-    """Temps d'antenne d'un downlink sur le débit RX1 (CR 4/5, en-tête explicite, sans CRC)."""
-    sf, bw = radio.rx1_sf, radio.rx1_bw_hz
+def downlink_phy(radio: DeviceRadio, window: str = "rx1") -> tuple[int, int, int]:
+    """`(fréquence, SF, largeur de bande)` de la fenêtre dans laquelle la descente est émise.
+
+    RX2 n'est **pas** RX1 : c'est le repli régional, avec sa propre fréquence et son propre débit
+    (`DLSettings`). Une descente émise en RX2 au SF12 occupe l'émetteur bien plus longtemps que la
+    même trame en RX1 au SF7 — le temps d'antenne doit donc suivre la fenêtre réellement émise.
+    `window` vaut `rx1`, `rx2` ou `replay` ; un rejeu réémet la **même** trame, donc au débit de la
+    fenêtre qui l'a portée (RX1 par défaut).
+    """
+    if window == "rx2":
+        return radio.rx2_hz, radio.rx2_sf, radio.rx2_bw_hz
+    return radio.rx1_hz, radio.rx1_sf, radio.rx1_bw_hz
+
+
+def _downlink_airtime_ns(radio: DeviceRadio, payload_bytes: int, window: str = "rx1") -> int:
+    """Temps d'antenne d'un downlink, au débit de la fenêtre émise (CR 4/5, en-tête, sans CRC)."""
+    _freq, sf, bw = downlink_phy(radio, window)
     symbol_s = (2 ** sf) / bw
     config = RadioConfig(spreading_factor=sf, bandwidth_hz=bw, coding_rate=1, crc_on=False,
                          explicit_header=True, low_data_rate_optimize=symbol_s > 0.016)
@@ -377,7 +412,8 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             # DeviceTimeAns : heure GPS au début de la fenêtre RX1 (époque GPS en t = 0 de la simulation).
             fopts = _downlink_fopts(margin, carries_ds,
                                     device_time_ns=t_open if wants_time else None)
-        airtime = _downlink_airtime_ns(radio, base + len(fopts))
+        # Les descentes de données sont émises dans la fenêtre RX1 du dispositif.
+        airtime = _downlink_airtime_ns(radio, base + len(fopts), "rx1")
 
         nxt = next_start.get(i)
         jobs.append(_Job(
