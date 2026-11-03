@@ -1111,6 +1111,51 @@ LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t 
                                         lsim_interval* busy, size_t busy_capacity,
                                         size_t* busy_count);
 
+/* -------------------------------------------------------------------------- D3.15, jalon I0
+ * Enveloppe versionnée de la planification des descentes.
+ *
+ * `lsim_plan_downlinks_v1` reste inchangée. L'enveloppe ci-dessous reprend ses entrées et y
+ * ajoute les paramètres de la seconde fenêtre de réception, par dispositif. Un pointeur ne dit
+ * pas la longueur de son tableau : `rx2_count` annonce le nombre d'entrées de `rx2`, vérifié
+ * **avant toute lecture**. Sans lui, le cœur lirait `device_count` entrées quelle que soit la
+ * taille réellement fournie par l'appelant.
+ *
+ * Le repli RX2 est **opt-in** : `rx2_sf = 0` signifie « aucune descente RX2 ». Au jalon I0, RX2
+ * est transporté et validé, puis **écarté** : aucun repli n'est produit, ni placement ni temps
+ * d'antenne ne changent. L'implémentation du repli est reportée à un jalon ultérieur.
+ *
+ * Contrat complet et dispositions mesurées : `docs/DOWNLINK_PLAN_ABI_V2.md`.
+ */
+#define LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION 1
+
+typedef struct lsim_plan_device_rx2 {
+    int64_t rx2_hz;     /* fréquence RX2 ; 0 : non renseignée ; sinon > 0            */
+    uint32_t rx2_sf;    /* 0 : aucun repli (opt-in) ; sinon 7..12                    */
+    uint32_t rx2_bw_hz; /* 0 : reprend `rx1_bw_hz` ; sinon 125000, 250000 ou 500000  */
+    uint64_t reserved[2];
+} lsim_plan_device_rx2;
+
+typedef struct lsim_plan_downlinks_v2_args {
+    uint32_t struct_size;  /* sizeof(lsim_plan_downlinks_v2_args), obligatoire          */
+    uint32_t abi_version;  /* LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION, obligatoire           */
+    const lsim_plan_uplink* uplinks;
+    size_t uplink_count;
+    const lsim_plan_device* devices;
+    size_t device_count;
+    const lsim_plan_options* options; /* obligatoire                                    */
+    const lsim_plan_device_rx2* rx2;  /* NULL : comportement de la v1                   */
+    lsim_plan_event* events;
+    size_t event_capacity;
+    size_t* event_count; /* obligatoire                                                 */
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count; /* obligatoire                                                  */
+    size_t rx2_count;   /* nombre d'entrées de `rx2` ; 0 si `rx2` est NULL              */
+    uint64_t reserved[2];
+} lsim_plan_downlinks_v2_args;
+
+LSIM_API int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args);
+
 /* ------------------------------------------- Boucle fermée : commandes MAC LinkADR et DutyCycle (S2)
  * Passerelle unique, sans jointure ni autre commande MAC. Voir lsim/engine.hpp (LoopOptions).
  * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (toujours lues). Sorties : uplinks (ordre des débuts),

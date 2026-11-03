@@ -2,6 +2,43 @@
 
 ## 0.1.0 (non publiée)
 
+### D3.15 / I0 — Enveloppe ABI versionnée du planificateur de descentes
+
+Premier jalon de la refonte descendante. **Capacitaire :** l'extension transporte et valide les
+paramètres de la seconde fenêtre de réception (RX2) **sans modifier ni le placement ni le temps
+d'antenne**. Le repli RX2 reste **opt-in** et son implémentation est reportée à un jalon ultérieur.
+
+- **`lsim_plan_downlinks_v2`** (nouveau symbole) : enveloppe `lsim_plan_downlinks_v2_args`
+  versionnée (`struct_size`, `abi_version`), qui reprend les entrées de la v1 et ajoute
+  `lsim_plan_device_rx2` — `rx2_hz`, `rx2_sf`, `rx2_bw_hz` — plus `rx2_count`. Les champs
+  `reserved` permettent une extension ultérieure sans rupture.
+- **`lsim_plan_downlinks_v1` inchangée.** Sa déclaration publique est identique au caractère près ;
+  son corps est déplacé tel quel dans une fonction commune, appelée avec `rx2 = nullptr`. Les
+  anciens appels conservent exactement leur comportement — vérifié par la parité bit à bit
+  (C++ et Python), les 114 tests de `test_downlink_plan_parity.py` et les empreintes gelées.
+- **`sizeof(lsim_plan_device)` inchangé** (40 o en x86-64, 36 o en i386). La structure n'est pas
+  étendue en place : elle n'a aucun octet libre.
+- **Sûreté de la frontière C.** `args` nul, `struct_size` erroné, `abi_version` inconnue, pointeurs
+  obligatoires nuls et comptages incohérents sont refusés sans accéder à la mémoire. `rx2_count`
+  existe précisément parce qu'un pointeur seul ne dit pas sa longueur : sans lui, le cœur aurait lu
+  `device_count` entrées quelle que soit la taille réelle du tableau.
+- **C++ (`lsim::plan`)** : `DeviceRx2` ; surcharge `plan_downlinks(..., rx2, ...)` ; surcharge du
+  constructeur de `DownlinkScheduler` et surcharge `on_received(device, end_ns, rx2)` (arbitrage
+  C2). Les signatures d'origine sont conservées et délèguent avec « aucun RX2 ».
+- **Validation RX2** : `rx2_sf` nul = aucun repli ; sinon 7..12. `rx2_bw_hz` nul = reprend
+  `rx1_bw_hz` ; sinon 125, 250 ou 500 kHz. `rx2_hz` nul = non renseigné ; valeur négative refusée.
+- **Python** : `plan_native_v2` et `DeviceRx2` dans `lsim.downlink_plan`. `plan_native` est
+  désormais un appel de `plan_native_v2` sans RX2.
+- **`docs/DOWNLINK_PLAN_ABI_V2.md`** : contrat de l'enveloppe.
+
+**Vérifications** : C++ 685 874/685 874 (dont 592 nouvelles), Python 2 103 tests (dont 31
+nouveaux), harnais ABI 55 structures / 477 grandeurs en x86-64 et compilation i386, 98 symboles
+`lsim_*` (**+1**, aucun retiré), empreintes `d2cb0fac…` et `ed126d7f…` inchangées.
+
+**Non couvert, reporté** : le repli RX2 lui-même (changera le placement) ; l'exposition de la
+fréquence RX2 par module régional (arbitrage S1) — aucun appelant ne peut donc aujourd'hui
+renseigner `rx2_hz` correctement.
+
 ### D3.13 — Arbitrage radio partagé : un émetteur, un budget, une seule source de vérité
 - **`python/lsim/arbitre.py` (nouveau)** : `GatewayArbiter` et `DutyCycleLedger` remplacent trois
   occupations passerelle indépendantes — `busy_until` local de `trace_events._schedule_gateway`,

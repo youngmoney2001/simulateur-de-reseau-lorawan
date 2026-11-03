@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Frontière C de la planification des descentes (lsim_plan_downlinks_v1).
+// Frontière C de la planification des descentes (lsim_plan_downlinks_v1 et _v2).
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -10,6 +10,7 @@
 namespace {
 
 using lsim::plan::DeviceRadio;
+using lsim::plan::DeviceRx2;
 using lsim::plan::Event;
 using lsim::plan::Interval;
 using lsim::plan::PlanOptions;
@@ -26,19 +27,29 @@ int32_t map_status(PlanStatus s) {
     return LSIM_STATUS_INTERNAL;
 }
 
-}  // namespace
-
-int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_count,
-                               const lsim_plan_device* devices, size_t device_count,
-                               const lsim_plan_options* options,
-                               lsim_plan_event* events, size_t event_capacity,
-                               size_t* event_count,
-                               lsim_interval* busy, size_t busy_capacity,
-                               size_t* busy_count) {
+// Corps commun aux deux entrées. `rx2` nul reproduit exactement la v1 ; non nul, il compte
+// `rx2_count` entrées, vérifié **avant toute lecture**.
+//
+// Jalon I0 : RX2 est transporté et validé, puis écarté par `plan_downlinks` — aucun repli n'est
+// produit, et le résultat est identique à celui de la v1.
+int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
+                 const lsim_plan_device* devices, size_t device_count,
+                 const lsim_plan_options* options, const lsim_plan_device_rx2* rx2,
+                 size_t rx2_count, lsim_plan_event* events, size_t event_capacity,
+                 size_t* event_count, lsim_interval* busy, size_t busy_capacity,
+                 size_t* busy_count) {
     if (event_count == nullptr || busy_count == nullptr || options == nullptr) {
         return LSIM_STATUS_PLAN_BASE + 1;
     }
     if ((uplink_count > 0 && uplinks == nullptr) || (device_count > 0 && devices == nullptr)) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    // Un pointeur ne dit pas la longueur de son tableau. `rx2` non nul doit annoncer exactement
+    // `device_count` entrées ; sinon refus, sans lire une seule entrée.
+    if (rx2 != nullptr && rx2_count != device_count) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    if (rx2 == nullptr && rx2_count != 0) {
         return LSIM_STATUS_PLAN_BASE + 1;
     }
     try {
@@ -63,6 +74,15 @@ int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_co
             radios[i].rx1_sf = d.rx1_sf;
             radios[i].rx1_bw_hz = d.rx1_bw_hz;
         }
+        std::vector<DeviceRx2> rx2s;
+        if (rx2 != nullptr) {
+            rx2s.resize(rx2_count);
+            for (size_t i = 0; i < rx2_count; ++i) {
+                rx2s[i].rx2_hz = rx2[i].rx2_hz;
+                rx2s[i].rx2_sf = static_cast<std::uint8_t>(rx2[i].rx2_sf);
+                rx2s[i].rx2_bw_hz = rx2[i].rx2_bw_hz;
+            }
+        }
         PlanOptions po;
         po.confirmed_uplinks = options->confirmed_uplinks != 0;
         po.downlink_every = options->downlink_every;
@@ -73,7 +93,9 @@ int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_co
 
         std::vector<Event> evs;
         std::vector<Interval> bus;
-        const PlanStatus st = lsim::plan::plan_downlinks(ups, radios, po, evs, bus);
+        const PlanStatus st = lsim::plan::plan_downlinks(ups, radios, po,
+                                                         rx2 == nullptr ? nullptr : &rx2s, evs,
+                                                         bus);
         if (st != PlanStatus::Ok) return map_status(st);
 
         *event_count = evs.size();
@@ -107,4 +129,34 @@ int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_co
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }
+}
+
+}  // namespace
+
+int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_count,
+                               const lsim_plan_device* devices, size_t device_count,
+                               const lsim_plan_options* options,
+                               lsim_plan_event* events, size_t event_capacity,
+                               size_t* event_count,
+                               lsim_interval* busy, size_t busy_capacity,
+                               size_t* busy_count) {
+    // Comportement inchangé : aucune fenêtre RX2.
+    return run_plan(uplinks, uplink_count, devices, device_count, options, nullptr, 0, events,
+                    event_capacity, event_count, busy, busy_capacity, busy_count);
+}
+
+int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args) {
+    if (args == nullptr) return LSIM_STATUS_PLAN_BASE + 1;
+    // Taille et version d'abord : sans elles, les champs suivants ne peuvent pas être lus sans
+    // risque, l'appelant pouvant compiler contre une autre version de l'en-tête.
+    if (args->struct_size != sizeof(lsim_plan_downlinks_v2_args)) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    if (args->abi_version != LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    return run_plan(args->uplinks, args->uplink_count, args->devices, args->device_count,
+                    args->options, args->rx2, args->rx2_count, args->events,
+                    args->event_capacity, args->event_count, args->busy, args->busy_capacity,
+                    args->busy_count);
 }

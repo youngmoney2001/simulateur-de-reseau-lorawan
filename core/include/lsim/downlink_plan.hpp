@@ -70,6 +70,17 @@ struct DeviceRadio {
     std::uint32_t rx1_bw_hz = 125'000;
 };
 
+// Seconde fenêtre de réception (RX2), repli régional : fréquence et débit **propres**, distincts
+// de RX1. Miroir de `lsim_plan_device_rx2` (frontière C).
+//
+// Jalon I0 : transportée et validée, puis **écartée** — aucun repli n'est produit. Le repli est
+// **opt-in** : `rx2_sf = 0` signifie « aucune descente RX2 ».
+struct DeviceRx2 {
+    std::int64_t rx2_hz = 0;      // 0 : non renseignée ; sinon > 0
+    std::uint8_t rx2_sf = 0;      // 0 : aucun repli ; sinon 7..12
+    std::uint32_t rx2_bw_hz = 0;  // 0 : reprend `rx1_bw_hz` ; sinon 125k, 250k ou 500k
+};
+
 struct PlanOptions {
     bool confirmed_uplinks = false;
     std::uint32_t downlink_every = 0;
@@ -115,6 +126,16 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                           const std::vector<DeviceRadio>& radios, const PlanOptions& options,
                           std::vector<Event>& events, std::vector<Interval>& busy);
 
+// Surcharge avec les paramètres RX2 (jalon I0). `rx2` nul : comportement de la forme ci-dessus.
+// Non nul, il doit compter exactement `radios.size()` entrées, sinon InvalidInput.
+//
+// Au jalon I0 les valeurs RX2 sont **validées puis écartées** : le résultat est identique à celui
+// de la forme sans RX2, quel que soit leur contenu.
+PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
+                          const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                          const std::vector<DeviceRx2>* rx2, std::vector<Event>& events,
+                          std::vector<Interval>& busy);
+
 // Durée d'un downlink de `payload_bytes` au débit RX1 du dispositif (CR 4/5, en-tête explicite,
 // sans CRC, préambule 8, optimisation bas débit si Tsym > 16 ms), en ns.
 lora::Status downlink_airtime_ns(const DeviceRadio& radio, std::uint32_t payload_bytes,
@@ -127,6 +148,11 @@ class DownlinkScheduler {
 public:
     DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options);
 
+    // Surcharge avec les paramètres RX2 (jalon I0). `rx2` nul : comportement du constructeur
+    // ci-dessus. Non nul, il doit compter exactement `radios.size()` entrées, sinon InvalidInput.
+    DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                      const std::vector<DeviceRx2>* rx2);
+
     PlanStatus status() const { return status_; }
 
     // Trame montante reçue par la passerelle, à `end_ns`. Retourne l'émission passerelle planifiée,
@@ -134,9 +160,16 @@ public:
     // Les appels doivent se succéder par fins croissantes (ordre de la trace).
     std::optional<Interval> on_received(std::uint32_t device, std::int64_t end_ns);
 
+    // Surcharge avec les paramètres RX2 du dispositif (jalon I0). RX2 est validé, puis écarté :
+    // le résultat est celui de la forme à deux arguments. Un RX2 invalide fait passer le
+    // planificateur en InvalidRadio.
+    std::optional<Interval> on_received(std::uint32_t device, std::int64_t end_ns,
+                                        const DeviceRx2& rx2);
+
 private:
     PlanOptions options_;
     std::vector<DeviceRadio> radios_;
+    std::vector<DeviceRx2> rx2_;
     std::vector<std::uint32_t> accepted_;
     std::vector<std::int64_t> ack_air_;  // 0 = non calculée
     std::vector<std::int64_t> data_air_;

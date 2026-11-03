@@ -3,7 +3,8 @@
 #
 #   bash scripts/preuves/verifier_abi_layout.sh
 #
-# Attendu en x86-64 : « structures vérifiées : 53, grandeurs : 454 ».
+# Attendu en x86-64 : « structures vérifiées : 55, grandeurs : 477 ».
+# (jalon I0 : +2 structures — lsim_plan_device_rx2, lsim_plan_downlinks_v2_args — et +23 grandeurs)
 # En i386, seule la COMPILATION est possible ici (pas de CRT ni de libc 32 bits) :
 # le script le signale explicitement au lieu de prétendre à une exécution.
 set -euo pipefail

@@ -25,6 +25,19 @@ bool valid_rx1(const DeviceRadio& r) {
     return r.rx1_bw_hz == 125'000 || r.rx1_bw_hz == 250'000 || r.rx1_bw_hz == 500'000;
 }
 
+// Paramètres RX2 valides (jalon I0). `rx2_sf = 0` et `rx2_bw_hz = 0` sont des valeurs
+// **admissibles** — aucun repli ; largeur reprise de RX1 — et non des erreurs : c'est l'absence
+// de valeur, documentée dans le contrat d'ABI.
+bool valid_rx2(const DeviceRx2& r) {
+    if (r.rx2_hz < 0) return false;
+    if (r.rx2_sf != 0 && (r.rx2_sf < 7 || r.rx2_sf > 12)) return false;
+    if (r.rx2_bw_hz != 0 && r.rx2_bw_hz != 125'000 && r.rx2_bw_hz != 250'000 &&
+        r.rx2_bw_hz != 500'000) {
+        return false;
+    }
+    return true;
+}
+
 Outcome from_uplink(UplinkOutcome o) {
     switch (o) {
         case UplinkOutcome::Received: return Outcome::Received;
@@ -82,8 +95,23 @@ lora::Status downlink_airtime_ns(const DeviceRadio& radio, std::uint32_t payload
 PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                           const std::vector<DeviceRadio>& radios, const PlanOptions& options,
                           std::vector<Event>& events, std::vector<Interval>& busy) {
+    // Jalon I0 : aucune fenêtre RX2, comportement inchangé.
+    return plan_downlinks(uplinks, radios, options, nullptr, events, busy);
+}
+
+PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
+                          const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                          const std::vector<DeviceRx2>* rx2, std::vector<Event>& events,
+                          std::vector<Interval>& busy) {
     events.clear();
     busy.clear();
+    if (rx2 != nullptr && rx2->size() != radios.size()) return PlanStatus::InvalidInput;
+    if (rx2 != nullptr) {
+        for (const DeviceRx2& r : *rx2) {
+            if (!valid_rx2(r)) return PlanStatus::InvalidRadio;
+        }
+    }
+    // Jalon I0 : RX2 est transporté et validé, puis **écarté** — aucun repli n'est produit.
     if (options.downlink_payload_bytes > kMaxDownlinkPayloadBytes) return PlanStatus::InvalidOptions;
     if (!std::isfinite(options.gateway_tx_power_dbm) || !std::isfinite(options.device_antenna_gain_dbi) ||
         !std::isfinite(options.device_rx_offset_db)) {
@@ -259,6 +287,10 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
 namespace lsim::plan {
 
 DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options)
+    : DownlinkScheduler(radios, options, nullptr) {}
+
+DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                                     const std::vector<DeviceRx2>* rx2)
     : options_(options), accepted_(radios.size(), 0), ack_air_(radios.size(), 0),
       data_air_(radios.size(), 0) {
     if (options.downlink_payload_bytes > kMaxDownlinkPayloadBytes) {
@@ -276,13 +308,39 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
             return;
         }
     }
+    if (rx2 != nullptr) {
+        // Le comptage doit être annoncé par l'appelant : `rx2_count` côté C. Un tableau de
+        // longueur différente est une erreur d'appel, pas une entrée à tronquer.
+        if (rx2->size() != radios.size()) {
+            status_ = PlanStatus::InvalidInput;
+            return;
+        }
+        for (const DeviceRx2& r : *rx2) {
+            if (!valid_rx2(r)) {
+                status_ = PlanStatus::InvalidRadio;
+                return;
+            }
+        }
+        rx2_ = *rx2;
+    }
     // Durées de trame : calculées à la première utilisation (comme `plan_downlinks`, une erreur
     // n'est signalée que si une descente est réellement planifiée).
     radios_ = radios;
 }
 
 std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns) {
+    // Jalon I0 : sans RX2 explicite, le comportement est celui d'avant l'extension.
+    return on_received(device, end_ns, DeviceRx2{});
+}
+
+std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns,
+                                                       const DeviceRx2& rx2) {
     if (status_ != PlanStatus::Ok) return std::nullopt;
+    // Jalon I0 : RX2 est validé, puis **écarté** — aucun repli n'est produit.
+    if (!valid_rx2(rx2)) {
+        status_ = PlanStatus::InvalidRadio;
+        return std::nullopt;
+    }
     ++accepted_[device];
     const bool queued = options_.downlink_every > 0 && accepted_[device] % options_.downlink_every == 0;
     std::uint32_t base = 0;

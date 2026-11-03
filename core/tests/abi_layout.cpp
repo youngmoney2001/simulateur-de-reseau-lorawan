@@ -400,6 +400,30 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_event__outcome = 13;
     inline constexpr size_t off_lsim_plan_event__hop_count = 14;
     inline constexpr size_t off_lsim_plan_event__hops = 16;
+    // lsim_plan_device_rx2 (jalon I0)
+    inline constexpr size_t size_lsim_plan_device_rx2 = 32;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_hz = 0;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_sf = 8;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_bw_hz = 12;
+    inline constexpr size_t off_lsim_plan_device_rx2__reserved = 16;
+    // lsim_plan_downlinks_v2_args (jalon I0)
+    inline constexpr size_t size_lsim_plan_downlinks_v2_args = 76;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__struct_size = 0;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__abi_version = 4;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__uplinks = 8;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__uplink_count = 12;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__devices = 16;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__device_count = 20;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__options = 24;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2 = 28;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__events = 32;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__event_capacity = 36;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__event_count = 40;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy = 44;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_capacity = 48;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 52;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 56;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 60;
     // lsim_loop_region
     inline constexpr size_t size_lsim_loop_region = 160;
     inline constexpr size_t off_lsim_loop_region__dr_sf = 0;
@@ -911,6 +935,30 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_event__outcome = 13;
     inline constexpr size_t off_lsim_plan_event__hop_count = 14;
     inline constexpr size_t off_lsim_plan_event__hops = 16;
+    // lsim_plan_device_rx2 (jalon I0)
+    inline constexpr size_t size_lsim_plan_device_rx2 = 32;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_hz = 0;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_sf = 8;
+    inline constexpr size_t off_lsim_plan_device_rx2__rx2_bw_hz = 12;
+    inline constexpr size_t off_lsim_plan_device_rx2__reserved = 16;
+    // lsim_plan_downlinks_v2_args (jalon I0)
+    inline constexpr size_t size_lsim_plan_downlinks_v2_args = 128;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__struct_size = 0;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__abi_version = 4;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__uplinks = 8;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__uplink_count = 16;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__devices = 24;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__device_count = 32;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__options = 40;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2 = 48;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__events = 56;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__event_capacity = 64;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__event_count = 72;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy = 80;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_capacity = 88;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 96;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 104;
+    inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 112;
     // lsim_loop_region
     inline constexpr size_t size_lsim_loop_region = 160;
     inline constexpr size_t off_lsim_loop_region__dr_sf = 0;
@@ -1389,6 +1437,28 @@ static_assert(offsetof(lsim_plan_event, kind) == expected::off_lsim_plan_event__
 static_assert(offsetof(lsim_plan_event, outcome) == expected::off_lsim_plan_event__outcome, "lsim_plan_event::outcome");
 static_assert(offsetof(lsim_plan_event, hop_count) == expected::off_lsim_plan_event__hop_count, "lsim_plan_event::hop_count");
 static_assert(offsetof(lsim_plan_event, hops) == expected::off_lsim_plan_event__hops, "lsim_plan_event::hops");
+static_assert(sizeof(lsim_plan_device_rx2) == expected::size_lsim_plan_device_rx2, "lsim_plan_device_rx2 : taille");
+static_assert(offsetof(lsim_plan_device_rx2, rx2_hz) == expected::off_lsim_plan_device_rx2__rx2_hz, "lsim_plan_device_rx2::rx2_hz");
+static_assert(offsetof(lsim_plan_device_rx2, rx2_sf) == expected::off_lsim_plan_device_rx2__rx2_sf, "lsim_plan_device_rx2::rx2_sf");
+static_assert(offsetof(lsim_plan_device_rx2, rx2_bw_hz) == expected::off_lsim_plan_device_rx2__rx2_bw_hz, "lsim_plan_device_rx2::rx2_bw_hz");
+static_assert(offsetof(lsim_plan_device_rx2, reserved) == expected::off_lsim_plan_device_rx2__reserved, "lsim_plan_device_rx2::reserved");
+static_assert(sizeof(lsim_plan_downlinks_v2_args) == expected::size_lsim_plan_downlinks_v2_args, "lsim_plan_downlinks_v2_args : taille");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, struct_size) == expected::off_lsim_plan_downlinks_v2_args__struct_size, "lsim_plan_downlinks_v2_args::struct_size");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, abi_version) == expected::off_lsim_plan_downlinks_v2_args__abi_version, "lsim_plan_downlinks_v2_args::abi_version");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, uplinks) == expected::off_lsim_plan_downlinks_v2_args__uplinks, "lsim_plan_downlinks_v2_args::uplinks");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, uplink_count) == expected::off_lsim_plan_downlinks_v2_args__uplink_count, "lsim_plan_downlinks_v2_args::uplink_count");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, devices) == expected::off_lsim_plan_downlinks_v2_args__devices, "lsim_plan_downlinks_v2_args::devices");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, device_count) == expected::off_lsim_plan_downlinks_v2_args__device_count, "lsim_plan_downlinks_v2_args::device_count");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, options) == expected::off_lsim_plan_downlinks_v2_args__options, "lsim_plan_downlinks_v2_args::options");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, rx2) == expected::off_lsim_plan_downlinks_v2_args__rx2, "lsim_plan_downlinks_v2_args::rx2");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, events) == expected::off_lsim_plan_downlinks_v2_args__events, "lsim_plan_downlinks_v2_args::events");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, event_capacity) == expected::off_lsim_plan_downlinks_v2_args__event_capacity, "lsim_plan_downlinks_v2_args::event_capacity");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, event_count) == expected::off_lsim_plan_downlinks_v2_args__event_count, "lsim_plan_downlinks_v2_args::event_count");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, busy) == expected::off_lsim_plan_downlinks_v2_args__busy, "lsim_plan_downlinks_v2_args::busy");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_capacity) == expected::off_lsim_plan_downlinks_v2_args__busy_capacity, "lsim_plan_downlinks_v2_args::busy_capacity");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_count) == expected::off_lsim_plan_downlinks_v2_args__busy_count, "lsim_plan_downlinks_v2_args::busy_count");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, rx2_count) == expected::off_lsim_plan_downlinks_v2_args__rx2_count, "lsim_plan_downlinks_v2_args::rx2_count");
+static_assert(offsetof(lsim_plan_downlinks_v2_args, reserved) == expected::off_lsim_plan_downlinks_v2_args__reserved, "lsim_plan_downlinks_v2_args::reserved");
 static_assert(sizeof(lsim_loop_region) == expected::size_lsim_loop_region, "lsim_loop_region : taille");
 static_assert(offsetof(lsim_loop_region, dr_sf) == expected::off_lsim_loop_region__dr_sf, "lsim_loop_region::dr_sf");
 static_assert(offsetof(lsim_loop_region, max_dr) == expected::off_lsim_loop_region__max_dr, "lsim_loop_region::max_dr");
@@ -1549,7 +1619,7 @@ inline int run() {
 int main() {
     printf("ABI %s : pointeur %zu octets, alignement max %zu\n", abi_layout::kAbiName,
                 abi_layout::kPointerSize, abi_layout::kMaxAlign);
-    printf("structures vérifiées : 53, grandeurs : 454\n");
+    printf("structures vérifiées : 55, grandeurs : 477\n");
     return abi_layout::run();
 }
 #endif
