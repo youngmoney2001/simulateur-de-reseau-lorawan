@@ -348,9 +348,114 @@ issues existent déjà dans `HopOutcome`.
 
 - **Aucune cryptographie** : ni clé, ni `MIC`, ni chiffrement. « Reçu » veut dire « décodable au
   niveau radio », pas « authentifié ».
-- **Le Join-Accept n'occupe pas la passerelle** : il n'est opposé ni aux ACK de données ni aux
-  autres descentes ; seul le fait que le terminal écoute est vérifié.
-- **Le Join-Request ne consomme pas le rapport cyclique du terminal** : il est simulé comme une
-  transmission isolée (même mécanisme que les réémissions).
 - **Une seule jointure par terminal** : `join_requests_s` ne modélise pas le rejoint 1.1 ni un
   changement de session pendant que des trames sont en vol.
+
+Les deux limites suivantes, présentes jusqu'à D3.12, **ne sont plus d'actualité** : l'occupation de la
+passerelle et le rapport cyclique sont désormais arbitrés, voir §10.
+
+| Limite levée | Depuis D3.13 |
+|---|---|
+| « le Join-Accept n'occupe pas la passerelle » | il passe par l'arbitre partagé : une fenêtre couverte n'est pas émise (`gateway_busy`), une émission retarde les autres |
+| « le Join-Request ne consomme pas le rapport cyclique » | il passe par `DutyCycleLedger` : une tentative qui dépasse le budget n'est pas émise du tout |
+
+## 10. Arbitrage radio partagé (D3.13)
+
+Avant D3.13, trois implémentations indépendantes décidaient de l'occupation de l'émetteur, et la
+quatrième (le Join-Accept) n'en décidait rien du tout :
+
+| Producteur | Où il vivait | Ressource utilisée |
+|---|---|---|
+| ACK et downlinks, chemin du cœur | `DownlinkScheduler` (C++, `lsim_plan_downlinks_v1`) | `busy` calculé en C++ |
+| ACK et downlinks, oracle Python | `trace_events._schedule_gateway` | `busy_until` local |
+| ACK retardé ou répété | `ack_mac.plan_acks` | `busy_until` local |
+| Join-Accept RX1 / RX2 / rejeu | `join._evaluer` | **aucune** |
+
+D3.13 les fait converger vers **un seul arbitre**, `lsim.arbitre.GatewayArbiter`, et ajoute la
+contrainte réglementaire qui manquait, `lsim.arbitre.DutyCycleLedger`.
+
+### 10.1 Règles d'arbitrage
+
+| Règle | Énoncé | Statut |
+|---|---|---|
+| 1. Émetteur unique | la passerelle n'émet qu'une descente à la fois | modélisé |
+| 2. File monotone | `début = max(instant_prêt, occupé_jusqu'à)` ; `occupé_jusqu'à` ne décroît jamais dans une passe | **hypothèse** (modèle « une file d'émission »), et la règle historique du cœur |
+| 3. Ordre chronologique | file d'événements : une demande née du placement d'une autre (RX2 après RX1) entre à son propre instant | modélisé |
+| 4. Aucune priorité inventée | `ArbitrationPolicy.priority` est **vide** : à instant égal, ordre de dépôt | décision |
+| 5. Fenêtre | `début >= fin de fenêtre` ⇒ `window_missed`, **aucune occupation** | modélisé |
+| 6. Émission tardive | `allow_late=True` (couche MAC) : émise hors fenêtre, elle occupe quand même | déjà le comportement de `ack_mac` |
+| 7. Rapport cyclique | budget `airtime cumulé + airtime <= rapport × instant`, **avant** l'appel au moteur | **hypothèse**, la même que pour les réémissions |
+
+La règle 4 est une décision, pas une approximation : LoRaWAN ne définit pas d'ordre entre un
+Join-Accept et l'ACK d'un autre terminal. Le simulateur n'en invente pas ; une politique explicite
+reste configurable, à charge pour l'appelant de la justifier.
+
+La règle 5 ne vérifie que le **début** de l'émission, comme le planificateur du cœur : une descente
+qui commence dans la fenêtre et finit après sa fermeture est émise. C'est la règle historique,
+conservée pour ne pas rompre la parité.
+
+### 10.2 Ce que ça change, mesuré
+
+Scénario `retransmissions_ack_tardif.yaml`, trames de 51 octets en SF12 (descentes longues),
+`join_requests_s: [10]`, `retries: 2` :
+
+| Réglage | RX1 | RX2 | Session |
+|---|---|---|---|
+| `ack_delay_ms: 0` | `delivered` | — | 1 |
+| `ack_repetitions: 2`, `ack_delay_ms: 12000` | `gateway_busy` | `delivered` | 1 |
+| `ack_repetitions: 3`, `ack_delay_ms: 12000` | `gateway_busy` | `gateway_busy` | **0** |
+
+`ack_delay_ms: 12800` place un ACK à 15,288 s, pendant l'émission du Join-Accept (15,206 →
+15,453 s) : l'ACK part à 15,453 s. **La ressource est unique, dans les deux sens.**
+
+RX2 est désormais **retardée par l'émission de RX1** quand celle-ci dépasse l'ouverture de RX2 :
+c'est le cas mesuré en SF12, où un Join-Accept de 33 octets occupe l'émetteur 1,81 s. La correction
+RX1/RX2 de D3.12 est intacte — RX2 reste un **secours**, jamais une seconde copie — mais elle
+s'ajoute à la file au lieu d'être posée à un instant fixe.
+
+### 10.3 Rapport cyclique des Join-Request
+
+`DutyCycleLedger` applique `airtime cumulé + airtime <= rapport × instant`, avec le
+`duty_cycle` du groupe (et la limite de sous-bande régionale, déjà appliquée par
+`GroupModel.effective_duty_cycle`). Le budget est **global** : les trames de données et les
+réémissions du terminal le consomment comme les Join-Request, parce que la contrainte
+réglementaire porte sur l'occupation de la sous-bande, pas sur la nature de la trame.
+
+Une tentative refusée :
+
+- n'entre **pas** dans le moteur : aucune collision provoquée, aucun temps d'antenne consommé ;
+- porte l'issue `blocked_duty_cycle` sur `JoinAttempt.request_outcome` ;
+- apparaît en trace avec l'issue `suppressed` du contrat — jamais comme une transmission.
+
+Mesuré avec `duty_cycle: 0.001` et `join_retries: 2` : 2 tentatives refusées, 0 Join-Accept
+émis, 0 session. `enforce_duty_cycle: false` rend le budget inopérant (1 Join-Accept émis, session
+ouverte) — la même clef que pour les réémissions.
+
+### 10.4 Conséquences sur le chemin d'exécution
+
+Dès qu'une jointure radio est déclarée, les descentes passent par le planificateur **Python**
+(`lsim.ack_mac`) au lieu de celui du cœur, avec le comportement nominal (`AckTiming()` : délai nul,
+une copie). C'est le seul moyen de faire partager un émetteur unique sans modifier l'ABI : le cœur
+ne peut pas arbitrer une demande qu'il ne connaît pas. Sans jointure radio, **rien ne change** : le
+cœur garde la main, et la parité avec l'oracle Python reste exigée test par test
+(`tests/test_downlink_plan_parity.py`).
+
+L'occupation rendue par l'arbitre — ACK **et** Join-Accept — est réinjectée au moteur à
+l'itération suivante du point fixe : une trame montante qui chevauche une descente est perdue
+(`LOST_GATEWAY_BUSY`), dans les deux sens.
+
+### 10.5 Limites explicites de D3.13
+
+- **Le rapport cyclique descendant n'est pas modélisé.** La passerelle n'a pas de budget
+  réglementaire : seul le terminal en a un. Une passerelle réelle est soumise à une limite, que le
+  simulateur ne connaît pas.
+- **Le jeu de tentatives est figé avant le placement partagé.** Les tentatives qui suivraient une
+  jointure réussie sont retirées du calendrier par une sonde qui ne connaît que la contention
+  entre Join-Accept, pas celle avec les ACK. Si le placement partagé fait échouer une jointure que
+  la sonde croyait réussie, la tentative de secours correspondante peut manquer.
+- **Un seul émetteur par passerelle** : ni cartes radio multiples, ni descentes simultanées sur
+  plusieurs canaux. Un équipement réel à huit canaux descendants n'est pas représenté.
+- **La durée d'ouverture des fenêtres (1 s) est une hypothèse du simulateur**, déjà celle du cœur.
+  LoRaWAN fixe le délai d'ouverture, pas la durée d'écoute.
+- **La jointure reste non authentifiée** : §10.1 ne change rien à §9.4 — aucune clé, aucun `MIC`.
+- **Le cœur C++ et l'ABI ne sont pas modifiés.**

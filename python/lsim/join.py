@@ -2,24 +2,48 @@
 
 Ce module fait passer la jointure par le **moteur causal**, au lieu de la déclarer acceptée. Il ne
 fait ni cryptographie ni validation de `MIC` : il simule le **transport** de la jointure, pas son
-authentification (voir `docs/MAC_CONSOLIDATION.md` §9).
+authentification (voir `docs/MAC_CONSOLIDATION.md` §9 et §10).
 
 Sémantique des fenêtres, telle que LoRaWAN la définit : après un Join-Request le terminal ouvre
 **RX1** (`JOIN_ACCEPT_DELAY1`, 5 s) puis **RX2** (`JOIN_ACCEPT_DELAY2`, 6 s). RX2 est une fenêtre de
 **secours**, pas une seconde copie systématique : si le Join-Accept est reçu en RX1, aucune émission
 RX2 n'a lieu. Le réseau n'émet en RX2 que lorsque RX1 n'a pas abouti (terminal en émission, descente
-sous la sensibilité). Un Join-Accept **rejoué** est un cas distinct : c'est une émission
-supplémentaire du même message (même `JoinNonce`), que le terminal reçoit et refuse — elle ne crée
-aucune session.
+sous la sensibilité, **ou passerelle déjà en émission**). Un Join-Accept **rejoué** est un cas
+distinct : c'est une émission supplémentaire du même message (même `JoinNonce`), que le terminal
+reçoit et refuse — elle ne crée aucune session.
 
 | Étape | Ce que le moteur en fait |
 |---|---|
-| Join-Request | une transmission uplink de 23 octets (`lsim_encode_join_request`) : temps de vol, collision, sensibilité, couverture, placement causal |
-| Join-Accept | une descente de 33 octets (`lsim_encode_join_accept`), en RX1 ou — si RX1 a échoué — en RX2 |
+| Join-Request | une transmission uplink de 23 octets (`lsim_encode_join_request`) : temps de vol, collision, sensibilité, couverture, placement causal, **et rapport cyclique du terminal** |
+| Join-Accept | une descente de 33 octets (`lsim_encode_join_accept`), placée par l'arbitre radio partagé (`lsim.arbitre`) : RX1, puis RX2 en secours, puis rejeux éventuels |
 | session | ouverte **seulement** si un Join-Accept est reçu, si le terminal écoutait et si son `JoinNonce` dépasse le dernier accepté |
 
-Deux limites explicites (§9.4) : le Join-Accept n'est opposé ni à l'occupation de la passerelle par
-les ACK de données, ni au temps de vol des autres descentes.
+## Ressources partagées (D3.13)
+
+Le Join-Accept passe par le **même** `GatewayArbiter` que les ACK et les downlinks : une seule
+file d'émission, `début = max(instant_prêt, occupé_jusqu'à)`. Trois conséquences, toutes mesurées :
+
+1. un Join-Accept dont la fenêtre est couverte par une émission en cours **n'est pas émis**
+   (`gateway_busy`) ; RX2 est alors tentée en secours ;
+2. un Join-Accept émis **occupe** l'émetteur : un ACK demandé dans la seconde suivante est
+   retardé, et une trame montante qui le chevauche est perdue (demi-duplex, par le point fixe) ;
+3. une émission supprimée, retardée ou manquée **ne crée aucune session**.
+
+Le Join-Request, lui, passe par `DutyCycleLedger` : le rapport cyclique configuré du terminal est
+un budget (`airtime cumulé + airtime <= rapport × instant`), appliqué avant l'appel au moteur. Une
+tentative refusée n'est **pas** une émission : elle n'entre pas dans la simulation, ne provoque
+aucune collision et ne consomme aucun temps d'antenne.
+
+## Limites explicites
+
+- **Aucune cryptographie** : ni clé, ni `MIC`, ni chiffrement. « Reçu » veut dire « décodable au
+  niveau radio ».
+- **Le jeu de tentatives est figé avant le placement partagé.** Les tentatives qui suivraient une
+  jointure réussie sont retirées du calendrier par une sonde qui ne connaît que la contention
+  entre Join-Accept (pas celle avec les ACK). Si le placement partagé fait échouer une jointure
+  que la sonde croyait réussie, la tentative de secours correspondante peut manquer : c'est une
+  approximation bornée, signalée ici plutôt que masquée.
+- **Une seule jointure par terminal** : `join_requests_s` ne modélise pas le rejoint 1.1.
 """
 
 from __future__ import annotations
@@ -27,7 +51,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence
 
-from lsim.ack_mac import _decodable
+from lsim.ack_mac import RX1_WINDOW_NS, _decodable
+from lsim.arbitre import DUTY_CYCLE, EmissionRequest, GatewayArbiter
 from lsim.downlink_plan import simulate_causal
 from lsim.lora import RadioConfig, time_on_air_ns
 from lsim.sessions import JoinAccept, SessionTimeline
@@ -38,6 +63,10 @@ JOIN_ACCEPT_DELAY1_NS = 5_000_000_000   # RX1 après le Join-Request
 JOIN_ACCEPT_DELAY2_NS = 6_000_000_000   # RX2 : fenêtre de secours, pas une copie systématique
 JOIN_RETRY_DELAY_NS = 10_000_000_000    # nouvelle tentative après un échec
 JOIN_REPLAY_DELAY_NS = 1_000_000_000    # écart entre deux émissions du même Join-Accept
+# Durée d'ouverture de la fenêtre de jointure : **hypothèse du simulateur**, la même que la
+# fenêtre RX1 des données. LoRaWAN fixe le délai d'ouverture (`JOIN_ACCEPT_DELAY1/2`), pas la
+# durée d'écoute du terminal.
+JOIN_WINDOW_NS = RX1_WINDOW_NS
 
 # `TxRecord.outcome` : 0 sous la sensibilité, 1 collision, 2 reçue, 3 passerelle occupée.
 _UPLINK_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "received",
@@ -46,6 +75,8 @@ _UPLINK_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "received",
 RX1 = "rx1"
 RX2 = "rx2"
 REPLAY = "replay"
+BLOCKED_DUTY_CYCLE = "blocked_duty_cycle"   # tentative refusée par le rapport cyclique :
+                                           # aucune émission
 
 
 @dataclass(frozen=True)
@@ -91,7 +122,9 @@ class AcceptEmission:
     """Une émission de Join-Accept **réellement effectuée**, avec sa fenêtre et son issue.
 
     `window` vaut `rx1`, `rx2` (secours) ou `replay` (émission d'un message déjà consommé).
-    `outcome` vaut `delivered`, `not_listened`, `lost_sensitivity` ou `replayed`.
+    `outcome` vaut `delivered`, `not_listened`, `lost_sensitivity`, `gateway_busy` ou `replayed`.
+    `gateway_busy` : la passerelle émettait déjà et n'a pas pu placer l'émission dans la fenêtre ;
+    **rien n'a été émis**, et l'occupation de l'émetteur n'en porte aucune trace.
     """
 
     at_ns: int
@@ -102,6 +135,15 @@ class AcceptEmission:
     def received(self) -> bool:
         return self.outcome == "delivered"
 
+    @property
+    def emitted(self) -> bool:
+        """L'émetteur a-t-il réellement produit cette émission ?
+
+        `gateway_busy` : la fenêtre était couverte, **rien n'a été émis**. L'émission est datée
+        (pour la trace) mais n'occupe pas la ressource.
+        """
+        return self.outcome != "gateway_busy"
+
 
 @dataclass(frozen=True)
 class JoinAttempt:
@@ -110,7 +152,8 @@ class JoinAttempt:
     device: int
     request_ns: int
     request_end_ns: int
-    request_outcome: str              # received | lost_sensitivity | lost_collision | lost_gateway_busy
+    request_outcome: str              # received | lost_sensitivity | lost_collision
+                                      # | lost_gateway_busy | blocked_duty_cycle
     accepts: tuple[AcceptEmission, ...] = ()
     accept_ns: Optional[int] = None   # début de l'émission **acceptée** (None : aucune)
     accept_end_ns: Optional[int] = None
@@ -143,6 +186,11 @@ class JoinAttempt:
     def joined(self) -> bool:
         return self.session > 0
 
+    @property
+    def emitted(self) -> bool:
+        """La tentative a-t-elle réellement occupé la voie montante ?"""
+        return self.request_outcome != BLOCKED_DUTY_CYCLE
+
 
 @dataclass(frozen=True)
 class JoinResult:
@@ -154,6 +202,7 @@ class JoinResult:
 
     attempts: tuple[JoinAttempt, ...] = ()
     timelines: dict = field(default_factory=dict)
+    blocked_by_duty_cycle: int = 0   # tentatives refusées par le rapport cyclique
 
     @property
     def joined(self) -> int:
@@ -168,15 +217,38 @@ class JoinResult:
         return len(self.attempts)
 
 
+class JoinPlan:
+    """Join-Accept déposés auprès d'un arbitre partagé, en attente de résolution.
+
+    Les émissions ne sont connues qu'après `arbitre.resolve()` : c'est l'arbitre qui décide si le
+    Join-Accept tient dans sa fenêtre, face aux ACK et aux autres descentes déjà déposés.
+    """
+
+    def __init__(self, attentes, nonces, bloquees, timelines):
+        self._attentes = attentes
+        self._nonces = nonces
+        self._bloquees = bloquees
+        self._timelines = timelines
+
+    def result(self) -> JoinResult:
+        """Tentatives et sessions, **après** résolution de l'arbitre."""
+        tentatives, acceptations, _succes = _clore(self._attentes, self._nonces)
+        return _assembler(self._bloquees, tentatives, acceptations, self._timelines)
+
+
 def join_request_device(device, at_ns: int):
     """Le terminal réduit à un seul Join-Request, à l'instant voulu.
 
     Même mécanisme que `retransmissions._virtual` : le moteur ne prend en entrée que des calendriers
     périodiques, donc une transmission isolée est un terminal à une transmission. La trame pèse
     23 octets, ce qui allonge son temps de vol par rapport à une trame de données.
+
+    Le rapport cyclique du terminal est transmis tel quel au moteur : il n'a aucun effet ici (une
+    seule émission, donc aucun espacement à calculer), mais il ne doit pas être neutralisé — c'est
+    `DutyCycleLedger` qui applique le budget, avant l'appel au moteur.
     """
     return replace(device, start_offset_ns=int(at_ns), messages=1, downlink=None,
-                   duty_cycle=1.0, payload_bytes=JOIN_REQUEST_BYTES, rf=device.rf)
+                   payload_bytes=JOIN_REQUEST_BYTES, rf=device.rf)
 
 
 def accept_airtime_ns(radio) -> int:
@@ -184,6 +256,14 @@ def accept_airtime_ns(radio) -> int:
     config = RadioConfig(spreading_factor=radio.rx1_sf, bandwidth_hz=radio.rx1_bw_hz,
                          coding_rate=1, low_data_rate_optimize=radio.rx1_sf >= 11)
     return time_on_air_ns(config, JOIN_ACCEPT_BYTES)
+
+
+def join_request_airtime_ns(device) -> int:
+    """Temps de vol du Join-Request (23 octets), au débit montant du terminal."""
+    sf = device.spreading_factor
+    config = RadioConfig(spreading_factor=sf, bandwidth_hz=125_000, coding_rate=1,
+                         low_data_rate_optimize=sf >= 11)
+    return time_on_air_ns(config, JOIN_REQUEST_BYTES)
 
 
 def _transmitting(attempts, device: int, instant: int) -> bool:
@@ -206,75 +286,142 @@ def _records(devices, gateway, propagation, radios, options, environment, candid
     return trouve
 
 
-def _evaluer(candidats, enregistrements, radios, options, data_attempts, join_options, nonces):
-    """Une passe : RX1, puis RX2 **seulement si RX1 a échoué**, puis rejeux éventuels.
+class _Attente:
+    """Une tentative dont les émissions sont déposées, en attente de résolution de l'arbitre."""
 
-    `nonces` porte, par terminal, le dernier JoinNonce accepté (muté ici).
-    Renvoie `(tentatives, acceptations, succès par terminal)`.
+    __slots__ = ("device_index", "at_ns", "request_ns", "request_end_ns", "request_outcome",
+                 "emissions", "accepte")
+
+    def __init__(self, device_index: int, at_ns: int, request_ns: int, request_end_ns: int,
+                 request_outcome: str):
+        self.device_index = device_index
+        self.at_ns = at_ns
+        self.request_ns = request_ns
+        self.request_end_ns = request_end_ns
+        self.request_outcome = request_outcome
+        self.emissions: list[AcceptEmission] = []
+        self.accepte: Optional[tuple[int, int]] = None
+
+    def finalize(self) -> JoinAttempt:
+        return JoinAttempt(self.device_index, self.request_ns, self.request_end_ns,
+                           self.request_outcome, tuple(self.emissions),
+                           self.accepte[0] if self.accepte is not None else None,
+                           self.accepte[1] if self.accepte is not None else None, 0, None)
+
+
+def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_options, arbitre,
+             attente: _Attente, accepte_par: dict):
+    """Dépose la demande RX1 d'une tentative ; RX2 et rejeux naîtront de la réaction.
+
+    Fonction séparée pour que chaque tentative ait sa propre fermeture : les réactions sont
+    appelées pendant la résolution, donc bien après la boucle qui les a créées.
     """
-    tentatives: list[JoinAttempt] = []
-    acceptations: list[tuple[int, int, int]] = []  # (terminal, instant d'ouverture, nonce)
-    succes: dict[int, int] = {}                    # terminal -> instant de la réussite
+    airtime = accept_airtime_ns(radio)
 
+    def ecoute(instant: int) -> str:
+        if _transmitting(data_attempts, device_index, instant):
+            return "not_listened"
+        if not _decodable(record.rssi_dbm, radio, options):
+            return "lost_sensitivity"
+        return "delivered"
+
+    def fenetre(instant: int) -> EmissionRequest:
+        return EmissionRequest(label="join_accept", device=device_index, ready_ns=instant,
+                               duration_ns=airtime, window=(instant, instant + JOIN_WINDOW_NS))
+
+    def rejeux(deposer, depuis: int) -> None:
+        """Rejeu : mêmes octets, même JoinNonce, après l'acceptation. Reçu puis refusé."""
+        for rang in range(join_options.accept_replays):
+            deposer(fenetre(depuis + (rang + 1) * JOIN_REPLAY_DELAY_NS), ensuite=apres_rejeu)
+
+    def apres_rejeu(emission, deposer) -> None:
+        if not emission.emitted:
+            issue = "gateway_busy"
+        else:
+            brut = ecoute(emission.start_ns)
+            issue = "replayed" if brut == "delivered" else brut
+        attente.emissions.append(AcceptEmission(emission.start_ns, REPLAY, issue))
+
+    def apres_rx2(emission, deposer) -> None:
+        if not emission.emitted:
+            issue = "gateway_busy"
+        else:
+            issue = ecoute(emission.start_ns)
+        attente.emissions.append(AcceptEmission(emission.start_ns, RX2, issue))
+        if issue == "delivered":
+            attente.accepte = (emission.start_ns, emission.end_ns)
+            accepte_par[device_index] = emission.start_ns
+            rejeux(deposer, emission.end_ns)
+
+    def apres_rx1(emission, deposer) -> None:
+        if not emission.emitted:
+            # La passerelle émettait déjà : rien n'a été émis, la fenêtre est perdue.
+            issue = "gateway_busy"
+        else:
+            issue = ecoute(emission.start_ns)
+        attente.emissions.append(AcceptEmission(emission.start_ns, RX1, issue))
+        if issue == "delivered":
+            attente.accepte = (emission.start_ns, emission.end_ns)
+            accepte_par[device_index] = emission.start_ns
+            rejeux(deposer, emission.end_ns)
+        elif join_options.rx2_fallback:
+            # Fenêtre de secours : RX2 n'est émise que parce que RX1 n'a pas abouti.
+            deposer(fenetre(record.end_ns + JOIN_ACCEPT_DELAY2_NS), ensuite=apres_rx2)
+
+    demande = fenetre(record.end_ns + JOIN_ACCEPT_DELAY1_NS)
+    # Un terminal déjà joint dans cette passe ne reçoit pas de second Join-Accept : la condition
+    # est évaluée au moment du placement, quand l'issue des tentatives précédentes est connue.
+    arbitre.demand(replace(demande, condition=lambda: device_index not in accepte_par),
+                   ensuite=apres_rx1)
+
+
+def _evaluer(candidats, enregistrements, radios, options, data_attempts, join_options, arbitre):
+    """Dépose les demandes de Join-Accept auprès de l'arbitre.
+
+    Renvoie les tentatives **en attente** : leurs émissions ne sont connues qu'après
+    `arbitre.resolve()`. RX2 naît du placement de RX1 (secours) et les rejeux naissent d'une
+    acceptation ; déposés depuis la réaction de l'arbitre, ils sont placés à leur propre instant
+    dans la même file chronologique, devant les demandes déjà déposées qui sont plus tardives.
+    """
+    attentes: list[_Attente] = []
+    accepte_par: dict[int, int] = {}
     for device_index, at_ns in candidats:
-        if device_index in succes:
-            continue        # terminal déjà joint dans cette passe : la tentative n'est pas jouée
         record = enregistrements.get((device_index, at_ns))
         if record is None:
             continue
-        radio = radios[device_index]
-        airtime = accept_airtime_ns(radio)
+        attente = _Attente(device_index, at_ns, record.start_ns, record.end_ns,
+                           _UPLINK_OUTCOME.get(record.outcome, "lost"))
+        attentes.append(attente)
         if record.outcome != 2:
-            tentatives.append(JoinAttempt(device_index, record.start_ns, record.end_ns,
-                                          _UPLINK_OUTCOME.get(record.outcome, "lost")))
             continue
+        _deposer(device_index, at_ns, record, radios[device_index], options, data_attempts,
+                 join_options, arbitre, attente, accepte_par)
+    return attentes
 
-        def ecoute(instant: int) -> str:
-            if _transmitting(data_attempts, device_index, instant):
-                return "not_listened"
-            if not _decodable(record.rssi_dbm, radio, options):
-                return "lost_sensitivity"
-            return "delivered"
 
-        emissions: list[AcceptEmission] = []
-        accepte = None                                  # (début, fin) de l'émission acceptée
-        rx1 = record.end_ns + JOIN_ACCEPT_DELAY1_NS
-        issue = ecoute(rx1)
-        emissions.append(AcceptEmission(rx1, RX1, issue))
-        if issue == "delivered":
-            accepte = (rx1, rx1 + airtime)
-        elif join_options.rx2_fallback:
-            # Fenêtre de secours : RX2 n'est émise que parce que RX1 n'a pas abouti.
-            rx2 = record.end_ns + JOIN_ACCEPT_DELAY2_NS
-            issue2 = ecoute(rx2)
-            emissions.append(AcceptEmission(rx2, RX2, issue2))
-            if issue2 == "delivered":
-                accepte = (rx2, rx2 + airtime)
-
-        nonce = nonces.get(device_index, -1) + 1
-        if accepte is not None:
-            acceptations.append((device_index, accepte[1], nonce))
-            succes[device_index] = at_ns
-            nonces[device_index] = nonce
-            # Rejeu : mêmes octets, même JoinNonce, après l'acceptation. Reçu puis refusé.
-            for rang in range(join_options.accept_replays):
-                instant = accepte[1] + (rang + 1) * JOIN_REPLAY_DELAY_NS
-                issue_rejeu = ecoute(instant)
-                emissions.append(AcceptEmission(
-                    instant, REPLAY, "replayed" if issue_rejeu == "delivered" else issue_rejeu))
-
-        tentatives.append(JoinAttempt(
-            device_index, record.start_ns, record.end_ns, "received", tuple(emissions),
-            accepte[0] if accepte is not None else None,
-            accepte[1] if accepte is not None else None,
-            0, nonce if accepte is not None else None))
+def _clore(attentes, nonces):
+    """Attribue les `JoinNonce` et referme les tentatives, **après** résolution de l'arbitre."""
+    tentatives: list[JoinAttempt] = []
+    acceptations: list[tuple[int, int, int]] = []  # (terminal, instant d'ouverture, nonce)
+    succes: dict[int, int] = {}                    # terminal -> instant de la réussite
+    for attente in attentes:
+        tentative = attente.finalize()
+        if tentative.accept_end_ns is not None:
+            nonce = nonces.get(attente.device_index, -1) + 1
+            nonces[attente.device_index] = nonce
+            tentative = replace(tentative, nonce=nonce)
+            acceptations.append((attente.device_index, tentative.accept_end_ns, nonce))
+            succes[attente.device_index] = attente.at_ns
+        tentatives.append(tentative)
     return tentatives, acceptations, succes
 
 
 def simulate_joins(devices, gateway, propagation, radios, options, environment,
                    requests: Sequence[tuple[int, int]], timelines=None,
                    data_attempts: Sequence = (),
-                   join_options: JoinRadioOptions = JoinRadioOptions()) -> JoinResult:
+                   join_options: JoinRadioOptions = JoinRadioOptions(),
+                   arbiter: Optional[GatewayArbiter] = None,
+                   ledger=None) -> JoinResult:
     """Joue les jointures déclarées dans le moteur causal.
 
     `requests` : `(terminal, instant du Join-Request)`, tentatives comprises. Dès qu'un terminal est
@@ -282,31 +429,72 @@ def simulate_joins(devices, gateway, propagation, radios, options, environment,
     elles : une tentative qui n'a pas lieu ne doit pas provoquer de collision.
     `data_attempts` : calendrier des uplinks de données ; une émission en cours ferme la fenêtre.
     `timelines` : sessions ouvertes avant la jointure, par terminal.
+    `arbiter` : émetteur partagé (`lsim.arbitre`). Fourni, les Join-Accept y sont **déposés** et
+    la fonction renvoie un `JoinPlan`, à refermer après `arbitre.resolve()`. Sans arbitre, la
+    jointure s'arbitre seule (contention entre Join-Accept seulement) et renvoie un `JoinResult`.
+    `ledger` : budget de rapport cyclique par terminal (`DutyCycleLedger`). Fourni, une tentative
+    qui le dépasse n'est **pas** émise : elle n'entre pas dans le moteur.
     """
     timelines = dict(timelines or {})
     if not requests:
-        return JoinResult(timelines=timelines)
+        plan = JoinPlan([], {}, [], timelines) if arbiter is not None else None
+        return plan if plan is not None else JoinResult(timelines=timelines)
 
     candidats = sorted(requests, key=lambda paire: (paire[1], paire[0]))
     nonces = {terminal: timeline.last.nonce for terminal, timeline in timelines.items()
               if timeline.last is not None}
-    tentatives: list[JoinAttempt] = []
-    acceptations: list[tuple[int, int, int]] = []
+
+    # Rapport cyclique : une tentative refusée n'est pas une émission. Elle est retirée du
+    # calendrier **avant** l'appel au moteur, donc ne provoque aucune collision et ne consomme
+    # aucun temps d'antenne.
+    bloquees: list[JoinAttempt] = []
+    if ledger is not None:
+        gardees = []
+        for device_index, at_ns in candidats:
+            airtime = join_request_airtime_ns(devices[device_index])
+            if not ledger.allows(device_index, at_ns, airtime):
+                ledger.refuse(device_index)
+                bloquees.append(JoinAttempt(device_index, at_ns, at_ns + airtime, BLOCKED_DUTY_CYCLE))
+                continue
+            gardees.append((device_index, at_ns))
+        candidats = gardees
+
+    # Sonde : figer le jeu de tentatives jouées (celles qui suivraient une jointure réussie sont
+    # retirées). Elle ne connaît que la contention entre Join-Accept ; le placement définitif,
+    # lui, se fait sur l'arbitre partagé (voir la limite énoncée en tête de module).
+    copie = dict(nonces)
+    enregistrements: dict = {}
     for _ in range(4):
+        if not candidats:
+            break
         enregistrements = _records(devices, gateway, propagation, radios, options, environment,
                                    candidats)
-        copie_nonces = dict(nonces)
-        tentatives, acceptations, succes = _evaluer(
-            candidats, enregistrements, radios, options, data_attempts, join_options,
-            copie_nonces)
+        sonde = GatewayArbiter()
+        attentes = _evaluer(candidats, enregistrements, radios, options, data_attempts,
+                            join_options, sonde)
+        sonde.resolve()
+        _tentatives, _acceptations, succes = _clore(attentes, dict(copie))
         restants = [(d, t) for (d, t) in candidats if d not in succes or t <= succes[d]]
         if len(restants) == len(candidats):
-            nonces = copie_nonces
             break
         candidats = restants
 
-    # Une horloge par terminal : le nonce y est un rang local, donc strictement croissant pour
-    # `SessionTimeline.accept`, sans qu'un terminal avance la session d'un autre.
+    if arbiter is None:
+        arbitre = GatewayArbiter()
+        attentes = _evaluer(candidats, enregistrements if candidats else {}, radios, options,
+                            data_attempts, join_options, arbitre)
+        arbitre.resolve()
+        tentatives, acceptations, _succes = _clore(attentes, copie)
+        return _assembler(bloquees, tentatives, acceptations, timelines)
+
+    # Arbitre partagé : on dépose, l'appelant résout (les ACK sont dans la même file).
+    attentes = _evaluer(candidats, enregistrements if candidats else {}, radios, options,
+                        data_attempts, join_options, arbiter)
+    return JoinPlan(attentes, copie, bloquees, timelines)
+
+
+def _assembler(bloquees, tentatives, acceptations, timelines) -> JoinResult:
+    """Ouvre les sessions, une horloge par terminal, et rattache chaque tentative à la sienne."""
     nouvelles = dict(timelines)
     ouvertures: dict[tuple[int, int], int] = {}
     for terminal, instant, nonce in sorted(acceptations, key=lambda item: item[1]):
@@ -328,4 +516,5 @@ def simulate_joins(devices, gateway, propagation, radios, options, environment,
             if index:
                 tentative = replace(tentative, session=index)
         corrigees.append(tentative)
-    return JoinResult(tuple(corrigees), nouvelles)
+    return JoinResult(tuple(bloquees) + tuple(corrigees), nouvelles,
+                      blocked_by_duty_cycle=len(bloquees))

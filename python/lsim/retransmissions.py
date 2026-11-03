@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace as _replace
 from enum import Enum
 from typing import Optional, Sequence
 
+from lsim.arbitre import DutyCycleLedger, GatewayArbiter
 from lsim.downlink_plan import plan_native, simulate_causal
 from lsim.sessions import SessionTimeline
 
@@ -221,6 +222,8 @@ class RetransmissionResult:
     ack_gap: int = 0        # ACK reçus puis rejetés par la fenêtre de rejeu
     rejected_stale_session: int = 0   # réémissions refusées : session déjà remplacée
     joins: tuple = ()       # tentatives de jointure radio (vide si jointure déclarée ou absente)
+    joins_blocked_by_duty_cycle: int = 0  # Join-Request refusés par le rapport cyclique
+    join_accepts_emitted: int = 0     # Join-Accept réellement émis (RX1, RX2 et rejeux)
 
     @property
     def delivery_ratio(self) -> float:
@@ -375,13 +378,19 @@ def _prune_acknowledged(schedule):
 
 def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
               timing=None, busy=None, classes=None, fcnt_down_start: int = 0,
-              payload: bool = False):
+              payload: bool = False, arbiter=None, avant_resolution=None):
     """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
 
-    Avec `timing` (ACK retardé ou répété) : les transmissions sont simulées avec une occupation
-    passerelle **imposée**, puis la couche `ack_mac` recalcule les ACK et la nouvelle occupation.
-    C'est le seul moyen de faire exister un ACK hors fenêtre sans modifier le cœur, dont le
-    planificateur abandonne ces descentes par construction.
+    Avec `timing` (ACK retardé ou répété, **ou descentes partagées avec une jointure radio**) : les
+    transmissions sont simulées avec une occupation passerelle **imposée**, puis la couche
+    `ack_mac` recalcule les ACK et la nouvelle occupation. C'est le seul moyen de faire exister un
+    ACK hors fenêtre sans modifier le cœur, dont le planificateur abandonne ces descentes par
+    construction ; c'est aussi le seul moyen de faire partager un émetteur unique entre les ACK et
+    les Join-Accept, sans toucher à l'ABI.
+
+    `arbiter` : émetteur partagé (`lsim.arbitre`). `avant_resolution` : appelée avec
+    `(arbitre, calendrier courant)` juste avant la résolution, pour qu'un autre producteur
+    (les jointures) dépose ses propres demandes dans la même passe chronologique.
     """
     if not schedule:
         return None, (), (), None
@@ -394,6 +403,12 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
 
     from lsim.ack_mac import plan_acks
     from lsim.simulator import simulate_uplinks_trace
+
+    if avant_resolution is not None:
+        def accroche(arbitre):
+            avant_resolution(arbitre, schedule)
+    else:
+        accroche = None
 
     result = simulate_uplinks_trace(virt, gateway, propagation, environment,
                                     gateway_busy=tuple(busy or ()), device_rf=None)
@@ -409,7 +424,8 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
                      devices=[schedule[record.device_index].device
                               for record in result.records],
                      sessions=[schedule[record.device_index].session
-                               for record in result.records])
+                               for record in result.records],
+                     arbiter=arbiter, avant_resolution=accroche)
     # Les ACK de la trace sont ceux que la couche a réellement émis, pas ceux du planificateur
     # du cœur : instants, copies et verdicts viennent du même plan que les compteurs.
     events = _mac_ack_events(result.records, plan, radios_par_enregistrement, payload=payload)
@@ -468,7 +484,7 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
                         energy_profile: Optional[str] = None, environment=None,
                         with_engine_output: bool = False,
                         device_classes: Optional[Sequence[str]] = None,
-                        timelines=None) -> RetransmissionResult:
+                        timelines=None, avant_resolution=None) -> RetransmissionResult:
     """Uplinks confirmés avec réémissions ; renvoie les compteurs mesurés.
 
     `devices`, `radios` : un élément par terminal, même ordre (comme `simulate_causal`).
@@ -482,6 +498,11 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     `retransmit.session_joins_s` ouvre des sessions : `FCntUp` et les séries descendantes repartent
     de zéro à chacune, et une trame dont la réémission tomberait après une jointure est abandonnée
     (`RetransmissionResult.rejected_stale_session`).
+    `avant_resolution` : `(arbitre, calendrier) -> None`, appelée à chaque itération juste avant la
+    résolution de l'émetteur partagé. C'est par là que les Join-Accept d'une jointure radio
+    concourent avec les ACK pour la même ressource. Fournie, elle **impose** le planificateur
+    Python (`lsim.ack_mac`) au lieu de celui du cœur : le cœur ne peut pas partager son émetteur
+    avec une demande qu'il ne connaît pas.
     """
     devices = list(devices)
     radios = list(radios)
@@ -518,15 +539,24 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     events: tuple = ()
     planned: tuple = ()
 
-    timing = retransmit.ack_timing() if retransmit.uses_ack_mac else None
+    # Descentes partagées (jointure radio) : le planificateur Python est imposé, seul à pouvoir
+    # déposer dans un arbitre commun. `AckTiming()` — délai nul, une copie — reproduit le
+    # comportement nominal du cœur ; il est remplacé par `retransmit.ack_timing()` si la couche
+    # MAC est déjà nécessaire (ACK retardé ou répété).
+    timing = retransmit.ack_timing() if (retransmit.uses_ack_mac
+                                         or avant_resolution is not None) else None
     occupation: tuple = ()
     mac_plan = None
     for _iteration in range(MAX_ITERATIONS):
+        # Un émetteur neuf à chaque itération : aucune occupation d'une passe précédente ne
+        # survit à la suivante, et la convergence se lit sur l'égalité des occupations.
+        arbitre = GatewayArbiter()
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
             timing=timing, busy=occupation, classes=device_classes,
             fcnt_down_start=retransmit.fcnt_down_start,
-            payload=retransmit.downlink_payload)
+            payload=retransmit.downlink_payload, arbiter=arbitre,
+            avant_resolution=avant_resolution)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:
@@ -709,9 +739,15 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
 
     Sans `join_requests_s`, l'appel est exactement celui de `_simulate_confirmed` : aucune jointure
     n'est jouée et le résultat ne porte pas de `joins`. Avec, les Join-Request passent par le moteur
-    causal (temps de vol, collision, sensibilité), les Join-Accept par la fenêtre RX1/RX2 du
-    terminal, et une session n'est ouverte que si le Join-Accept est reçu et non rejoué. Les
-    compteurs ne sont donc remis à zéro que dans ce cas.
+    causal (temps de vol, collision, sensibilité, **rapport cyclique**), les Join-Accept par
+    l'arbitre radio partagé (`lsim.arbitre`), et une session n'est ouverte que si le Join-Accept est
+    reçu et non rejoué. Les compteurs ne sont donc remis à zéro que dans ce cas.
+
+    **Émetteur partagé.** Les Join-Accept sont déposés dans le **même** `GatewayArbiter` que les
+    ACK et les downlinks, à l'intérieur de chaque itération du point fixe : la file est
+    chronologique, une émission en cours en retarde une autre, une fenêtre couverte n'est pas
+    émise. L'occupation qui en résulte — ACK **et** Join-Accept — est réinjectée au moteur à
+    l'itération suivante : une trame montante qui chevauche une descente est perdue.
     """
     if not retransmit.join_options.enabled:
         return _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
@@ -724,19 +760,45 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     radios = list(radios)
     options = _replace(options, confirmed_uplinks=True)
     demandes = retransmit.join_options.requests(range(len(devices)))
+    rapports = {terminal: devices[terminal].duty_cycle for terminal in range(len(devices))}
     timelines: dict = {}
-    result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
-                                 energy_profile, environment, with_engine_output,
-                                 device_classes, timelines=timelines)
     jointures = None
     for _ in range(3):
-        jointures = simulate_joins(devices, gateway, propagation, radios, options, environment,
-                                   demandes, timelines, data_attempts=result.attempts,
-                                   join_options=retransmit.join_options)
+        boite: dict = {}
+
+        def avant_resolution(arbitre, programme, boite=boite, timelines=timelines):
+            """Dépose les Join-Accept dans la passe en cours, après les ACK, avant résolution."""
+            # Budget réglementaire : il comptabilise les émissions déjà jouées du terminal, parce
+            # que la contrainte porte sur l'occupation de la sous-bande et non sur la nature de la
+            # trame. Une tentative refusée n'entre pas dans le moteur : elle n'émet rien.
+            # `enforce_duty_cycle: false` désactive le budget comme il désactive celui des
+            # réémissions — une seule clef pour la même règle.
+            livre = None
+            if retransmit.enforce_duty_cycle:
+                livre = DutyCycleLedger(rapports)
+                for essai in programme:
+                    livre.record(essai.device, essai.start_ns, essai.end_ns)
+            boite["plan"] = simulate_joins(devices, gateway, propagation, radios, options,
+                                           environment, demandes, timelines,
+                                           data_attempts=programme,
+                                           join_options=retransmit.join_options,
+                                           arbiter=arbitre, ledger=livre)
+
+        result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
+                                     energy_profile, environment, with_engine_output,
+                                     device_classes, timelines=timelines,
+                                     avant_resolution=avant_resolution)
+        plan = boite.get("plan")
+        if plan is None:
+            break
+        jointures = plan.result()
         if jointures.timelines == timelines:
             break
         timelines = jointures.timelines
-        result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
-                                     energy_profile, environment, with_engine_output,
-                                     device_classes, timelines=timelines)
-    return _replace(result, joins=jointures.attempts if jointures is not None else ())
+    return _replace(result,
+                    joins=jointures.attempts if jointures is not None else (),
+                    joins_blocked_by_duty_cycle=(jointures.blocked_by_duty_cycle
+                                                 if jointures is not None else 0),
+                    join_accepts_emitted=sum(sum(1 for e in t.accepts if e.emitted)
+                                             for t in jointures.attempts)
+                    if jointures is not None else 0)

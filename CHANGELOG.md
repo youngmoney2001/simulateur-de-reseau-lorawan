@@ -2,6 +2,68 @@
 
 ## 0.1.0 (non publiée)
 
+### D3.13 — Arbitrage radio partagé : un émetteur, un budget, une seule source de vérité
+- **`python/lsim/arbitre.py` (nouveau)** : `GatewayArbiter` et `DutyCycleLedger` remplacent trois
+  occupations passerelle indépendantes — `busy_until` local de `trace_events._schedule_gateway`,
+  `busy_until` local de `ack_mac.plan_acks`, et **aucune** pour `join._evaluer`. Une seule ressource,
+  une seule règle, une seule trace d'occupation.
+- **Règles d'arbitrage** : (1) un seul émetteur ; (2) file monotone `début = max(instant_prêt,
+  occupé_jusqu'à)` — la règle historique du cœur, au bit près ; (3) ordre chronologique évalué en
+  **file d'événements**, une demande née du placement d'une autre (RX2 après RX1) entrant à son propre
+  instant ; (4) **aucune priorité inventée** : LoRaWAN ne définit pas d'ordre entre un Join-Accept et
+  l'ACK d'un autre terminal, `ArbitrationPolicy.priority` est vide et l'ordre est celui du dépôt ;
+  (5) une émission hors fenêtre **n'a pas lieu** (`window_missed`, aucune occupation), sauf
+  `allow_late` explicite — c'est l'ACK tardif, qui occupe sans être écouté.
+- **Le Join-Accept occupe l'émetteur et lui est opposé.** Mesuré, `retransmissions_ack_tardif`,
+  trames de 51 octets en SF12, `join_requests_s: [10]`, `retries: 2`, `ack_delay_ms: 12000` :
+
+  | copies d'ACK | avant D3.13 | après D3.13 |
+  |---|---|---|
+  | 1 | RX1 `delivered`, session 1 | RX1 `delivered`, session 1 |
+  | 2 | RX1 `delivered`, session 1 | RX1 `gateway_busy`, **RX2 `delivered`**, session 1 |
+  | 3 | RX1 `delivered`, session 1 | RX1 `gateway_busy`, RX2 `gateway_busy`, **session 0** |
+
+  Dans l'autre sens, `ack_delay_ms: 12800` place un ACK à 15,288 s pendant l'émission du Join-Accept
+  (15,206 → 15,453 s) : l'ACK part à 15,453 s, alors qu'il partait à 15,288 s avant. L'occupation
+  passerelle contient désormais les Join-Accept, et elle est réinjectée au moteur au tour suivant :
+  une trame montante qui chevauche une descente est perdue.
+- **RX2 peut être retardée par l'émission de RX1.** Mesuré en SF12, où un Join-Accept de 33 octets
+  occupe l'émetteur 1,81 s : RX2 passe de 63,483 s à 64,293 s (fin de l'émission de RX1), tout en
+  restant dans sa fenêtre. La correction D3.12 est intacte — RX2 reste un **secours**, jamais une
+  seconde copie — mais elle s'ajoute à la file au lieu d'être posée à un instant fixe.
+- **Le Join-Request consomme le rapport cyclique du terminal** (`DutyCycleLedger`, budget
+  `airtime cumulé + airtime <= rapport × instant`, la règle déjà utilisée pour les réémissions).
+  Une tentative refusée n'entre **pas** dans le moteur : aucune collision provoquée, aucun temps
+  d'antenne consommé, aucun compteur `sent`. Mesuré avec `duty_cycle: 0.001`, `join_retries: 2` :
+  2 refus, 0 Join-Accept émis, 0 session, et une trace qui porte `join_request / suppressed` au lieu
+  de `join_request / received`. `enforce_duty_cycle: false` rend le budget inopérant.
+- **Nouveaux compteurs** : `RetransmissionResult.joins_blocked_by_duty_cycle`,
+  `.join_accepts_emitted` ; `JoinResult.blocked_by_duty_cycle` ; `AcceptEmission.emitted` ;
+  `JoinAttempt.emitted`. Issue `gateway_busy` sur une émission de Join-Accept dont la fenêtre est
+  couverte — c'est un fait de réseau tracé, pas une transmission.
+- **Chemin d'exécution** : dès qu'une jointure radio est déclarée, les descentes passent par le
+  planificateur Python (`lsim.ack_mac`, `AckTiming()` nominal) au lieu de celui du cœur : c'est le
+  seul moyen de faire partager un émetteur unique sans modifier l'ABI. **Sans jointure radio, rien ne
+  change** : le cœur garde la main et la parité avec l'oracle Python reste exigée
+  (`test_downlink_plan_parity.py`, 124 tests).
+- **Tests** : `python/tests/test_arbitre_radio.py`, **25 tests** — concurrence reproductible
+  (Join-Accept et ACK au même instant, ACK en émission quand RX1 s'ouvre, RX1 impossible puis RX2
+  possible, RX1 réussie sans RX2, descentes concurrentes, deux jointures qui se chevauchent,
+  émission bloquée non tracée comme réussie, session seulement après réception effective), plus un
+  scénario de bout en bout combinant jointure, ACK et downlink de données sur une passerelle.
+- **Mesures inchangées, vérifiées** : scénarios de référence des retransmissions **8/24 → 7/24 → 5/24**
+  (24/43/83 transmises, 11/15/20 reçues, 8/7/5 livrées, 0/1/8 doublons, 6/16/31 collisions,
+  occupation 0,296 / 0,440 / 0,543) ; chemin historique `join=True` avec `downlink_every` ; aucune
+  clé de scénario nouvelle, donc **les 30 schémas `schemas/api/v1` sont identiques**.
+- **Invariants** : cœur C++ et **ABI intacts** (97 symboles `lsim_*`, aucune source C++ touchée),
+  empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées, **685 282 / 685 282** vérifications C++,
+  suite Python **1 977 tests** (1 952 + 25).
+- **Limites** : rapport cyclique **descendant** non modélisé ; un seul émetteur par passerelle (pas de
+  cartes radio multiples) ; durée d'ouverture des fenêtres (1 s) = hypothèse du simulateur ; le jeu de
+  tentatives est figé par une sonde qui ne connaît pas la contention avec les ACK (approximation
+  bornée, énoncée). `docs/MAC_CONSOLIDATION.md` §10.
+
+
 ### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en RX1/RX2
 - **`python/lsim/join.py`** : le Join-Request passe par le moteur causal comme une transmission de
   23 octets (temps de vol, collisions, sensibilité, couverture) ; le Join-Accept est une descente de

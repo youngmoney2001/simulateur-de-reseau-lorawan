@@ -412,20 +412,26 @@ def _downlink_fopts(margin: Optional[int], carries_ds: bool,
 
 def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[tuple[int, int]]]:
     """Sérialise les downlinks sur la passerelle (un émetteur). Retourne (début par job ou None si
-    perdu faute de fenêtre, intervalles d'émission)."""
-    order = sorted(range(len(jobs)), key=lambda k: (jobs[k].t_open, k))
-    starts: list[Optional[int]] = [None] * len(jobs)
-    intervals: list[tuple[int, int]] = []
-    busy_until = None
-    for k in order:
-        job = jobs[k]
-        start = job.t_open if busy_until is None else max(job.t_open, busy_until)
-        if start - job.t_open >= RX1_WINDOW_NS:
-            continue  # la passerelle ne peut plus émettre dans la fenêtre du dispositif
-        starts[k] = start
-        busy_until = start + job.airtime_ns
-        intervals.append((start, busy_until))
-    return starts, intervals
+    perdu faute de fenêtre, intervalles d'émission).
+
+    L'émetteur est celui de `lsim.arbitre.GatewayArbiter`, partagé avec les Join-Accept et la
+    couche MAC : une seule file, `début = max(ouverture, occupé_jusqu'à)`, abandon si le
+    placement tombe hors de la fenêtre RX1 du dispositif. La règle est celle du planificateur
+    C++ au bit près (parité : `tests/test_downlink_plan_parity.py`).
+    """
+    from lsim.arbitre import EmissionRequest, GatewayArbiter
+
+    arbitre = GatewayArbiter()
+    tickets = arbitre.demand_all([
+        EmissionRequest(label=job.kind, device=job.device, ready_ns=job.t_open,
+                        duration_ns=job.airtime_ns,
+                        window=(job.t_open, job.t_open + RX1_WINDOW_NS))
+        for job in jobs])
+    arbitre.resolve()
+    starts: list[Optional[int]] = [
+        decision.start_ns if decision.emitted else None
+        for decision in (arbitre.emission(ticket) for ticket in tickets)]
+    return starts, list(arbitre.occupation)
 
 
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
@@ -620,6 +626,7 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
     """
     from dataclasses import replace as _remplacer
 
+    from lsim.join import BLOCKED_DUTY_CYCLE  # import local : `lsim.join` importe `lsim.ack_mac`
     from lsim.retransmissions import simulate_confirmed_uplinks
 
     etat = scenario.model.retransmissions
@@ -672,10 +679,15 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
     # Le Join-Accept n'apparait que si le Join-Request a ete recu (sinon rien n'a ete emis).
     for tentative in getattr(resultat, "joins", ()):
         radio = radios[tentative.device]
+        # Un Join-Request refusé par le rapport cyclique n'est **pas** une émission : il apparaît
+        # en trace, mais avec l'issue `suppressed` du contrat (rien n'a été transmis), jamais
+        # comme une transmission réussie.
+        issue_requete = ("suppressed" if tentative.request_outcome == BLOCKED_DUTY_CYCLE
+                         else tentative.request_outcome)
         remappes.append(ProtocolEvent(
             0, tentative.request_ns, "join_request", tentative.device, 0,
             (HopEvent(_dev(tentative.device), "gw:0", tentative.request_ns, radio.freq_hz,
-                      radio.dr, None, tentative.request_outcome),), tentative.request_outcome))
+                      radio.dr, None, issue_requete),), issue_requete))
         # Une émission par Join-Accept réellement transmis : RX1, puis RX2 en secours, puis rejeux.
         # Le rejeu reçu est « suppressed » au contrat : le terminal le décode et le refuse.
         for emission in tentative.accepts:

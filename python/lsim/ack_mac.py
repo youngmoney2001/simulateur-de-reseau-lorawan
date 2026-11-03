@@ -59,8 +59,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
+from lsim.arbitre import EmissionRequest, GatewayArbiter
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.fcnt import AF, NF, MODULUS_16, MODULUS_32, CounterSeries, CounterVerdict
 from lsim.trace_events import DeviceRadio
@@ -248,8 +249,16 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
               fcnt_down_start: int = 0, uses_nf: bool = True,
               devices: Optional[Sequence[int]] = None,
               sessions: Optional[Sequence[int]] = None,
-              payload: bool = False) -> AckPlan:
+              payload: bool = False,
+              arbiter: Optional["GatewayArbiter"] = None,
+              avant_resolution: Optional[Callable[["GatewayArbiter"], None]] = None) -> AckPlan:
     """Planifie les ACK de `records` (réceptions montantes), selon `timing`.
+
+    `arbiter` : émetteur partagé (`lsim.arbitre.GatewayArbiter`). Quand il est fourni, les ACK y
+    sont déposés avec les autres descentes (Join-Accept, downlinks) : la ressource est unique et
+    l'ordre est chronologique, sans priorité inventée. `None` : la couche arbitre seule.
+    `avant_resolution` : appelée avec l'arbitre juste avant `resolve()`, pour qu'un autre
+    producteur dépose ses propres demandes dans la même passe.
 
     `records` : `TxRecord` du moteur, dans l'ordre de la trace. Seuls les uplinks reçus
     (`outcome == 2`) déclenchent une réponse, comme dans le cœur.
@@ -305,9 +314,13 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
     for index, appareil in enumerate(appareils):
         par_dispositif.setdefault(appareil, []).append(index)
 
-    busy_until = 0
-    busy: list[tuple[int, int]] = []
+    # L'émetteur est unique et partagé (`lsim.arbitre`) : les ACK y passent comme les Join-Accept
+    # et les downlinks. Sans arbitre fourni, la couche en crée un pour elle seule : les instants
+    # sont alors ceux d'avant D3.13 (`début = max(ouverture + retard, occupé_jusqu'à)`).
+    arbitre = GatewayArbiter() if arbiter is None else arbiter
     outcomes: list[AckOutcome] = []
+    # Demandes déposées, à relire après résolution : (tickets, radio, f_cnt_down).
+    deposees: dict[int, tuple[list[int], object, int]] = {}
     # Séries de descentes et contrôle de rejeu, **par terminal et par session**.
     fcnt_down_suivant: dict[tuple[int, int], int] = {}
     dernier_accepte: dict[tuple[int, int], int] = {}
@@ -323,11 +336,13 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         rangs[record.device_index] = valeur + 1
         compteurs.append(valeur)
 
+    # --- phase 1 : dépôt des demandes ------------------------------------------------------
+    # Le compteur descendant se numérote ici, dans l'ordre des enregistrements : c'est le réseau
+    # qui numérote ses descentes, indépendamment de l'instant où l'émetteur les place.
     for index, record in enumerate(records):
         appareil = appareils[index]
         session = sessions_lues[index]
         cle = (appareil, session)
-        classe = "A" if classes is None else classes[index]
         montant = compteurs[index]
         if record.outcome != 2:  # 2 = received
             outcomes.append(AckOutcome(index, appareil, montant, None, (), AckWindow.NOT_SENT,
@@ -336,7 +351,6 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         radio = radios[index]  # même ordre que `records`
         airtime = _ack_airtime_ns(radio)
         t_open = record.end_ns + RX1_DELAY_NS
-        premiere = max(t_open + timing.delay_ms * 1_000_000, busy_until)
         f_cnt_down = fcnt_down_suivant.get(cle, fcnt_down_start)
         if f_cnt_down >= MODULUS_32:
             # Série épuisée à 2^32 : le réseau ne peut plus numéroter de descente. La spécification
@@ -346,13 +360,32 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                                        CounterVerdict.EXHAUSTED, session))
             continue
         fcnt_down_suivant[cle] = f_cnt_down + 1
+        # Aucune fenêtre imposée à l'arbitre : un ACK retardé par l'émetteur est une émission
+        # réelle, que la couche classe `LATE` elle-même une fois l'instant connu. Les copies se
+        # suivent parce qu'elles partagent le même instant prêt et que la file est monotone.
+        tickets = arbitre.demand_all([
+            EmissionRequest(label="ack", device=appareil,
+                            ready_ns=t_open + timing.delay_ms * 1_000_000,
+                            duration_ns=airtime, window=None)
+            for _copie in range(timing.repetitions)])
+        deposees[index] = (tickets, radio, f_cnt_down)
 
-        creneaux: list[tuple[int, int]] = []
-        for copie in range(timing.repetitions):
-            debut = premiere + copie * airtime
-            creneaux.append((debut, debut + airtime))
-            busy.append((debut, debut + airtime))
-            busy_until = max(busy_until, debut + airtime)
+    if avant_resolution is not None:
+        avant_resolution(arbitre)
+    arbitre.resolve()
+
+    # --- phase 2 : classification, l'instant de chaque émission étant connu -----------------
+    for index, record in enumerate(records):
+        if index not in deposees:
+            continue
+        appareil = appareils[index]
+        session = sessions_lues[index]
+        cle = (appareil, session)
+        classe = "A" if classes is None else classes[index]
+        montant = compteurs[index]
+        radio = radios[index]  # même ordre que `records`
+        tickets, _radio, f_cnt_down = deposees[index]
+        creneaux = [(e.start_ns, e.end_ns) for e in arbitre.emissions(tickets)]
 
         # Le terminal écoutait-il ? RX1 puis RX2 pour A et B ; en continu pour C.
         rx1 = (record.end_ns + RX1_DELAY_NS, record.end_ns + RX1_DELAY_NS + RX1_WINDOW_NS)
@@ -422,5 +455,8 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                                    fenetre_retenue, accepte, ignorees, verdict, serie_utilisee,
                                    verdict_compteur, session))
 
-    busy.sort()
-    return AckPlan(tuple(outcomes), tuple(busy))
+    # L'occupation rendue est celle de **toutes** les émissions réellement faites sur l'émetteur
+    # partagé : les ACK, et les Join-Accept qu'un autre producteur aurait déposés. C'est elle qui
+    # alimente le point fixe, donc les pertes montantes par demi-duplex.
+    outcomes.sort(key=lambda o: o.uplink_index)
+    return AckPlan(tuple(outcomes), arbitre.occupation)

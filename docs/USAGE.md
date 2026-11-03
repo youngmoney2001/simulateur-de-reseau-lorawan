@@ -327,8 +327,40 @@ groups:
 | Bloc `enabled: false` | équivaut à `retries: 0` |
 | `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `session_joins_s` / `join_requests_s` / `join_retries` / `join_accept_rx2_fallback` / `join_accept_replays` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
 | `session_joins_s` et `join_requests_s` ensemble | refusé : le modèle déclaré et le modèle radio sont exclusifs |
+| Émetteur de la passerelle | une seule descente à la fois : Join-Accept, ACK et downlinks passent par le même arbitre (`lsim.arbitre`) |
+| Join-Request et rapport cyclique | le budget du terminal s'applique ; une tentative refusée n'est **pas** émise (`enforce_duty_cycle` pour le désactiver) |
 | `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
 | `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
+
+### Émetteur partagé : Join-Accept, ACK et downlinks (D3.13)
+
+Les descentes ne sont pas indépendantes : la passerelle n'a **qu'un émetteur**. Join-Accept RX1 et
+RX2, ACK des uplinks et downlinks de données passent par le même arbitre
+(`lsim.arbitre.GatewayArbiter`), dans l'ordre chronologique :
+
+- une émission en cours en retarde une autre ;
+- une descente dont la fenêtre est couverte **n'est pas émise** (`gateway_busy`) et n'occupe rien ;
+- une trame montante qui chevauche une descente est perdue (demi-duplex, par le point fixe).
+
+Aucune priorité n'est inventée entre un Join-Accept et l'ACK d'un autre terminal : LoRaWAN n'en
+définit pas. À instant égal, l'ordre est celui du dépôt.
+
+Le Join-Request consomme le rapport cyclique du groupe (`duty_cycle`, et la limite de sous-bande
+régionale). Une tentative qui dépasse le budget n'est pas émise du tout : elle ne provoque aucune
+collision et n'apparaît pas comme une transmission dans la trace.
+
+```yaml
+groups:
+  - name: terminaux
+    duty_cycle: 0.01       # 1 % ; la sous-bande régionale peut être plus restrictive
+retransmissions:
+  enforce_duty_cycle: true # false : le budget n'est pas appliqué (ni aux réémissions)
+  join_requests_s: [10]
+```
+
+Ce qui **n'est pas** modélisé : le rapport cyclique **descendant** de la passerelle, les cartes
+radio multiples, et la durée d'ouverture des fenêtres (1 s, hypothèse du simulateur — LoRaWAN ne
+fixe que le délai). Détails et mesures : `docs/MAC_CONSOLIDATION.md` §10.
 
 ### Compteurs : rejeu, désynchronisation, débordement
 

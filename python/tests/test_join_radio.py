@@ -30,7 +30,7 @@ import yaml
 from pydantic import ValidationError
 
 from lsim.join import (JOIN_ACCEPT_BYTES, JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS,
-                       JOIN_REQUEST_BYTES, JoinRadioOptions, accept_airtime_ns,
+                       JOIN_REQUEST_BYTES, JOIN_WINDOW_NS, JoinRadioOptions, accept_airtime_ns,
                        join_request_device, simulate_joins)
 from lsim.scenario import load_scenario
 from lsim.sessions import SessionTimeline
@@ -122,7 +122,15 @@ def test_rx1_missed_falls_back_to_rx2():
     assert tentative.request_outcome == "received"
     assert [(e.window, e.outcome) for e in tentative.accepts] == [
         ("rx1", "not_listened"), ("rx2", "delivered")]
-    assert tentative.accepts[1].at_ns == tentative.request_end_ns + JOIN_ACCEPT_DELAY2_NS
+    # RX1 est bien émise — la passerelle ne sait pas que le terminal n'écoute pas — et occupe
+    # l'émetteur pendant tout son temps de vol (33 o en SF12 : 1,81 s), donc au-delà de
+    # l'ouverture de RX2. RX2 est décalée à la fin de l'émission de RX1 (D3.13), tout en
+    # restant dans sa fenêtre d'une seconde.
+    radio = device_radios(_scenario(_lent, join_requests_s=[56]))[0]
+    assert tentative.accepts[1].at_ns == tentative.accepts[0].at_ns + accept_airtime_ns(radio)
+    assert (tentative.request_end_ns + JOIN_ACCEPT_DELAY2_NS
+            <= tentative.accepts[1].at_ns
+            < tentative.request_end_ns + JOIN_ACCEPT_DELAY2_NS + JOIN_WINDOW_NS)
     assert tentative.accept_window == "rx2"
     assert tentative.session == 1
     # Les événements de trace suivent les émissions réellement faites, fenêtre par fenêtre.
