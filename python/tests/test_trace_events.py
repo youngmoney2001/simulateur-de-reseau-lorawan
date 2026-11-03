@@ -263,14 +263,14 @@ def test_gateway_serializes_downlinks_and_drops_late_ones():
                     airtime_ns=airtime, rx1_hz=868_100_000, received=True, device_missed=False)
 
     # Deux réponses qui tombent presque ensemble : la seconde attend la fin de la première.
-    starts, busy = _schedule_gateway([job(1_000_000_000, 300_000_000),
-                                      job(1_050_000_000, 300_000_000)])
+    starts, _fen, busy = _schedule_gateway([job(1_000_000_000, 300_000_000),
+                                            job(1_050_000_000, 300_000_000)])
     assert starts == [1_000_000_000, 1_300_000_000]
     assert busy == [(1_000_000_000, 1_300_000_000), (1_300_000_000, 1_600_000_000)]
 
     # Une réponse qui ne peut partir qu'après la fenêtre RX1 du dispositif est perdue.
-    starts, busy = _schedule_gateway([job(1_000_000_000, 1_500_000_000),
-                                      job(1_100_000_000, 100_000_000)])
+    starts, _fen, busy = _schedule_gateway([job(1_000_000_000, 1_500_000_000),
+                                            job(1_100_000_000, 100_000_000)])
     assert starts[0] == 1_000_000_000
     assert starts[1] is None
     assert len(busy) == 1
@@ -367,7 +367,8 @@ def test_fixed_point_cycle_is_reported_immediately(monkeypatch):
     def faux_plan(_records, _radios, _options, _joined, _mac=None):
         busy, joined = etats[appels["n"] % 2]
         appels["n"] += 1
-        return [], [], [], busy, joined
+        # _plan renvoie aussi la fenêtre réellement émise par job (I2) : None si non émis.
+        return [], [], [], busy, None, joined
 
     monkeypatch.setattr(te, "simulate_uplinks_trace", faux_simulate)
     monkeypatch.setattr(te, "_plan", faux_plan)

@@ -40,7 +40,7 @@ from __future__ import annotations
 import math
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
@@ -69,6 +69,9 @@ from lsim.simulator import (
 
 NS_PER_US = 1_000
 RECEIVE_DELAY1_NS = RECEIVE_DELAY1_US * NS_PER_US
+# RX2 s'ouvre une seconde après RX1 : RP002 §2.3, RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s.
+RECEIVE_DELAY2_NS = 2 * RECEIVE_DELAY1_NS
+RX2_WINDOW_NS = 1_000_000_000       # durée de la fenêtre RX2 (même largeur que RX1)
 JOIN_ACCEPT_DELAY1_NS = JOIN_ACCEPT_DELAY1_US * NS_PER_US
 # Durée de la fenêtre RX1 du dispositif (hypothèse, 1 s).
 RX1_WINDOW_NS = 1_000_000_000
@@ -113,6 +116,17 @@ class ProtocolOptions:
     gateway_tx_power_dbm: float = 14.0    # puissance d'émission de la passerelle (downlink)
     device_antenna_gain_dbi: float = 0.0  # gain d'antenne du dispositif (réception downlink)
     device_rx_offset_db: float = 0.0      # écart de sensibilité du récepteur réel (0 = SX1276)
+    # Repli RX2 des descentes. **Opt-in** : `False` reproduit exactement le comportement
+    # historique et le planificateur natif, qui ne replient pas. Même à `True`, le repli ne
+    # s'applique qu'aux dispositifs dont la fenêtre RX2 est réellement renseignée
+    # (`rx2_sf != 0` **et** `rx2_hz != 0`) — voir `_Job.rx2_disponible`.
+    #
+    # `repr=False` : le `repr` de `ProtocolOptions` est une **clé** du dépôt de référence
+    # (`scripts/mac_baseline_dump.py`), dont l'empreinte `ed126d7f…` est gelée. Y faire
+    # apparaître le champ changerait l'empreinte sans changer un seul événement : la référence
+    # perdrait sa valeur de détection. Elle continue donc de porter sur le comportement, ce que
+    # vérifie `test_rx2_fallback_absent_du_repr` (la clé ne doit pas dépendre de ce champ).
+    rx2_fallback: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -188,6 +202,30 @@ class _Job:
     fopts: bytes = b""    # commandes MAC en FOpts du downlink (LinkCheckAns, DevStatusReq)
     link_margin: int = 0  # marge rapportée par LinkCheckAns (dB, si présente)
     carries_ds: bool = False  # le downlink porte DevStatusReq (réponse attendue si reçue)
+    # Fenêtre de secours. RX2 n'est ni RX1 ni une répétition : fréquence et débit régionaux
+    # propres, donc temps d'antenne différent — d'où `rx2_airtime_ns` calculé à part.
+    rx2_hz: int = 0           # 0 : fréquence non renseignée (aucun plan régional)
+    rx2_sf: int = 0           # 0 : aucun repli pour ce dispositif
+    rx2_bw_hz: int = 0
+    rx2_airtime_ns: int = 0   # 0 tant que `rx2_disponible` est faux
+    device_missed_rx2: bool = False  # le dispositif émet pendant sa fenêtre RX2
+
+    @property
+    def rx2_disponible(self) -> bool:
+        """Le repli RX2 est-il matériellement possible pour ce job ?
+
+        Deux conditions, toutes deux nécessaires. `rx2_sf == 0` : le dispositif n'a pas de
+        fenêtre de secours, il n'y a rien à replier. `rx2_hz == 0` : aucune fréquence
+        régionale — on ne peut pas émettre sans fréquence, et la deviner serait inventer une
+        valeur réglementaire. Le repli est donc **inerte** dans ce cas, ce qui est le
+        comportement attendu tant que l'exposition régionale de RX2 n'est pas faite.
+        """
+        return self.rx2_sf != 0 and self.rx2_hz != 0
+
+    @property
+    def t_open_rx2(self) -> int:
+        """Ouverture de la fenêtre RX2 : RECEIVE_DELAY2 après la fin de la montante."""
+        return self.t_open + (RECEIVE_DELAY2_NS - RECEIVE_DELAY1_NS)
 
 
 def _dev(i: int) -> str:
@@ -274,8 +312,25 @@ def downlink_phy(radio: DeviceRadio, window: str = "rx1") -> tuple[int, int, int
     fenêtre qui l'a portée (RX1 par défaut).
     """
     if window == "rx2":
-        return radio.rx2_hz, radio.rx2_sf, radio.rx2_bw_hz
+        # Largeur non renseignée : RX2 reprend celle de RX1, comme le cœur (`valid_rx2`, ABI v2).
+        # Sans cela, `2 ** sf / 0` lèverait au lieu de produire un temps d'antenne.
+        return radio.rx2_hz, radio.rx2_sf, radio.rx2_bw_hz or radio.rx1_bw_hz
     return radio.rx1_hz, radio.rx1_sf, radio.rx1_bw_hz
+
+
+def _valider_rx2(radio: DeviceRadio, device: int) -> None:
+    """Bornes de RX2, identiques à `valid_rx2()` du cœur (ABI v2) : refuser plutôt que calculer faux.
+
+    `rx2_sf = 0` et `rx2_bw_hz = 0` sont des valeurs **admissibles** (aucun repli ; largeur reprise
+    de RX1), pas des erreurs — c'est l'absence de valeur, et elle est documentée.
+    """
+    if radio.rx2_hz < 0:
+        raise ValueError(f"dispositif {device} : rx2_hz négatif ({radio.rx2_hz})")
+    if radio.rx2_sf != 0 and not 7 <= radio.rx2_sf <= 12:
+        raise ValueError(f"dispositif {device} : rx2_sf hors 7..12 ou 0 ({radio.rx2_sf})")
+    if radio.rx2_bw_hz != 0 and radio.rx2_bw_hz not in (125_000, 250_000, 500_000):
+        raise ValueError(f"dispositif {device} : rx2_bw_hz hors {{0, 125k, 250k, 500k}} "
+                         f"({radio.rx2_bw_hz})")
 
 
 def _downlink_airtime_ns(radio: DeviceRadio, payload_bytes: int, window: str = "rx1") -> int:
@@ -414,14 +469,29 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
                                     device_time_ns=t_open if wants_time else None)
         # Les descentes de données sont émises dans la fenêtre RX1 du dispositif.
         airtime = _downlink_airtime_ns(radio, base + len(fopts), "rx1")
+        # Le repli est **opt-in** : à `rx2_fallback=False` on ne valide ni ne calcule rien, ce qui
+        # reproduit exactement le comportement d'avant I2 (et celui du cœur, qui ne replie pas).
+        # Actif, on valide d'abord — mêmes bornes que `valid_rx2()` côté C++ — car un SF hors
+        # bornes donnerait un temps d'antenne faux plutôt qu'une erreur.
+        repli = False
+        if options.rx2_fallback:
+            _valider_rx2(radio, d)
+            # Sans fréquence régionale il n'y a rien à émettre, et le temps d'antenne RX2
+            # (SF12 le plus souvent) n'a pas à être calculé.
+            repli = radio.rx2_hz != 0 and radio.rx2_sf != 0
+        airtime_rx2 = (_downlink_airtime_ns(radio, base + len(fopts), "rx2") if repli else 0)
 
         nxt = next_start.get(i)
+        ouverture_rx2 = t_open + (RECEIVE_DELAY2_NS - RECEIVE_DELAY1_NS)
         jobs.append(_Job(
             record=i, device=d, kind=kind, content=content, t_open=t_open, airtime_ns=airtime,
             rx1_hz=radio.rx1_hz,
             received=_received_by_device(r, radio, options),
             device_missed=nxt is not None and nxt < t_open + RX1_WINDOW_NS,
             fopts=fopts, link_margin=margin or 0, carries_ds=carries_ds,
+            rx2_hz=radio.rx2_hz, rx2_sf=radio.rx2_sf, rx2_bw_hz=radio.rx2_bw_hz,
+            rx2_airtime_ns=airtime_rx2,
+            device_missed_rx2=nxt is not None and nxt < ouverture_rx2 + RX2_WINDOW_NS,
         ))
     return jobs
 
@@ -446,35 +516,75 @@ def _downlink_fopts(margin: Optional[int], carries_ds: bool,
     return fopts
 
 
-def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[tuple[int, int]]]:
-    """Sérialise les downlinks sur la passerelle (un émetteur). Retourne (début par job ou None si
-    perdu faute de fenêtre, intervalles d'émission).
+def _schedule_gateway(jobs: Sequence[_Job],
+                     options: Optional[ProtocolOptions] = None,
+                     ) -> tuple[list[Optional[int]], list[Optional[str]], list[tuple[int, int]]]:
+    """Sérialise les downlinks sur la passerelle (un émetteur).
+
+    Retourne `(début par job ou None si aucune fenêtre n'a abouti, fenêtre réellement émise —
+    `"rx1"`, `"rx2"` ou None, intervalles d'émission)`.
 
     L'émetteur est celui de `lsim.arbitre.GatewayArbiter`, partagé avec les Join-Accept et la
     couche MAC : une seule file, `début = max(ouverture, occupé_jusqu'à)`, abandon si le
-    placement tombe hors de la fenêtre RX1 du dispositif. La règle est celle du planificateur
-    C++ au bit près (parité : `tests/test_downlink_plan_parity.py`).
+    placement tombe hors de la fenêtre du dispositif. La règle est celle du planificateur C++
+    au bit près (parité : `tests/test_downlink_plan_parity.py`).
+
+    **Repli RX2 (I2).** RX1 reste prioritaire : RX2 n'est demandée que par la réaction d'une RX1
+    **non émise**, jamais à côté ni en double. Il est opt-in (`options.rx2_fallback`) et ne
+    s'applique qu'aux jobs dont la fenêtre de secours est réellement renseignée
+    (`job.rx2_disponible`) : sans fréquence régionale il n'y a rien à émettre, et sans SF il n'y a
+    pas de fenêtre. Le repli porte la fréquence, le SF et la bande passante de RX2 — donc un temps
+    d'antenne différent, qui est celui réservé à l'émetteur. Une seule émission par descente : la
+    réaction RX2 ne redemande rien.
+
+    Sans `options` (ou `rx2_fallback=False`), le comportement est celui d'avant I2, à
+    l'identique : la file ne contient que des demandes RX1.
     """
     from lsim.arbitre import EmissionRequest, GatewayArbiter
 
+    repli_actif = options is not None and options.rx2_fallback
     arbitre = GatewayArbiter()
-    tickets = arbitre.demand_all([
-        EmissionRequest(label=job.kind, device=job.device, ready_ns=job.t_open,
-                        freq_hz=job.rx1_hz,
-                        duration_ns=job.airtime_ns,
-                        window=(job.t_open, job.t_open + RX1_WINDOW_NS))
-        for job in jobs])
+    starts: list[Optional[int]] = [None] * len(jobs)
+    fenetres: list[Optional[str]] = [None] * len(jobs)
+
+    def fenetre(k: int, job: _Job, rx2: bool) -> EmissionRequest:
+        if rx2:
+            t2 = job.t_open_rx2
+            return EmissionRequest(label=job.kind, device=job.device, ready_ns=t2,
+                                   freq_hz=job.rx2_hz, duration_ns=job.rx2_airtime_ns,
+                                   window=(t2, t2 + RX2_WINDOW_NS))
+        return EmissionRequest(label=job.kind, device=job.device, ready_ns=job.t_open,
+                               freq_hz=job.rx1_hz, duration_ns=job.airtime_ns,
+                               window=(job.t_open, job.t_open + RX1_WINDOW_NS))
+
+    def apres(k: int, rx2: bool):
+        """Réaction d'un placement : retient l'émission, ou demande la fenêtre de secours."""
+        def reagir(emission, deposer) -> None:
+            if emission.emitted:
+                starts[k] = emission.start_ns
+                fenetres[k] = "rx2" if rx2 else "rx1"
+                return
+            if rx2 or not repli_actif or not jobs[k].rx2_disponible:
+                return
+            # RX1 n'a pas abouti — seconde fenêtre, une seule fois, avec ses propres paramètres.
+            deposer(fenetre(k, jobs[k], True), ensuite=apres(k, True))
+        return reagir
+
+    for k, job in enumerate(jobs):
+        arbitre.demand(fenetre(k, job, False), ensuite=apres(k, False))
     arbitre.resolve()
-    starts: list[Optional[int]] = [
-        decision.start_ns if decision.emitted else None
-        for decision in (arbitre.emission(ticket) for ticket in tickets)]
-    return starts, list(arbitre.occupation)
+    return starts, fenetres, list(arbitre.occupation)
 
 
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
             starts: Sequence[Optional[int]], roles: Sequence[bool],
-            mac: Optional[MacSchedule] = None) -> tuple[ProtocolEvent, ...]:
-    """Événements dans l'ordre temporel, à partir de la trace et de la planification."""
+            mac: Optional[MacSchedule] = None,
+            fenetres: Optional[Sequence[Optional[str]]] = None) -> tuple[ProtocolEvent, ...]:
+    """Événements dans l'ordre temporel, à partir de la trace et de la planification.
+
+    `fenetres` : fenêtre réellement émise par job (`"rx1"`, `"rx2"` ou None). Sans elle, toutes
+    les descentes sont rapportées en RX1 — comportement d'avant I2.
+    """
     pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
 
     def add(t: int, kind: str, device: int, hops: list[HopEvent], outcome: str) -> None:
@@ -521,19 +631,27 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
             continue
         job = jobs[k]
         start = starts[k]
+        # Fenêtre réellement émise : la fréquence du saut descendant est celle de cette fenêtre,
+        # pas systématiquement celle de RX1. Une descente repliée en RX2 n'est pas sur la même
+        # fréquence — la rapporter en RX1 serait faux, et trompeur pour le rapport cyclique.
+        en_rx2 = fenetres is not None and fenetres[k] == "rx2"
+        freq_dl = job.rx2_hz if en_rx2 else job.rx1_hz
+        # Le dispositif peut émettre pendant l'une fenêtre et pas l'autre : RX2 s'ouvre une
+        # seconde plus tard, une montante courte n'a pas fini de la masquer.
+        manquee = job.device_missed_rx2 if en_rx2 else job.device_missed
         if start is None:
-            hop = HopEvent("gw:0", _dev(d), job.t_open, job.rx1_hz, None, None, "not_listened")
+            hop = HopEvent("gw:0", _dev(d), job.t_open, freq_dl, None, None, "not_listened")
             add(job.t_open, "rx_window_missed", d, [hop], "gateway_busy")
             continue
-        if job.device_missed:
-            hop = HopEvent("gw:0", _dev(d), start, job.rx1_hz, None, None, "not_listened")
+        if manquee:
+            hop = HopEvent("gw:0", _dev(d), start, freq_dl, None, None, "not_listened")
             add(job.t_open, "rx_window_missed", d, [hop], "device_transmitting")
             continue
         ok = job.received
-        down_hop = HopEvent("gw:0", _dev(d), start, job.rx1_hz, None, None,
+        down_hop = HopEvent("gw:0", _dev(d), start, freq_dl, None, None,
                             "delivered" if ok else "lost_sensitivity")
         if job.kind == "join_accept":
-            down = [HopEvent("ns", "gw:0", start, job.rx1_hz, None, None, "delivered"), down_hop]
+            down = [HopEvent("ns", "gw:0", start, freq_dl, None, None, "delivered"), down_hop]
         else:
             down = [down_hop]
         add(start, job.kind, d, down, job.content if ok else "lost_sensitivity")
@@ -565,8 +683,8 @@ def _plan(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], options: P
     """Une passe de planification : rôles, downlinks, émissions passerelle, jointures obtenues."""
     roles = _join_roles(records, joined, options)
     jobs = _downlink_jobs(records, radios, options, roles, mac)
-    starts, busy = _schedule_gateway(jobs)
-    return roles, jobs, starts, busy, _joined_times(jobs, starts)
+    starts, fenetres, busy = _schedule_gateway(jobs, options)
+    return roles, jobs, starts, busy, fenetres, _joined_times(jobs, starts)
 
 
 def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
@@ -580,9 +698,10 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
     joined: dict[int, int] = {}
     seen: dict[tuple, int] = {(): 0}
     for iteration in range(1, MAX_ITERATIONS + 1):
-        roles, jobs, starts, _busy, new_joined = _plan(records, radios, options, joined, mac)
+        roles, jobs, starts, _busy, fenetres, new_joined = _plan(records, radios, options,
+                                                                 joined, mac)
         if new_joined == joined:
-            return _events(records, radios, jobs, starts, roles, mac)
+            return _events(records, radios, jobs, starts, roles, mac, fenetres)
         signature = tuple(sorted(new_joined.items()))
         if signature in seen:
             raise RuntimeError(
@@ -955,10 +1074,10 @@ def _build_trace_python(devices, radios, gateway, propagation, environment, rese
     for iteration in range(1, MAX_ITERATIONS + 1):
         result = simulate_uplinks_trace(devices, gateway, propagation, environment,
                                         gateway_busy=busy, reservations=reservations)
-        roles, jobs, starts, new_busy, new_joined = _plan(result.records, radios, options, joined,
-                                                          mac)
+        roles, jobs, starts, new_busy, fenetres, new_joined = _plan(result.records, radios,
+                                                                    options, joined, mac)
         if new_busy == busy and new_joined == joined:
-            events = _events(result.records, radios, jobs, starts, roles, mac)
+            events = _events(result.records, radios, jobs, starts, roles, mac, fenetres)
             return TraceRun(
                 per_device=result.per_device,
                 totals=result.totals,

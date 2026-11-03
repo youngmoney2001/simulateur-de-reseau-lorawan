@@ -39,6 +39,47 @@ nouveaux), harnais ABI 55 structures / 477 grandeurs en x86-64 et compilation i3
 fréquence RX2 par module régional (arbitrage S1) — aucun appelant ne peut donc aujourd'hui
 renseigner `rx2_hz` correctement.
 
+### D3.15 / I2 — Repli RX2 dans l'oracle Python
+
+Le repli vers la seconde fenêtre de réception est implémenté dans la planification descendante
+Python (`trace_events._schedule_gateway`). RX1 reste prioritaire : RX2 n'est demandée que par la
+réaction d'une RX1 **non émise**, jamais à côté ni en double.
+
+- **Opt-in.** `ProtocolOptions.rx2_fallback`, `False` par défaut : à `False`, la file de
+  l'émetteur ne contient que des demandes RX1, exactement comme avant I2.
+- **Conditionné à une fenêtre réellement renseignée.** Le repli n'opère que si `rx2_sf != 0`
+  (il y a une fenêtre) **et** `rx2_hz != 0` (il y a une fréquence). Sans fréquence régionale —
+  cas de tous les scénarios sans `region:` — le repli est **inerte par construction**, ce qui
+  préserve les empreintes gelées.
+- **Paramètres effectifs.** Une descente repliée porte la fréquence, le SF et la bande passante
+  de RX2, donc un temps d'antenne **différent** : au SF12 BW125 (défaut EU868, RP002-1.0.5), la
+  même trame occupe l'émetteur une vingtaine de fois plus longtemps qu'au SF7. C'est cette durée
+  qui est réservée, pas celle de RX1.
+- **Validation ajoutée**, bornes identiques à `valid_rx2()` du cœur : `rx2_sf` dans 7..12 (0 =
+  aucun repli), `rx2_bw_hz` dans {125k, 250k, 500k} (0 = reprend `rx1_bw_hz`), `rx2_hz` non
+  négatif. Hors opt-in, rien n'est validé ni lu.
+- **Aucun doublon** : une seule émission acceptée par descente ; la réaction RX2 ne redemande
+  rien.
+
+**Divergence identifiée, non masquée.** Le planificateur natif n'implémente **aucun** repli RX2
+(écart D1 de l'audit). La parité Python/natif est donc exigée et vérifiée sur RX1, sur le repli
+désactivé et sur l'absence de fréquence régionale — où les deux moteurs se rejoignent — mais
+**pas** sur un repli effectif, qui n'a pas d'équivalent natif. Ce cas est épinglé par un
+`xfail(strict=True)` et par un test qui démontre positivement l'écart
+(`test_le_coeur_ne_replie_pas_et_le_dit`). Tant que le cœur ne replie pas, toute comparaison
+« parité avec repli » serait fausse.
+
+**Conséquence mesurée, assumée** : en saturation, le repli **réduit** le nombre de descentes qui
+aboutissent. Une RX2 au SF12 bloque l'émetteur plusieurs secondes, et empêche des RX1 suivantes
+de se placer. Ce n'est pas un défaut de placement : c'est le coût radio réel du débit de repli
+EU868. Le test `test_le_repli_coute_l_emetteur_et_peut_reduire_le_total` épingle cet effet.
+
+**Vérifications** : 25 nouveaux tests (`python/tests/test_downlink_plan_rx2.py`) ; suite Python
+complète rejouée ; C++, ABI (55 / 477, i386) et symboles (98, +1) inchangés ; empreintes
+`d2cb0fac…` et `ed126d7f…` inchangées — le champ `rx2_fallback` est délibérément exclu du `repr`
+de `ProtocolOptions`, dont la chaîne sert de clé au dépôt figé : l'y faire apparaître aurait
+changé l'empreinte sans changer un seul événement.
+
 ### D3.13 — Arbitrage radio partagé : un émetteur, un budget, une seule source de vérité
 - **`python/lsim/arbitre.py` (nouveau)** : `GatewayArbiter` et `DutyCycleLedger` remplacent trois
   occupations passerelle indépendantes — `busy_until` local de `trace_events._schedule_gateway`,

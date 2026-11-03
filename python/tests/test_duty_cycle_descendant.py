@@ -454,12 +454,13 @@ def test_le_chemin_natif_napplique_pas_la_contrainte():
                     airtime_ns=1 * SECONDE, rx1_hz=RX1_HZ, received=True, device_missed=False),
                _Job(record=1, device=1, kind="downlink", content="data", t_open=3 * SECONDE,
                     airtime_ns=1 * SECONDE, rx1_hz=RX1_HZ, received=True, device_missed=False)]
-    debuts, occupations = _schedule_gateway(travaux)
+    debuts, _fenetres, occupations = _schedule_gateway(travaux)
     # Aucun espacement : la seconde descente suit la première, et non 100 s plus tard.
     assert debuts == [2 * SECONDE, 3 * SECONDE]
     assert [tuple(o) for o in occupations] == [(2 * SECONDE, 3 * SECONDE),
                                                (3 * SECONDE, 4 * SECONDE)]
-    assert _schedule_gateway(travaux) == (debuts, occupations)   # sans état : reproductible
+    # sans état : reproductible
+    assert _schedule_gateway(travaux) == (debuts, _fenetres, occupations)
 
 
 # ------------------------------------------------------------- la jointure radio
