@@ -31,6 +31,7 @@ Arbitrages appliqués :
 | `enforce_duty_cycle: false` désactive | `test_enforce_duty_cycle_false_desactive_la_contrainte` |
 | Le point fixe ne cumule pas les passes | `test_le_point_fixe_ne_cumule_pas_les_passes` |
 | Le chemin natif n'applique pas la contrainte | `test_le_chemin_natif_napplique_pas_la_contrainte` |
+| Hors chemin de l'arbitre : aucune contrainte | `test_la_contrainte_ne_sapplique_pas_hors_du_chemin_de_larbitre` |
 | Un Join-Accept est compté une seule fois | `test_le_join_accept_est_compte_une_seule_fois` |
 | Les rejeux sont refusés par la sous-bande | `test_les_rejeux_sont_refuses_par_le_rapport_cyclique` |
 | RX2 de secours : sous-bande distincte, aucun retard | `test_la_rx2_de_secours_nest_pas_retardee_par_la_rx1` |
@@ -381,6 +382,40 @@ def test_sans_nouvelle_passe_un_etat_conserve_refuserait_la_suite():
     assert emission.verdict == DUTY_CYCLE
     assert suivante.occupation == ()
     assert d.refus() == 1
+
+
+def _occupations(exemple, region=None, **reglages):
+    """Occupations passerelle d'un scénario, avec ou sans région déclarée."""
+    data = yaml.safe_load(open(exemple, encoding="utf-8"))
+    if region is not None:
+        for groupe in data["groups"]:
+            groupe["region"] = region
+    data["retransmissions"].update({"retries": 1, **reglages})
+    return build_trace(load_scenario(yaml.safe_dump(data)),
+                       ProtocolOptions()).retransmissions.gateway_tx
+
+
+def test_la_contrainte_ne_sapplique_pas_hors_du_chemin_de_larbitre():
+    """Limite structurelle (A4) : le planificateur du cœur ne reçoit aucun état.
+
+    Sans couche MAC ni jointure radio, `_simulate` prend le **chemin causal du cœur**
+    (`simulate_causal` + `plan_native`) : il n'y a aucun arbitre, donc aucune contrainte
+    descendante. Dès que la couche MAC est nécessaire (ACK retardé ou répété, `uses_ack_mac`)
+    ou qu'une jointure radio est déclarée, les descentes passent par l'arbitre partagé et la
+    contrainte s'applique. Modéliser le premier cas supposerait de toucher à l'ABI du cœur,
+    ce que l'arbitrage A4 interdit : la limite est donc documentée, pas masquée.
+    """
+    # NOMINAL : ack_delay_ms = 0, une copie ⇒ chemin natif ⇒ aucune contrainte.
+    assert _arrondis(_occupations(NOMINAL, region=None)) == \
+        _arrondis(_occupations(NOMINAL, region="EU868"))
+
+    # DUPLIQUE : deux copies d'ACK ⇒ couche MAC ⇒ arbitre partagé ⇒ contrainte appliquée.
+    sans = _arrondis(_occupations("docs/exemples/retransmissions_ack_duplique.yaml"))
+    avec = _arrondis(_occupations("docs/exemples/retransmissions_ack_duplique.yaml",
+                                  region="EU868"))
+    assert sans == [(2.488, 0.1444), (2.6324, 0.1444), (62.488, 0.1444), (62.6324, 0.1444)]
+    # La seconde copie, qui suivait la première de 0,1444 s, attend la bande O (0,1 %).
+    assert avec == [(2.488, 0.1444), (16.9264, 0.1444), (62.488, 0.1444), (76.9264, 0.1444)]
 
 
 def test_le_chemin_natif_napplique_pas_la_contrainte():
