@@ -378,7 +378,7 @@ def _prune_acknowledged(schedule):
 
 def _simulate(schedule, devices, gateway, propagation, radios, options, environment=None,
               timing=None, busy=None, classes=None, fcnt_down_start: int = 0,
-              payload: bool = False, arbiter=None, avant_resolution=None):
+              payload: bool = False, arbiter=None, avant_resolution=None, duty_cycle=None):
     """Rejoue le calendrier. Sans `timing` : chemin causal du cœur, inchangé.
 
     Avec `timing` (ACK retardé ou répété, **ou descentes partagées avec une jointure radio**) : les
@@ -391,6 +391,8 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
     `arbiter` : émetteur partagé (`lsim.arbitre`). `avant_resolution` : appelée avec
     `(arbitre, calendrier courant)` juste avant la résolution, pour qu'un autre producteur
     (les jointures) dépose ses propres demandes dans la même passe chronologique.
+    `duty_cycle` : espacement réglementaire descendant (`lsim.arbitre.DownlinkDutyCycle`),
+    partagé par toutes les descentes de la passe. `None` : aucune contrainte.
     """
     if not schedule:
         return None, (), (), None
@@ -484,7 +486,8 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
                         energy_profile: Optional[str] = None, environment=None,
                         with_engine_output: bool = False,
                         device_classes: Optional[Sequence[str]] = None,
-                        timelines=None, avant_resolution=None) -> RetransmissionResult:
+                        timelines=None, avant_resolution=None,
+                        duty_cycle=None) -> RetransmissionResult:
     """Uplinks confirmés avec réémissions ; renvoie les compteurs mesurés.
 
     `devices`, `radios` : un élément par terminal, même ordre (comme `simulate_causal`).
@@ -550,13 +553,13 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     for _iteration in range(MAX_ITERATIONS):
         # Un émetteur neuf à chaque itération : aucune occupation d'une passe précédente ne
         # survit à la suivante, et la convergence se lit sur l'égalité des occupations.
-        arbitre = GatewayArbiter()
+        arbitre = GatewayArbiter(duty_cycle=duty_cycle)
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
             timing=timing, busy=occupation, classes=device_classes,
             fcnt_down_start=retransmit.fcnt_down_start,
             payload=retransmit.downlink_payload, arbiter=arbitre,
-            avant_resolution=avant_resolution)
+            avant_resolution=avant_resolution, duty_cycle=duty_cycle)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:
@@ -734,7 +737,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                                retransmit: RetransmissionOptions = RetransmissionOptions(),
                                energy_profile: Optional[str] = None, environment=None,
                                with_engine_output: bool = False,
-                               device_classes: Optional[Sequence[str]] = None) -> RetransmissionResult:
+                               device_classes: Optional[Sequence[str]] = None,
+                               duty_cycle=None) -> RetransmissionResult:
     """Uplinks confirmés, avec jointures radio quand `join_requests_s` est déclaré.
 
     Sans `join_requests_s`, l'appel est exactement celui de `_simulate_confirmed` : aucune jointure
@@ -752,7 +756,7 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     if not retransmit.join_options.enabled:
         return _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
                                    energy_profile, environment, with_engine_output,
-                                   device_classes)
+                                   device_classes, duty_cycle=duty_cycle)
 
     from lsim.join import simulate_joins
 
@@ -772,6 +776,10 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     signatures = set()
     for _ in range(8):
         boite: dict = {}
+        # État de rapport cyclique descendant **neuf à chaque passe** : le point fixe rejoue la
+        # même chronologie, y laisser survivre l'état de la passe précédente compterait deux
+        # fois les mêmes émissions et refuserait ce que la passe précédente avait autorisé.
+        duty = None if duty_cycle is None else duty_cycle.nouvelle_passe()
 
         def avant_resolution(arbitre, programme, boite=boite, timelines=timelines,
                              succes=succes):
@@ -796,7 +804,7 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
                                      energy_profile, environment, with_engine_output,
                                      device_classes, timelines=timelines,
-                                     avant_resolution=avant_resolution)
+                                     avant_resolution=avant_resolution, duty_cycle=duty)
         plan = boite.get("plan")
         if plan is None:
             break

@@ -35,10 +35,16 @@ l'**occupation** : qui émet, quand, et combien de temps.
    `début >= fin de fenêtre`, le verdict est `window_missed` et **aucune occupation n'est
    enregistrée** : la passerelle n'a rien émis. La couche MAC demande `allow_late=True` pour
    l'ACK retardé, qui est une émission réelle que personne n'écoute — elle occupe l'émetteur.
-6. **Le rapport cyclique est un budget, pas un espacement.** `DutyCycleLedger` applique
-   `airtime_cumulé + airtime <= rapport × instant`, la règle déjà utilisée par `retransmissions`
-   pour les réémissions. Une émission refusée n'est **pas** une émission : ni occupation, ni
-   compteur `sent`, ni événement de transmission.
+6. **Le rapport cyclique montant est un budget, pas un espacement.** `DutyCycleLedger`
+   applique `airtime_cumulé + airtime <= rapport × instant`, la règle déjà utilisée par
+   `retransmissions` pour les réémissions. Une émission refusée n'est **pas** une émission :
+   ni occupation, ni compteur `sent`, ni événement de transmission.
+7. **Le rapport cyclique descendant est un espacement, pas un budget.** Depuis D3.14,
+   `DownlinkDutyCycle` applique `début >= fin + airtime × (1 − d) / d` — la formule de la
+   boucle fermée du moteur — par **passerelle et par sous-bande**. Les deux mécanismes ne
+   sont pas fusionnés : l'un borne un total, l'autre espace deux émissions consécutives.
+   Une émission refusée ne consomme rien non plus : l'état n'est réservé **qu'une seule
+   fois**, au moment où l'émission est acceptée.
 
 ## Règle de départ et durée d'occupation
 
@@ -101,6 +107,8 @@ import heapq
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
+from lsim.power import GATEWAY_TX_POWER_DEFAULT_DBM, TxChain
+
 # Verdicts de l'arbitre. Un seul moyen de les distinguer : l'occupation.
 EMITTED = "emitted"              # émise dans la fenêtre : l'émetteur est occupé
 LATE = "late"                    # émise hors fenêtre (demandé) : occupée, mais non écoutée
@@ -147,6 +155,11 @@ class EmissionRequest:
     `condition` : évaluée **au moment du placement**. Fausse ⇒ la demande est devenue sans objet
     (un terminal déjà joint ne reçoit pas de second Join-Accept) : verdict `not_needed`, aucune
     occupation, et aucune réaction (`ensuite` n'est pas appelée).
+    `freq_hz` : fréquence de l'émission. Elle seule détermine la sous-bande réglementaire, donc
+    la contrainte de rapport cyclique descendant (`DownlinkDutyCycle`). `None` : la demande
+    n'est pas rattachée à une fréquence, aucune contrainte n'est appliquée.
+    `gateway` : indice de la passerelle émettrice. L'état de rapport cyclique est **par
+    passerelle** : deux passerelles ne partagent pas le droit d'émettre d'une sous-bande.
     """
 
     label: str
@@ -157,6 +170,8 @@ class EmissionRequest:
     allow_late: bool = False
     priority: Optional[int] = None
     condition: Optional[Callable[[], bool]] = None
+    freq_hz: Optional[int] = None
+    gateway: int = 0
 
     def __post_init__(self) -> None:
         if self.duration_ns <= 0:
@@ -219,8 +234,10 @@ class GatewayArbiter:
     """
 
     def __init__(self, policy: ArbitrationPolicy = ArbitrationPolicy(),
-                 occupation: Sequence[tuple[int, int]] = ()):
+                 occupation: Sequence[tuple[int, int]] = (),
+                 duty_cycle: Optional["DownlinkDutyCycle"] = None):
         self.policy = policy
+        self.duty_cycle = duty_cycle
         self._requetes: dict[int, EmissionRequest] = {}
         self._ensuite: dict[int, Reaktion] = {}
         self._emissions: dict[int, Emission] = {}
@@ -292,9 +309,32 @@ class GatewayArbiter:
         ouverture = demande.window[0] if demande.window is not None else demande.ready_ns
         debut = max(demande.ready_ns, ouverture, self._occupe_jusqua)
         fermeture = demande.window[1] if demande.window is not None else None
+        # Rapport cyclique descendant. La contrainte porte sur le **début**, comme
+        # l'occupation de l'émetteur : la sous-bande impose une attente, on ne l'anticipe pas.
+        # Ce n'est pas un report : si l'attente sort l'émission de sa fenêtre, le verdict est
+        # DUTY_CYCLE et **rien n'est émis** — ni occupation, ni consommation de la sous-bande.
+        attente = False
+        if self.duty_cycle is not None:
+            cle, _limite = self.duty_cycle.regle(demande.freq_hz)
+            if cle == HORS_PLAN:
+                # Fréquence hors des bandes désignées : ce n'est pas une question de quota.
+                self.duty_cycle.refuse(hors_plan=True)
+                return Emission(ticket, demande.label, demande.device, demande.ready_ns,
+                                demande.duration_ns, demande.window, debut, debut, DUTY_CYCLE)
+            libre = self.duty_cycle.libre_le(demande.gateway, demande.freq_hz, debut)
+            if libre > debut:
+                attente = True
+                debut = libre
         if fermeture is not None and debut >= fermeture:
             if not demande.allow_late:
                 # La passerelle n'a rien émis : aucune occupation, aucun temps d'antenne.
+                if attente:
+                    # C'est l'attente réglementaire, et non l'occupation de l'émetteur, qui a
+                    # fait manquer la fenêtre : le verdict le dit.
+                    self.duty_cycle.refuse()
+                    return Emission(ticket, demande.label, demande.device, demande.ready_ns,
+                                    demande.duration_ns, demande.window, debut, debut,
+                                    DUTY_CYCLE)
                 return Emission(ticket, demande.label, demande.device, demande.ready_ns,
                                 demande.duration_ns, demande.window, debut, debut,
                                 WINDOW_MISSED)
@@ -304,6 +344,10 @@ class GatewayArbiter:
         fin = debut + demande.duration_ns
         self._occupation.append((debut, fin))
         self._occupe_jusqua = max(self._occupe_jusqua, fin)
+        if self.duty_cycle is not None:
+            # Réservation **unique**, au moment où l'émission est acceptée. Une demande
+            # refusée n'atteint jamais cette ligne : elle ne consomme donc rien.
+            self.duty_cycle.consommer(demande.gateway, demande.freq_hz, debut, fin)
         return Emission(ticket, demande.label, demande.device, demande.ready_ns,
                         demande.duration_ns, demande.window, debut, fin, verdict)
 
@@ -339,6 +383,168 @@ class GatewayArbiter:
         return tuple((e.start_ns, e.end_ns) for e in self.emissions_faites if e.label == label)
 
 
+#: Clé d'état d'une émission dont la fréquence n'entre dans aucune sous-bande du plan.
+#: Une telle émission est **refusée** : émettre hors des bandes désignées n'est pas une
+#: question de quota.
+HORS_PLAN = "hors_plan"
+
+
+@dataclass(frozen=True)
+class _Derniere:
+    """Dernière émission d'une sous-bande : sa fin et son temps d'antenne."""
+
+    fin_ns: int
+    airtime_ns: int
+
+
+class DownlinkDutyCycle:
+    """Espacement réglementaire **descendant**, par passerelle et par sous-bande.
+
+    Deux mécanismes de rapport cyclique coexistent, volontairement **non fusionnés** parce
+    qu'ils ne mesurent pas la même chose :
+
+    | | `DutyCycleLedger` (montant) | `DownlinkDutyCycle` (descendant) |
+    |---|---|---|
+    | nature | **budget cumulatif** | **espacement** entre deux émissions |
+    | portée | un terminal | une passerelle **et** une sous-bande |
+    | règle | `cumul + airtime <= rapport × instant` | `début >= fin + airtime × (1 − d) / d` |
+    | origine | cumul depuis `t = 0`, droit qui croît avec le temps | dernière émission de la sous-bande |
+    | source | règle des réémissions (`retransmissions`) | boucle fermée du moteur, `core/src/engine.cpp` l. 2019-2031 |
+
+    Le premier borne un **total**, le second espace deux **émissions consécutives**. Les
+    fusionner reviendrait à choisir arbitrairement l'une des deux sémantiques ; ils sont donc
+    distincts, et chacun est documenté à sa place.
+
+    **Règle retenue (A1).** Le repos suit l'émission **réellement émise** :
+
+        repos = airtime × (1 − d) / d
+
+    où `d` est la limite de la sous-bande et `airtime` le temps d'antenne de l'émission qui
+    vient d'avoir lieu. C'est exactement la formule de la boucle fermée du moteur, appliquée
+    cette fois à l'émetteur de la passerelle. Une limite de 1 % impose donc un repos de 99 fois
+    le temps d'antenne ; une limite de 10 %, 9 fois.
+
+    **État (A3).** L'état est indexé par `(passerelle, sous-bande)` : RX1, RX2, un ACK, un
+    Join-Accept et ses rejeux partagent le même état dès qu'ils tombent dans la même
+    sous-bande. Une émission **refusée ne consomme rien** : ni occupation, ni repos — la
+    passerelle n'a rien émis. Le contrôle a lieu **une seule fois**, au moment où l'émission
+    est acceptée (`GatewayArbiter._placer`).
+
+    **Portée.** `profile = None` (région inconnue ou non déclarée), `enabled = False` ou
+    `freq_hz = None` : **aucune contrainte**, l'objet ne refuse jamais rien. Un profil sans
+    sous-bandes (US915, AU915) ne contraint rien non plus.
+    """
+
+    def __init__(self, profile=None, tx: Optional[TxChain] = None, enabled: bool = True):
+        self._profile = profile
+        self._tx = tx if tx is not None else TxChain(GATEWAY_TX_POWER_DEFAULT_DBM)
+        self._enabled = bool(enabled)
+        self._etat: dict[tuple[int, str], _Derniere] = {}
+        self._regles: dict[int, tuple[Optional[str], Optional[float]]] = {}
+        self._consommations = 0
+        self._refus = 0
+        self._refus_hors_plan = 0
+
+    # --- règle ---------------------------------------------------------------------------
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled and self._profile is not None
+
+    @property
+    def eirp_dbm(self) -> float:
+        """PIRE de la passerelle : c'est elle qui départage les sous-bandes (O contre P)."""
+        return self._tx.eirp_dbm
+
+    def regle(self, freq_hz: Optional[int]) -> tuple[Optional[str], Optional[float]]:
+        """`(clé d'état, limite)` pour une fréquence.
+
+        - `(None, None)` : aucune contrainte ;
+        - `(HORS_PLAN, None)` : fréquence hors du plan, émission refusée ;
+        - `(nom de sous-bande, limite)` : contrainte d'espacement.
+
+        `freq_hz = 0` vaut « fréquence non renseignée » (convention de `DeviceRadio.rx2_hz`,
+        qui vaut 0 tant qu'aucun plan régional ne définit RX2) et ne contraint rien.
+        """
+        if not freq_hz or not self.enabled:
+            return None, None
+        cle = int(freq_hz)
+        if cle not in self._regles:
+            self._regles[cle] = self._resoudre(cle)
+        return self._regles[cle]
+
+    def _resoudre(self, freq_hz: int) -> tuple[Optional[str], Optional[float]]:
+        if not getattr(self._profile, "sub_bands", ()):
+            return None, None                      # région sans sous-bandes : rien à appliquer
+        bandes = self._profile.applicable(freq_hz, self._tx.erp_dbm)
+        if not bandes:
+            return HORS_PLAN, None                 # hors des bandes désignées
+        bande = min(bandes, key=lambda b: b.duty_cycle)
+        return bande.name, bande.duty_cycle
+
+    # --- espacement ----------------------------------------------------------------------
+
+    @staticmethod
+    def repos_ns(airtime_ns: int, limite: float) -> int:
+        """Repos imposé après une émission de `airtime_ns` dans une sous-bande à `limite`."""
+        if limite >= 1.0:
+            return 0
+        if limite <= 0.0:
+            raise ValueError("la limite de rapport cyclique est dans ]0, 1]")
+        return int(round(airtime_ns * (1.0 - limite) / limite))
+
+    def libre_le(self, gateway: int, freq_hz: Optional[int], debut: int) -> int:
+        """Premier instant d'émission autorisé, à partir de `debut`."""
+        cle, limite = self.regle(freq_hz)
+        if cle is None or limite is None:
+            return debut
+        derniere = self._etat.get((int(gateway), cle))
+        if derniere is None:
+            return debut
+        return max(debut, derniere.fin_ns + self.repos_ns(derniere.airtime_ns, limite))
+
+    def consommer(self, gateway: int, freq_hz: Optional[int], debut: int, fin: int) -> None:
+        """Enregistre une émission **acceptée**. Une émission refusée n'appelle jamais ceci."""
+        cle, _limite = self.regle(freq_hz)
+        if cle is None or cle == HORS_PLAN:
+            return
+        self._etat[(int(gateway), cle)] = _Derniere(int(fin), int(fin) - int(debut))
+        self._consommations += 1
+
+    def refuse(self, hors_plan: bool = False) -> None:
+        if hors_plan:
+            self._refus_hors_plan += 1
+        else:
+            self._refus += 1
+
+    # --- lecture -------------------------------------------------------------------------
+
+    def consommations(self) -> int:
+        """Nombre d'émissions descendantes comptabilisées, toutes sous-bandes confondues."""
+        return self._consommations
+
+    def refus(self) -> int:
+        """Émissions refusées par l'espacement (hors plan exclu)."""
+        return self._refus
+
+    def refus_hors_plan(self) -> int:
+        """Émissions refusées parce que leur fréquence n'entre dans aucune sous-bande."""
+        return self._refus_hors_plan
+
+    def etat(self) -> dict[tuple[int, str], tuple[int, int]]:
+        """Copie de l'état : `(passerelle, sous-bande) -> (fin, temps d'antenne)`."""
+        return {cle: (d.fin_ns, d.airtime_ns) for cle, d in self._etat.items()}
+
+    def nouvelle_passe(self) -> "DownlinkDutyCycle":
+        """Même règle, état vierge.
+
+        Le point fixe de `retransmissions` **rejoue la même chronologie** à chaque passe : y
+        laisser survivre l'état de la passe précédente compterait deux fois les mêmes
+        émissions et refuserait, à la passe suivante, ce que la précédente avait autorisé.
+        """
+        return DownlinkDutyCycle(self._profile, self._tx, self._enabled)
+
+
 class DutyCycleLedger:
     """Budget réglementaire d'émission, par terminal.
 
@@ -361,11 +567,11 @@ class DutyCycleLedger:
     l'occupation de la sous-bande et non sur la nature de la trame. Il est **isolé par terminal** :
     le budget de l'un ne limite pas l'autre.
 
-    **Limite non modélisée, signalée et non inventée.** Ce budget est **montant** : il ne s'applique
-    qu'aux émissions du terminal. Le rapport cyclique **descendant** de la passerelle n'est pas
-    modélisé — la passerelle peut émettre sans limite de budget. Aucune valeur réglementaire
-    descendante n'est donc introduite ici : une contrainte qu'on ne peut pas modéliser se signale,
-    elle ne s'invente pas.
+    **Portée.** Ce budget est **montant** : il ne s'applique qu'aux émissions du terminal. Le
+    rapport cyclique **descendant** de la passerelle n'est **pas** modélisé ici : il l'est depuis
+    D3.14 par `DownlinkDutyCycle`, qui est un espacement et non un budget. Les deux grandeurs ne
+    se cumulent pas : un terminal qui émet et une passerelle qui répond n'épuisent pas le même
+    droit, et les deux mécanismes restent séparés à dessein.
 
     `rapport = 1.0` (défaut) : aucune contrainte, le ledger ne refuse jamais rien.
     """

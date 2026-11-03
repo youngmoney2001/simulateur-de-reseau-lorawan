@@ -460,6 +460,7 @@ def _schedule_gateway(jobs: Sequence[_Job]) -> tuple[list[Optional[int]], list[t
     arbitre = GatewayArbiter()
     tickets = arbitre.demand_all([
         EmissionRequest(label=job.kind, device=job.device, ready_ns=job.t_open,
+                        freq_hz=job.rx1_hz,
                         duration_ns=job.airtime_ns,
                         window=(job.t_open, job.t_open + RX1_WINDOW_NS))
         for job in jobs])
@@ -653,6 +654,36 @@ def _build_trace_native(devices, radios, gateway, propagation, environment,
                     gateway_tx=tuple(busy))
 
 
+def _downlink_duty_cycle(scenario, gateway, options, active: bool = True):
+    """Règle de rapport cyclique **descendant** du scénario, ou `None` si elle n'est pas définie.
+
+    Trois conditions, toutes nécessaires :
+
+    - une région **unique** est déclarée par les groupes : sans elle, la sous-bande de la
+      descente est indéfinie, et aucune contrainte n'est appliquée ;
+    - cette région définit des sous-bandes (US915 et AU915 n'en ont pas : rien à appliquer) ;
+    - `enforce_duty_cycle` est vrai.
+
+    Une région absente ou plusieurs régions différentes ne sont **pas** une erreur : c'est
+    l'absence d'une information que le scénario ne porte pas. La contrainte est alors
+    inertie, et non pas devinée.
+    """
+    if not active:
+        return None
+    from lsim.arbitre import DownlinkDutyCycle
+    from lsim.power import gateway_tx
+    from lsim.regions import PROFILES
+
+    regions = {groupe.region for groupe in scenario.model.groups if groupe.region}
+    if len(regions) != 1:
+        return None
+    profile = PROFILES.get(regions.pop())
+    if profile is None or not profile.sub_bands:
+        return None
+    return DownlinkDutyCycle(profile, gateway_tx(gateway, options.gateway_tx_power_dbm),
+                             enabled=True)
+
+
 def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation, environment,
                                  options: ProtocolOptions) -> TraceRun:
     """Trace d'un scénario à retransmissions : une entrée par transmission, indices physiques.
@@ -666,10 +697,11 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
     from lsim.retransmissions import simulate_confirmed_uplinks
 
     etat = scenario.model.retransmissions
+    devoir = _downlink_duty_cycle(scenario, gateway, options, active=etat.enforce_duty_cycle)
     resultat = simulate_confirmed_uplinks(
         devices, gateway, propagation, radios, options, etat.options(),
         energy_profile=etat.energy_profile, environment=environment, with_engine_output=True,
-        device_classes=scenario.device_classes())
+        device_classes=scenario.device_classes(), duty_cycle=devoir)
     moteur, evenements = resultat.trace, resultat.events
     if moteur is None:
         raise RuntimeError("moteur sans sortie : trace de réémission impossible")

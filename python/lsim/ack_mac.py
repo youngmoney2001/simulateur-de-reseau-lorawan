@@ -375,8 +375,11 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         # Aucune fenêtre imposée à l'arbitre : un ACK retardé par l'émetteur est une émission
         # réelle, que la couche classe `LATE` elle-même une fois l'instant connu. Les copies se
         # suivent parce qu'elles partagent le même instant prêt et que la file est monotone.
+        # Fréquence de la fenêtre visée : RX1 et RX2 ne sont pas dans la même sous-bande. Un
+        # ACK `LATE` est émis après RX2, sur la fréquence de la dernière fenêtre écoutée.
+        freq_hz = radio.rx2_hz if cible is not AckWindow.RX1 else radio.rx1_hz
         tickets = arbitre.demand_all([
-            EmissionRequest(label="ack", device=appareil, ready_ns=pret,
+            EmissionRequest(label="ack", device=appareil, ready_ns=pret, freq_hz=freq_hz,
                             duration_ns=airtime, window=None)
             for _copie in range(timing.repetitions)])
         deposees[index] = (tickets, radio, f_cnt_down)

@@ -359,8 +359,12 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
         return "delivered"
 
     def fenetre(instant: int, fenetre_emise: str = RX1) -> EmissionRequest:
+        # La fréquence suit la fenêtre : RX1 et RX2 ne sont pas dans la même sous-bande, donc
+        # n'ont pas le même droit d'émission. `rx2_hz = 0` quand aucun plan régional ne
+        # définit RX2 : l'arbitre y lit « fréquence non renseignée », aucune contrainte.
+        freq_hz = radio.rx1_hz if fenetre_emise == RX1 else radio.rx2_hz
         return EmissionRequest(label="join_accept", device=device_index, ready_ns=instant,
-                               duration_ns=airtimes[fenetre_emise],
+                               duration_ns=airtimes[fenetre_emise], freq_hz=freq_hz,
                                window=(instant, instant + JOIN_WINDOW_NS))
 
     def rejeux(deposer, depuis: int, fenetre_source: str) -> None:
