@@ -221,6 +221,12 @@ class RetransmissionResult:
     gateway_tx: tuple = ()  # émissions passerelle planifiées, en ns
     ack_gap: int = 0        # ACK reçus puis rejetés par la fenêtre de rejeu
     rejected_stale_session: int = 0   # réémissions refusées : session déjà remplacée
+    # Restitution du contrôle descendant (`lsim.arbitre.DownlinkDutyCycleReport`). `None`
+    # quand aucune règle n'a été fournie. Il distingue expressément « aucune contrainte
+    # applicable » (`active` faux) de « contrainte non évaluée faute de fréquence »
+    # (`non_evaluees` non nul) et de « règle existante mais jamais appliquée parce que le
+    # scénario est passé par le chemin natif du cœur » (`active` vrai, `engage` faux).
+    duty_cycle: object = None
     joins: tuple = ()       # tentatives de jointure radio (vide si jointure déclarée ou absente)
     joins_blocked_by_duty_cycle: int = 0  # Join-Request refusés par le rapport cyclique
     join_accepts_emitted: int = 0     # Join-Accept réellement émis (RX1, RX2 et rejeux)
@@ -550,16 +556,26 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
                                          or avant_resolution is not None) else None
     occupation: tuple = ()
     mac_plan = None
+    dernier_devoir = duty_cycle
     for _iteration in range(MAX_ITERATIONS):
         # Un émetteur neuf à chaque itération : aucune occupation d'une passe précédente ne
         # survit à la suivante, et la convergence se lit sur l'égalité des occupations.
-        arbitre = GatewayArbiter(duty_cycle=duty_cycle)
+        #
+        # L'état de rapport cyclique descendant doit renaître de la même façon, et pour la
+        # même raison : chaque itération **rejoue toute la chronologie** depuis l'origine,
+        # en y ajoutant les réémissions décidées à l'itération précédente. Le laisser
+        # survivre compterait deux fois les mêmes émissions et repousserait la première
+        # d'autant d'espacements qu'il y a eu d'itérations — mesuré : 293,756 s attendus
+        # contre 726,908 s obtenus après trois itérations, soit 3 × 144,384 s de trop.
+        devoir = None if duty_cycle is None else duty_cycle.nouvelle_passe()
+        dernier_devoir = devoir
+        arbitre = GatewayArbiter(duty_cycle=devoir)
         result, events, planned, mac_plan = _simulate(
             schedule, devices, gateway, propagation, radios, options, environment,
             timing=timing, busy=occupation, classes=device_classes,
             fcnt_down_start=retransmit.fcnt_down_start,
             payload=retransmit.downlink_payload, arbiter=arbitre,
-            avant_resolution=avant_resolution, duty_cycle=duty_cycle)
+            avant_resolution=avant_resolution, duty_cycle=devoir)
         recues = {record.device_index for record in result.records if record.outcome == 2}
 
         if mac_plan is None:
@@ -730,6 +746,7 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
         events=events if with_engine_output else (),
         gateway_tx=tuple(planned) if with_engine_output else (),
         rejected_stale_session=perimees,
+        duty_cycle=(None if dernier_devoir is None else dernier_devoir.report()),
     )
 
 

@@ -32,6 +32,17 @@ Arbitrages appliqués :
 | Le point fixe ne cumule pas les passes | `test_le_point_fixe_ne_cumule_pas_les_passes` |
 | Le chemin natif n'applique pas la contrainte | `test_le_chemin_natif_napplique_pas_la_contrainte` |
 | Hors chemin de l'arbitre : aucune contrainte | `test_la_contrainte_ne_sapplique_pas_hors_du_chemin_de_larbitre` |
+| Seuil O/P de part et d'autre | `test_de_part_et_dautre_du_seuil_o_p` |
+| Tolérance de sélection et arrondis | `test_la_selection_ne_tient_pas_a_l_ulp` |
+| Bornes de fréquence inclusives | `test_les_bornes_de_frequence_sont_inclusives_des_deux_cotes` |
+| Deux sous-bandes inclusives se recouvrent | `test_deux_sous_bandes_inclusives_se_recouvrent_a_865_mhz` |
+| Fréquence absente : non évaluée, pas respectée | `test_une_frequence_absente_nest_pas_evaluee` |
+| Sans règle : ni évaluée ni refusée | `test_sans_regle_les_demandes_ne_sont_pas_evaluees` |
+| Aucune RX2 inventée hors plan régional | `test_aucune_frequence_rx2_nest_inventee_hors_plan_regional` |
+| Le rapport distingue les trois causes | `test_le_rapport_distingue_non_evaluee_et_sans_regle` |
+| Trois producteurs, trois consommations | `test_trois_producteurs_ne_consomment_chacun_qu_une_fois` |
+| Les itérations du point fixe ne s'additionnent pas | `test_les_iterations_du_point_fixe_ne_sadditionnent_pas` |
+| Le rapport signale le chemin natif | `test_le_rapport_signale_le_chemin_natif` |
 | Un Join-Accept est compté une seule fois | `test_le_join_accept_est_compte_une_seule_fois` |
 | Les rejeux sont refusés par la sous-bande | `test_les_rejeux_sont_refuses_par_le_rapport_cyclique` |
 | RX2 de secours : sous-bande distincte, aucun retard | `test_la_rx2_de_secours_nest_pas_retardee_par_la_rx1` |
@@ -47,7 +58,7 @@ from lsim.arbitre import (DUTY_CYCLE, HORS_PLAN, NOT_NEEDED, WINDOW_MISSED, Down
                           EmissionRequest, GatewayArbiter)
 from lsim.join import (JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS, JOIN_WINDOW_NS,
                        JoinRadioOptions, simulate_joins)
-from lsim.power import TxChain
+from lsim.power import TxChain, erp_from_eirp, eirp_from_erp, mw_to_dbm
 from lsim.regions import PROFILES
 from lsim.scenario import load_scenario
 from lsim.trace_events import ProtocolOptions, build_trace, device_radios
@@ -302,21 +313,33 @@ def _arrondis(occupations, precision: int = 4):
 
 
 def test_bande_o_et_bande_p_espanacent_differemment():
-    """Même scénario, même trame : 14 dBm (bande O, 0,1 %) contre 27 dBm (bande P, 10 %)."""
-    sans_region = build_trace(load_scenario(_brut()), ProtocolOptions()).retransmissions
-    bande_o = build_trace(load_scenario(_brut(region="EU868")), ProtocolOptions()).retransmissions
-    bande_p = build_trace(load_scenario(_brut(region="EU868", puissance=27)),
+    """Deux copies d'ACK en RX2 : 14 dBm (bande O, 0,1 %) contre 27 dBm (bande P, 10 %).
+
+    Deux copies par trame, pour que l'espacement soit **la** contrainte qui les sépare : la
+    seconde copie est prête 0,1444 s après la première, bien avant le repos imposé.
+    """
+    sans_region = build_trace(load_scenario(_brut(ack_repetitions=2)),
+                              ProtocolOptions()).retransmissions
+    bande_o = build_trace(load_scenario(_brut(region="EU868", ack_repetitions=2)),
+                          ProtocolOptions()).retransmissions
+    bande_p = build_trace(load_scenario(_brut(region="EU868", puissance=27, ack_repetitions=2)),
                           ProtocolOptions()).retransmissions
 
-    # Un ACK de 0,1444 s en RX2 : repos de 999 × l'airtime en bande O, de 9 × en bande P.
+    # Un ACK de 0,1444 s : repos de 999 × l'airtime en bande O, de 9 × en bande P.
     assert _arrondis(bande_o.gateway_tx)[0][1] == pytest.approx(0.1444, abs=1e-4)
     assert _arrondis(bande_p.gateway_tx)[0][1] == pytest.approx(0.1444, abs=1e-4)
     ecart_o = (bande_o.gateway_tx[1][0] - bande_o.gateway_tx[0][0]) / 1e9
     ecart_p = (bande_p.gateway_tx[1][0] - bande_p.gateway_tx[0][0]) / 1e9
     assert ecart_o == pytest.approx(0.144384 * 1000, abs=1e-3)   # 144,384 s
-    assert ecart_p == pytest.approx(0.144384 * 10, abs=1e-3)     # 1,4438 s
+    assert ecart_p == pytest.approx(0.144384 * 10, abs=1e-3)     # 1,4439 s
+    assert _arrondis(bande_p.gateway_tx) == [
+        (4.988, 0.1444), (6.4319, 0.1444), (64.988, 0.1444), (66.4319, 0.1444),
+        (68.1324, 0.1444), (69.5763, 0.1444)]
+    assert _arrondis(bande_o.gateway_tx) == [
+        (4.988, 0.1444), (149.372, 0.1444), (293.756, 0.1444), (438.14, 0.1444),
+        (582.524, 0.1444), (726.908, 0.1444)]
     # Sans région, rien ne change : c'est la référence historique.
-    assert _arrondis(sans_region.gateway_tx) == [(4.988, 0.1444), (8.1324, 0.1444), (64.988, 0.1444), (68.1324, 0.1444)]
+    assert _arrondis(sans_region.gateway_tx)[:2] == [(4.988, 0.1444), (5.1324, 0.1444)]
 
 
 def test_sans_region_aucune_contrainte_nest_appliquee():
@@ -521,3 +544,210 @@ def test_un_join_accept_refuse_nouvre_aucune_session():
     assert tentative.session == 0
     assert arbitre.occupation_par_etiquette("join_accept") == ()
     assert d.refus() == 2
+
+
+# --------------------------------------------- A. seuils, arrondis et bornes
+
+#: PIRE à laquelle la sous-bande O (25 mW de PAR) cesse de s'appliquer.
+SEUIL_OP = eirp_from_erp(mw_to_dbm(25.0))
+
+
+def test_le_seuil_o_p_vaut_25_mw_de_par():
+    assert mw_to_dbm(25.0) == pytest.approx(13.979400086720377)
+    assert SEUIL_OP == pytest.approx(16.129400086720377)
+    # Le plafond du plan EU868 (16 dBm de PIRE) reste **en dessous** du seuil, de 0,13 dB.
+    assert SEUIL_OP - 16.0 == pytest.approx(0.1294, abs=1e-4)
+
+
+def test_de_part_et_dautre_du_seuil_o_p():
+    """Immédiatement en dessous, au seuil, immédiatement au-dessus."""
+    eu = PROFILES["EU868"]
+
+    def bandes(delta):
+        return [b.name for b in eu.applicable(RX2_HZ, TxChain.from_eirp(SEUIL_OP + delta).erp_dbm)]
+
+    for delta in (-1e-6, -1e-9, -1e-12, 0.0, +1e-12):
+        assert bandes(delta) == ["O", "P"], delta
+    # Le seuil **appartient** à O : la limite est « PAR ≤ 25 mW », borne incluse.
+    assert bandes(0.0) == ["O", "P"]
+    for delta in (+2e-9, +1e-6, +0.5, +11.0):
+        assert bandes(delta) == ["P"], delta
+
+
+def test_la_tolerance_de_selection_est_d_un_milliardieme_de_db():
+    """`SubBand.applies` accepte `PAR <= max + 1e-9` : bande explicite, pas un hasard.
+
+    Elle est mesurable : à +1e-9 dB la bande O tient encore, à +2e-9 elle cède.
+    """
+    eu = PROFILES["EU868"]
+    juste = TxChain.from_eirp(SEUIL_OP + 1e-9)
+    apres = TxChain.from_eirp(SEUIL_OP + 2e-9)
+    assert [b.name for b in eu.applicable(RX2_HZ, juste.erp_dbm)] == ["O", "P"]
+    assert [b.name for b in eu.applicable(RX2_HZ, apres.erp_dbm)] == ["P"]
+
+
+def test_la_selection_ne_tient_pas_a_l_ulp():
+    """L'aller-retour PIRE ↔ PAR erre de ~7e-15 dB, très sous la tolérance de 1e-9 dB."""
+    err = max(abs(erp_from_eirp(eirp_from_erp(v / 7.0)) - v / 7.0) for v in range(-700, 700))
+    assert err < 1e-13                       # mesuré : 7,105e-15 dB
+    assert err * 1e5 < 1e-9                  # cent mille fois sous la tolérance de sélection
+    assert eirp_from_erp(erp_from_eirp(14.0)) == 14.0
+
+
+def test_les_bornes_de_frequence_sont_inclusives_des_deux_cotes():
+    """`f_min <= f <= f_max` : les deux bornes appartiennent à la sous-bande."""
+    d = _duty()
+    attendu = {
+        863_000_000: "K", 862_999_999: HORS_PLAN,        # début de K
+        865_000_000: "K",                                 # fin de K **et** début de L
+        867_999_999: "L", 868_000_000: "L",               # fin de L / début de M (mêmes limites)
+        868_600_000: "M", 868_600_001: HORS_PLAN,         # fin de M
+        868_650_000: HORS_PLAN,                           # lacune entre M (868,6) et N (868,7)
+        869_399_999: HORS_PLAN, 869_400_000: "O",         # début de O
+        869_650_000: "O", 869_650_001: HORS_PLAN,         # fin de O
+        869_700_000: "Q", 870_000_000: "Q", 870_000_001: HORS_PLAN,
+    }
+    for freq, bande in attendu.items():
+        cle, _limite = d.regle(freq)
+        assert cle == bande, (freq, cle, bande)
+
+
+def test_deux_sous_bandes_inclusives_se_recouvrent_a_865_mhz():
+    """K (863-865 MHz, 0,1 %) et L (865-868 MHz, 1 %) se recouvrent à la borne commune.
+
+    Les deux bornes étant inclusives, 865,000 MHz appartient aux deux : la plus restrictive
+    est retenue, soit K. Une passerelle réglée exactement à 865,000 MHz serait donc limitée
+    à 0,1 % et non à 1 %. Conséquence de la convention de bornes, pas d'un choix du modèle.
+    """
+    d = _duty()
+    assert [b.name for b in EU.applicable(865_000_000, TxChain(14.0).erp_dbm)] == ["K", "L"]
+    assert d.regle(865_000_000) == ("K", 0.001)
+    assert d.regle(865_000_001) == ("L", 0.01)
+
+
+# ------------------------------- B. RX2 non renseignée / aucune règle
+
+def test_une_frequence_absente_nest_pas_evaluee():
+    """`freq_hz = 0` (RX2 qu'aucun plan ne renseigne) : ni évaluée, ni consommée.
+
+    Ce n'est **pas** une contrainte respectée : c'est une contrainte qu'on ne peut pas
+    évaluer, et le compteur le dit séparément.
+    """
+    d = _duty()
+    arbitre = GatewayArbiter(duty_cycle=d)
+    _emettre(arbitre, "join_accept", 0, 1 * SECONDE, freq=0)
+    _emettre(arbitre, "join_accept", 2 * SECONDE, 1 * SECONDE, freq=None)
+    (a, b) = arbitre.resolve()
+    assert (a.verdict, b.verdict) == ("emitted", "emitted")
+    assert (d.evaluees(), d.non_evaluees(), d.sans_regle()) == (0, 2, 0)
+    assert d.consommations() == 0            # aucune sous-bande touchée
+    assert d.etat() == {}
+
+
+def test_sans_regle_les_demandes_ne_sont_pas_evaluees():
+    """Aucune région : la demande n'est pas évaluée faute de règle, comptée à part."""
+    d = DownlinkDutyCycle(None, TxChain(14.0))
+    assert not d.enabled
+    arbitre = GatewayArbiter(duty_cycle=d)
+    _emettre(arbitre, "ack", 0, 1 * SECONDE, freq=RX1_HZ)
+    arbitre.resolve()
+    assert (d.evaluees(), d.non_evaluees(), d.sans_regle()) == (0, 0, 1)
+
+    us = _duty(region="US915")               # région sans sous-bandes : même compteur
+    second = GatewayArbiter(duty_cycle=us)
+    _emettre(second, "ack", 0, 1 * SECONDE, freq=RX1_HZ)
+    second.resolve()
+    assert (us.evaluees(), us.non_evaluees(), us.sans_regle()) == (0, 0, 1)
+
+
+def test_aucune_frequence_rx2_nest_inventee_hors_plan_regional():
+    """AS923JP a des sous-bandes mais aucun plan de canaux : `rx2()` lève, RX2 reste à 0.
+
+    Le simulateur n'invente alors aucune fréquence de repli : la sous-bande de RX2 est
+    inconnaissable et l'émission n'est pas évaluée.
+    """
+    from lsim.plan import get_plan
+
+    with pytest.raises(ValueError, match="plan régional non supporté"):
+        get_plan("AS923JP").rx2()
+    # `rx2_hz = 0` est la convention de `DeviceRadio` pour « non renseignée ».
+    assert _duty(region="AS923JP").regle(0) == (None, None)
+    assert _duty(region="AS923JP").regle(None) == (None, None)
+
+
+def test_le_rapport_distingue_non_evaluee_et_sans_regle():
+    """Trois causes, trois compteurs : évaluée, non évaluée, sans règle."""
+    d = _duty()
+    arbitre = GatewayArbiter(duty_cycle=d)
+    _emettre(arbitre, "ack", 0, 1 * SECONDE, freq=RX1_HZ)               # évaluée
+    _emettre(arbitre, "join_accept", 0, 1 * SECONDE, freq=0)            # non évaluée
+    # 868,650 MHz : lacune entre M (≤ 868,6) et N (≥ 868,7), hors plan **à 14 dBm**.
+    _emettre(arbitre, "downlink", 0, 1 * SECONDE, freq=868_650_000)     # évaluée, hors plan
+    arbitre.resolve()
+    r = d.report()
+    assert (r.active, r.engage) == (True, True)
+    assert (r.evaluees, r.non_evaluees, r.sans_regle) == (2, 1, 0)
+    assert (r.consommations, r.refus, r.refus_hors_plan) == (1, 0, 1)
+    assert r.bandes == ("M",)
+    assert r.region == "EU868" and r.eirp_dbm == pytest.approx(14.0)
+
+
+# --------------------------------------- C. point fixe et consommation
+
+def test_trois_producteurs_ne_consomment_chacun_qu_une_fois():
+    """ACK, Join-Accept et descente de données dans le même arbitre, même sous-bande.
+
+    Trois émissions acceptées ⇒ trois consommations, une par émission, jamais deux.
+    """
+    d = _duty()
+    arbitre = GatewayArbiter(duty_cycle=d)
+    # 1 % en bande M : repos de 99 s après une émission d'une seconde.
+    _emettre(arbitre, "ack", 0, 1 * SECONDE, freq=RX1_HZ)
+    _emettre(arbitre, "join_accept", 100 * SECONDE, 1 * SECONDE, freq=RX1_HZ)
+    _emettre(arbitre, "downlink", 200 * SECONDE, 1 * SECONDE, freq=RX1_HZ)
+    (a, b, c) = arbitre.resolve()
+    assert [e.verdict for e in (a, b, c)] == ["emitted"] * 3
+    assert [e.start_ns for e in (a, b, c)] == [0, 100 * SECONDE, 200 * SECONDE]
+    assert d.consommations() == 3
+    assert d.evaluees() == 3
+    assert d.etat() == {(0, "M"): (201 * SECONDE, 1 * SECONDE)}
+
+
+def test_les_iterations_du_point_fixe_ne_sadditionnent_pas():
+    """Boucle interne de `_simulate_confirmed` : chaque itération rejoue la chronologie.
+
+    Défaut constaté puis corrigé : l'état survivait d'une itération à l'autre, et la
+    première émission était repoussée d'autant d'espacements qu'il y avait eu d'itérations
+    (mesuré : 726,908 s au lieu de 4,988 s, soit 3 × 144,384 s de trop). Un terminal
+    lointain perd ses trames, ce qui force plusieurs itérations.
+    """
+    data = yaml.safe_load(open(TARDIF, encoding="utf-8"))
+    for groupe in data["groups"]:
+        groupe["region"] = "EU868"
+        groupe["placement"] = {"type": "explicit", "positions": [[9000.0, 0.0]]}
+    data["retransmissions"].update({"retries": 3})
+    occupations = build_trace(load_scenario(yaml.safe_dump(data)),
+                              ProtocolOptions()).retransmissions.gateway_tx
+    # La première émission reste à son instant naturel, quel que soit le nombre d'itérations.
+    assert _arrondis(occupations)[0] == (4.988, 0.1444)
+    # Et l'espacement reste celui d'une seule application de la règle.
+    assert (occupations[1][0] - occupations[0][0]) / 1e9 == pytest.approx(144.384, abs=1e-3)
+
+
+# --------------------------------------------------------- D. chemin natif
+
+def test_le_rapport_signale_le_chemin_natif():
+    """`active` sans `engage` : la règle existait, le cœur ne l'a jamais appliquée."""
+    r_natif = build_trace(load_scenario(_brut(exemple=NOMINAL, region="EU868")),
+                          ProtocolOptions()).retransmissions.duty_cycle
+    r_arbitre = build_trace(load_scenario(_brut(region="EU868")),
+                            ProtocolOptions()).retransmissions.duty_cycle
+
+    assert r_natif.active and not r_natif.engage
+    assert (r_natif.evaluees, r_natif.consommations, r_natif.non_evaluees) == (0, 0, 0)
+    assert r_arbitre.active and r_arbitre.engage
+    assert r_arbitre.consommations == 3
+    assert r_arbitre.bandes == ("O",)
+    # Sans région, aucun rapport n'est même produit.
+    assert build_trace(load_scenario(_brut()),
+                       ProtocolOptions()).retransmissions.duty_cycle is None

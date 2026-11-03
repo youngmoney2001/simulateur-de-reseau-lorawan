@@ -315,6 +315,13 @@ class GatewayArbiter:
         # DUTY_CYCLE et **rien n'est émis** — ni occupation, ni consommation de la sous-bande.
         attente = False
         if self.duty_cycle is not None:
+            # Comptée **une fois** par placement, avant tout verdict : une demande refusée
+            # pour une autre raison (sans objet, fenêtre manquée) est quand même passée
+            # devant le contrôle, et l'on doit pouvoir le lire.
+            self.duty_cycle.compter(demande.freq_hz)
+            # L'engagement est marqué au placement, pas à la construction : l'arbitre est
+            # créé même sur le chemin natif du cœur, où il n'est jamais utilisé.
+            self.duty_cycle.engager()
             cle, _limite = self.duty_cycle.regle(demande.freq_hz)
             if cle == HORS_PLAN:
                 # Fréquence hors des bandes désignées : ce n'est pas une question de quota.
@@ -390,6 +397,37 @@ HORS_PLAN = "hors_plan"
 
 
 @dataclass(frozen=True)
+class DownlinkDutyCycleReport:
+    """État final du contrôle descendant, pour la restitution.
+
+    Les compteurs ne disent pas tous la même chose, et c'est tout l'objet de ce rapport :
+
+    - `active` : une règle réglementaire existait (région à sous-bandes, contrainte activée) ;
+    - `engage` : un émetteur partagé a réellement utilisé l'état. `active` sans `engage`
+      signifie que le scénario est passé par le **chemin natif du cœur**, qui n'applique
+      aucune contrainte descendante (arbitrage A4). Présenter le contrôle comme actif dans
+      ce cas serait faux ;
+    - `evaluees` : demandes dont la sous-bande a été résolue ;
+    - `non_evaluees` : demandes **sans fréquence**. Une RX2 non renseignée (`rx2_hz = 0`,
+      aucun plan régional) rend la sous-bande inconnaissable : la contrainte n'est pas
+      « respectée », elle n'est simplement **pas évaluée** ;
+    - `sans_regle` : demandes soumises alors qu'aucune règle n'existait.
+    """
+
+    region: Optional[str]
+    eirp_dbm: float
+    active: bool
+    engage: bool
+    evaluees: int
+    non_evaluees: int
+    sans_regle: int
+    consommations: int
+    refus: int
+    refus_hors_plan: int
+    bandes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _Derniere:
     """Dernière émission d'une sous-bande : sa fin et son temps d'antenne."""
 
@@ -444,12 +482,29 @@ class DownlinkDutyCycle:
         self._consommations = 0
         self._refus = 0
         self._refus_hors_plan = 0
+        # Comptabilité de ce qui a été **soumis** au contrôle, pour distinguer trois
+        # situations que les seuls refus ne séparent pas : une règle existait et a été
+        # appliquée, aucune règle n'existait, ou la fréquence manquait (RX2 non renseignée).
+        self._evaluees = 0
+        self._non_evaluees = 0
+        self._sans_regle = 0
+        self._engage = False
 
     # --- règle ---------------------------------------------------------------------------
 
     @property
     def enabled(self) -> bool:
         return self._enabled and self._profile is not None
+
+    @property
+    def reglementee(self) -> bool:
+        """Une contrainte existe-t-elle seulement ?
+
+        Distinct de `enabled` : une région déclarée **sans sous-bandes** (US915 par exemple)
+        est active mais ne pose aucune limite ; une telle demande est comptée `sans_regle`,
+        au même titre qu'une région absente ou une contrainte désactivée.
+        """
+        return self.enabled and bool(getattr(self._profile, "sub_bands", ()))
 
     @property
     def eirp_dbm(self) -> float:
@@ -503,6 +558,32 @@ class DownlinkDutyCycle:
             return debut
         return max(debut, derniere.fin_ns + self.repos_ns(derniere.airtime_ns, limite))
 
+    def compter(self, freq_hz: Optional[int]) -> None:
+        """Classe une demande soumise à l'arbitre, **une fois** par placement.
+
+        Trois cas, volontairement distincts dans les résultats :
+
+        - `sans_regle` : aucune région, région sans sous-bandes, ou contrainte désactivée ;
+        - `non_evaluees` : la demande ne porte **pas de fréquence** (`None`, ou `0` pour une
+          RX2 qu'aucun plan régional ne renseigne) — la sous-bande est alors inconnaissable ;
+        - `evaluees` : une sous-bande a été résolue, ou l'émission a été jugée hors plan.
+        """
+        if not self.reglementee:
+            self._sans_regle += 1
+        elif not freq_hz:
+            self._non_evaluees += 1
+        else:
+            self._evaluees += 1
+
+    def engager(self) -> None:
+        """Marque l'état comme réellement utilisé par un émetteur partagé.
+
+        Seul le chemin Python à arbitre partagé construit un `GatewayArbiter` muni d'un état.
+        Sans engagement, la règle existait mais **n'a jamais été appliquée** : c'est le cas du
+        chemin natif du cœur, qui ne connaît pas cette contrainte (arbitrage A4).
+        """
+        self._engage = True
+
     def consommer(self, gateway: int, freq_hz: Optional[int], debut: int, fin: int) -> None:
         """Enregistre une émission **acceptée**. Une émission refusée n'appelle jamais ceci."""
         cle, _limite = self.regle(freq_hz)
@@ -531,9 +612,37 @@ class DownlinkDutyCycle:
         """Émissions refusées parce que leur fréquence n'entre dans aucune sous-bande."""
         return self._refus_hors_plan
 
+    def evaluees(self) -> int:
+        """Demandes pour lesquelles une sous-bande a été résolue (ou jugée hors plan)."""
+        return self._evaluees
+
+    def non_evaluees(self) -> int:
+        """Demandes sans fréquence : RX2 non renseignée, contrainte impossible à évaluer."""
+        return self._non_evaluees
+
+    def sans_regle(self) -> int:
+        """Demandes soumises alors qu'aucune règle réglementaire n'existait."""
+        return self._sans_regle
+
     def etat(self) -> dict[tuple[int, str], tuple[int, int]]:
         """Copie de l'état : `(passerelle, sous-bande) -> (fin, temps d'antenne)`."""
         return {cle: (d.fin_ns, d.airtime_ns) for cle, d in self._etat.items()}
+
+    def report(self) -> "DownlinkDutyCycleReport":
+        """État final du contrôle, pour la restitution. Voir `DownlinkDutyCycleReport`."""
+        return DownlinkDutyCycleReport(
+            region=getattr(self._profile, "code", None),
+            eirp_dbm=self._tx.eirp_dbm,
+            active=self.enabled,
+            engage=self._engage,
+            evaluees=self._evaluees,
+            non_evaluees=self._non_evaluees,
+            sans_regle=self._sans_regle,
+            consommations=self._consommations,
+            refus=self._refus,
+            refus_hors_plan=self._refus_hors_plan,
+            bandes=tuple(sorted({cle[1] for cle in self._etat})),
+        )
 
     def nouvelle_passe(self) -> "DownlinkDutyCycle":
         """Même règle, état vierge.
