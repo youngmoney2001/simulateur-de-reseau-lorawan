@@ -92,6 +92,22 @@ _UPLINK_OUTCOME = {0: "lost_sensitivity", 1: "lost_collision", 2: "received",
 RX1 = "rx1"
 RX2 = "rx2"
 REPLAY = "replay"
+
+
+def _issue_non_emise(emission) -> str:
+    """Issue d'une émission que l'arbitre n'a **pas** faite.
+
+    Deux causes, deux issues : la fenêtre était couverte par une émission en cours
+    (`gateway_busy`, rien n'occupe la sous-bande) ou la sous-bande l'interdisait
+    (`duty_cycle`, rapport cyclique descendant). Les confondre ferait croire qu'une
+    interdiction réglementaire est une contention d'émetteur.
+    """
+    return "duty_cycle" if emission.verdict == "duty_cycle" else "gateway_busy"
+
+# Verdict de l'arbitre valant « refusée par le rapport cyclique descendant » (`lsim.arbitre`).
+# Importé ici pour ne pas confondre, dans les issues, une fenêtre couverte par une émission en
+# cours et une émission interdite par la sous-bande.
+_VERDICT_DUTY_CYCLE = "duty_cycle"
 BLOCKED_DUTY_CYCLE = "blocked_duty_cycle"   # tentative refusée par le rapport cyclique :
                                            # aucune émission
 
@@ -139,8 +155,11 @@ class AcceptEmission:
     """Une émission de Join-Accept **réellement effectuée**, avec sa fenêtre et son issue.
 
     `window` vaut `rx1`, `rx2` (secours) ou `replay` (émission d'un message déjà consommé).
-    `outcome` vaut `delivered`, `not_listened`, `lost_sensitivity`, `gateway_busy` ou `replayed`.
+    `outcome` vaut `delivered`, `not_listened`, `lost_sensitivity`, `gateway_busy`,
+    `duty_cycle` ou `replayed`.
     `gateway_busy` : la passerelle émettait déjà et n'a pas pu placer l'émission dans la fenêtre ;
+    `duty_cycle` : la sous-bande l'interdisait (rapport cyclique descendant, D3.14). Dans les
+    deux cas **rien n'a été émis**, la fenêtre est perdue, et aucune session n'est ouverte ;
     **rien n'a été émis**, et l'occupation de l'émetteur n'en porte aucune trace.
     """
 
@@ -378,7 +397,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
 
     def apres_rejeu(emission, deposer) -> None:
         if not emission.emitted:
-            issue = "gateway_busy"
+            issue = _issue_non_emise(emission)
         else:
             brut = ecoute(emission.start_ns)
             issue = "replayed" if brut == "delivered" else brut
@@ -386,7 +405,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
 
     def apres_rx2(emission, deposer) -> None:
         if not emission.emitted:
-            issue = "gateway_busy"
+            issue = _issue_non_emise(emission)
         else:
             issue = ecoute(emission.start_ns)
         attente.emissions.append(AcceptEmission(emission.start_ns, RX2, issue))
@@ -397,8 +416,10 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
 
     def apres_rx1(emission, deposer) -> None:
         if not emission.emitted:
-            # La passerelle émettait déjà : rien n'a été émis, la fenêtre est perdue.
-            issue = "gateway_busy"
+            # « La passerelle émettait déjà » n'est qu'une des causes : une émission refusée
+            # par le rapport cyclique descendant n'a pas non plus eu lieu, mais la cause est
+            # réglementaire et l'issue le dit.
+            issue = _issue_non_emise(emission)
         else:
             issue = ecoute(emission.start_ns)
         attente.emissions.append(AcceptEmission(emission.start_ns, RX1, issue))

@@ -31,6 +31,10 @@ Arbitrages appliqués :
 | `enforce_duty_cycle: false` désactive | `test_enforce_duty_cycle_false_desactive_la_contrainte` |
 | Le point fixe ne cumule pas les passes | `test_le_point_fixe_ne_cumule_pas_les_passes` |
 | Le chemin natif n'applique pas la contrainte | `test_le_chemin_natif_napplique_pas_la_contrainte` |
+| Un Join-Accept est compté une seule fois | `test_le_join_accept_est_compte_une_seule_fois` |
+| Les rejeux sont refusés par la sous-bande | `test_les_rejeux_sont_refuses_par_le_rapport_cyclique` |
+| RX2 de secours : sous-bande distincte, aucun retard | `test_la_rx2_de_secours_nest_pas_retardee_par_la_rx1` |
+| Un Join-Accept refusé n'ouvre aucune session | `test_un_join_accept_refuse_nouvre_aucune_session` |
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ import yaml
 
 from lsim.arbitre import (DUTY_CYCLE, HORS_PLAN, NOT_NEEDED, WINDOW_MISSED, DownlinkDutyCycle,
                           EmissionRequest, GatewayArbiter)
+from lsim.join import (JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS, JOIN_WINDOW_NS,
+                       JoinRadioOptions, simulate_joins)
 from lsim.power import TxChain
 from lsim.regions import PROFILES
 from lsim.scenario import load_scenario
@@ -396,3 +402,87 @@ def test_le_chemin_natif_napplique_pas_la_contrainte():
     assert [tuple(o) for o in occupations] == [(2 * SECONDE, 3 * SECONDE),
                                                (3 * SECONDE, 4 * SECONDE)]
     assert _schedule_gateway(travaux) == (debuts, occupations)   # sans état : reproductible
+
+
+# ------------------------------------------------------------- la jointure radio
+
+def _join_duty(region="EU868", conduite=14.0, occupation=(), duty=None, accept_replays=0):
+    """Joue une jointure dans un arbitre où `occupation` est imposée et `duty` actif."""
+    data = yaml.safe_load(open(TARDIF, encoding="utf-8"))
+    for groupe in data["groups"]:
+        groupe["region"] = region
+    data["retransmissions"].update({"retries": 1, "ack_delay_ms": 0})
+    scenario = load_scenario(yaml.safe_dump(data))
+    devices, _, _ = scenario.deploy()
+    radios = device_radios(scenario)
+    etat = duty if duty is not None else DownlinkDutyCycle(PROFILES[region], TxChain(conduite))
+    arbitre = GatewayArbiter(occupation=occupation, duty_cycle=etat)
+    plan = simulate_joins(devices, scenario.gateway(), scenario.propagation(), radios,
+                          ProtocolOptions(), scenario.environment, [(0, 300 * SECONDE)], {},
+                          join_options=JoinRadioOptions(requests_s=(300,),
+                                                        accept_replays=accept_replays),
+                          arbiter=arbitre)
+    arbitre.resolve()
+    return plan.result(), arbitre, etat, radios
+
+
+def test_le_join_accept_est_compte_une_seule_fois():
+    """Une acceptation = une consommation, pas une par fenêtre ni une par passe."""
+    resultat, _arbitre, d, radios = _join_duty()
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [("rx1", "delivered")]
+    assert tentative.session == 1
+    assert d.consommations() == 1
+    # Une seule clé : la sous-bande de RX1 (868,1 MHz → bande M), jamais celle de RX2.
+    assert set(d.etat()) == {(0, "M")}
+
+
+def test_les_rejeux_sont_refuses_par_le_rapport_cyclique():
+    """`JOIN_REPLAY_DELAY_NS` vaut 1 s ; la bande M impose 24,43 s de repos après 0,2468 s.
+
+    Le rejeu n'est donc pas émis, et l'issue le dit : `duty_cycle`, pas `gateway_busy` —
+    la passerelle était libre, c'est la sous-bande qui l'interdisait.
+    """
+    resultat, _arbitre, d, _radios = _join_duty(accept_replays=2)
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", "delivered"), ("replay", DUTY_CYCLE), ("replay", DUTY_CYCLE)]
+    assert tentative.session == 1                 # une seule session : les rejeux n'en ouvrent pas
+    assert d.consommations() == 1                 # seules les émissions réelles sont comptées
+    assert d.refus() == 2
+
+
+def test_la_rx2_de_secours_nest_pas_retardee_par_la_rx1():
+    """RX1 est en bande M, RX2 en bande O : l'échec de RX1 ne consomme rien pour RX2."""
+    sans = _join_duty()
+    rx1 = sans[0].attempts[0].request_end_ns + JOIN_ACCEPT_DELAY1_NS
+    rx2 = sans[0].attempts[0].request_end_ns + JOIN_ACCEPT_DELAY2_NS
+    couvrir = [(rx1 - SECONDE // 10, rx1 + JOIN_WINDOW_NS + SECONDE // 5)]
+    resultat, arbitre, d, radios = _join_duty(occupation=couvrir)
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", "gateway_busy"), ("rx2", "delivered")]
+    # RX2 part dès que l'émetteur se libère, **sans** un instant de plus : l'état de la
+    # bande M, où RX1 a échoué, ne la concerne pas. Le retard observable (0,2 s) est celui
+    # de l'occupation imposée, pas celui de la sous-bande.
+    assert tentative.accepts[1].at_ns == couvrir[0][1]
+    assert d.consommations() == 1
+    assert set(d.etat()) == {(0, "O")}
+
+
+def test_un_join_accept_refuse_nouvre_aucune_session():
+    """Une émission antérieure dans la même sous-bande épuise le droit : aucune session."""
+    d = DownlinkDutyCycle(EU, TxChain(14.0))
+    # 60 s d'émission déjà jouées dans les deux sous-bandes de la jointure : 5 940 s de repos
+    # en bande M (1 %), 59 940 s en bande O (0,1 %). RX1 **et** RX2 tombent donc après.
+    d.consommer(0, RX1_HZ, 0, 60 * SECONDE)
+    d.consommer(0, RX2_HZ, 0, 60 * SECONDE)
+    assert d.repos_ns(60 * SECONDE, 0.01) == 5940 * SECONDE
+    assert d.repos_ns(60 * SECONDE, 0.001) == 59_940 * SECONDE
+    resultat, arbitre, d, _radios = _join_duty(duty=d)
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", DUTY_CYCLE), ("rx2", DUTY_CYCLE)]
+    assert tentative.session == 0
+    assert arbitre.occupation_par_etiquette("join_accept") == ()
+    assert d.refus() == 2
