@@ -218,6 +218,20 @@
           ],
           "default": null
         },
+        "tx_power_dbm": {
+          "anyOf": [
+            {
+              "maximum": 27.0,
+              "minimum": -10.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Power Dbm"
+        },
         "x_m": {
           "default": 0.0,
           "title": "X M",
@@ -992,6 +1006,7 @@
         "profile": null,
         "rf": null,
         "sensitivity": null,
+        "tx_power_dbm": null,
         "x_m": 0.0,
         "y_m": 0.0
       }

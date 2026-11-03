@@ -89,6 +89,13 @@ class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    # Puissance d'émission de la passerelle, **conduite en sortie d'émetteur** (dBm), avant
+    # câble et antenne : même convention que `group.tx_power_dbm` côté terminal. `None`
+    # (défaut) : la valeur vient des options de protocole
+    # (`ProtocolOptions.gateway_tx_power_dbm`, 14,0 dBm) — comportement historique inchangé.
+    # La PIRE qui en découle (conduite + gain − perte) départage les sous-bandes ETSI : voir
+    # `lsim.power`. Plafond : 27 dBm, puissance publiée des fiches du catalogue.
+    tx_power_dbm: Optional[float] = Field(None, ge=-10.0, le=27.0)
     # Multi-passerelles seulement : nom unique, profil du catalogue, relais mesh.
     name: Optional[str] = Field(None, min_length=1, max_length=64)
     profile: Optional[str] = Field(None, min_length=1, max_length=64)
@@ -340,11 +347,17 @@ class GroupModel(_Strict):
             ch = profile.channel_at(self.channel_freq_hz)
             if ch is None:
                 raise ValueError(f"{self.region} : canal {self.channel_freq_hz} Hz absent du plan")
-            if (profile.power_basis == "eirp" and ch.max_eirp_dbm is not None
-                    and self.tx_power_dbm > ch.max_eirp_dbm + 1e-9):
-                raise ValueError(
-                    f"{self.region} : PIRE {self.tx_power_dbm} dBm au-dessus de la limite "
-                    f"{ch.max_eirp_dbm} dBm du canal")
+            if profile.power_basis == "eirp" and ch.max_eirp_dbm is not None:
+                # Comparaison en PIRE : `tx_power_dbm` est une puissance conduite, la
+                # chaîne `gain - perte` du frontal s'ajoute (`lsim.power.device_tx`).
+                # Sans bloc `rf`, la chaîne est nulle et le comportement est identique
+                # à l'ancienne comparaison sur `tx_power_dbm` seul.
+                from lsim.power import device_tx
+                pire = device_tx(self).eirp_dbm
+                if pire > ch.max_eirp_dbm + 1e-9:
+                    raise ValueError(
+                        f"{self.region} : PIRE {pire} dBm au-dessus de la limite "
+                        f"{ch.max_eirp_dbm} dBm du canal")
         return self
         from lsim.regions import PROFILES
         if self.region not in PROFILES:
@@ -651,6 +664,15 @@ class Scenario:
                     gw_dump.pop(key, None)
             if not gw_dump.get("mesh"):
                 gw_dump.pop("mesh", None)
+            # Puissance d'émission non déclarée : hors du hash, donc scénarios antérieurs
+            # inchangés (elle est alors fournie par les options de protocole).
+            if gw_dump.get("tx_power_dbm") is None:
+                gw_dump.pop("tx_power_dbm", None)
+        if model.gateways is not None:
+            # `gateways` déclaré : le champ scalaire `gateway` subsiste à sa valeur par défaut
+            # et reste haché tel quel (comportement historique, y compris ses valeurs nulles).
+            # Seul le champ ajouté en est retiré, pour ne pas en déplacer l'empreinte.
+            dumped["gateway"].pop("tx_power_dbm", None)
         if model.gateways is None:
             dumped["gateway"] = gw_dumps[0]
         # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
@@ -726,6 +748,7 @@ class Scenario:
     def gateway(self) -> Gateway:
         g = self.model.gateway
         return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                       tx_power_dbm=g.tx_power_dbm,
                        absolute_sensitivity=None if g.sensitivity is None else g.sensitivity.absolute(),
                        rf=g.rf.gateway() if g.rf is not None else None)
 
@@ -737,6 +760,7 @@ class Scenario:
 
     def gateways(self) -> list[Gateway]:
         return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                        tx_power_dbm=g.tx_power_dbm,
                         rx_sensitivity_offset_db=(rx_sensitivity_offset_db(get_profile(g.profile))
                                                   if g.profile is not None else 0.0),
                         rf=g.rf.gateway() if g.rf is not None else None)

@@ -137,6 +137,11 @@ class Gateway:
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    # Puissance d'émission, **conduite en sortie d'émetteur** (dBm) ; None : la valeur vient
+    # des options de protocole (`ProtocolOptions.gateway_tx_power_dbm`). Champ propre à
+    # Python : la structure C `_CGateway` est construite positionnellement et reste
+    # inchangée (voir `lsim.power.gateway_tx`).
+    tx_power_dbm: Optional[float] = None
     rx_sensitivity_offset_db: float = 0.0   # 0 sans profil ; voir gateway_profiles.rx_sensitivity_offset_db
     # Sensibilité absolue (modèle sensibilite-par-sf-v2, ABI v2) ; None = modèle relatif (ABI v1).
     absolute_sensitivity: Optional[AbsoluteSensitivity] = None
