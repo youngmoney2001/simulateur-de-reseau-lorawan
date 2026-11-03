@@ -385,6 +385,17 @@ contrainte réglementaire qui manquait, `lsim.arbitre.DutyCycleLedger`.
 | 5. Fenêtre | `début >= fin de fenêtre` ⇒ `window_missed`, **aucune occupation** | modélisé |
 | 6. Émission tardive | `allow_late=True` (couche MAC) : émise hors fenêtre, elle occupe quand même | déjà le comportement de `ack_mac` |
 | 7. Rapport cyclique | budget `airtime cumulé + airtime <= rapport × instant`, **avant** l'appel au moteur | **hypothèse**, la même que pour les réémissions |
+| 8. Causalité des tentatives | une tentative n'est retirée du calendrier que si une jointure a été **observée**, jamais sur une prévision | modélisé |
+
+La règle 8 est la correction apportée par la validation finale de D3.13. Le Join-Accept partage
+l'émetteur avec les ACK : on ne sait donc **qu'après** l'avoir placé si une tentative aboutit. Une
+sonde qui rejouait la jointure à part, avant le placement partagé, pouvait annoncer une réussite
+qu'un ACK concurrent démentait ensuite — la tentative de secours était alors retirée du calendrier
+alors qu'elle était nécessaire. Le jeu de tentatives se déduit désormais des succès observés au
+tour précédent (`JoinResult.succes`), par itération jusqu'au point fixe ; au premier tour, rien
+n'est encore observé, donc toutes les tentatives sont jouées et aucune n'est supprimée. Une
+tentative postérieure à une jointure obtenue n'émet pas de Join-Accept (condition de
+`EmissionRequest`) et disparaît du calendrier au tour suivant.
 
 La règle 4 est une décision, pas une approximation : LoRaWAN ne définit pas d'ordre entre un
 Join-Accept et l'ACK d'un autre terminal. Le simulateur n'en invente pas ; une politique explicite
@@ -413,6 +424,23 @@ c'est le cas mesuré en SF12, où un Join-Accept de 33 octets occupe l'émetteur
 RX1/RX2 de D3.12 est intacte — RX2 reste un **secours**, jamais une seconde copie — mais elle
 s'ajoute à la file au lieu d'être posée à un instant fixe.
 
+#### Le scénario de causalité, avant et après
+
+Scénario de la directive de validation finale : un terminal tente à 10 s, avec une seconde tentative
+programmée à 20 s (`join_retries: 2`) ; trois copies d'ACK couvrent RX1 **et** RX2 de la première
+tentative (`ack_repetitions: 3`, `ack_delay_ms: 12000`, SF12).
+
+| | Tentatives jouées | RX1 / RX2 de la 1re | Session | Join-Accept émis |
+|---|---|---|---|---|
+| **Avant** (sonde anticipée) | 1 (à 10 s) | `gateway_busy` / `gateway_busy` | **0** | 0 |
+| **Après** (programmation causale) | **2** (10 s et 20 s) | `gateway_busy` / `gateway_busy`, puis `delivered` à 26,48 s | **1** | 1 |
+
+Avant : la sonde prévoyait une réussite à 10 s, la tentative de secours à 20 s était retirée du
+calendrier, et le terminal **ne joignait jamais** alors que rien ne l'en empêchait. Après : la
+tentative de secours a lieu, le Join-Accept de 26,48 s est délivré, la session s'ouvre. Aucune
+tentative n'est émise après une jointure réussie — cas sans concurrence mesuré à une seule
+tentative, un seul Join-Accept émis, une seule session.
+
 ### 10.3 Rapport cyclique des Join-Request
 
 `DutyCycleLedger` applique `airtime cumulé + airtime <= rapport × instant`, avec le
@@ -425,11 +453,31 @@ Une tentative refusée :
 
 - n'entre **pas** dans le moteur : aucune collision provoquée, aucun temps d'antenne consommé ;
 - porte l'issue `blocked_duty_cycle` sur `JoinAttempt.request_outcome` ;
-- apparaît en trace avec l'issue `suppressed` du contrat — jamais comme une transmission.
+- apparaît en trace avec l'issue `suppressed` du contrat — jamais comme une transmission ;
+- **n'alimente pas** le budget : le cumul ne compte que les émissions réellement faites.
+
+**Grandeurs et unités.** `rapport` : sans dimension, dans `]0, 1]` (1 % = 0,01). `airtime` et
+`instant` : **nanosecondes entières** comptées depuis l'origine de la simulation. Le produit
+`rapport × instant` est un temps d'antenne autorisé, en nanosecondes.
+
+**Fenêtre temporelle — ce n'est pas une fenêtre glissante.** Le budget est **cumulatif depuis
+l'origine** : `airtime_cumulé` est la somme de toutes les émissions du terminal depuis `t = 0`,
+mise en regard d'un droit qui croît linéairement avec le temps. Une émission vieille de 190 s pèse
+encore à `t = 200 s`. C'est la règle déjà appliquée aux réémissions, reprise à l'identique ; rien
+de nouveau n'est inventé ici.
+
+**Isolation.** Le budget est par terminal : celui de l'un ne limite pas l'autre. Mesuré avec deux
+groupes (`duty_cycle: 0.001` et `1.0`), `join_retries: 2` : le terminal contraint voit ses deux
+tentatives refusées, l'autre joint du premier coup, et le compteur de refus vaut 2.
 
 Mesuré avec `duty_cycle: 0.001` et `join_retries: 2` : 2 tentatives refusées, 0 Join-Accept
-émis, 0 session. `enforce_duty_cycle: false` rend le budget inopérant (1 Join-Accept émis, session
-ouverte) — la même clef que pour les réémissions.
+émis, 0 session. Avec `join_retries: 3` : **3** tentatives refusées — le budget s'applique à
+toutes les tentatives réelles, pas seulement à la première. `enforce_duty_cycle: false` rend le
+budget inopérant (1 Join-Accept émis, session ouverte) — la même clef que pour les réémissions.
+
+**Contrainte non modélisée, signalée et non inventée :** aucune limite réglementaire **descendante**
+n'est introduite. La passerelle n'a pas de budget d'émission ; `DutyCycleLedger` ne connaît que des
+terminaux et l'arbitre ne le consulte jamais pour une descente.
 
 ### 10.4 Conséquences sur le chemin d'exécution
 
@@ -444,15 +492,41 @@ L'occupation rendue par l'arbitre — ACK **et** Join-Accept — est réinjecté
 l'itération suivante du point fixe : une trame montante qui chevauche une descente est perdue
 (`LOST_GATEWAY_BUSY`), dans les deux sens.
 
+**Pourquoi exactement le chemin Python est activé.** La bascule est une seule fonction,
+`_native_plan_applies` : `not options.join and mac is None`. La raison est structurelle, pas
+incidente. `plan_native(records, radios, options)` reçoit les enregistrements d'**une** exécution du
+moteur et produit un plan ; `_build_trace_native` vérifie ensuite que l'occupation produite égale
+celle que le moteur a utilisé, et **lève** sinon. Il n'y a pas d'itération — mesuré : une seule
+exécution du moteur sur le chemin natif, contre un point fixe sur le chemin Python. Or une demande
+de Join-Accept n'est pas une fonction des seuls enregistrements :
+
+1. elle dépend du **calendrier des tentatives de données**, qui ferme les fenêtres RX quand le
+   terminal émet — calendrier connu seulement dans la boucle de point fixe des retransmissions ;
+2. elle dépend de l'**issue de l'arbitrage**, puisque RX2 n'est déposée que si RX1 n'a pas abouti et
+   qu'un rejeu naît d'une acceptation : une demande naît donc **pendant** la résolution.
+
+Faire tenir cela dans `lsim_plan_downlinks_v1` exigerait de changer la structure d'entrée de la
+fonction, donc l'ABI gelée — ce qui n'est autorisé que sur nécessité démontrée et autorisation
+spécifique. **L'ABI est inchangée :** 97 symboles `lsim_*`, empreinte
+`0e546fa6391866d9…`, 685 282 vérifications C++.
+
+**Mêmes résultats quand le mécanisme partagé n'est pas nécessaire.** Condition exigée et vérifiée :
+sans concurrence pour l'émetteur, l'arbitre partagé reproduit le chemin isolé **à la nanoseconde**.
+Mesuré sur les 500 tentatives du scénario de référence : empreintes identiques, mêmes instants de
+Join-Accept, mêmes sessions.
+
 ### 10.5 Limites explicites de D3.13
 
 - **Le rapport cyclique descendant n'est pas modélisé.** La passerelle n'a pas de budget
   réglementaire : seul le terminal en a un. Une passerelle réelle est soumise à une limite, que le
   simulateur ne connaît pas.
-- **Le jeu de tentatives est figé avant le placement partagé.** Les tentatives qui suivraient une
-  jointure réussie sont retirées du calendrier par une sonde qui ne connaît que la contention
-  entre Join-Accept, pas celle avec les ACK. Si le placement partagé fait échouer une jointure que
-  la sonde croyait réussie, la tentative de secours correspondante peut manquer.
+- **La programmation causale du jeu de tentatives est itérative, et bornée.** Les tentatives qui
+  suivent une jointure **observée** sont retirées au tour suivant, jamais sur une prévision. Le
+  point fixe est recherché en au plus 8 tours ; un état qui se répète à l'identique lève une erreur
+  explicite plutôt que de rendre un résultat approximatif. La limite résiduelle est le coût : un
+  scénario qui joint est rejoué autant de fois qu'il faut pour stabiliser le calendrier des
+  tentatives — en pratique deux à trois tours, soit une durée de simulation inchangée au regard des
+  mesures (101 s pour la suite complète, contre 100 s avant la correction).
 - **Un seul émetteur par passerelle** : ni cartes radio multiples, ni descentes simultanées sur
   plusieurs canaux. Un équipement réel à huit canaux descendants n'est pas représenté.
 - **La durée d'ouverture des fenêtres (1 s) est une hypothèse du simulateur**, déjà celle du cœur.

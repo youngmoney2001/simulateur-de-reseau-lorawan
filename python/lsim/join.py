@@ -34,15 +34,32 @@ un budget (`airtime cumulé + airtime <= rapport × instant`), appliqué avant l
 tentative refusée n'est **pas** une émission : elle n'entre pas dans la simulation, ne provoque
 aucune collision et ne consomme aucun temps d'antenne.
 
+## Causalité du jeu de tentatives
+
+Le Join-Accept partage l'émetteur de la passerelle avec les ACK et les autres descentes. Son issue
+n'est donc connue qu'**après** le placement partagé, jamais avant. Une tentative ne peut par
+conséquent être retirée du calendrier que si une jointure a été **observée** — jamais sur une
+prévision. Prévoir, ce serait retirer la tentative de secours d'un terminal qui, en fait, n'a pas
+réussi à joindre.
+
+Sur le chemin de l'arbitre partagé (`arbiter=` fourni), `simulate_joins` joue **toutes** les
+tentatives, lit les succès dans `JoinResult.succes`, et l'appelant rejoue : les tentatives
+postérieures à une jointure obtenue disparaissent au tour suivant. Au premier tour, rien n'est
+observé : aucune tentative n'est supprimée. Une tentative postérieure à une jointure déjà obtenue
+dans la même passe n'émet pas de Join-Accept (`EmissionRequest.condition`), donc elle ne coûte
+rien d'autre que sa place dans le calendrier, une seule passe durant.
+
+Sur le chemin **sans** arbitre partagé, la jointure s'arbitre seule : l'évaluateur y est le
+placement définitif, de sorte que la passe de sélection y est causale — ce qu'elle a obtenu est ce
+qui a été joué, sans prévision d'aucune sorte.
+
 ## Limites explicites
 
 - **Aucune cryptographie** : ni clé, ni `MIC`, ni chiffrement. « Reçu » veut dire « décodable au
   niveau radio ».
-- **Le jeu de tentatives est figé avant le placement partagé.** Les tentatives qui suivraient une
-  jointure réussie sont retirées du calendrier par une sonde qui ne connaît que la contention
-  entre Join-Accept (pas celle avec les ACK). Si le placement partagé fait échouer une jointure
-  que la sonde croyait réussie, la tentative de secours correspondante peut manquer : c'est une
-  approximation bornée, signalée ici plutôt que masquée.
+- **La programmation causale est itérative et bornée.** Le point fixe est recherché en au plus 8
+  tours ; un état qui se répète à l'identique lève `RuntimeError` plutôt que de rendre un résultat
+  approximatif. La limite est le coût, pas l'exactitude : deux à trois tours en pratique.
 - **Une seule jointure par terminal** : `join_requests_s` ne modélise pas le rejoint 1.1.
 """
 
@@ -203,6 +220,10 @@ class JoinResult:
     attempts: tuple[JoinAttempt, ...] = ()
     timelines: dict = field(default_factory=dict)
     blocked_by_duty_cycle: int = 0   # tentatives refusées par le rapport cyclique
+    # Succès **observés** au placement : terminal -> instant de la tentative qui a abouti. Vide
+    # quand rien n'a abouti. C'est cette grandeur qui décide des tentatives suivantes, jamais une
+    # prévision : voir « Causalité du jeu de tentatives » en tête de module.
+    succes: dict = field(default_factory=dict)
 
     @property
     def joined(self) -> int:
@@ -231,9 +252,9 @@ class JoinPlan:
         self._timelines = timelines
 
     def result(self) -> JoinResult:
-        """Tentatives et sessions, **après** résolution de l'arbitre."""
-        tentatives, acceptations, _succes = _clore(self._attentes, self._nonces)
-        return _assembler(self._bloquees, tentatives, acceptations, self._timelines)
+        """Tentatives, sessions et succès **observés**, après résolution de l'arbitre."""
+        tentatives, acceptations, succes = _clore(self._attentes, self._nonces)
+        return _assembler(self._bloquees, tentatives, acceptations, self._timelines, succes)
 
 
 def join_request_device(device, at_ns: int):
@@ -421,7 +442,7 @@ def simulate_joins(devices, gateway, propagation, radios, options, environment,
                    data_attempts: Sequence = (),
                    join_options: JoinRadioOptions = JoinRadioOptions(),
                    arbiter: Optional[GatewayArbiter] = None,
-                   ledger=None) -> JoinResult:
+                   ledger=None, succes_connu: Optional[dict] = None) -> JoinResult:
     """Joue les jointures déclarées dans le moteur causal.
 
     `requests` : `(terminal, instant du Join-Request)`, tentatives comprises. Dès qu'un terminal est
@@ -434,6 +455,10 @@ def simulate_joins(devices, gateway, propagation, radios, options, environment,
     jointure s'arbitre seule (contention entre Join-Accept seulement) et renvoie un `JoinResult`.
     `ledger` : budget de rapport cyclique par terminal (`DutyCycleLedger`). Fourni, une tentative
     qui le dépasse n'est **pas** émise : elle n'entre pas dans le moteur.
+    `succes_connu` : succès **observés** au tour précédent (`terminal -> instant`). Uniquement
+    sur le chemin de l'arbitre partagé, où il remplace la sonde : les tentatives postérieures à
+    une jointure effectivement obtenue sont retirées, et **celles-là seulement**. Vide au premier
+    tour, il ne retire rien — une tentative n'est jamais supprimée sur une prévision.
     """
     timelines = dict(timelines or {})
     if not requests:
@@ -459,41 +484,53 @@ def simulate_joins(devices, gateway, propagation, radios, options, environment,
             gardees.append((device_index, at_ns))
         candidats = gardees
 
-    # Sonde : figer le jeu de tentatives jouées (celles qui suivraient une jointure réussie sont
-    # retirées). Elle ne connaît que la contention entre Join-Accept ; le placement définitif,
-    # lui, se fait sur l'arbitre partagé (voir la limite énoncée en tête de module).
     copie = dict(nonces)
-    enregistrements: dict = {}
-    for _ in range(4):
-        if not candidats:
-            break
-        enregistrements = _records(devices, gateway, propagation, radios, options, environment,
-                                   candidats)
-        sonde = GatewayArbiter()
-        attentes = _evaluer(candidats, enregistrements, radios, options, data_attempts,
-                            join_options, sonde)
-        sonde.resolve()
-        _tentatives, _acceptations, succes = _clore(attentes, dict(copie))
-        restants = [(d, t) for (d, t) in candidats if d not in succes or t <= succes[d]]
-        if len(restants) == len(candidats):
-            break
-        candidats = restants
 
     if arbiter is None:
-        arbitre = GatewayArbiter()
+        # Sans arbitre partagé, la jointure s'arbitre seule : l'évaluateur **est** le placement
+        # définitif. Le jeu de tentatives se déduit donc de ce qui a été réellement obtenu, à
+        # chaque passe, sans prévision d'aucune sorte.
+        enregistrements: dict = {}
+        for _ in range(4):
+            if not candidats:
+                break
+            enregistrements = _records(devices, gateway, propagation, radios, options,
+                                       environment, candidats)
+            sonde = GatewayArbiter()
+            attentes = _evaluer(candidats, enregistrements, radios, options, data_attempts,
+                                join_options, sonde)
+            sonde.resolve()
+            _tentatives, _acceptations, succes = _clore(attentes, dict(copie))
+            restants = [(d, t) for (d, t) in candidats if d not in succes or t <= succes[d]]
+            if len(restants) == len(candidats):
+                break
+            candidats = restants
+        arbitre_local = GatewayArbiter()
         attentes = _evaluer(candidats, enregistrements if candidats else {}, radios, options,
-                            data_attempts, join_options, arbitre)
-        arbitre.resolve()
-        tentatives, acceptations, _succes = _clore(attentes, copie)
-        return _assembler(bloquees, tentatives, acceptations, timelines)
+                            data_attempts, join_options, arbitre_local)
+        arbitre_local.resolve()
+        tentatives, acceptations, succes = _clore(attentes, copie)
+        return _assembler(bloquees, tentatives, acceptations, timelines, succes)
 
-    # Arbitre partagé : on dépose, l'appelant résout (les ACK sont dans la même file).
-    attentes = _evaluer(candidats, enregistrements if candidats else {}, radios, options,
-                        data_attempts, join_options, arbiter)
+    # Arbitre partagé : **aucune sonde**. Le jeu de tentatives jouées se déduit des succès déjà
+    # observés, jamais d'une prévision. Au premier tour il n'y en a aucun, donc toutes les
+    # tentatives sont jouées ; une tentative postérieure à une jointure obtenue n'émet pas de
+    # Join-Accept (condition de `EmissionRequest`) et elle est retirée du calendrier au tour
+    # suivant, quand le succès est connu. La causalité est rétablie par itération, du côté de
+    # l'appelant (`retransmissions.simulate_confirmed_uplinks`).
+    if succes_connu:
+        candidats = [(d, t) for (d, t) in candidats
+                     if d not in succes_connu or t <= succes_connu[d]]
+    if not candidats:
+        return JoinPlan([], copie, bloquees, timelines)
+    enregistrements = _records(devices, gateway, propagation, radios, options, environment,
+                               candidats)
+    attentes = _evaluer(candidats, enregistrements, radios, options, data_attempts,
+                        join_options, arbiter)
     return JoinPlan(attentes, copie, bloquees, timelines)
 
 
-def _assembler(bloquees, tentatives, acceptations, timelines) -> JoinResult:
+def _assembler(bloquees, tentatives, acceptations, timelines, succes=None) -> JoinResult:
     """Ouvre les sessions, une horloge par terminal, et rattache chaque tentative à la sienne."""
     nouvelles = dict(timelines)
     ouvertures: dict[tuple[int, int], int] = {}
@@ -517,4 +554,5 @@ def _assembler(bloquees, tentatives, acceptations, timelines) -> JoinResult:
                 tentative = replace(tentative, session=index)
         corrigees.append(tentative)
     return JoinResult(tuple(bloquees) + tuple(corrigees), nouvelles,
-                      blocked_by_duty_cycle=len(bloquees))
+                      blocked_by_duty_cycle=len(bloquees),
+                      succes=dict(succes or {}))

@@ -761,12 +761,20 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
     options = _replace(options, confirmed_uplinks=True)
     demandes = retransmit.join_options.requests(range(len(devices)))
     rapports = {terminal: devices[terminal].duty_cycle for terminal in range(len(devices))}
+    # Itération causale. Le Join-Accept partage l'émetteur avec les ACK : on ne peut donc pas
+    # savoir, avant résolution, si une tentative aboutit. On joue **toutes** les tentatives, on lit
+    # les succès observés, et on rejoue : les tentatives postérieures à une jointure effectivement
+    # obtenue disparaissent du calendrier du tour suivant. Aucune tentative n'est jamais retirée
+    # sur une prévision, et aucune tentative rendue nécessaire par un échec n'est supprimée.
     timelines: dict = {}
+    succes: dict = {}
     jointures = None
-    for _ in range(3):
+    signatures = set()
+    for _ in range(8):
         boite: dict = {}
 
-        def avant_resolution(arbitre, programme, boite=boite, timelines=timelines):
+        def avant_resolution(arbitre, programme, boite=boite, timelines=timelines,
+                             succes=succes):
             """Dépose les Join-Accept dans la passe en cours, après les ACK, avant résolution."""
             # Budget réglementaire : il comptabilise les émissions déjà jouées du terminal, parce
             # que la contrainte porte sur l'occupation de la sous-bande et non sur la nature de la
@@ -782,7 +790,8 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
                                            environment, demandes, timelines,
                                            data_attempts=programme,
                                            join_options=retransmit.join_options,
-                                           arbiter=arbitre, ledger=livre)
+                                           arbiter=arbitre, ledger=livre,
+                                           succes_connu=succes)
 
         result = _simulate_confirmed(devices, gateway, propagation, radios, options, retransmit,
                                      energy_profile, environment, with_engine_output,
@@ -792,9 +801,17 @@ def simulate_confirmed_uplinks(devices: Sequence, gateway, propagation, radios, 
         if plan is None:
             break
         jointures = plan.result()
-        if jointures.timelines == timelines:
+        if jointures.succes == succes and jointures.timelines == timelines:
             break
-        timelines = jointures.timelines
+        signature = (tuple(sorted(jointures.succes.items())),
+                     tuple(sorted((terminal, len(horloge.sessions))
+                                  for terminal, horloge in jointures.timelines.items())))
+        if signature in signatures:
+            raise RuntimeError(
+                "jointures radio sans point fixe : le jeu de tentatives se r\u00e9p\u00e8te "
+                "\u00e0 l'identique")
+        signatures.add(signature)
+        succes, timelines = jointures.succes, jointures.timelines
     return _replace(result,
                     joins=jointures.attempts if jointures is not None else (),
                     joins_blocked_by_duty_cycle=(jointures.blocked_by_duty_cycle

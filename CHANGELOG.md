@@ -46,7 +46,8 @@
   seul moyen de faire partager un émetteur unique sans modifier l'ABI. **Sans jointure radio, rien ne
   change** : le cœur garde la main et la parité avec l'oracle Python reste exigée
   (`test_downlink_plan_parity.py`, 124 tests).
-- **Tests** : `python/tests/test_arbitre_radio.py`, **25 tests** — concurrence reproductible
+- **Tests** : `python/tests/test_arbitre_radio.py`, **25 tests** (portés à 34 par la validation
+  finale) — concurrence reproductible
   (Join-Accept et ACK au même instant, ACK en émission quand RX1 s'ouvre, RX1 impossible puis RX2
   possible, RX1 réussie sans RX2, descentes concurrentes, deux jointures qui se chevauchent,
   émission bloquée non tracée comme réussie, session seulement après réception effective), plus un
@@ -57,11 +58,68 @@
   clé de scénario nouvelle, donc **les 30 schémas `schemas/api/v1` sont identiques**.
 - **Invariants** : cœur C++ et **ABI intacts** (97 symboles `lsim_*`, aucune source C++ touchée),
   empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées, **685 282 / 685 282** vérifications C++,
-  suite Python **1 977 tests** (1 952 + 25).
+  suite Python **1 977 tests** (1 952 + 25) — portée à 1 997 par la validation finale.
 - **Limites** : rapport cyclique **descendant** non modélisé ; un seul émetteur par passerelle (pas de
-  cartes radio multiples) ; durée d'ouverture des fenêtres (1 s) = hypothèse du simulateur ; le jeu de
-  tentatives est figé par une sonde qui ne connaît pas la contention avec les ACK (approximation
-  bornée, énoncée). `docs/MAC_CONSOLIDATION.md` §10.
+  cartes radio multiples) ; durée d'ouverture des fenêtres (1 s) = hypothèse du simulateur ; la
+  programmation causale du jeu de tentatives est **itérative et bornée** (8 tours, erreur explicite
+  sur état répété). `docs/MAC_CONSOLIDATION.md` §10.
+
+#### D3.13 — Validation finale : causalité du jeu de tentatives, fenêtres, rapport cyclique, chemins
+
+La sonde anticipée qui figeait le jeu de tentatives **avant** le placement partagé est remplacée par
+une **programmation causale** : une tentative n'est retirée du calendrier que si une jointure a été
+**observée**, jamais sur une prévision.
+
+- **`python/lsim/join.py`** : nouveau paramètre `succes_connu` de `simulate_joins`. Sur le chemin de
+  l'arbitre partagé, la boucle de sonde disparaît : les tentatives postérieures à une jointure
+  observée sont retirées, et **celles-là seulement**. Au premier tour rien n'est observé, donc toutes
+  les tentatives sont jouées. `JoinResult.succes` expose les succès observés. Le chemin **sans**
+  arbitre partagé garde sa boucle, qui y est causale puisque l'évaluateur y est le placement définitif.
+- **`python/lsim/retransmissions.py`** : `simulate_confirmed_uplinks` itère sur `succes` jusqu'au point
+  fixe (8 tours au plus). Un état qui se répète à l'identique lève `RuntimeError` plutôt que de rendre
+  un résultat approximatif. En pratique : deux à trois tours.
+- **Scénario de causalité, avant / après.** `join_retries: 2`, tentative à 10 s, seconde à 20 s ;
+  `ack_repetitions: 3`, `ack_delay_ms: 12000`, SF12 — les ACK couvrent RX1 **et** RX2 :
+
+  | | Tentatives | RX1 / RX2 de la 1re | Session | Join-Accept émis |
+  |---|---|---|---|---|
+  | avant (sonde) | 1 (10 s) | `gateway_busy` / `gateway_busy` | **0** | 0 |
+  | après (causal) | **2** (10 s, 20 s) | `gateway_busy` / `gateway_busy`, puis `delivered` à 26,48 s | **1** | 1 |
+
+  Avant, le terminal **ne joignait jamais** alors que rien ne l'en empêchait. Sans concurrence, une
+  seule tentative est jouée : aucune tentative n'est émise après une jointure réussie.
+- **Fenêtres : les sept cas exigés sont couverts et testés** — ACK occupant RX1 puis RX2 ; Join-Accept
+  occupant l'émetteur quand un ACK est demandé ; plusieurs demandes au même instant ; demande retardée
+  dépassant sa fenêtre ; **émission commençant dans la fenêtre et la dépassant** ; demande supprimée ne
+  réservant pas l'émetteur ; **rejeu non confondu avec un nouvel Join-Accept**. La règle de départ est
+  documentée dans `lsim.arbitre` : `début = max(instant_prêt, ouverture, occupé_jusqu'à)`, occupation
+  de `début` à `début + temps d'antenne`, **sans garde ni temps de retournement**. Le verdict porte sur
+  le **début** : une descente commencée dans la fenêtre est émise entière et occupe au-delà.
+- **Rapport cyclique : le budget Join-Request est conservé**, jamais étendu. Vérifié : il s'applique à
+  **toutes** les tentatives réelles du terminal (`join_retries: 3` ⇒ 3 refus, pas 1) ; une tentative
+  refusée n'est **pas** enregistrée comme une émission (ni occupation, ni temps d'antenne, ni compteur
+  `sent`, événement `suppressed`) ; isolation entre terminaux mesurée sur deux groupes (`0.001` et
+  `1.0`) ; unités et fenêtre documentées — nanosecondes, budget **cumulatif depuis l'origine**, et non
+  une fenêtre glissante. **Aucune limite réglementaire descendante n'est inventée** : contrainte non
+  modélisée, signalée.
+- **Chemins C++ et Python.** La bascule est `_native_plan_applies` : `not options.join and mac is None`.
+  La raison est structurelle : `plan_native(records, radios, options)` ne reçoit que des enregistrements
+  et **n'itère pas** (une seule exécution du moteur, contrôle d'égalité), alors qu'une demande de
+  Join-Accept dépend du calendrier des tentatives de données **et** naît pendant la résolution (RX2,
+  rejeu). Faire tenir cela dans `lsim_plan_downlinks_v1` changerait l'ABI gelée. Vérifié sans équivoque :
+  sans concurrence pour l'émetteur, l'arbitre partagé reproduit le chemin isolé **à la nanoseconde**,
+  sur les **500 tentatives** du scénario de référence. **97 symboles `lsim_*`, empreinte
+  `0e546fa6391866d9…` : ABI et symboles exportés inchangés.**
+- **Mesures de référence inchangées, remesurées après la correction** : 8/24 → 7/24 → 5/24
+  (24/43/83 transmises, 11/15/20 reçues, 8/7/5 livrées, 0/1/8 doublons, 6/16/31 collisions,
+  occupation 0,296 / 0,440 / 0,543) ; RX2 retardée par RX1 (62,483 → 64,293 s) ; ACK repoussé par le
+  Join-Accept (15,206 → 15,453 s) ; chemin historique `join=True` avec `downlink_every` (3 familles de
+  descentes, aucun chevauchement).
+- **Tests** : `test_join_causalite.py` (**6**, le scénario exigé et les quatre propriétés),
+  `test_arbitre_radio.py` (**34**, dont les sept cas de fenêtres et cinq de rapport cyclique),
+  `test_chemins_cpp_python.py` (**5**, branche empruntée, justification, concordance). Suite Python :
+  **1 997 tests** (1 977 + 20), 1 ignoré, aucun échec. **685 282 / 685 282** vérifications C++.
+  Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées.
 
 
 ### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en RX1/RX2

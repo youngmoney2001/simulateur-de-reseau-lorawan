@@ -25,6 +25,22 @@ est un budget appliqué avant l'émission (`DutyCycleLedger`).
 | Bout en bout : jointure, ACK et downlink sur une passerelle | `test_join_accept_ack_et_downlink_sur_une_meme_passerelle` |
 | Référence retransmissions 8/24 → 7/24 → 5/24 préservée | `test_les_scenarios_de_reference_des_retransmissions` |
 
+**Fenêtres (§2 de la directive).** Les sept cas exigés sont couverts :
+
+| Cas | Test |
+|---|---|
+| Un ACK occupe RX1, puis RX2 | `test_un_ack_occupe_rx1_puis_rx2` |
+| Un Join-Accept occupe l'émetteur quand un ACK est demandé | `test_un_ack_est_repousse_par_un_join_accept` |
+| Plusieurs demandes au même instant | `test_un_join_accept_et_un_ack_au_meme_instant` |
+| Une demande retardée dépasse sa fenêtre | `test_une_fenetre_couverte_nest_pas_emise` |
+| Une émission commence dans la fenêtre et finit après | `test_une_emission_commencee_dans_la_fenetre_la_depasse` |
+| Une demande supprimée ne réserve pas l'émetteur | `test_une_demande_devenue_sans_objet_noccupe_rien` |
+| Un rejeu n'est pas un nouveau Join-Accept | `test_un_rejeu_nest_pas_un_nouveau_join_accept` |
+
+La **règle de départ** et la **durée d'occupation** sont énoncées dans `lsim.arbitre`, section
+« Règle de départ et durée d'occupation » : `début = max(ready_ns, ouverture, occupé_jusqu'à)`,
+occupation de `début` à `début + temps d'antenne`, sans garde ni temps de retournement.
+
 Ce qui n'est **pas** vérifié ici, parce que ce n'est pas modélisé : la cryptographie de la
 jointure (aucune clé, aucun `MIC`), la priorité protocolaire entre un Join-Accept et l'ACK d'un
 autre terminal (LoRaWAN n'en définit pas), et le rapport cyclique **descendant** de la passerelle.
@@ -38,6 +54,7 @@ import yaml
 from lsim.arbitre import (DUTY_CYCLE, EMITTED, LATE, NOT_NEEDED, WINDOW_MISSED, ArbitrationPolicy,
                           DutyCycleLedger, EmissionRequest, GatewayArbiter)
 from lsim.join import (BLOCKED_DUTY_CYCLE, JOIN_ACCEPT_DELAY1_NS, JOIN_ACCEPT_DELAY2_NS,
+                       JOIN_REPLAY_DELAY_NS,
                        JOIN_WINDOW_NS, JoinRadioOptions, accept_airtime_ns, simulate_joins)
 from lsim.retransmissions import RetransmissionOptions, simulate_confirmed_uplinks
 from lsim.scenario import load_scenario
@@ -501,4 +518,221 @@ def test_le_verdict_duty_cycle_est_porte_par_le_ledger_pas_par_larbitre():
     assert DUTY_CYCLE == "duty_cycle"
     livre = DutyCycleLedger({0: 1.0})
     assert livre.allows(0, 0, 10 ** 9) is True      # rapport 1.0 : aucune contrainte
+    assert livre.refusees() == 0
+
+
+# --- fenêtres : les sept cas du §2 -------------------------------------------------------------
+
+def test_un_ack_occupe_rx1_puis_rx2():
+    """Une même descente en cours couvre RX1 **puis** RX2 : les deux fenêtres sont perdues.
+
+    L'occupation est imposée, pas simulée : c'est le seul moyen rendu reproductible de faire tenir
+    la même émission sur les deux fenêtres d'une tentative.
+    """
+    scenario = _scenario(_sf12)
+    rx1 = _rx1_de(scenario)
+    rx2 = rx1 + (JOIN_ACCEPT_DELAY2_NS - JOIN_ACCEPT_DELAY1_NS)
+    # Une descente commencée avant RX1 et finissant après la fin de la fenêtre RX2.
+    resultat, arbitre = _join_arbitre(scenario, occupation=[(rx1 - SECONDE, rx2 + 2 * SECONDE)])
+
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome, e.emitted) for e in tentative.accepts] == [
+        ("rx1", "gateway_busy", False), ("rx2", "gateway_busy", False)]
+    # Rien n'a été émis pour cette tentative : l'occupation est celle imposée, et rien d'autre.
+    assert arbitre.occupation == ((rx1 - SECONDE, rx2 + 2 * SECONDE),)
+    assert tentative.session == 0 and resultat.joined == 0
+
+
+def test_une_emission_commencee_dans_la_fenetre_la_depasse():
+    """Le verdict porte sur le **début** : une descente commencée dans la fenêtre est émise entière.
+
+    Elle occupe donc l'émetteur au-delà de la fermeture. L'arbitre mesure l'occupation ; la couche
+    MAC décide seule si le terminal écoutait encore — les deux grandeurs sont indépendantes.
+    """
+    ouverture, fermeture = 10 * SECONDE, 11 * SECONDE
+    # L'émetteur est libre à 10,8 s ; le temps d'antenne est de 1,5 s.
+    arbitre = GatewayArbiter(occupation=[(0, 10 * SECONDE + 800_000_000)])
+    longue = arbitre.demand(EmissionRequest(label="ack", device=0, ready_ns=ouverture,
+                                            duration_ns=1_500_000_000,
+                                            window=(ouverture, fermeture)))
+    suivante = arbitre.demand(EmissionRequest(label="downlink", device=1, ready_ns=fermeture,
+                                              duration_ns=100_000_000))
+    arbitre.resolve()
+
+    emission = arbitre.emission(longue)
+    assert emission.start_ns == 10_800_000_000
+    assert emission.start_ns < fermeture < emission.end_ns
+    assert emission.verdict == EMITTED and emission.emitted is True
+    assert emission.in_window is True
+    # L'occupation va jusqu'au bout du temps d'antenne, au-delà de la fenêtre. La première
+    # entrée est l'occupation imposée au départ, qui a rendu l'émetteur indisponible jusqu'à 10,8 s.
+    assert arbitre.occupation[1:] == ((10_800_000_000, 12_300_000_000),
+                                      (12_300_000_000, 12_400_000_000))
+    assert 12_300_000_000 > fermeture
+    # La demande suivante attend la fin **réelle** de l'émission, pas la fermeture de la fenêtre.
+    assert arbitre.emission(suivante).start_ns == 12_300_000_000
+
+
+def test_un_rejeu_nest_pas_un_nouveau_join_accept():
+    """Le rejeu est une **émission de plus du même** Join-Accept, pas une seconde jointure.
+
+    Trois propriétés le distinguent d'un nouveau Join-Accept : il naît d'une acceptation, il est
+    reçu puis refusé (`replayed`), et il n'ouvre aucune session.
+    """
+    resultat, arbitre = _join_arbitre(_scenario(), accept_replays=2)
+
+    tentative = resultat.attempts[0]
+    assert [(e.window, e.outcome) for e in tentative.accepts] == [
+        ("rx1", "delivered"), ("replay", "replayed"), ("replay", "replayed")]
+
+    # Un rejeu est une émission **réelle** : il occupe l'émetteur, contrairement à une fenêtre
+    # manquée. Trois émissions, donc trois occupations disjointes, espacées d'une seconde.
+    assert len(arbitre.occupation) == 3
+    for precedente, suivante in zip(arbitre.occupation, arbitre.occupation[1:]):
+        assert suivante[0] >= precedente[1]                     # aucune descente simultanée
+    # Les deux rejeux sont déposés depuis la **même** origine — la fin de RX1 — à une seconde
+    # d'intervalle chacun. Ils ne s'enchaînent donc pas bout à bout comme le ferait une file :
+    # le rangième rejeu part à `fin(RX1) + rang × JOIN_REPLAY_DELAY_NS`.
+    fin_rx1 = arbitre.occupation[0][1]
+    assert [debut for debut, _fin in arbitre.occupation] == [
+        arbitre.occupation[0][0]] + [fin_rx1 + rang * JOIN_REPLAY_DELAY_NS
+                                     for rang in (1, 2)]
+    # RX2 n'a **pas** été émise : le rejeu n'est pas une fenêtre de secours.
+    assert [e.window for e in tentative.accepts].count("rx2") == 0
+
+    # Une seule session ouverte pour une acceptation et ses deux rejeux.
+    assert tentative.session == 1 and resultat.joined == 1
+    horloge = resultat.timelines[0]
+    assert len(horloge.sessions) == 1
+    # Le nonce est celui de l'acceptation : un rejeu ne renégocie rien.
+    assert horloge.last.nonce == horloge.sessions[0].nonce
+
+
+def test_un_rejeu_hors_emetteur_nouvre_rien():
+    """Un rejeu que l'émetteur ne peut pas placer est `gateway_busy` : il n'occupe rien."""
+    scenario = _scenario()
+    rx1 = _rx1_de(scenario)
+    # L'émetteur est occupé sans discontinuer à partir de RX1.
+    imposer = [(rx1 - 2 * SECONDE, rx1 + 60 * SECONDE)]
+    resultat, arbitre = _join_arbitre(scenario, accept_replays=1, occupation=imposer)
+
+    tentative = resultat.attempts[0]
+    # RX1 est refusée, donc RX2 est tentée en secours, et il n'y a ni acceptation ni rejeu.
+    assert [(e.window, e.outcome, e.emitted) for e in tentative.accepts] == [
+        ("rx1", "gateway_busy", False), ("rx2", "gateway_busy", False)]
+    assert tentative.session == 0
+    assert arbitre.occupation == tuple(imposer)
+
+
+# --- rapport cyclique (§3) ---------------------------------------------------------------------
+
+def _duty_tous(valeur):
+    """Le rapport cyclique est une propriété de **groupe**, donc de terminal."""
+
+    def modifier(data):
+        for groupe in data["groups"]:
+            groupe["duty_cycle"] = valeur
+
+    return modifier
+
+
+def test_le_budget_sapplique_a_toutes_les_tentatives_reelles():
+    """Chaque tentative du terminal est soumise au budget, pas seulement la première."""
+    trace = _trace(_duty_tous(0.001), join_requests_s=[10], join_retries=3)
+    joins = trace.retransmissions.joins
+    assert [(j.device, round(j.request_ns / 1e9, 1)) for j in joins] == [
+        (0, 10.0), (0, 20.0), (0, 30.0)]
+    assert [j.request_outcome for j in joins] == [BLOCKED_DUTY_CYCLE] * 3
+    # Les trois tentatives sont refusées : le budget n'est pas réinitialisé entre elles.
+    assert trace.retransmissions.joins_blocked_by_duty_cycle == 3
+
+
+def test_une_tentative_refusee_nest_pas_une_emission():
+    """Un Join-Request refusé n'émet rien : ni Join-Accept, ni session, ni occupation."""
+    bloquee = _trace(_duty_tous(0.001), join_requests_s=[10], join_retries=2)
+    resultat = bloquee.retransmissions
+    assert resultat.joins_blocked_by_duty_cycle == 2
+    assert resultat.join_accepts_emitted == 0
+    assert all(j.session == 0 and j.accepts == () for j in resultat.joins)
+    # L'événement est `suppressed`, pas `sent` : aucune transmission n'a eu lieu.
+    assert [(e.kind, e.outcome) for e in bloquee.events if e.kind.startswith("join")] == [
+        ("join_request", "suppressed"), ("join_request", "suppressed")]
+
+    # Même scénario, budget levé : la jointure a bien lieu, les compteurs sont cohérents.
+    libre = _trace(_duty_tous(1.0), join_requests_s=[10], join_retries=2)
+    assert libre.retransmissions.joins_blocked_by_duty_cycle == 0
+    assert libre.retransmissions.join_accepts_emitted == 1
+    assert sum(1 for j in libre.retransmissions.joins if j.joined) == 1
+
+
+def test_le_budget_est_isole_entre_terminaux():
+    """Le budget d'un terminal ne limite pas celui d'un autre : deux groupes, deux budgets."""
+
+    def deux_budgets(data):
+        modele = data["groups"][0]
+        second = dict(modele, name="second",
+                      placement={"type": "explicit", "positions": [[300.0, 0.0]]})
+        data["groups"] = [modele, second]
+        data["groups"][0]["duty_cycle"] = 0.001   # terminal 0 : contraint
+        data["groups"][1]["duty_cycle"] = 1.0     # terminal 1 : libre
+
+    trace = _trace(deux_budgets, join_requests_s=[10], join_retries=2)
+    joins = trace.retransmissions.joins
+    # Le terminal contraint voit ses deux tentatives refusées ; l'autre joint du premier coup.
+    assert [(j.device, j.request_outcome) for j in joins
+            if j.device == 0] == [(0, BLOCKED_DUTY_CYCLE)] * 2
+    assert [(j.device, j.request_outcome, j.session) for j in joins
+            if j.device == 1] == [(1, "received", 1)]
+    # Le compteur de refus ne comptabilise que le terminal contraint.
+    assert trace.retransmissions.joins_blocked_by_duty_cycle == 2
+
+
+def test_unites_calcul_et_fenetre_temporelle_du_budget():
+    """Grandeurs, unités et fenêtre du budget : nanosecondes, cumul depuis l'origine."""
+    livre = DutyCycleLedger({0: 0.01})     # 1 % du temps
+
+    # Un terminal qui n'a rien émis peut émettre : le droit est `rapport × instant`.
+    assert livre.consumed_ns(0) == 0
+    assert livre.allows(0, 100 * SECONDE, 1 * SECONDE) is True       # 1 s <= 0,01 × 100 s
+    assert livre.allows(0, 100 * SECONDE, 2 * SECONDE) is False      # 2 s > 1 s de droit
+
+    # Le budget est **cumulatif** : ce qui a été émis à t = 10 s reste compté à t = 100 s.
+    livre.record(0, 10 * SECONDE, 11 * SECONDE)                     # 1 s d'antenne
+    assert livre.consumed_ns(0) == 1 * SECONDE
+    # Droit à t = 100 s : 1 s. Cumul 1 s + demande 1 s = 2 s > 1 s ⇒ refusé.
+    assert livre.allows(0, 100 * SECONDE, 1 * SECONDE) is False
+    # Droit à t = 200 s : 2 s. Cumul 1 s + demande 1 s = 2 s ≤ 2 s ⇒ accordé, tout juste.
+    assert livre.allows(0, 200 * SECONDE, 1 * SECONDE) is True
+    # Ce n'est **pas** une fenêtre glissante : l'émission de t = 10 s pèse encore à t = 200 s.
+
+    # Le cumul est mesurable jusqu'à un instant donné, pour la traçabilité.
+    livre.record(0, 150 * SECONDE, 150 * SECONDE + 500_000_000)
+    assert livre.consumed_ns(0, until_ns=100 * SECONDE) == 1 * SECONDE
+    assert livre.consumed_ns(0) == 1_500_000_000
+
+    # Le rapport est **sans dimension** et borné : 1,0 ne contraint rien, 0 ne veut rien dire.
+    assert DutyCycleLedger({0: 1.0}).allows(0, 1, 10 ** 12) is True
+    with pytest.raises(ValueError):
+        DutyCycleLedger({0: 0.0})
+
+
+def test_aucune_limite_descendante_nest_modelee():
+    """Contrainte non modélisée, signalée : la passerelle n'a **pas** de budget d'émission.
+
+    Le ledger ne connaît que des émissions de **terminaux**. Aucune valeur réglementaire
+    descendante n'est introduite : plutôt que d'inventer une règle, on vérifie ici que rien
+    ne limite les descentes.
+    """
+    livre = DutyCycleLedger()
+    # Aucun enregistrement d'émission de passerelle n'est possible : le ledger est indexé par
+    # terminal et l'arbitre ne le consulte jamais pour une descente.
+    assert livre.refusees() == 0
+    arbitre = GatewayArbiter()
+    # Cinq descentes consécutives : l'arbitre les place toutes, sans notion de budget.
+    tickets = arbitre.demand_all([
+        EmissionRequest(label="ack", device=d, ready_ns=10 * SECONDE,
+                        duration_ns=SECONDE, window=(10 * SECONDE, 60 * SECONDE))
+        for d in range(5)])
+    arbitre.resolve()
+    assert [arbitre.emission(t).verdict for t in tickets] == [EMITTED] * 5
     assert livre.refusees() == 0

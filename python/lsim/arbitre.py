@@ -40,6 +40,42 @@ l'**occupation** : qui émet, quand, et combien de temps.
    pour les réémissions. Une émission refusée n'est **pas** une émission : ni occupation, ni
    compteur `sent`, ni événement de transmission.
 
+## Règle de départ et durée d'occupation
+
+C'est la seule formule d'occupation du simulateur ; elle est appliquée par `GatewayArbiter._placer`,
+à l'identique pour un Join-Accept RX1, un Join-Accept RX2, un rejeu, un ACK ou un downlink.
+
+```
+ouverture = fenêtre[0] si fenêtre else ready_ns            # la fenêtre ne peut pas être anticipée
+début     = max(ready_ns, ouverture, occupé_jusqu'à)       # la passerelle n'émet qu'une descente
+fermeture = fenêtre[1] si fenêtre else None
+
+si fermeture est définie et début >= fermeture :
+    allow_late  -> verdict LATE           (émise, occupée, mais plus écoutée — l'ACK retardé)
+    sinon       -> verdict WINDOW_MISSED  (rien n'est émis, aucune occupation)
+sinon :
+    verdict EMITTED
+
+fin = début + duration_ns
+occupation = (début, fin)                                  # inscrite seulement si émise
+occupé_jusqu'à = max(occupé_jusqu'à, fin)                  # monotone : ne décroît jamais
+```
+
+Deux conséquences, assumées et testées :
+
+- **La durée d'occupation est le temps d'antenne seul**, sans garde ni temps de retournement. Une
+  émission commence à `début` et libère l'émetteur à `début + duration_ns`, exactement.
+- **Une émission peut dépasser sa fenêtre par la fin.** La condition porte sur le **début**
+  (`début < fermeture`), pas sur la fin : une descente commencée dans la fenêtre est émise en
+  entier, même si `fin > fermeture`, et elle occupe l'émetteur au-delà. Le terminal, lui, cesse
+  d'écouter à la fermeture — c'est la couche MAC (`ack_mac`, `join`) qui le décide, pas l'arbitre.
+  Ces deux grandeurs ne sont donc pas redondantes : l'arbitre mesure l'occupation, la couche MAC
+  mesure l'écoute.
+
+Le verdict `NOT_NEEDED`, lui, n'entre pas dans cette formule : il est décidé **avant** le calcul du
+départ, quand `EmissionRequest.condition` est devenue fausse au moment du placement (un terminal
+déjà joint ne reçoit pas de second Join-Accept). Aucune occupation, aucune réaction.
+
 ## Hypothèses explicites
 
 - **Fenêtre RX1 d'une seconde** (`RX1_WINDOW_NS`) : hypothèse du simulateur, déjà celle du cœur
@@ -306,11 +342,30 @@ class GatewayArbiter:
 class DutyCycleLedger:
     """Budget réglementaire d'émission, par terminal.
 
-    Règle appliquée — la même que `retransmissions` pour les réémissions :
-    `airtime_cumulé + airtime <= rapport_cyclique × instant`. Le budget est **global** : il
-    comptabilise toutes les émissions réelles du terminal (données, réémissions, Join-Request),
-    parce que la contrainte réglementaire porte sur l'occupation de la sous-bande et non sur la
-    nature de la trame.
+    Règle appliquée — la même que `retransmissions` pour les réémissions, reprise à l'identique :
+    `airtime_cumulé + airtime <= rapport_cyclique × instant`.
+
+    **Grandeurs et unités.** `rapport` : sans dimension, dans `]0, 1]` (1 % = 0,01). `airtime`
+    et `instant` : **nanosecondes entières**, comptées depuis l'origine de la simulation
+    (`t = 0`), jamais des secondes ni des millisecondes. Le produit `rapport × instant` est donc
+    un temps d'antenne autorisé, exprimé en nanosecondes.
+
+    **Fenêtre temporelle.** Le budget est **cumulatif depuis l'origine**, il ne s'agit **pas**
+    d'une fenêtre glissante : `airtime_cumulé` est la somme de toutes les émissions du terminal
+    depuis `t = 0`, mise en regard d'un droit qui croît linéairement avec le temps
+    (`rapport × instant`). Un terminal qui émet tôt épuise son budget et le reconstitue en
+    attendant ; c'est le comportement déjà vérifié pour les réémissions.
+
+    **Portée.** Le budget est **global au terminal** : il comptabilise ses émissions réelles
+    (données, réémissions, Join-Request), parce que la contrainte réglementaire porte sur
+    l'occupation de la sous-bande et non sur la nature de la trame. Il est **isolé par terminal** :
+    le budget de l'un ne limite pas l'autre.
+
+    **Limite non modélisée, signalée et non inventée.** Ce budget est **montant** : il ne s'applique
+    qu'aux émissions du terminal. Le rapport cyclique **descendant** de la passerelle n'est pas
+    modélisé — la passerelle peut émettre sans limite de budget. Aucune valeur réglementaire
+    descendante n'est donc introduite ici : une contrainte qu'on ne peut pas modéliser se signale,
+    elle ne s'invente pas.
 
     `rapport = 1.0` (défaut) : aucune contrainte, le ledger ne refuse jamais rien.
     """
@@ -346,7 +401,11 @@ class DutyCycleLedger:
                    for debut, fin in bornes if min(fin, until_ns) > debut)
 
     def allows(self, device: int, at_ns: int, duration_ns: int) -> bool:
-        """Le terminal peut-il émettre `duration_ns` à partir de `at_ns` ?"""
+        """Le terminal peut-il émettre `duration_ns` à partir de `at_ns` ?
+
+        `cumul + duration_ns <= rapport × at_ns`, toutes grandeurs en nanosecondes, le cumul étant
+        pris depuis l'origine de la simulation (budget cumulatif, non glissant).
+        """
         rapport = self.rapport(device)
         if rapport >= 1.0:
             return True

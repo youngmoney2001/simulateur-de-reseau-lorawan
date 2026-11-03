@@ -345,6 +345,16 @@ RX2, ACK des uplinks et downlinks de données passent par le même arbitre
 Aucune priorité n'est inventée entre un Join-Accept et l'ACK d'un autre terminal : LoRaWAN n'en
 définit pas. À instant égal, l'ordre est celui du dépôt.
 
+**Règle de départ et durée d'occupation** : `début = max(instant_prêt, ouverture de fenêtre,
+occupé_jusqu'à)` ; l'émetteur est occupé de `début` à `début + temps d'antenne`, sans garde ni temps
+de retournement. Le verdict porte sur le **début** : une descente commencée dans la fenêtre est
+émise entière, même si elle finit après la fermeture, et elle occupe l'émetteur au-delà.
+
+**Causalité des tentatives.** L'issue d'un Join-Accept n'est connue qu'après le placement partagé.
+Une tentative de secours n'est donc jamais retirée du calendrier sur une prévision : elle l'est
+seulement quand la jointure a été **observée**. Un terminal dont la première tentative échoue parce
+qu'un ACK occupait RX1 et RX2 effectue bien sa tentative suivante.
+
 Le Join-Request consomme le rapport cyclique du groupe (`duty_cycle`, et la limite de sous-bande
 régionale). Une tentative qui dépasse le budget n'est pas émise du tout : elle ne provoque aucune
 collision et n'apparaît pas comme une transmission dans la trace.
@@ -357,6 +367,12 @@ retransmissions:
   enforce_duty_cycle: true # false : le budget n'est pas appliqué (ni aux réémissions)
   join_requests_s: [10]
 ```
+
+**Un budget cumulatif, pas une fenêtre glissante.** Le rapport cyclique est un budget montant par
+terminal : `airtime cumulé + airtime <= rapport × instant`, en nanosecondes, le cumul étant pris
+depuis l'origine de la simulation. Une émission ancienne pèse donc encore sur le droit courant. Il
+s'applique à **toutes** les tentatives réelles du terminal, et une tentative refusée n'est pas
+enregistrée comme une émission — elle ne consomme aucun budget.
 
 Ce qui **n'est pas** modélisé : le rapport cyclique **descendant** de la passerelle, les cartes
 radio multiples, et la durée d'ouverture des fenêtres (1 s, hypothèse du simulateur — LoRaWAN ne
