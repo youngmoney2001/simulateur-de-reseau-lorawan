@@ -31,6 +31,7 @@ ne soit réécrit.
 
 import pytest
 
+from lsim.ack_mac import AckTiming, plan_acks
 from lsim.downlink_plan import DeviceRx2, plan_native, plan_native_v2
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario, ScenarioModel
@@ -852,3 +853,181 @@ def test_chaque_region_a_un_profil_rx2_distinct_mais_pas_toujours_une_frequence_
     # permet pas d'y lire la fenêtre sur la fréquence.
     confondues = [r for r, v in profils.items() if v[3] == v[0]]
     assert confondues, "aucune région à RX1/RX2 confondus : la réserve serait caduque"
+
+
+# ------------------------------------------------------ limites restantes, traitées (§6)
+#
+# Les cinq points que le bilan des correctifs laissait ouverts. Quatre sont traités ci-dessous ;
+# le cinquième (sauvegardes) ne relève pas du code.
+
+def test_classe_c_le_seuil_suit_la_phy_de_la_fenetre_visee():
+    """Classe C : le seuil suit la PHY réellement utilisée, pas toujours RX1.
+
+    Une descente émise sur la fréquence RX2 au débit RX2 ne peut pas être jugée au seuil RX1 :
+    c'est la même incohérence interne que D-I3-2, par un autre chemin (l'écoute continue ne
+    distingue plus RX1 de RX2, seule la fenêtre visée le peut).
+
+    Discriminant : `delay_ms=0` vise RX1 (41,2 ms, seuil SF7), `delay_ms=1500` vise RX2
+    (991,2 ms, seuil SF12). À -130 dBm de descendant, le premier est perdu et le second reçu.
+    """
+    from lsim.ack_mac import AckTiming, plan_acks
+    from lsim.trace_events import DeviceRadio
+
+    hz1, hz2 = _canal("EU868"), _rx2_de_la_region("EU868")[0]
+    radio = DeviceRadio(freq_hz=hz1, dr=None, rx1_hz=hz1, tx_power_dbm=14.0,
+                        rx1_sf=7, rx1_bw_hz=125_000,
+                        rx2_hz=hz2, rx2_sf=12, rx2_bw_hz=125_000)
+    # Descendant visé -130 dBm : sous le seuil SF7 (-123), au-dessus du seuil SF12 (-136).
+    record = TxRecord(0, 0, 100_000_000, 7, -130.0 - 13.0, TxRecord.OUTCOME_RECEIVED)
+
+    def essai(delai):
+        plan = plan_acks([record], [radio], _options(), AckTiming(delay_ms=delai),
+                         classes=["C"])
+        return plan.outcomes[0], (plan.busy[0][1] - plan.busy[0][0]) / 1e6
+
+    en_rx1, duree_rx1 = essai(0)
+    en_rx2, duree_rx2 = essai(1500)
+    assert duree_rx1 < 100 < duree_rx2, "les deux essais doivent viser des PHY différents"
+    assert not en_rx1.received, "classe C visant RX1 : -130 dBm est sous le seuil SF7"
+    assert en_rx2.received, "classe C visant RX2 : -130 dBm est au-dessus du seuil SF12"
+    assert str(en_rx2.window) == "AckWindow.CONTINUOUS", "la classe C écoute en continu"
+
+
+def test_le_rejeu_porte_la_fenetre_dont_la_phy_la_servi():
+    """Rejeu : `AcceptEmission.fenetre_source` porte la fenêtre, lue et non reconstruite.
+
+    Avant, `trace_events` retrouvait la fenêtre d'un rejeu par inférence (« dernière acceptation
+    vue »), ce qui dépendait de l'ordre de `tentative.accepts`. Le champ la porte explicitement.
+
+    On exerce ici les DEUX branches : un rejeu né d'une acceptation RX1, et un rejeu né d'une
+    acceptation RX2 — celui-là seul distingue l'inférence d'une lecture correcte quand RX1 et RX2
+    n'ont pas la même fréquence.
+    """
+    from lsim.join import RX1, RX2, REPLAY
+    from lsim.retransmissions import simulate_confirmed_uplinks
+
+    scenario = Scenario(ScenarioModel.model_validate({
+        "schema_version": 1, "name": "d315-rejeu", "seed": 11,
+        "gateway": {"x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+        "propagation": {"frequency_hz": _canal("EU868"), "exponent": 2.7},
+        "retransmissions": {"enabled": True, "retries": 1, "retransmit_delay_ms": 3000,
+                            "enforce_duty_cycle": False, "join_requests_s": [0],
+                            "join_retries": 1, "join_accept_rx2_fallback": True,
+                            "join_accept_replays": 2},
+        "groups": [
+            {"name": f"sf{sf}", "count": 1, "region": "EU868",
+             "channel_freq_hz": _canal("EU868"),
+             "placement": {"type": "disk", "radius_m": r},
+             "spreading_factor": sf, "payload_bytes": 20, "tx_power_dbm": 14.0,
+             "period_s": 30, "messages": 4, "start_spread_s": 10}
+            for sf, r in ((7, 500), (9, 1000), (11, 1500), (12, 1900))
+        ]}))
+    radios = device_radios(scenario)
+    devices, _g, _i = scenario.deploy()
+    res = simulate_confirmed_uplinks(devices, scenario.gateway(), scenario.propagation(), radios,
+                                     _options(), scenario.model.retransmissions.options(),
+                                     with_engine_output=True)
+    rejeux = [e for t in getattr(res, "joins", ()) for e in t.accepts if e.window == REPLAY]
+    assert rejeux, "aucun rejeu produit : le test ne prouverait rien"
+    for e in rejeux:
+        assert e.fenetre_source in (RX1, RX2), (
+            f"rejeu sans fenêtre source valide : {e.fenetre_source!r}")
+    # Le cas qui distingue une lecture correcte d'une inférence : un rejeu issu d'une acceptation
+    # RX2. Sans `fenetre_source`, il retomberait sur RX1. C'est l'assertion qui rend le test
+    # discriminant — les deux autres ne portent que sur des rejeux RX1, indétectables.
+    de_rx2 = [e for e in rejeux if e.fenetre_source == RX2]
+    assert de_rx2, (
+        f"aucun rejeu issu de RX2 sur {len(rejeux)} : le test ne distinguerait pas "
+        f"la lecture du champ d'une inférence")
+    # Et la fréquence tracée d'un rejeu suit sa fenêtre source, pas une inférence d'ordre.
+    from lsim.trace_events import build_trace
+
+    run = build_trace(scenario, _options())
+    acceptees = {(t.device, e.at_ns): e for t in getattr(res, "joins", ()) for e in t.accepts}
+    for ev in run.events:
+        if ev.kind != "join_accept":
+            continue
+        emission = acceptees.get((ev.device_index, ev.t_ns))
+        if emission is None or emission.window not in (RX1, RX2, REPLAY):
+            continue
+        attendu = (radios[ev.device_index].rx2_hz if emission.fenetre_source == RX2
+                   else radios[ev.device_index].rx1_hz)
+        assert any(h.freq_hz == attendu for h in ev.hops), (
+            f"rejeu {emission.window}/{emission.fenetre_source} rapporté sur "
+            f"{[h.freq_hz for h in ev.hops]}, attendu {attendu}")
+
+
+def test_les_jointures_declarees_restent_en_rx1():
+    """Jointures déclarées : aucune fenêtre n'existe, la convention RX1 est conservée et épinglée.
+
+    Une jointure « déclarée » (`session_joins_s`) ouvre une session à un instant donné sans
+    simulation radio : il n'y a ni RX1 ni RX2, donc aucune fenêtre à choisir. Le `HopEvent` garde
+    `rx1_hz`, convention antérieure. Le test existe pour que ce point reste une convention
+    documentée et vérifiée, non une limite implicite.
+    """
+    from lsim.trace_events import build_trace
+
+    hz = _canal("EU868")
+    scenario = Scenario(ScenarioModel.model_validate({
+        "schema_version": 1, "name": "d315-declare", "seed": 11,
+        "gateway": {"x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+        "propagation": {"frequency_hz": hz, "exponent": 2.7},
+        # `is_active` exige `retries > 0` : sans réémission possible, `build_trace` emprunte le
+        # chemin historique et les jointures déclarées n'apparaissent jamais.
+        "retransmissions": {"enabled": True, "retries": 1, "retransmit_delay_ms": 2000,
+                            "enforce_duty_cycle": False, "session_joins_s": [2]},
+        "groups": [{"name": "g", "count": 3, "region": "EU868", "channel_freq_hz": hz,
+                    "placement": {"type": "disk", "radius_m": 600},
+                    "spreading_factor": 9, "payload_bytes": 20, "tx_power_dbm": 14.0,
+                    "period_s": 30, "messages": 4, "start_spread_s": 10}]}))
+    radios = device_radios(scenario)
+    run = build_trace(scenario, _options())
+    acceptees = [e for e in run.events if e.kind == "join_accept"]
+    assert acceptees, "aucune jointure déclarée en trace"
+    for e in acceptees:
+        for h in e.hops:
+            assert h.freq_hz == radios[e.device_index].rx1_hz, (
+                f"jointure déclarée rapportée sur {h.freq_hz}")
+
+
+def test_a_faible_puissance_passerelle_la_correction_change_le_resultat():
+    """D-I3-2 : latent à 27 dBm, il double les ACK reçus à 7 dBm — les deux régimes sont épinglés.
+
+    C'est le test qui donne sa portée réelle au correctif. Sous le budget de liaison par défaut
+    (P_gw 27 dBm contre P_dev 14 dBm, soit +13 dB au descendant) l'asymétrie couvre déjà l'écart
+    de sensibilité RX1/RX2 : le défaut n'y changeait RIEN. Il devient observable quand
+    l'asymétrie se réduit. Sans ce test, le correctif ne serait gardé que dans le régime où il
+    est sans effet.
+    """
+    import lsim.ack_mac as am
+
+    original = am._decodable
+    # Rayon large : il faut des terminaux dans la bande marginale entre les deux seuils, sinon
+    # tous les descendants sont largement au-dessus des deux sensibilités et le test est vide.
+    scenario = _scene(region="EU868", sf=7, rayon=40_000)
+    radios = device_radios(scenario)
+    devices, _, _ = scenario.deploy()
+    resultat = simulate_uplinks_trace(devices, scenario.gateway(), scenario.propagation(),
+                                      scenario.environment, gateway_busy=())
+    par = [radios[r.device_index] for r in resultat.records]
+
+    def compter(pgw, forcer_ancien):
+        def _ancien(rssi, radio, options, en_rx2=False):
+            return original(rssi, radio, options, en_rx2=False)
+        am._decodable = _ancien if forcer_ancien else original
+        try:
+            opts = ProtocolOptions(confirmed_uplinks=True, downlink_every=1,
+                                   downlink_payload_bytes=60, gateway_tx_power_dbm=pgw,
+                                   rx2_fallback=True)
+            plan = plan_acks(resultat.records, par, opts, AckTiming(delay_ms=1500))
+            return sum(1 for o in plan.outcomes if o.received)
+        finally:
+            am._decodable = original
+
+    # Régime par défaut : le défaut y était latent — le correctif ne change rien.
+    assert compter(27.0, True) == compter(27.0, False), (
+        "à 27 dBm la correction ne doit rien changer (asymétrie de 13 dB)")
+    # Régime dégradé : la correction y est décisive.
+    avant, apres = compter(7.0, True), compter(7.0, False)
+    assert apres > avant, (
+        f"à 7 dBm la correction doit augmenter les ACK reçus ({avant} -> {apres})")

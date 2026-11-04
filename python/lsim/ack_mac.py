@@ -237,16 +237,38 @@ def _decodable(rssi_uplink_dbm: float, radio: DeviceRadio, options,
     soit 13 dB d'écart. Juger une descente reçue en RX2 avec le seuil de RX1 la déclarerait perdue
     alors que le dispositif l'entend.
 
-    Limite assumée : la classe C écoute en continu (`AckWindow.CONTINUOUS`) et n'appartient donc à
-    aucune des deux fenêtres ; elle conserve le seuil RX1, comportement antérieur inchangé. Voir
-    le bilan de validation — RP002-1.0.5 §classe C y appellerait les paramètres RX2, mais la
-    modélisation actuelle ne distingue pas l'écoute continue de la fenêtre RX1.
+    La fenêtre à utiliser n'est pas toujours `ou_ecoute` : en classe C l'écoute est continue et ne
+    distingue plus RX1 de RX2, c'est la fenêtre visée qui a choisi la PHY. Voir `_en_rx2`.
     """
     from lsim.trace_events import _seuil_dispositif  # import local : `trace_events` réimporte ici
 
     rssi_down = (rssi_uplink_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
                  + options.device_antenna_gain_dbi)
     return rssi_down >= _seuil_dispositif(radio, options, en_rx2)
+
+
+def _en_rx2(debut: int, ou_ecoute: AckWindow, cible: AckWindow) -> bool:
+    """La descente est-elle jugée au seuil de RX2 ?
+
+    La règle est : **le seuil suit la PHY qui a servi à l'émettre**. Or c'est la fenêtre VISÉE
+    (`cible`) qui fixe l'airtime et la fréquence dès la phase 1 de `plan_acks` — l'approximation
+    documentée veut qu'une copie retardée garde l'airtime de la fenêtre visée.
+
+    - classes A/B : l'émission aboutit dans la fenêtre que le terminal écoute, donc `ou_ecoute`
+      et `cible` coïncident ; on suit la fenêtre écoutée, ce qui est la grandeur physique.
+    - classe C : l'écoute est continue (`CONTINUOUS`), `ou_ecoute` ne distingue plus RX1 de RX2.
+      Seule `cible` le peut, et c'est elle qui a choisi la PHY. Sans ce relais, une descente
+      émise sur la fréquence RX2 au débit RX2 était jugée au seuil RX1 — la même incohérence
+      interne que le défaut D-I3-2, par un autre chemin.
+
+    Limite assumée : la classe C est modélisée par une écoute continue dès la fin de l'émission
+    montante, sans fenêtre RX1 distincte. Cette modélisation n'a pas été confrontée à une source
+    primaire LoRaWAN : elle n'est donc vérifiée que pour sa cohérence interne, pas pour sa
+    conformité.
+    """
+    if ou_ecoute is AckWindow.CONTINUOUS:
+        return cible is AckWindow.RX2
+    return ou_ecoute is AckWindow.RX2
 
 
 def _fenetre(debut: int, rx1: tuple[int, int], rx2: tuple[int, int]) -> AckWindow:
@@ -392,7 +414,9 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
             EmissionRequest(label="ack", device=appareil, ready_ns=pret, freq_hz=freq_hz,
                             duration_ns=airtime, window=None)
             for _copie in range(timing.repetitions)])
-        deposees[index] = (tickets, radio, f_cnt_down)
+        # La fenêtre visée est mémorisée avec les tickets : c'est elle qui fixe l'airtime et la
+        # fréquence de l'émission, donc la PHY réellement utilisée — le seuil doit la suivre.
+        deposees[index] = (tickets, radio, f_cnt_down, cible)
 
     if avant_resolution is not None:
         avant_resolution(arbitre)
@@ -408,7 +432,7 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
         classe = "A" if classes is None else classes[index]
         montant = compteurs[index]
         radio = radios[index]  # même ordre que `records`
-        tickets, _radio, f_cnt_down = deposees[index]
+        tickets, _radio, f_cnt_down, cible = deposees[index]
         creneaux = [(e.start_ns, e.end_ns) for e in arbitre.emissions(tickets)]
 
         # Le terminal écoutait-il ? RX1 puis RX2 pour A et B ; en continu pour C.
@@ -445,8 +469,8 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                 # Le terminal émet : il ne peut pas écouter. Sinon, il n'écoutait pas encore
                 # (classe A/B hors fenêtre) : l'ACK est tardif.
                 classe_emission = AckSort.LOST if emet_a(debut) else AckSort.LATE
-            elif not _decodable(record.rssi_dbm, radio, options,
-                                en_rx2=(ou_ecoute is AckWindow.RX2)):
+            elif not _decodable(record.rssi_dbm, radio, options, en_rx2=_en_rx2(debut, ou_ecoute,
+                                                                                cible)):
                 # Seuil évalué **ici**, et non avant la boucle : la fenêtre écoutée n'est connue
                 # qu'une fois l'instant d'émission connu. C'est la même règle que
                 # `_seuil_dispositif` dans `trace_events`.

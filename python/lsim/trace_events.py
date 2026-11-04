@@ -992,15 +992,14 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
         # régionaux (US915, AS923, AU915 [H]) donnent à RX1 et RX2 la même fréquence, donc la
         # fréquence ne permet pas de remonter à la fenêtre.
         #
-        # Un rejeu ne porte pas sa fenêtre (`REPLAY`) : il rejoue la trame de l'acceptation qui
-        # l'a déclenché, au même débit et sur la même fréquence. On retient donc la dernière
-        # fenêtre d'acceptation vue — les rejeux suivent immédiatement leur acceptation dans
-        # `tentative.accepts`.
-        fenetre_source = "rx1"
+        # Un rejeu porte `window == "replay"` : la fenêtre dont la PHY l'a servi est dans
+        # `fenetre_source`, renseignée par le module `join`. On la lit, on ne la reconstruit pas :
+        # l'inférence par « dernière acceptation vue » dépendait de l'ordre de la liste.
         for emission in tentative.accepts:
             issue = "suppressed" if emission.outcome == "replayed" else emission.outcome
-            if emission.window in ("rx1", "rx2"):
-                fenetre_source = emission.window
+            fenetre_source = getattr(emission, "fenetre_source", None)
+            if fenetre_source not in ("rx1", "rx2"):
+                fenetre_source = emission.window if emission.window in ("rx1", "rx2") else "rx1"
             freq_hz = radio.rx2_hz if fenetre_source == "rx2" else radio.rx1_hz
             remappes.append(ProtocolEvent(
                 0, emission.at_ns, "join_accept", tentative.device, 0,

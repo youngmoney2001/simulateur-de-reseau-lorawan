@@ -155,6 +155,10 @@ class AcceptEmission:
     """Une émission de Join-Accept **réellement effectuée**, avec sa fenêtre et son issue.
 
     `window` vaut `rx1`, `rx2` (secours) ou `replay` (émission d'un message déjà consommé).
+    `fenetre_source` : fenêtre dont la **PHY** a porté l'émission (`rx1` ou `rx2`). Elle ne
+    redonde pas `window` : un rejeu porte `window == "replay"` et, dans `fenetre_source`, la
+    fenêtre de l'acceptation qu'il rejoue — même trame, même débit, même fréquence. Le
+    consommateur n'a donc pas à la retrouver par inférence.
     `outcome` vaut `delivered`, `not_listened`, `lost_sensitivity`, `gateway_busy`,
     `duty_cycle` ou `replayed`.
     `gateway_busy` : la passerelle émettait déjà et n'a pas pu placer l'émission dans la fenêtre ;
@@ -166,6 +170,7 @@ class AcceptEmission:
     at_ns: int
     window: str
     outcome: str
+    fenetre_source: str = RX1
 
     @property
     def received(self) -> bool:
@@ -410,7 +415,8 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
             else:
                 brut = ecoute(emission.start_ns, fenetre_source)
                 issue = "replayed" if brut == "delivered" else brut
-            attente.emissions.append(AcceptEmission(emission.start_ns, REPLAY, issue))
+            attente.emissions.append(AcceptEmission(emission.start_ns, REPLAY, issue,
+                                                    fenetre_source))
         return reaction
 
     def apres_rx2(emission, deposer) -> None:
@@ -418,7 +424,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
             issue = _issue_non_emise(emission)
         else:
             issue = ecoute(emission.start_ns, RX2)
-        attente.emissions.append(AcceptEmission(emission.start_ns, RX2, issue))
+        attente.emissions.append(AcceptEmission(emission.start_ns, RX2, issue, RX2))
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)
             accepte_par[device_index] = emission.start_ns
@@ -432,7 +438,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
             issue = _issue_non_emise(emission)
         else:
             issue = ecoute(emission.start_ns, RX1)
-        attente.emissions.append(AcceptEmission(emission.start_ns, RX1, issue))
+        attente.emissions.append(AcceptEmission(emission.start_ns, RX1, issue, RX1))
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)
             accepte_par[device_index] = emission.start_ns
