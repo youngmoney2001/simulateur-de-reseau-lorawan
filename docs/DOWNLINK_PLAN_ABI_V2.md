@@ -139,6 +139,26 @@ Ajouts dans `core/include/lsim/downlink_plan.hpp` et `core/src/downlink_plan.cpp
   d'origine sont conservées et délèguent avec « aucun RX2 ».
 - `valid_rx2()` — la seule nouvelle règle de validation.
 
+### Chemin causal (jalon I3)
+
+`lsim::sim::CausalDownlinks` porte `const std::vector<plan::DeviceRx2>* rx2` (défaut `nullptr`),
+que le moteur transmet au `DownlinkScheduler`. Les entrées C correspondantes sont
+`lsim_simulate_uplinks_causal_v3` et `lsim_simulate_uplinks_causal_gw2_v3` : elles réunissent la
+table RX2 **et** les frontaux, de sorte qu'une seule entrée couvre les deux extensions. Sans
+aucune des deux, l'appelant reste en v1 et le résultat est identique à l'octet près.
+
+**Pourquoi une entrée de plus plutôt qu'un champ** : la frontière C n'a pas d'argument
+facultatif. Ajouter `rx2` à `lsim_plan_options` aurait changé la taille d'une structure déjà
+gelée par le harnais ABI ; modifier la signature de `causal_v1` aurait rompu tous les appelants
+existants. Une nouvelle entrée est le seul choix qui ne casse rien.
+
+### Placement différé de la RX2 (jalon I3)
+
+`DownlinkScheduler::on_received` renvoie `std::vector<Interval>` : la fenêtre de secours **n'est
+pas** placée à l'appel qui la provoque, mais à son propre instant d'ouverture, une fois certain
+que plus aucune descente ne peut la précéder. `drain()` purge ce qui reste en attente à la fin
+de la trace. Voir le §4 et le commentaire de `on_received` dans l'en-tête.
+
 ## 6. Côté Python
 
 `python/lsim/downlink_plan.py` :
@@ -146,6 +166,8 @@ Ajouts dans `core/include/lsim/downlink_plan.hpp` et `core/src/downlink_plan.cpp
 - `DeviceRx2` (dataclasse immuable), `_CPlanDeviceRx2`, `_CPlanDownlinksV2Args`.
 - `plan_native_v2(records, radios, options, rx2=None)` — même contrat que `plan_native`.
 - `plan_native` est désormais un appel de `plan_native_v2` sans RX2.
+- `simulate_causal(..., rx2=None)` : passer la table, c'est demander le repli côté moteur. Sans
+  table **ni** frontal, l'entrée v1 reste appelée : la base est inchangée à l'octet près.
 
 `argtypes` et `restype` sont déclarés explicitement : une erreur de typage ctypes provoquerait
 sinon un segfault silencieux. Le test `test_disposition_ctypes_conforme_au_harnais_abi`
@@ -156,8 +178,7 @@ harnais C++ ne couvrait pas.
 
 | Point | Raison |
 |---|---|
-| Le repli RX2 (placement) | jalon suivant. Il **changera le placement**, ce que le critère I0 interdit. |
-| Exposition de `rx2_hz` par module régional | arbitrage S1 |
+| Exposition de `rx2_hz` par module régional | **traité en I3** : `DeviceRadio.rx2_*` est rempli par `device_radios`, et `_table_rx2` en fait une table pour le cœur. |
 | Enveloppe causale (variante C : pointeurs typés exclusifs) | jalon I4 |
 | Multi-passerelles (trajectoire T2) | jalon I5 |
 
@@ -174,3 +195,14 @@ Exécutées sur la reconstruction du jalon (base `a9abf64`) :
 | Harnais ABI i386 | compilation OK |
 | Symboles `lsim_*` | 98, soit **+1** (`lsim_plan_downlinks_v2`), **0** retiré |
 | Empreintes | `d2cb0fac6c2d9950` et `ed126d7ff5aac3b0` inchangées |
+
+État après les jalons I1 (repli), I3/C3 (placement différé), I3/C4 (sensibilité par fenêtre) et
+I3/C1-C2 (table RX2 sur le chemin causal) :
+
+| Contrôle | Résultat |
+|---|---|
+| Suite C++ | 685 924 / 685 924 |
+| Suite Python | 2 167 passed, 1 skipped, 16 subtests |
+| Harnais ABI x86-64 | 55 structures / 477 grandeurs — inchangé |
+| Symboles `lsim_*` | 100, soit **+2** (`lsim_simulate_uplinks_causal_v3`, `..._gw2_v3`), **0** retiré |
+| Empreintes | inchangées |

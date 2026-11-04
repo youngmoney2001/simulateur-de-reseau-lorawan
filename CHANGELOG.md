@@ -2,6 +2,54 @@
 
 ## 0.1.0 (non publiée)
 
+### D3.15 / I3 — Repli RX2 : exposition, sensibilité de la fenêtre émise, cohérence des moteurs
+
+Troisième jalon, découpé en quatre incréments. Il traite les deux défauts classés Haute et le
+préalable que leur correction a révélé.
+
+#### C3 — Placement différé de la RX2 (préalable)
+
+`DownlinkScheduler::on_received` plaçait la fenêtre de secours **immédiatement**, alors que
+`plan_downlinks` la met dans un tas à son propre instant d'ouverture. Dès que deux montantes
+finissent à moins d'une seconde d'écart, les deux moteurs divergaient — et le contrôle
+d'égalité de `trace_events` (`occupation passerelle incohérente`) est bloquant. Activer le repli
+par défaut sans corriger cela aurait cassé les scénarios réels.
+
+- `on_received` renvoie désormais `std::vector<Interval>` et ne place que ce qui est certain de
+  ne plus pouvoir être devancé : frontière = ouverture de la RX1 de la montante courante.
+- `drain()` purge ce qui reste en attente à la fin de la trace, faute de quoi la dernière RX2
+  différée n'était jamais émise.
+
+#### C4 — Sensibilité évaluée dans la fenêtre réellement émise
+
+Une descente repliée en RX2 était seuillée avec la sensibilité de **RX1**. Au SF12BW125 le
+récepteur entend 13 dB plus bas qu'au SF7BW125 : la descente était déclarée perdue alors que le
+dispositif l'entendait. **Les deux moteurs commettaient l'erreur à l'identique, la parité ne la
+voyait pas.** Corrigé dans `downlink_plan.cpp` et dans `trace_events.py`, et épinglé dans chacun
+séparément.
+
+#### C1/C2 — La table RX2 atteint enfin les appelants
+
+Les profils régionaux exposent RX2 depuis toujours, et `device_radios` remplit déjà
+`DeviceRadio.rx2_*`. Le chaînon manquant était dans l'appelant :
+
+- aucune entrée causale n'acceptait la table ⇒ le moteur causal n'avait aucune fenêtre de
+  secours, alors que le planificateur par lot en avait une. Nouvelles entrées
+  `lsim_simulate_uplinks_causal_v3` / `..._gw2_v3`, qui réunissent la table RX2 **et** les
+  frontaux (sans aucune des deux extensions, l'entrée v1 reste appelée : base inchangée) ;
+- `trace_events` et `retransmissions` appelaient `plan_native` (v1). Ils appellent désormais
+  `plan_native_v2` avec la table, et la passent aussi à `simulate_causal` ;
+- `ProtocolOptions.rx2_fallback` passe à **`True`** par défaut, comme le repli du Join-Accept.
+
+**Sans région déclarée, `rx2_hz == 0` et le repli reste inerte** : les scénarios historiques et
+les empreintes gelées sont intacts (aucun scénario de référence ne déclare de région).
+
+#### C6/C7 — Multi-régions et coût
+
+Sept profils exercés (EU868, US915, AS923, AU915, IN865, KR920, RU864) ; un garde-fou exige
+qu'au moins un soit en SF10, un en BW500 et un en SF12BW125. Le coût du repli est mesuré : au
+SF12BW125, la même trame occupe l'émetteur environ 20× plus longtemps qu'au SF7BW125.
+
 ### D3.15 / I1 — Repli RX2 dans le planificateur natif
 
 Le cœur C++ implémente le repli vers la seconde fenêtre de réception, ce qui **supprime la

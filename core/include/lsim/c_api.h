@@ -1604,6 +1604,60 @@ LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v2(const lsim_end_device* devi
                                                      size_t device_rf_count,
                                                      const lsim_gateway_rf* gateway_rf);
 
+/* ------------------------------------------- Chemin causal, table RX2 et frontaux (v3, I3)
+ *
+ * Mêmes sorties, mêmes statuts et même contrat de tampon que `lsim_simulate_uplinks_causal_v1`.
+ *
+ * `rx2` : paramètres de la fenêtre de secours, `rx2_count` entrées (`rx2 == NULL` avec
+ * `rx2_count == 0` ⇒ comportement de causal_v1). **Passer la table, c'est demander le repli** :
+ * le moteur réserve alors l'émetteur pour les fenêtres RX2 des descentes dont la RX1 n'a pas
+ * abouti, très exactement comme `plan_downlinks` alimenté par l'enveloppe v2. Une entrée dont
+ * `rx2_sf == 0` ou `rx2_hz == 0` n'a simplement rien à replier.
+ *
+ * `device_rf` / `gateway_rf` : frontaux, comme causal_v2 (NULL ⇒ comportement sans frontal).
+ * v3 réunit les deux extensions dans une seule entrée : sans table RX2 **et** sans frontal, le
+ * résultat est identique à causal_v1, à l'octet près.
+ *
+ * Sans cette entrée, la table RX2 n'atteignait jamais le chemin causal alors que la
+ * planification par lot en disposait : les deux producteurs divergeaient dès le premier repli. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v3(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count,
+                                                 const lsim_plan_device_rx2* rx2,
+                                                 size_t rx2_count,
+                                                 const lsim_device_rf* device_rf,
+                                                 size_t device_rf_count,
+                                                 const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue), mêmes extensions que causal_v3. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v3(const lsim_end_device* devices,
+                                                     size_t device_count,
+                                                     const lsim_gateway_v2* gateway,
+                                                     const lsim_propagation* prop,
+                                                     const lsim_environment* env,
+                                                     lsim_device_stats* per_device,
+                                                     lsim_sim_stats* totals,
+                                                     lsim_tx_record* records,
+                                                     size_t record_capacity, size_t* record_count,
+                                                     const lsim_plan_device* radios,
+                                                     const lsim_plan_options* options,
+                                                     lsim_interval* busy_out, size_t busy_capacity,
+                                                     size_t* busy_count,
+                                                     const lsim_plan_device_rx2* rx2,
+                                                     size_t rx2_count,
+                                                     const lsim_device_rf* device_rf,
+                                                     size_t device_rf_count,
+                                                     const lsim_gateway_rf* gateway_rf);
+
 LSIM_API int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices,
                                                 size_t device_count,
                                                 const lsim_gateway* gateway,

@@ -32,8 +32,14 @@ from enum import Enum
 from typing import Optional, Sequence
 
 from lsim.arbitre import DutyCycleLedger, GatewayArbiter
-from lsim.downlink_plan import plan_native, simulate_causal
+from lsim.downlink_plan import DeviceRx2, plan_native, plan_native_v2, simulate_causal
 from lsim.sessions import SessionTimeline
+
+
+def _table_rx2(radios) -> tuple[DeviceRx2, ...]:
+    """Table RX2 du cœur, une entrée par dispositif — voir `lsim.trace_events._table_rx2`."""
+    return tuple(DeviceRx2(rx2_hz=r.rx2_hz, rx2_sf=r.rx2_sf, rx2_bw_hz=r.rx2_bw_hz)
+                 for r in radios)
 
 RX1_DELAY_NS = 1_000_000_000       # RECEIVE_DELAY1 (cœur : downlink_plan.cpp)
 RX1_WINDOW_NS = 1_000_000_000      # durée de la fenêtre RX1 (hypothèse du cœur)
@@ -405,8 +411,14 @@ def _simulate(schedule, devices, gateway, propagation, radios, options, environm
     virt = [_virtual(devices[a.device], a.start_ns) for a in schedule]
     vrad = [radios[a.device] for a in schedule]
     if timing is None:
-        result, _busy = simulate_causal(virt, gateway, propagation, environment, vrad, options)
-        events, planned = plan_native(result.records, vrad, options)
+        # Repli RX2 (I3) : les deux producteurs reçoivent la même table. Sans région, `rx2_hz`
+        # est nul et la table est inerte — le comportement est celui d'avant I3.
+        table = (_table_rx2(vrad) if getattr(options, "rx2_fallback", False) else None)
+        result, _busy = simulate_causal(virt, gateway, propagation, environment, vrad, options,
+                                        rx2=table)
+        events, planned = (plan_native_v2(result.records, vrad, options, table)
+                           if table is not None
+                           else plan_native(result.records, vrad, options))
         return result, events, planned, None
 
     from lsim.ack_mac import plan_acks

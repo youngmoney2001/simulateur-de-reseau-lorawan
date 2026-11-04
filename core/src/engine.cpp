@@ -493,7 +493,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     if (causal != nullptr) {
         std::stable_sort(order.begin(), order.end(),
                          [&txs](std::size_t a, std::size_t b) { return txs[a].end < txs[b].end; });
-        scheduler.emplace(causal->radios, causal->options);
+        scheduler.emplace(causal->radios, causal->options, causal->rx2);
         if (scheduler->status() != plan::PlanStatus::Ok) return SimStatus::InvalidInput;
     }
     std::vector<TxOutcome> outcomes(txs.size(), TxOutcome::LostSensitivity);

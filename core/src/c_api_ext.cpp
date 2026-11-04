@@ -865,7 +865,9 @@ int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
                                         size_t* busy_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute,
                                         const lsim_device_rf* device_rf = nullptr,
                                         size_t device_rf_count = 0,
-                                        const lsim_gateway_rf* gateway_rf = nullptr);
+                                        const lsim_gateway_rf* gateway_rf = nullptr,
+                                        const lsim_plan_device_rx2* rx2 = nullptr,
+                                        size_t rx2_count = 0);
 
 int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t device_count,
                                         const lsim_gateway* gateway, const lsim_propagation* prop,
@@ -916,6 +918,53 @@ int32_t lsim_simulate_uplinks_causal_v2(const lsim_end_device* devices, size_t d
                           busy_count, nullptr, device_rf, device_rf_count, gateway_rf);
 }
 
+// ---- v5 : causal avec table RX2 **et** frontaux ----
+// Une seule entrée réunit les deux extensions : sans table et sans frontal, le résultat est
+// identique à causal_v1. Avant I3, la table RX2 atteignait la planification par lot mais pas ce
+// chemin : les deux producteurs divergeaient dès le premier repli.
+
+int32_t lsim_simulate_uplinks_causal_v3(const lsim_end_device* devices, size_t device_count,
+                                        const lsim_gateway* gateway, const lsim_propagation* prop,
+                                        const lsim_environment* env, lsim_device_stats* per_device,
+                                        lsim_sim_stats* totals, lsim_tx_record* records,
+                                        size_t record_capacity, size_t* record_count,
+                                        const lsim_plan_device* radios,
+                                        const lsim_plan_options* options,
+                                        lsim_interval* busy_out, size_t busy_capacity,
+                                        size_t* busy_count, const lsim_plan_device_rx2* rx2,
+                                        size_t rx2_count, const lsim_device_rf* device_rf,
+                                        size_t device_rf_count,
+                                        const lsim_gateway_rf* gateway_rf) {
+    return causal_v1_impl(devices, device_count, gateway, prop, env, per_device, totals, records,
+                          record_capacity, record_count, radios, options, busy_out, busy_capacity,
+                          busy_count, nullptr, device_rf, device_rf_count, gateway_rf, rx2,
+                          rx2_count);
+}
+
+int32_t lsim_simulate_uplinks_causal_gw2_v3(const lsim_end_device* devices, size_t device_count,
+                                            const lsim_gateway_v2* gateway,
+                                            const lsim_propagation* prop,
+                                            const lsim_environment* env,
+                                            lsim_device_stats* per_device, lsim_sim_stats* totals,
+                                            lsim_tx_record* records, size_t record_capacity,
+                                            size_t* record_count, const lsim_plan_device* radios,
+                                            const lsim_plan_options* options,
+                                            lsim_interval* busy_out, size_t busy_capacity,
+                                            size_t* busy_count, const lsim_plan_device_rx2* rx2,
+                                            size_t rx2_count, const lsim_device_rf* device_rf,
+                                            size_t device_rf_count,
+                                            const lsim_gateway_rf* gateway_rf) {
+    if (gateway == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    if (gateway->sensitivity_model > LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2) {
+        return rf_invalid();
+    }
+    const lsim::sim::GatewayAbsoluteSensitivity absolute = to_absolute(gateway);
+    return causal_v1_impl(devices, device_count, &gateway->base, prop, env, per_device, totals,
+                          records, record_capacity, record_count, radios, options, busy_out,
+                          busy_capacity, busy_count, &absolute, device_rf, device_rf_count,
+                          gateway_rf, rx2, rx2_count);
+}
+
 int32_t lsim_simulate_uplinks_causal_gw2_v2(const lsim_end_device* devices, size_t device_count,
                                             const lsim_gateway_v2* gateway,
                                             const lsim_propagation* prop,
@@ -949,7 +998,8 @@ int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
                                         lsim_interval* busy_out, size_t busy_capacity,
                                         size_t* busy_count, const lsim::sim::GatewayAbsoluteSensitivity* absolute,
                                         const lsim_device_rf* device_rf, size_t device_rf_count,
-                                        const lsim_gateway_rf* gateway_rf) {
+                                        const lsim_gateway_rf* gateway_rf,
+                                        const lsim_plan_device_rx2* rx2, size_t rx2_count) {
     if (gateway == nullptr || prop == nullptr || totals == nullptr || record_count == nullptr ||
         busy_count == nullptr || options == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr))) {
@@ -986,8 +1036,27 @@ int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
         causal.options.gateway_tx_power_dbm = options->gateway_tx_power_dbm;
         causal.options.device_antenna_gain_dbi = options->device_antenna_gain_dbi;
         causal.options.device_rx_offset_db = options->device_rx_offset_db;
-        // Options et radios validées avant la simulation (mêmes codes que lsim_plan_downlinks_v1).
-        const lsim::plan::DownlinkScheduler probe(causal.radios, causal.options);
+        // Table RX2 (I3). Compter des entrées, c'est **demander** le repli : la présence de la
+        // table est le signal, comme dans `lsim_plan_downlinks_v2`. Une entrée à `rx2_sf == 0`
+        // ou `rx2_hz == 0` n'a rien à replier et reste inerte.
+        std::vector<lsim::plan::DeviceRx2> table_rx2;
+        if (rx2_count != 0) {
+            if (rx2 == nullptr || rx2_count != device_count) {
+                return LSIM_STATUS_PLAN_BASE +
+                       static_cast<int32_t>(lsim::plan::PlanStatus::InvalidInput);
+            }
+            table_rx2.resize(device_count);
+            for (size_t i = 0; i < device_count; ++i) {
+                table_rx2[i].rx2_hz = rx2[i].rx2_hz;
+                table_rx2[i].rx2_sf = static_cast<std::uint8_t>(rx2[i].rx2_sf);
+                table_rx2[i].rx2_bw_hz = rx2[i].rx2_bw_hz;
+            }
+            causal.rx2 = &table_rx2;
+            causal.options.rx2_fallback = true;
+        }
+        // Options, radios et table RX2 validées avant la simulation (mêmes codes que
+        // `lsim_plan_downlinks_v2`).
+        const lsim::plan::DownlinkScheduler probe(causal.radios, causal.options, causal.rx2);
         if (probe.status() != lsim::plan::PlanStatus::Ok) {
             return LSIM_STATUS_PLAN_BASE + static_cast<int32_t>(probe.status());
         }

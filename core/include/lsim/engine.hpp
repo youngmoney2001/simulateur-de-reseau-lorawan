@@ -273,6 +273,10 @@ struct CausalDownlinks {
     std::vector<plan::DeviceRadio> radios;
     plan::PlanOptions options;
     std::vector<plan::Interval>* busy_out = nullptr;  // reçoit les émissions passerelle planifiées
+    // Paramètres de la fenêtre de secours (I3). `nullptr` : aucun repli, comportement d'avant I3.
+    // Les porter jusqu'ici est la condition pour que l'occupation du chemin causal reste égale à
+    // celle de `plan_downlinks` — le contrôle d'égalité du côté appelant est bloquant.
+    const std::vector<plan::DeviceRx2>* rx2 = nullptr;
 };
 
 // ------------------------------------------------------- Boucle fermée (S2)

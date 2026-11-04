@@ -119,6 +119,27 @@ class _CPlanDeviceRx2(ctypes.Structure):
                 ("rx2_bw_hz", ctypes.c_uint32), ("reserved", ctypes.c_uint64 * 2)]
 
 
+# Entrées causales v3 (I3) : table RX2 **et** frontaux dans une seule entrée. Les argtypes sont
+# déclarés explicitement — sans eux, ctypes convertit chaque entier en `c_int` 32 bits et un
+# `size_t` ou un pointeur est tronqué (défaut déjà rencontré : faute de segmentation).
+_CAUSAL_V3_APRES_GW = [
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CPlanDevice), ctypes.POINTER(_CPlanOptions),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CPlanDeviceRx2), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf)]
+LIB.lsim_simulate_uplinks_causal_v3.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_causal_v3.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway)
+] + _CAUSAL_V3_APRES_GW
+LIB.lsim_simulate_uplinks_causal_gw2_v3.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_causal_gw2_v3.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2)
+] + _CAUSAL_V3_APRES_GW
+
+
 class _CPlanDownlinksV2Args(ctypes.Structure):
     _fields_ = [("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
                 ("uplinks", ctypes.POINTER(_CPlanUplink)), ("uplink_count", ctypes.c_size_t),
@@ -171,7 +192,7 @@ for _nom in ("lsim_simulate_uplinks_causal_v2", "lsim_simulate_uplinks_causal_gw
 
 
 def simulate_causal(devices, gateway, propagation, environment, radios, options,
-                    device_rf=None, gateway_rf=None):
+                    device_rf=None, gateway_rf=None, rx2=None):
     """Boucle fermée causale (S1) : trace et occupation passerelle, en une seule exécution.
 
     Chaque trame reçue planifie sa descente à sa fin (`lsim_simulate_uplinks_causal_v1`). Renvoie
@@ -180,6 +201,13 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options,
 
     `device_rf` / `gateway_rf` (v4) : frontaux RF, comme `simulate_uplinks_trace`. Sans frontal,
     l'entrée v1 est appelée : le résultat est celui de la base, à l'octet près.
+
+    `rx2` (I3) : une entrée `DeviceRx2` par dispositif. La passer, c'est **demander le repli** du
+    côté du moteur : les fenêtres RX2 des descentes dont la RX1 n'aboutit pas réservent alors
+    l'émetteur, comme dans `plan_native_v2`. Sans table, le comportement est celui d'avant I3.
+
+    Table et frontaux sont réunis dans la même entrée (causal_v3) : sans aucune des deux
+    extensions, l'entrée v1 reste appelée et le résultat est identique à l'octet près.
     """
     n = len(devices)
     if n > MAX_END_DEVICES:
@@ -230,17 +258,35 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options,
     with_rf = device_rf is not None or gateway_rf is not None
     c_dev_rf, n_dev_rf = device_table(device_rf, _CDeviceRf)
     c_gw_rf = gateway_entry(gateway_rf)
-    if with_rf:
-        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2_v2 if absolute is not None
-                     else LIB.lsim_simulate_uplinks_causal_v2)
+    # Table RX2 (I3) : une entrée par dispositif, ou rien. Une table de longueur nulle ne
+    # demande aucun repli et ne doit donc pas faire basculer d'entrée.
+    c_rx2 = None
+    n_rx2 = 0
+    if rx2 is not None:
+        if len(rx2) != n:
+            raise ValueError("une entrée RX2 par dispositif")
+        if n:
+            c_rx2 = (_CPlanDeviceRx2 * n)()
+            for i, r in enumerate(rx2):
+                c_rx2[i].rx2_hz = r.rx2_hz
+                c_rx2[i].rx2_sf = r.rx2_sf
+                c_rx2[i].rx2_bw_hz = r.rx2_bw_hz
+        n_rx2 = n
+    with_rx2 = n_rx2 > 0
+    if with_rx2 or with_rf:
+        # v3 réunit les deux extensions. Sans table et sans frontal on reste en v1 : la base est
+        # inchangée à l'octet près (empreintes gelées).
+        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2_v3 if absolute is not None
+                     else LIB.lsim_simulate_uplinks_causal_v3)
+    elif absolute is not None:
+        causal_fn = LIB.lsim_simulate_uplinks_causal_gw2
     else:
-        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2 if absolute is not None
-                     else LIB.lsim_simulate_uplinks_causal_v1)
+        causal_fn = LIB.lsim_simulate_uplinks_causal_v1
     args = [c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
             c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
             c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy)]
-    if with_rf:
-        args += [c_dev_rf if n_dev_rf else None, n_dev_rf, c_gw_rf]
+    if with_rx2 or with_rf:
+        args += [c_rx2, n_rx2, c_dev_rf if n_dev_rf else None, n_dev_rf, c_gw_rf]
     status = causal_fn(*args)
     del keep
     if status != 0:

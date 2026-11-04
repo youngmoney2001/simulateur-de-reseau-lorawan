@@ -116,17 +116,24 @@ class ProtocolOptions:
     gateway_tx_power_dbm: float = 14.0    # puissance d'émission de la passerelle (downlink)
     device_antenna_gain_dbi: float = 0.0  # gain d'antenne du dispositif (réception downlink)
     device_rx_offset_db: float = 0.0      # écart de sensibilité du récepteur réel (0 = SX1276)
-    # Repli RX2 des descentes. **Opt-in** : `False` reproduit exactement le comportement
-    # historique et le planificateur natif, qui ne replient pas. Même à `True`, le repli ne
-    # s'applique qu'aux dispositifs dont la fenêtre RX2 est réellement renseignée
-    # (`rx2_sf != 0` **et** `rx2_hz != 0`) — voir `_Job.rx2_disponible`.
+    # Repli RX2 des descentes. **Activé par défaut**, comme le repli du Join-Accept
+    # (`lsim.join`, `rx2_fallback: bool = True`) : c'est le comportement d'un réseau réel, et
+    # l'écart n'était pas justifié.
+    #
+    # Même à `True`, le repli ne s'applique qu'aux dispositifs dont la fenêtre RX2 est
+    # réellement renseignée (`rx2_sf != 0` **et** `rx2_hz != 0`) — voir `_Job.rx2_disponible`.
+    # Sans région déclarée, `rx2_hz == 0` : le repli est donc **inerte** sur tous les scénarios
+    # qui n'ont pas de région, ce qui préserve les empreintes gelées.
+    #
+    # Le repli ne s'exerce jamais « à côté » de RX1 : il n'est demandé que par la réaction d'une
+    # RX1 **non émise** (voir `_schedule_gateway`).
     #
     # `repr=False` : le `repr` de `ProtocolOptions` est une **clé** du dépôt de référence
     # (`scripts/mac_baseline_dump.py`), dont l'empreinte `ed126d7f…` est gelée. Y faire
     # apparaître le champ changerait l'empreinte sans changer un seul événement : la référence
     # perdrait sa valeur de détection. Elle continue donc de porter sur le comportement, ce que
     # vérifie `test_rx2_fallback_absent_du_repr` (la clé ne doit pas dépendre de ce champ).
-    rx2_fallback: bool = field(default=False, repr=False)
+    rx2_fallback: bool = field(default=True, repr=False)
 
 
 @dataclass(frozen=True)
@@ -309,6 +316,20 @@ def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
                 plan = None
         radios.append(_radio(plan, g.channel_freq_hz, g.spreading_factor, g.tx_power_dbm))
     return tuple(radios)
+
+
+def _table_rx2(radios) -> tuple[DeviceRx2, ...]:
+    """Table RX2 du cœur, une entrée par dispositif, à partir des radios du scénario.
+
+    C'est le chaînon qui manquait (I3) : les profils régionaux exposent RX2 depuis toujours, et
+    `device_radios` remplit déjà `DeviceRadio.rx2_*` — mais rien n'en faisait une table pour le
+    cœur. Sans région, `rx2_hz = 0` : la table est alors inerte, le repli ne se produit pas, et
+    aucun scénario historique ne change.
+    """
+    from lsim.downlink_plan import DeviceRx2
+
+    return tuple(DeviceRx2(rx2_hz=r.rx2_hz, rx2_sf=r.rx2_sf, rx2_bw_hz=r.rx2_bw_hz)
+                 for r in radios)
 
 
 def downlink_phy(radio: DeviceRadio, window: str = "rx1") -> tuple[int, int, int]:
@@ -836,13 +857,21 @@ def _build_trace_native(devices, radios, gateway, propagation, environment,
 
     Pas de point fixe : l'occupation passerelle utilisée par le moteur est celle que produit le
     planificateur natif sur la trace obtenue (contrôle d'égalité, sans itération).
+
+    Repli RX2 (I3) : les **deux** producteurs reçoivent la même table. Avant I3, seul le
+    planificateur par lot pouvait en recevoir une — aucune entrée causale ne l'acceptait — si
+    bien que le repli dès qu'il se produisait faisait diverger les deux. La passer aux deux est
+    la condition pour que le contrôle d'égalité ci-dessous reste vérifié.
     """
-    from lsim.downlink_plan import plan_native, simulate_causal
+    from lsim.downlink_plan import DeviceRx2, plan_native, plan_native_v2, simulate_causal
     from lsim.simulator import effective_frontends
     device_rf, gateway_rf = effective_frontends(devices, gateway)
+    table = _table_rx2(radios) if options.rx2_fallback else None
     result, busy = simulate_causal(devices, gateway, propagation, environment, radios, options,
-                                   device_rf=device_rf, gateway_rf=gateway_rf)
-    events, plan_busy = plan_native(result.records, radios, options)
+                                   device_rf=device_rf, gateway_rf=gateway_rf, rx2=table)
+    events, plan_busy = ((plan_native_v2(result.records, radios, options, table)
+                          if table is not None
+                          else plan_native(result.records, radios, options)))
     if tuple(plan_busy) != tuple(busy):
         raise RuntimeError("occupation passerelle incohérente entre le moteur et le planificateur")
     if len(events) > MAX_EVENTS:
