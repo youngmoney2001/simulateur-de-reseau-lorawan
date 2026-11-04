@@ -163,24 +163,59 @@ public:
 
     PlanStatus status() const { return status_; }
 
-    // Trame montante reçue par la passerelle, à `end_ns`. Retourne l'émission passerelle planifiée,
-    // ou nullopt (pas de réponse attendue, ou fenêtre RX1 perdue faute de passerelle libre).
+    // Trame montante reçue par la passerelle, à `end_ns`. Retourne les émissions passerelle
+    // planifiées à cet appel (voir la surcharge à trois arguments).
     // Les appels doivent se succéder par fins croissantes (ordre de la trace).
-    std::optional<Interval> on_received(std::uint32_t device, std::int64_t end_ns);
+    std::vector<Interval> on_received(std::uint32_t device, std::int64_t end_ns);
 
-    // Surcharge avec les paramètres RX2 du dispositif (jalon I0). RX2 est validé, puis écarté :
-    // le résultat est celui de la forme à deux arguments. Un RX2 invalide fait passer le
+    // Surcharge avec les paramètres RX2 du dispositif. Un RX2 invalide fait passer le
     // planificateur en InvalidRadio.
-    std::optional<Interval> on_received(std::uint32_t device, std::int64_t end_ns,
-                                        const DeviceRx2& rx2);
+    //
+    // Renvoie les intervalles **placés à cet appel**, dans l'ordre de placement : celui de la
+    // montante courante, mais aussi d'éventuelles fenêtres RX2 différées d'une montante
+    // antérieure et dont l'ouverture vient d'arriver.
+    //
+    // Avertissement : depuis I1, la RX2 n'est **pas** placée immédiatement. Elle entre dans la
+    // file à son propre instant d'ouverture (fin + 2 s), donc après les descentes déjà déposées
+    // qui sont plus tardives qu'elle. Placer la RX2 sur-le-champ placerait la descente trop tôt
+    // et ferait diverger l'occupation de celle de `plan_downlinks` (tas), ce que le chemin
+    // causal vérifie à l'égalité (`trace_events` : « occupation passerelle incohérente »).
+    std::vector<Interval> on_received(std::uint32_t device, std::int64_t end_ns,
+                                      const DeviceRx2& rx2);
+
+    // Place ce qui reste en attente, sans attendre de nouvelle montante : à appeler une fois la
+    // trace épuisée, sinon la dernière fenêtre RX2 différée ne serait jamais émise.
+    std::vector<Interval> drain();
 
 private:
+    std::vector<Interval> placer(std::int64_t frontiere);
+    // Une tentative de descente en attente de placement.
+    struct Essai {
+        std::int64_t pret = 0;      // ouverture de la fenêtre
+        std::int64_t pret_rx2 = 0;  // ouverture de la fenêtre de secours (RX1 seulement)
+        int phase = 0;              // 0 = RX1, 1 = RX2
+        std::uint32_t device = 0;
+        std::uint32_t base = 0;     // octets de la trame
+        bool queued = false;        // descente de données (sinon ACK) : sélection du temps d'antenne
+        std::int64_t ordre = 0;     // rang de dépôt, pour départager à ouverture égale
+        DeviceRx2 rx2{};
+    };
+    // (ouverture, phase, rang) : même clé que le tas de `plan_downlinks` — la phase départage à
+    // ouverture égale en faveur de la RX1, qui naît avant la RX2 qu'elle pourrait engendrer.
+    static bool plus_tot(const Essai& a, const Essai& b) {
+        if (a.pret != b.pret) return a.pret < b.pret;
+        if (a.phase != b.phase) return a.phase < b.phase;
+        return a.ordre < b.ordre;
+    }
+
     PlanOptions options_;
     std::vector<DeviceRadio> radios_;
     std::vector<DeviceRx2> rx2_;
     std::vector<std::uint32_t> accepted_;
     std::vector<std::int64_t> ack_air_;  // 0 = non calculée
     std::vector<std::int64_t> data_air_;
+    std::vector<Essai> pendantes_;  // tentatives dont l'ouverture n'est pas encore atteinte
+    std::int64_t ordre_ = 0;
     PlanStatus status_ = PlanStatus::Ok;
     bool any_busy_ = false;
     std::int64_t busy_until_ = 0;

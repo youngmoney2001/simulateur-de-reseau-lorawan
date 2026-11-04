@@ -546,9 +546,15 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         }
         outcomes[a] = outcome;
         if (scheduler && outcome == TxOutcome::Received) {
-            if (const std::optional<plan::Interval> iv = scheduler->on_received(ta.device, ta.end)) {
-                planned.push_back(Interval{iv->start_ns, iv->end_ns});
+            for (const plan::Interval& iv : scheduler->on_received(ta.device, ta.end)) {
+                planned.push_back(Interval{iv.start_ns, iv.end_ns});
             }
+        }
+    }
+    // Purge : la dernière fenêtre RX2 différée n'a pas eu de montante suivante pour la déclencher.
+    if (scheduler) {
+        for (const plan::Interval& iv : scheduler->drain()) {
+            planned.push_back(Interval{iv.start_ns, iv.end_ns});
         }
     }
     if (scheduler && scheduler->status() != plan::PlanStatus::Ok) return SimStatus::InvalidInput;

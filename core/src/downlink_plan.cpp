@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <queue>
 
 #include "lsim/lora_phy.hpp"
@@ -17,6 +18,8 @@ constexpr std::int64_t kRx1WindowNs = 1'000'000'000;
 // RX2 s'ouvre une seconde après RX1 : RP002 §2.3, RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s.
 constexpr std::int64_t kReceiveDelay2Ns = 2'000'000'000;
 constexpr std::int64_t kRx2WindowNs = 1'000'000'000;
+// Frontière de purge : toute ouverture réelle lui est strictement antérieure.
+constexpr std::int64_t kInf = std::numeric_limits<std::int64_t>::max();
 // Trame downlink sans charge (MHDR, DevAddr, FCtrl, FCnt, MIC) et avec charge (+ FPort).
 constexpr std::uint32_t kAckFrameBytes = 12;
 constexpr std::uint32_t kDataFrameOverheadBytes = 13;
@@ -443,18 +446,18 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
     radios_ = radios;
 }
 
-std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns) {
+std::vector<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns) {
     // Sans RX2 explicite, on reprend celui fourni à la construction (ou « aucun »).
     return on_received(device, end_ns, rx2_.empty() ? DeviceRx2{} : rx2_[device]);
 }
 
-std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns,
-                                                       const DeviceRx2& rx2) {
-    if (status_ != PlanStatus::Ok) return std::nullopt;
-    // Jalon I0 : RX2 est validé, puis **écarté** — aucun repli n'est produit.
+std::vector<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns,
+                                                     const DeviceRx2& rx2) {
+    std::vector<Interval> poses;
+    if (status_ != PlanStatus::Ok) return poses;
     if (!valid_rx2(rx2)) {
         status_ = PlanStatus::InvalidRadio;
-        return std::nullopt;
+        return poses;
     }
     ++accepted_[device];
     const bool queued = options_.downlink_every > 0 && accepted_[device] % options_.downlink_every == 0;
@@ -464,31 +467,75 @@ std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std
     } else if (options_.confirmed_uplinks) {
         base = kAckFrameBytes;
     } else {
-        return std::nullopt;
+        return poses;   // aucune réponse attendue
     }
-    std::int64_t& air = queued ? data_air_[device] : ack_air_[device];
-    if (air == 0 && downlink_airtime_ns(radios_[device], base, air) != lora::Status::Ok) {
-        status_ = PlanStatus::InvalidRadio;
-        return std::nullopt;
-    }
-    const std::int64_t t_open = end_ns + kReceiveDelay1Ns;
-    std::int64_t start = any_busy_ ? std::max(t_open, busy_until_) : t_open;
-    std::int64_t air_utile = air;
-    if (start - t_open >= kRx1WindowNs) {
-        // RX1 indisponible. Repli RX2 : opt-in, et seulement si la fenêtre de secours est
-        // renseignée. Le temps d'antenne devient celui de RX2, pas celui de RX1.
-        if (!options_.rx2_fallback || rx2.rx2_sf == 0 || rx2.rx2_hz == 0) return std::nullopt;
-        const std::int64_t ouverture = end_ns + kReceiveDelay2Ns;
-        start = any_busy_ ? std::max(ouverture, busy_until_) : ouverture;
-        if (start - ouverture >= kRx2WindowNs) return std::nullopt;  // indisponible aussi en RX2
-        if (rx2_airtime_ns(radios_[device], rx2, base, air_utile) != lora::Status::Ok) {
+
+    // Dépôt de la tentative RX1 de cette montante.
+    Essai nu;
+    nu.pret = end_ns + kReceiveDelay1Ns;
+    nu.pret_rx2 = end_ns + kReceiveDelay2Ns;
+    nu.phase = 0;
+    nu.device = device;
+    nu.base = base;
+    nu.queued = queued;
+    nu.ordre = ordre_++;
+    nu.rx2 = rx2;
+    pendantes_.push_back(nu);
+
+    // Frontier : une montante ultérieure finit au plus tôt à `end_ns`, donc sa RX1 ouvrira au
+    // plus tôt à `nu.pret` et sa RX2 une seconde plus tard. Tout ce qui est en attente à une
+    // ouverture strictement antérieure — ou égale, en RX1, car la phase départage — peut donc
+    // être placé maintenant : plus rien ne peut s'intercaler avant.
+    return placer(nu.pret);
+}
+
+std::vector<Interval> DownlinkScheduler::drain() { return placer(kInf); }
+
+std::vector<Interval> DownlinkScheduler::placer(std::int64_t frontiere) {
+    std::vector<Interval> poses;
+    while (!pendantes_.empty()) {
+        auto it = std::min_element(pendantes_.begin(), pendantes_.end(), plus_tot);
+        const bool avant = (it->pret != frontiere) ? (it->pret < frontiere) : (it->phase == 0);
+        if (!avant) break;  // cette tentative attend une montante ultérieure
+
+        const Essai e = *it;
+        pendantes_.erase(it);
+
+        std::int64_t& air_e = e.queued ? data_air_[e.device] : ack_air_[e.device];
+        std::int64_t air_utile = 0;
+        if (e.phase == 0) {
+            if (air_e == 0 &&
+                downlink_airtime_ns(radios_[e.device], e.base, air_e) != lora::Status::Ok) {
+                status_ = PlanStatus::InvalidRadio;
+                return poses;
+            }
+            air_utile = air_e;
+        } else if (rx2_airtime_ns(radios_[e.device], e.rx2, e.base, air_utile) !=
+                   lora::Status::Ok) {
             status_ = PlanStatus::InvalidRadio;
-            return std::nullopt;
+            return poses;
         }
+
+        const std::int64_t start = any_busy_ ? std::max(e.pret, busy_until_) : e.pret;
+        const std::int64_t fenetre = (e.phase == 0) ? kRx1WindowNs : kRx2WindowNs;
+        if (start - e.pret >= fenetre) {
+            // Fenêtre manquée. En RX1, la seconde fenêtre entre dans la file à son propre
+            // instant d'ouverture — pas maintenant : des descentes encore en attente peuvent
+            // être plus précoces qu'elle.
+            if (e.phase == 0 && options_.rx2_fallback && e.rx2.rx2_sf != 0 && e.rx2.rx2_hz != 0) {
+                Essai secours = e;
+                secours.pret = e.pret_rx2;
+                secours.phase = 1;
+                secours.ordre = ordre_++;
+                pendantes_.push_back(secours);
+            }
+            continue;
+        }
+        any_busy_ = true;
+        busy_until_ = start + air_utile;
+        poses.push_back(Interval{start, busy_until_});
     }
-    any_busy_ = true;
-    busy_until_ = start + air_utile;
-    return Interval{start, busy_until_};
+    return poses;
 }
 
 }  // namespace lsim::plan

@@ -244,8 +244,11 @@ void run_downlink_plan_tests() {
         std::vector<Interval> got;
         for (std::size_t k : by_end) {
             if (ups[k].outcome != UplinkOutcome::Received) continue;
-            if (const auto iv = sched.on_received(ups[k].device, ups[k].end_ns)) got.push_back(*iv);
+            for (const Interval& iv : sched.on_received(ups[k].device, ups[k].end_ns)) {
+                got.push_back(iv);
+            }
         }
+        for (const Interval& iv : sched.drain()) got.push_back(iv);
         CHECK_EQ(got.size(), ref.size());
         std::sort(ref.begin(), ref.end(), [](const Interval& a, const Interval& b) {
             return a.start_ns < b.start_ns;
@@ -536,12 +539,14 @@ void run_downlink_plan_tests() {
             std::vector<Interval> got;
             for (std::size_t k : by_end) {
                 if (ups[k].outcome != UplinkOutcome::Received) continue;
-                const auto iv = trois_args
-                                    ? s.on_received(ups[k].device, ups[k].end_ns,
-                                                    rx2 ? (*rx2)[ups[k].device] : DeviceRx2{})
-                                    : s.on_received(ups[k].device, ups[k].end_ns);
-                if (iv) got.push_back(*iv);
+                const std::vector<Interval> iv =
+                    trois_args
+                        ? s.on_received(ups[k].device, ups[k].end_ns,
+                                        rx2 ? (*rx2)[ups[k].device] : DeviceRx2{})
+                        : s.on_received(ups[k].device, ups[k].end_ns);
+                for (const Interval& i : iv) got.push_back(i);
             }
+            for (const Interval& i : s.drain()) got.push_back(i);
             return got;
         };
 
@@ -579,7 +584,7 @@ void run_downlink_plan_tests() {
             CHECK_EQ(s.status(), PlanStatus::Ok);
             DeviceRx2 bad;
             bad.rx2_sf = 13;
-            CHECK_TRUE(!s.on_received(0, 1'000'000'000, bad).has_value());
+            CHECK_TRUE(s.on_received(0, 1'000'000'000, bad).empty());
             CHECK_EQ(s.status(), PlanStatus::InvalidRadio);
         }
         // Comptage incohérent à la construction.
@@ -700,22 +705,53 @@ void run_downlink_plan_tests() {
             DownlinkScheduler s_sans(radios, o);
             CHECK_EQ(s_sans.status(), PlanStatus::Ok);
             const auto a0 = s_sans.on_received(0, 10'000'000, rx2[0]);
-            CHECK_TRUE(a0.has_value());
+            CHECK_EQ(a0.size(), 1u);
             const auto a1 = s_sans.on_received(1, 500'000'000, rx2[1]);
-            CHECK_TRUE(!a1.has_value());  // RX1 masquée, et aucun repli demandé
+            CHECK_TRUE(a1.empty());  // RX1 masquée, et aucun repli demandé
+            CHECK_TRUE(s_sans.drain().empty());
 
             PlanOptions repli = o;
             repli.rx2_fallback = true;
             DownlinkScheduler s_avec(radios, repli);
             CHECK_EQ(s_avec.status(), PlanStatus::Ok);
             const auto b0 = s_avec.on_received(0, 10'000'000, rx2[0]);
-            CHECK_TRUE(b0.has_value());
-            CHECK_EQ(b0->start_ns, a0->start_ns);
-            CHECK_EQ(b0->end_ns, a0->end_ns);
+            CHECK_EQ(b0.size(), 1u);
+            CHECK_EQ(b0[0].start_ns, a0[0].start_ns);
+            CHECK_EQ(b0[0].end_ns, a0[0].end_ns);
+            // La RX2 n'est pas placée à cet appel : son ouverture (2,5 s) est postérieure à la
+            // frontière de l'appel courant (1,5 s), et une montante ultérieure pourrait ouvrir
+            // sa RX1 avant elle.
             const auto b1 = s_avec.on_received(1, 500'000'000, rx2[1]);
-            CHECK_TRUE(b1.has_value());  // rattrapée en RX2
-            CHECK_EQ(b1->start_ns, a0->end_ns);
-            CHECK_EQ(b1->end_ns - b1->start_ns, air_rx2);  // durée réelle, pas celle de RX1
+            CHECK_TRUE(b1.empty());  // la RX1 est manquée, la seconde fenêtre est en attente
+            const auto b2 = s_avec.drain();
+            CHECK_EQ(b2.size(), 1u);  // rattrapée en RX2, à la purge
+            CHECK_EQ(b2[0].start_ns, a0[0].end_ns);
+            CHECK_EQ(b2[0].end_ns - b2[0].start_ns, air_rx2);  // durée réelle, pas celle de RX1
+            CHECK_TRUE(b2[0].start_ns >= 2 * kS);
+        }
+
+        // 12f. La purge ne place rien de plus qu'une seconde descente : une RX2 déjà émise
+        //      n'est pas réémise, et une seconde purge est vide.
+        {
+            PlanOptions repli = o;
+            repli.rx2_fallback = true;
+            DownlinkScheduler s(radios, repli);
+            CHECK_EQ(s.status(), PlanStatus::Ok);
+            std::vector<Interval> tout;
+            for (const Interval& i : s.on_received(0, 10'000'000, rx2[0])) tout.push_back(i);
+            for (const Interval& i : s.on_received(1, 500'000'000, rx2[1])) tout.push_back(i);
+            for (const Interval& i : s.drain()) tout.push_back(i);
+            CHECK_TRUE(s.drain().empty());
+            CHECK_EQ(tout.size(), 2u);
+            // Même résultat, dans le même ordre, que la planification par lot.
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, repli, &rx2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), tout.size());
+            for (std::size_t k = 0; k < std::min(bu.size(), tout.size()); ++k) {
+                CHECK_EQ(bu[k].start_ns, tout[k].start_ns);
+                CHECK_EQ(bu[k].end_ns, tout[k].end_ns);
+            }
         }
     }
 }
