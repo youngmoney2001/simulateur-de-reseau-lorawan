@@ -588,4 +588,134 @@ void run_downlink_plan_tests() {
             CHECK_EQ(DownlinkScheduler(radios, o, &court).status(), PlanStatus::InvalidInput);
         }
     }
+
+    // ----------------------------------------------------------------- I1 : repli RX2 dans le cœur
+    // 12. Jeu d'essai : deux ACK, le premier au SF12 (descente longue) qui occupe l'émetteur au-delà
+    //     de la fenêtre RX1 du second. C'est le cas « RX1 refusée puis RX2 acceptée ».
+    //     Sans repli, la seconde descente est perdue.
+    {
+        DeviceRadio gros = radio_sf7();
+        gros.rx1_sf = 12;  // ACK long : l'émetteur est pris bien au-delà de la fenêtre du second
+        const DeviceRadio petit = radio_sf7();
+        const std::vector<DeviceRadio> radios{gros, petit};
+
+        // Descente de données : 13 octets d'en-tête + 27 de charge = 40 octets. Au SF12 cela dure
+        // environ 1,97 s — assez pour masquer la fenêtre RX1 du second dispositif, pas sa RX2.
+        constexpr std::uint32_t kCharge = 27;
+        constexpr std::uint32_t kTrame = 13 + kCharge;
+        PlanOptions o;
+        o.confirmed_uplinks = true;
+        o.downlink_every = 1;   // une descente de données par uplink reçu
+        o.downlink_payload_bytes = kCharge;
+        o.gateway_tx_power_dbm = 27.0;
+
+        // Le second uplink finit 0,49 s après le premier : sa RX1 ferme à 2,5 s, sa RX2 à 3,5 s.
+        // La descente du premier (SF12) occupe l'émetteur de 1,01 s à 2,98 s : RX1 perdue, RX2
+        // encore ouverte. C'est exactement le cas que le jalon doit traiter.
+        const std::vector<UplinkRecord> ups{up(0, 0, 10'000'000, UplinkOutcome::Received),
+                                            up(1, 490'000'000, 10'000'000, UplinkOutcome::Received)};
+        // Temps d'antenne de référence, au débit de chaque fenêtre.
+        std::int64_t air_rx1 = 0;
+        std::int64_t air_rx2 = 0;
+        CHECK_EQ(downlink_airtime_ns(petit, kTrame, air_rx1), lsim::lora::Status::Ok);
+        DeviceRadio en_rx2 = petit;
+        en_rx2.rx1_sf = 12;
+        CHECK_EQ(downlink_airtime_ns(en_rx2, kTrame, air_rx2), lsim::lora::Status::Ok);
+        CHECK_TRUE(air_rx2 > air_rx1);  // le repli coûte l'émetteur : c'est le point du jalon
+
+        std::vector<DeviceRx2> rx2(2);
+        rx2[0] = DeviceRx2{869'525'000, 12, 125'000};
+        rx2[1] = DeviceRx2{869'525'000, 12, 125'000};
+
+        // 12a. Sans repli (opt-in désactivé) : la seconde descente est perdue, une seule occupation.
+        {
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 1u);
+            // Le second dispositif n'a rien reçu : fenêtre manquée.
+            std::size_t manquees = 0;
+            for (const Event& e : ev) {
+                if (e.kind == EventKind::RxWindowMissed) ++manquees;
+            }
+            CHECK_EQ(manquees, 1u);
+        }
+
+        // 12b. Repli activé : la seconde descente part en RX2, après la fin de la première.
+        {
+            PlanOptions avec = o;
+            avec.rx2_fallback = true;
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, avec, &rx2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 2u);  // une seule émission par descente : aucun doublon RX1/RX2
+            // Le repli s'ouvre une seconde après RX1 et démarre dès que l'émetteur est libre.
+            CHECK_EQ(bu[1].start_ns, bu[0].end_ns);
+            CHECK_TRUE(bu[1].start_ns >= 2 * kS);  // RECEIVE_DELAY2 = 2 s après la fin de la montante
+            // L'occupation porte la durée **réelle** : celle de RX2, pas celle de RX1.
+            CHECK_EQ(bu[1].end_ns - bu[1].start_ns, air_rx2);
+            // Et l'événement porte la fréquence de la fenêtre réellement émise.
+            std::size_t sur_rx2 = 0;
+            for (const Event& e : ev) {
+                if (e.kind == EventKind::Downlink && e.device == 1) {
+                    CHECK_EQ(e.hops.size(), 1u);
+                    CHECK_EQ(e.hops[0].freq_hz, 869'525'000);
+                    ++sur_rx2;
+                }
+            }
+            CHECK_EQ(sur_rx2, 1u);
+            // Le premier dispositif, lui, est resté en RX1 : une seule fenêtre par descente.
+            for (const Event& e : ev) {
+                if (e.kind == EventKind::Downlink && e.device == 0) {
+                    CHECK_EQ(e.hops[0].freq_hz, 868'100'000);
+                }
+            }
+        }
+
+        // 12c. Sans table RX2, le repli est impossible même activé : rien ne change.
+        {
+            PlanOptions avec = o;
+            avec.rx2_fallback = true;
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, avec, nullptr, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 1u);
+        }
+
+        // 12d. Fenêtre RX2 non renseignée : `rx2_sf = 0` ou `rx2_hz = 0` ⇒ aucun repli.
+        for (const DeviceRx2& partiel : {DeviceRx2{869'525'000, 0, 125'000},
+                                         DeviceRx2{0, 12, 125'000}}) {
+            PlanOptions avec = o;
+            avec.rx2_fallback = true;
+            std::vector<DeviceRx2> r2(2, partiel);
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, avec, &r2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 1u);
+        }
+
+        // 12e. Même règle au planificateur incrémental : sans l'opt-in, rien ne change ; avec lui,
+        //      la descente part en RX2 avec la durée RX2.
+        {
+            DownlinkScheduler s_sans(radios, o);
+            CHECK_EQ(s_sans.status(), PlanStatus::Ok);
+            const auto a0 = s_sans.on_received(0, 10'000'000, rx2[0]);
+            CHECK_TRUE(a0.has_value());
+            const auto a1 = s_sans.on_received(1, 500'000'000, rx2[1]);
+            CHECK_TRUE(!a1.has_value());  // RX1 masquée, et aucun repli demandé
+
+            PlanOptions repli = o;
+            repli.rx2_fallback = true;
+            DownlinkScheduler s_avec(radios, repli);
+            CHECK_EQ(s_avec.status(), PlanStatus::Ok);
+            const auto b0 = s_avec.on_received(0, 10'000'000, rx2[0]);
+            CHECK_TRUE(b0.has_value());
+            CHECK_EQ(b0->start_ns, a0->start_ns);
+            CHECK_EQ(b0->end_ns, a0->end_ns);
+            const auto b1 = s_avec.on_received(1, 500'000'000, rx2[1]);
+            CHECK_TRUE(b1.has_value());  // rattrapée en RX2
+            CHECK_EQ(b1->start_ns, a0->end_ns);
+            CHECK_EQ(b1->end_ns - b1->start_ns, air_rx2);  // durée réelle, pas celle de RX1
+        }
+    }
 }

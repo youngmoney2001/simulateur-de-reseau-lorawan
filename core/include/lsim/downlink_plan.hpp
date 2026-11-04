@@ -88,6 +88,14 @@ struct PlanOptions {
     double gateway_tx_power_dbm = 14.0;
     double device_antenna_gain_dbi = 0.0;
     double device_rx_offset_db = 0.0;
+    // Repli RX2 des descentes (I1). **Opt-in** : `false` reproduit exactement le comportement
+    // d'avant I1. Ce n'est pas un champ de `lsim_plan_options` (frontière C) : la structure ABI
+    // reste inchangée. Fournir une table RX2 à `lsim_plan_downlinks_v2` active le repli ; la v1
+    // et la v2 sans table ne le font jamais.
+    //
+    // Même à `true`, le repli n'opère que pour les dispositifs dont la fenêtre RX2 est
+    // réellement renseignée (`rx2_sf != 0` **et** `rx2_hz != 0`).
+    bool rx2_fallback = false;
 };
 
 struct Hop {

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <queue>
 
 #include "lsim/lora_phy.hpp"
 
@@ -13,6 +14,9 @@ namespace {
 // Constantes alignées sur `lsim.plan.RECEIVE_DELAY1_US` et `trace_events.RX1_WINDOW_NS`.
 constexpr std::int64_t kReceiveDelay1Ns = 1'000'000'000;
 constexpr std::int64_t kRx1WindowNs = 1'000'000'000;
+// RX2 s'ouvre une seconde après RX1 : RP002 §2.3, RECEIVE_DELAY2 = RECEIVE_DELAY1 + 1 s.
+constexpr std::int64_t kReceiveDelay2Ns = 2'000'000'000;
+constexpr std::int64_t kRx2WindowNs = 1'000'000'000;
 // Trame downlink sans charge (MHDR, DevAddr, FCtrl, FCnt, MIC) et avec charge (+ FPort).
 constexpr std::uint32_t kAckFrameBytes = 12;
 constexpr std::uint32_t kDataFrameOverheadBytes = 13;
@@ -69,6 +73,19 @@ struct Job {
     std::int64_t rx1_hz = 0;
     bool received = false;
     bool device_missed = false;
+    // Fenêtre de secours (I1). RX2 n'est ni RX1 ni une répétition : fréquence et débit régionaux
+    // propres, donc temps d'antenne distinct — d'où `rx2_airtime_ns` calculé à part.
+    std::int64_t rx2_hz = 0;
+    std::uint8_t rx2_sf = 0;
+    std::uint32_t rx2_bw_hz = 0;
+    std::int64_t rx2_airtime_ns = 0;
+    bool device_missed_rx2 = false;
+
+    // Le repli RX2 est-il matériellement possible ? `rx2_sf == 0` : pas de fenêtre de secours.
+    // `rx2_hz == 0` : aucune fréquence régionale — on ne peut pas émettre sans fréquence, et la
+    // deviner serait inventer une valeur réglementaire.
+    bool rx2_disponible() const { return rx2_sf != 0 && rx2_hz != 0; }
+    std::int64_t t_open_rx2() const { return t_open + (kReceiveDelay2Ns - kReceiveDelay1Ns); }
 };
 
 }  // namespace
@@ -91,6 +108,20 @@ lora::Status downlink_airtime_ns(const DeviceRadio& radio, std::uint32_t payload
     out_ns = at.nanoseconds;
     return lora::Status::Ok;
 }
+
+namespace {
+
+// Temps d'antenne d'un downlink au débit de la fenêtre RX2. Largeur non renseignée (0) : RX2
+// reprend celle de RX1, comme le valideur `valid_rx2`.
+lora::Status rx2_airtime_ns(const DeviceRadio& radio, const DeviceRx2& rx2,
+                            std::uint32_t payload_bytes, std::int64_t& out_ns) {
+    DeviceRadio r = radio;
+    r.rx1_sf = rx2.rx2_sf;
+    r.rx1_bw_hz = rx2.rx2_bw_hz != 0 ? rx2.rx2_bw_hz : radio.rx1_bw_hz;
+    return downlink_airtime_ns(r, payload_bytes, out_ns);
+}
+
+}  // namespace
 
 PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                           const std::vector<DeviceRadio>& radios, const PlanOptions& options,
@@ -175,27 +206,105 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         job.received = rssi_dl >= sens + options.device_rx_offset_db;
         const std::int64_t nxt = next_start[i];
         job.device_missed = nxt != kNone && nxt < job.t_open + kRx1WindowNs;
+        // Fenêtre de secours. Le repli est **opt-in** : il n'existe que si l'appelant a fourni une
+        // table RX2 (enveloppe v2). Sans elle, rien n'est calculé et le comportement est celui
+        // d'avant I1. Le temps d'antenne RX2 n'est calculé que si le repli est matériellement
+        // possible, pour ne pas payer un calcul inutile quand il n'y a rien à émettre.
+        if (rx2 != nullptr) {
+            const DeviceRx2& r2 = (*rx2)[r.device];
+            job.rx2_hz = r2.rx2_hz;
+            job.rx2_sf = r2.rx2_sf;
+            job.rx2_bw_hz = r2.rx2_bw_hz;
+            if (job.rx2_disponible() &&
+                rx2_airtime_ns(radio, r2, base, job.rx2_airtime_ns) != lora::Status::Ok) {
+                return PlanStatus::InvalidRadio;
+            }
+            job.device_missed_rx2 = nxt != kNone && nxt < job.t_open_rx2() + kRx2WindowNs;
+        }
         job_of[i] = static_cast<std::int64_t>(jobs.size());
         jobs.push_back(job);
     }
 
-    // Planification passerelle (`_schedule_gateway`) : ordre (t_open, indice de job).
-    std::vector<std::size_t> order(jobs.size());
-    for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
-    std::stable_sort(order.begin(), order.end(), [&jobs](std::size_t a, std::size_t b) {
-        return jobs[a].t_open < jobs[b].t_open;
-    });
+    // Planification passerelle (`_schedule_gateway`) : un émetteur, file chronologique.
+    //
+    // Sans table RX2, l'algorithme est celui d'avant I1 : les jobs sont triés par `t_open` (ordre
+    // stable, donc ordre de la trace à `t_open` égal) et placés à `max(t_open, occupé_jusqu'à)`.
+    //
+    // Avec table RX2, la file devient un **tas** : la fenêtre de secours naît de l'échec de la
+    // RX1 et porte sa propre ouverture (`t_open + 1 s`), qui peut être postérieure à celle
+    // d'autres jobs. La traiter au même endroit que la RX1 placerait la descente trop tôt. C'est
+    // ce que fait l'arbitre Python (`GatewayArbiter`, tas sur `ready_ns`) et l'on s'y aligne.
     std::vector<std::int64_t> starts(jobs.size(), kNone);
+    std::vector<std::uint8_t> en_rx2(jobs.size(), 0);
     bool any_busy = false;
     std::int64_t busy_until = 0;
-    for (std::size_t k : order) {
-        const Job& job = jobs[k];
-        const std::int64_t start = any_busy ? std::max(job.t_open, busy_until) : job.t_open;
-        if (start - job.t_open >= kRx1WindowNs) continue;  // passerelle indisponible dans la RX1
-        starts[k] = start;
-        busy_until = start + job.airtime_ns;
-        any_busy = true;
-        busy.push_back(Interval{start, busy_until});
+
+    if (rx2 == nullptr) {
+        std::vector<std::size_t> order(jobs.size());
+        for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
+        std::stable_sort(order.begin(), order.end(), [&jobs](std::size_t a, std::size_t b) {
+            return jobs[a].t_open < jobs[b].t_open;
+        });
+        for (std::size_t k : order) {
+            const Job& job = jobs[k];
+            const std::int64_t start = any_busy ? std::max(job.t_open, busy_until) : job.t_open;
+            if (start - job.t_open >= kRx1WindowNs) continue;  // indisponible dans la RX1
+            starts[k] = start;
+            busy_until = start + job.airtime_ns;
+            any_busy = true;
+            busy.push_back(Interval{start, busy_until});
+        }
+    } else {
+        // (ouverture, phase, indice) : la phase départage à ouverture égale — une RX2 naît après
+        // toutes les RX1 déjà déposées, donc elle passe après elles. Même ordre que le tas Python,
+        // dont la clé est (ready_ns, -priorité, ticket) avec des tickets croissants.
+        struct Essai {
+            std::int64_t pret;
+            int phase;
+            std::size_t index;
+        };
+        struct PlusTot {
+            bool operator()(const Essai& a, const Essai& b) const {
+                if (a.pret != b.pret) return a.pret > b.pret;
+                if (a.phase != b.phase) return a.phase > b.phase;
+                return a.index > b.index;
+            }
+        };
+        std::priority_queue<Essai, std::vector<Essai>, PlusTot> file;
+        for (std::size_t k = 0; k < jobs.size(); ++k) {
+            file.push(Essai{jobs[k].t_open, 0, k});
+        }
+        while (!file.empty()) {
+            const Essai e = file.top();
+            file.pop();
+            Job& job = jobs[e.index];
+            if (e.phase == 0) {
+                const std::int64_t start = any_busy ? std::max(job.t_open, busy_until) : job.t_open;
+                if (start - job.t_open >= kRx1WindowNs) {
+                    // RX1 perdue : seconde fenêtre, une seule fois, avec ses propres paramètres.
+                    // Le repli est opt-in et n'opère que si la fenêtre RX2 est renseignée.
+                    if (options.rx2_fallback && job.rx2_disponible()) {
+                        file.push(Essai{job.t_open_rx2(), 1, e.index});
+                    }
+                    continue;
+                }
+                starts[e.index] = start;
+                busy_until = start + job.airtime_ns;
+                any_busy = true;
+                busy.push_back(Interval{start, busy_until});
+            } else {
+                // Repli RX2. Le temps d'antenne est celui de RX2, pas celui de RX1 : au SF12, la
+                // même trame occupe l'émetteur une vingtaine de fois plus longtemps.
+                const std::int64_t ouverture = job.t_open_rx2();
+                const std::int64_t start = any_busy ? std::max(ouverture, busy_until) : ouverture;
+                if (start - ouverture >= kRx2WindowNs) continue;  // indisponible dans la RX2 aussi
+                starts[e.index] = start;
+                en_rx2[e.index] = 1;
+                busy_until = start + job.rx2_airtime_ns;
+                any_busy = true;
+                busy.push_back(Interval{start, busy_until});
+            }
+        }
     }
 
     // Événements (`_events`) : ordre d'insertion = enregistrement, puis job ; tri stable par temps.
@@ -238,6 +347,12 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         if (k == kNone) continue;
         const Job& job = jobs[static_cast<std::size_t>(k)];
         const std::int64_t start = starts[static_cast<std::size_t>(k)];
+        // Fenêtre réellement émise : la fréquence du saut descendant est celle de cette fenêtre.
+        // Une descente repliée en RX2 n'est pas sur la même fréquence — la rapporter en RX1
+        // serait faux, et trompeur pour le rapport cyclique.
+        const bool rx2_emise = en_rx2[static_cast<std::size_t>(k)] != 0;
+        const std::int64_t freq_dl = rx2_emise ? job.rx2_hz : job.rx1_hz;
+        const bool manquee = rx2_emise ? job.device_missed_rx2 : job.device_missed;
         Pending ev;
         ev.t = job.t_open;
         ev.ev.device = job.device;
@@ -249,9 +364,9 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             hop.dir = HopDir::GwToDev;
             hop.outcome = Outcome::NotListened;
             hop.t_ns = job.t_open;
-            hop.freq_hz = job.rx1_hz;
+            hop.freq_hz = freq_dl;
             ev.ev.hops.push_back(hop);
-        } else if (job.device_missed) {
+        } else if (manquee) {
             ev.ev.t_ns = job.t_open;
             ev.ev.kind = EventKind::RxWindowMissed;
             ev.ev.outcome = Outcome::DeviceTransmitting;
@@ -259,7 +374,7 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             hop.dir = HopDir::GwToDev;
             hop.outcome = Outcome::NotListened;
             hop.t_ns = start;
-            hop.freq_hz = job.rx1_hz;
+            hop.freq_hz = freq_dl;
             ev.ev.hops.push_back(hop);
         } else {
             ev.ev.t_ns = start;
@@ -269,7 +384,7 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             hop.dir = HopDir::GwToDev;
             hop.outcome = job.received ? Outcome::Delivered : Outcome::LostSensitivity;
             hop.t_ns = start;
-            hop.freq_hz = job.rx1_hz;
+            hop.freq_hz = freq_dl;
             ev.ev.hops.push_back(hop);
             ev.t = start;
         }
@@ -329,8 +444,8 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
 }
 
 std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns) {
-    // Jalon I0 : sans RX2 explicite, le comportement est celui d'avant l'extension.
-    return on_received(device, end_ns, DeviceRx2{});
+    // Sans RX2 explicite, on reprend celui fourni à la construction (ou « aucun »).
+    return on_received(device, end_ns, rx2_.empty() ? DeviceRx2{} : rx2_[device]);
 }
 
 std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::int64_t end_ns,
@@ -357,10 +472,22 @@ std::optional<Interval> DownlinkScheduler::on_received(std::uint32_t device, std
         return std::nullopt;
     }
     const std::int64_t t_open = end_ns + kReceiveDelay1Ns;
-    const std::int64_t start = any_busy_ ? std::max(t_open, busy_until_) : t_open;
-    if (start - t_open >= kRx1WindowNs) return std::nullopt;  // passerelle indisponible dans la RX1
+    std::int64_t start = any_busy_ ? std::max(t_open, busy_until_) : t_open;
+    std::int64_t air_utile = air;
+    if (start - t_open >= kRx1WindowNs) {
+        // RX1 indisponible. Repli RX2 : opt-in, et seulement si la fenêtre de secours est
+        // renseignée. Le temps d'antenne devient celui de RX2, pas celui de RX1.
+        if (!options_.rx2_fallback || rx2.rx2_sf == 0 || rx2.rx2_hz == 0) return std::nullopt;
+        const std::int64_t ouverture = end_ns + kReceiveDelay2Ns;
+        start = any_busy_ ? std::max(ouverture, busy_until_) : ouverture;
+        if (start - ouverture >= kRx2WindowNs) return std::nullopt;  // indisponible aussi en RX2
+        if (rx2_airtime_ns(radios_[device], rx2, base, air_utile) != lora::Status::Ok) {
+            status_ = PlanStatus::InvalidRadio;
+            return std::nullopt;
+        }
+    }
     any_busy_ = true;
-    busy_until_ = start + air;
+    busy_until_ = start + air_utile;
     return Interval{start, busy_until_};
 }
 

@@ -302,9 +302,22 @@ def _scenario_simple():
     return result.records, device_radios(scenario)
 
 
+def _rx2_des_radios(radios):
+    """Table RX2 telle que la construit l'appelant : une entrée par dispositif.
+
+    C'est cette table qui **active** le repli côté natif (la passer une enveloppe v2, c'est le
+    demander). Sans région, `rx2_hz = 0` : le repli reste inerte des deux côtés.
+    """
+    return tuple(DeviceRx2(rx2_hz=r.rx2_hz, rx2_sf=r.rx2_sf, rx2_bw_hz=r.rx2_bw_hz)
+                 for r in radios)
+
+
 def _parite(options, avec_region=False):
     records, radios = _scenario_sature() if avec_region else _scenario_simple()
-    natif = plan_native(records, radios, options)
+    # Repli activé ⇒ on alimente le cœur par l'enveloppe v2, sinon par la v1. Les deux doivent
+    # produire les mêmes décisions que l'oracle Python.
+    natif = (plan_native_v2(records, radios, options, _rx2_des_radios(radios))
+             if options.rx2_fallback else plan_native(records, radios, options))
     jobs = _downlink_jobs(records, radios, options, [False] * len(records), None)
     starts, fenetres, busy = _schedule_gateway(jobs, options)
     events = _events(records, radios, jobs, starts, [False] * len(records), None, fenetres)
@@ -350,32 +363,37 @@ def test_parite_rx2_invalide_les_deux_moteurs_refusent():
         _downlink_jobs(records, radios_invalides, _options(), [False] * len(records), None)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "le planificateur natif n'implémente aucun repli RX2 (écart D1 de l'audit) : tant que le "
-    "cœur ne replie pas, Python et lui divergent dès qu'une RX2 est émise. Ce test passera "
-    "(XPASS) quand le cœur l'implémentera — il faudra alors le réécrire en parité stricte."))
 def test_parite_repli_rx2_actif():
-    """Le repli effectif n'a pas d'équivalent natif : divergence identifiée, pas masquée."""
+    """I1 : le cœur replie désormais — parité stricte sur un scénario qui exerce le repli.
+
+    Ce test était un `xfail(strict=True)` en I2, quand le planificateur natif n'implémentait aucun
+    repli (écart D1 de l'audit). Il est devenu une parité stricte : les deux moteurs doivent
+    produire **exactement** les mêmes événements et la même occupation.
+    """
     natif, python = _parite(_options_satures(repli=True), avec_region=True)
     assert natif == python
+    # Contrôle positif : le scénario exerce réellement le repli, sinon le test ne prouve rien.
+    records, radios = _scenario_sature()
+    jobs = _downlink_jobs(records, radios, _options_satures(), [False] * len(records), None)
+    _s, fenetres, _o = _schedule_gateway(jobs, _options_satures())
+    assert fenetres.count("rx2") > 0, "aucun repli exercé côté Python : test inutile"
 
 
-def test_le_coeur_ne_replie_pas_et_le_dit():
-    """Preuve positive de l'écart : le cœur ne produit aucune RX2 là où Python en produit.
+def test_le_coeur_replie_et_cela_se_voit():
+    """Le repli natif est réel : la v2 avec table RX2 ne renvoie plus la v1.
 
-    Ce test **échouera** quand le cœur implémentera le repli, ce qui est souhaitable : il force
-    alors à réviser `test_parite_repli_rx2_actif` et le contrat.
+    C'est la contre-épreuve du test qui, en I2, démontrait l'écart : le cœur reçoit les paramètres
+    RX2 et les **utilise**. Sans table (v1 ou v2 à rx2 nul), il ne replie toujours pas.
     """
     records, radios = _scenario_sature()
     options = _options_satures()
-    # Le cœur reçoit bien les paramètres RX2 par l'enveloppe v2...
-    rx2 = tuple(DeviceRx2(rx2_hz=r.rx2_hz, rx2_sf=r.rx2_sf, rx2_bw_hz=r.rx2_bw_hz)
-                for r in radios)
+    rx2 = _rx2_des_radios(radios)
     natif_v2 = plan_native_v2(records, radios, options, rx2)
     natif_v1 = plan_native(records, radios, options)
-    # ...mais ne les utilise pas : la v2 renvoie exactement la v1, aucun repli.
-    assert natif_v2 == natif_v1
-    # L'oracle Python, lui, replie.
-    jobs = _downlink_jobs(records, radios, options, [False] * len(records), None)
-    _s, fenetres, _o = _schedule_gateway(jobs, options)
-    assert fenetres.count("rx2") > 0
+    assert natif_v2 != natif_v1, "le cœur n'a pas replié : la v2 renvoie encore la v1"
+    # L'écart est bien dû au repli : la v2 place davantage de descentes.
+    emis_v1 = sum(1 for e in natif_v1[0] if e.kind in ("downlink", "ack"))
+    emis_v2 = sum(1 for e in natif_v2[0] if e.kind in ("downlink", "ack"))
+    assert emis_v2 > 0
+    # Et sans table, l'enveloppe v2 redevient la v1 : le repli est opt-in.
+    assert plan_native_v2(records, radios, options) == natif_v1

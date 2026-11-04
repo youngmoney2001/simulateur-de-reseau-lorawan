@@ -89,20 +89,42 @@ bornes silencieuse**. `rx2_count` est donc vérifié **avant toute lecture** : `
 
 Aucun de ces refus n'accède à la mémoire pointée.
 
-## 4. Sémantique RX2 au jalon I0
+## 4. Sémantique RX2
 
-**Les paramètres RX2 sont transportés, validés, puis écartés.** Ils ne modifient ni le placement ni
-le temps d'antenne : **aucun repli RX2 n'est produit**, quelles que soient les valeurs fournies.
+### Au jalon I0 (historique)
 
-Trois conséquences, toutes voulues :
+Les paramètres RX2 étaient **transportés, validés, puis écartés** : aucun repli n'était produit, et
+`lsim_plan_downlinks_v2` renvoyait exactement le résultat de la v1, avec `rx2 = NULL` comme avec
+`rx2` renseigné.
 
-1. Le repli reste **opt-in** : `rx2_sf = 0` signifie « aucune descente RX2 ». Comme aucun repli
-   n'est implémenté, la condition est satisfaite de façon triviale.
-2. `lsim_plan_downlinks_v2` renvoie **exactement** le résultat de `lsim_plan_downlinks_v1` pour les
-   mêmes entrées — avec `rx2 = NULL` **et** avec `rx2` renseigné. C'est le cœur des tests de parité.
-3. Le champ est aujourd'hui **inutilisé en pratique** : l'exposition de la fréquence RX2 par module
-   régional est reportée (arbitrage S1), donc aucun appelant ne peut renseigner `rx2_hz`
-   correctement. C'est une dette assumée, pas un oubli.
+### Depuis le jalon I1 (état actuel)
+
+**Fournir une table RX2 à l'enveloppe v2, c'est demander le repli.** Le cœur l'implémente, à
+l'identique de l'oracle Python (`trace_events._schedule_gateway`) :
+
+- RX1 reste **prioritaire** : RX2 n'est tentée que sur l'échec d'une RX1, jamais en double. Une
+  seule émission par descente.
+- Le repli n'opère que si la fenêtre est renseignée : `rx2_sf != 0` **et** `rx2_hz != 0`.
+- Il porte la fréquence, le SF et la largeur de RX2, donc un **temps d'antenne distinct** — c'est
+  cette durée qui est réservée à l'émetteur.
+- Ouverture à `RECEIVE_DELAY2` (2 s après la fin de la montante), fenêtre de 1 s, placement
+  `début = max(ouverture, occupé_jusqu'à)`, abandon si `début − ouverture >= 1 s`.
+- La file de placement est un **tas** : la RX2 naît de l'échec de la RX1 avec sa propre ouverture,
+  qui peut être postérieure à celle d'autres descentes. La traiter au même endroit que la RX1 la
+  placerait trop tôt. C'est l'alignement sur `GatewayArbiter`.
+
+**La v1 et la v2 sans table ne replient jamais** : le comportement est préservé à l'identique. Le
+repli reste donc **opt-in**, par le seul canal disponible sans changer l'ABI : la présence de la
+table. `lsim::plan::PlanOptions::rx2_fallback` porte ce choix côté C++ ; il ne figure pas dans
+`lsim_plan_options`, dont la taille est figée.
+
+**Limitation de fidélité connue** : la sensibilité du récepteur servant à décider si la descente est
+reçue reste celle du débit **RX1**, même pour une descente émise en RX2. Une trame RX2 au SF12 est
+en réalité reçue avec la sensibilité SF12, bien meilleure. Les deux moteurs partagent ce
+comportement ; le corriger changerait les résultats des deux côtés (voir CHANGELOG, I1).
+
+**Dette restante** : l'exposition de la fréquence RX2 par module régional est reportée (arbitrage
+S1) — aucun appelant de production ne peut encore renseigner `rx2_hz` correctement.
 
 ## 5. Côté C++ (`lsim::plan`)
 

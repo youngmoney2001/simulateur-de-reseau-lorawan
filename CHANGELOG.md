@@ -2,6 +2,44 @@
 
 ## 0.1.0 (non publiée)
 
+### D3.15 / I1 — Repli RX2 dans le planificateur natif
+
+Le cœur C++ implémente le repli vers la seconde fenêtre de réception, ce qui **supprime la
+divergence** documentée en I2 (écart D1 de l'audit). Python et C++ produisent désormais les mêmes
+décisions sur un scénario qui exerce réellement le repli.
+
+- **Opt-in.** `lsim::plan::PlanOptions::rx2_fallback`. Ce n'est **pas** un champ de
+  `lsim_plan_options` : la structure ABI reste inchangée. Côté C, fournir une table RX2 à
+  `lsim_plan_downlinks_v2` active le repli ; la v1 et la v2 sans table ne le font jamais.
+- **Même condition qu'en Python** : le repli n'opère que si `rx2_sf != 0` **et** `rx2_hz != 0`.
+- **File chronologique.** La boucle de placement devient un **tas** : la fenêtre de secours naît de
+  l'échec de la RX1 et porte sa propre ouverture (`t_open + 1 s`), qui peut être postérieure à
+  celle d'autres descentes. La traiter au même endroit que la RX1 placerait la descente trop tôt.
+  C'est l'alignement sur le tas de `GatewayArbiter` (`ready_ns`, puis ticket croissant), qui
+  départage à ouverture égale en faveur de la RX1. Sans table RX2, l'ancien tri stable est
+  conservé : résultat identique à l'octet près.
+- **Paramètres effectifs** : ouverture à `RECEIVE_DELAY2` (2 s après la fin de la montante),
+  fenêtre de 1 s, fréquence `rx2_hz`, temps d'antenne calculé au SF et à la largeur de RX2
+  (largeur nulle ⇒ reprise de `rx1_bw_hz`). L'occupation réservée est la durée réelle.
+- **Une seule émission par descente** : la RX2 n'est enfichée que sur l'échec de la RX1, et la
+  réaction ne redemande rien. Aucun doublon.
+- **Événements** : le saut descendant porte la fréquence de la fenêtre réellement émise, et
+  l'indicateur « dispositif en émission » est évalué sur cette fenêtre (RX2 s'ouvre une seconde
+  plus tard : une montante courte ne la masque pas forcément).
+- **Planificateur incrémental** : `DownlinkScheduler::on_received` applique la même règle.
+
+**Limitation de fidélité, commune aux deux moteurs, non masquée** : la sensibilité du récepteur
+utilisée pour décider si la descente est reçue reste celle du débit **RX1**, même pour une
+descente émise en RX2. Une trame RX2 au SF12 est en réalité reçue avec la sensibilité SF12, bien
+meilleure. Corriger cela change les résultats des deux côtés ; c'est un travail de fidélité radio,
+pas de parité.
+
+**Vérifications** : C++ 685 905/685 905 (dont 31 nouvelles) ; suite Python complète et parité
+(114) rejouées ; ABI **inchangée** (55 / 477, i386) ; **98 symboles, +0 / −0** par rapport à I2 ;
+empreintes `d2cb0fac…` et `ed126d7f…` inchangées. Le `xfail(strict=True)` d'I2 est devenu une
+parité stricte, et un nouveau test vérifie que la v2 avec table **diffère** de la v1 (le repli
+natif est réel, pas déclaratif).
+
 ### D3.15 / I0 — Enveloppe ABI versionnée du planificateur de descentes
 
 Premier jalon de la refonte descendante. **Capacitaire :** l'extension transporte et valide les

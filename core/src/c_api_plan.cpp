@@ -90,6 +90,9 @@ int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
         po.gateway_tx_power_dbm = options->gateway_tx_power_dbm;
         po.device_antenna_gain_dbi = options->device_antenna_gain_dbi;
         po.device_rx_offset_db = options->device_rx_offset_db;
+        // Le repli RX2 est **opt-in** : fournir une table RX2 à l'enveloppe v2, c'est le demander.
+        // La v1 (et la v2 sans table) ne replie jamais : comportement préservé à l'identique.
+        po.rx2_fallback = (rx2 != nullptr);
 
         std::vector<Event> evs;
         std::vector<Interval> bus;
