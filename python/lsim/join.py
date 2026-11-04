@@ -370,10 +370,13 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
     # fréquence. Un rejeu garde celui de la fenêtre qui a porté l'acceptation — même trame.
     airtimes = {RX1: accept_airtime_ns(radio, RX1), RX2: accept_airtime_ns(radio, RX2)}
 
-    def ecoute(instant: int) -> str:
+    def ecoute(instant: int, fenetre_emise: str = RX1) -> str:
+        # Le seuil de sensibilité suit la fenêtre émise : RX2 a son propre débit régional, et le
+        # juger avec le seuil de RX1 déclarerait perdue une acceptation que le terminal entend.
+        # Même règle que `_seuil_dispositif` dans `trace_events` et `_decodable` dans `ack_mac`.
         if _transmitting(data_attempts, device_index, instant):
             return "not_listened"
-        if not _decodable(record.rssi_dbm, radio, options):
+        if not _decodable(record.rssi_dbm, radio, options, en_rx2=(fenetre_emise == RX2)):
             return "lost_sensitivity"
         return "delivered"
 
@@ -393,21 +396,28 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
         """
         for rang in range(join_options.accept_replays):
             deposer(fenetre(depuis + (rang + 1) * JOIN_REPLAY_DELAY_NS, fenetre_source),
-                    ensuite=apres_rejeu)
+                    ensuite=apres_rejeu(fenetre_source))
 
-    def apres_rejeu(emission, deposer) -> None:
-        if not emission.emitted:
-            issue = _issue_non_emise(emission)
-        else:
-            brut = ecoute(emission.start_ns)
-            issue = "replayed" if brut == "delivered" else brut
-        attente.emissions.append(AcceptEmission(emission.start_ns, REPLAY, issue))
+    def apres_rejeu(fenetre_source: str):
+        """Réaction d'un rejeu, fermée sur la fenêtre de l'acceptation qui l'a déclenché.
+
+        Le rejeu rejoue la même trame au même débit : son seuil de sensibilité est donc celui de
+        la fenêtre source, d'où la fermeture — la réaction ne reçoit que l'émission.
+        """
+        def reaction(emission, deposer) -> None:
+            if not emission.emitted:
+                issue = _issue_non_emise(emission)
+            else:
+                brut = ecoute(emission.start_ns, fenetre_source)
+                issue = "replayed" if brut == "delivered" else brut
+            attente.emissions.append(AcceptEmission(emission.start_ns, REPLAY, issue))
+        return reaction
 
     def apres_rx2(emission, deposer) -> None:
         if not emission.emitted:
             issue = _issue_non_emise(emission)
         else:
-            issue = ecoute(emission.start_ns)
+            issue = ecoute(emission.start_ns, RX2)
         attente.emissions.append(AcceptEmission(emission.start_ns, RX2, issue))
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)
@@ -421,7 +431,7 @@ def _deposer(device_index, at_ns, record, radio, options, data_attempts, join_op
             # réglementaire et l'issue le dit.
             issue = _issue_non_emise(emission)
         else:
-            issue = ecoute(emission.start_ns)
+            issue = ecoute(emission.start_ns, RX1)
         attente.emissions.append(AcceptEmission(emission.start_ns, RX1, issue))
         if issue == "delivered":
             attente.accepte = (emission.start_ns, emission.end_ns)

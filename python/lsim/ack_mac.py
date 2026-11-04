@@ -62,7 +62,6 @@ from enum import Enum
 from typing import Callable, Optional, Sequence
 
 from lsim.arbitre import EmissionRequest, GatewayArbiter
-from lsim.radio import receiver_sensitivity_dbm
 from lsim.fcnt import AF, NF, MODULUS_16, MODULUS_32, CounterSeries, CounterVerdict
 from lsim.trace_events import DeviceRadio
 
@@ -228,15 +227,26 @@ def _ack_airtime_ns(radio: DeviceRadio, window: str = "rx1") -> int:
     return _downlink_airtime_ns(radio, ACK_FRAME_BYTES, window)
 
 
-def _decodable(rssi_uplink_dbm: float, radio: DeviceRadio, options) -> bool:
+def _decodable(rssi_uplink_dbm: float, radio: DeviceRadio, options,
+               en_rx2: bool = False) -> bool:
     """Réciprocité de `downlink_plan.cpp` : le terminal peut-il décoder la descente ?
 
-    Même formule que le cœur, avec la même sensibilité et la même marge de récepteur.
+    Même formule que le cœur, avec la même marge de récepteur — mais la sensibilité est celle de
+    la fenêtre **dans laquelle le terminal écoute** (`en_rx2`), pas toujours celle de RX1. RX2 a
+    son propre débit régional : sur EU868 il est au SF12BW125 alors que RX1 peut être au SF7BW125,
+    soit 13 dB d'écart. Juger une descente reçue en RX2 avec le seuil de RX1 la déclarerait perdue
+    alors que le dispositif l'entend.
+
+    Limite assumée : la classe C écoute en continu (`AckWindow.CONTINUOUS`) et n'appartient donc à
+    aucune des deux fenêtres ; elle conserve le seuil RX1, comportement antérieur inchangé. Voir
+    le bilan de validation — RP002-1.0.5 §classe C y appellerait les paramètres RX2, mais la
+    modélisation actuelle ne distingue pas l'écoute continue de la fenêtre RX1.
     """
+    from lsim.trace_events import _seuil_dispositif  # import local : `trace_events` réimporte ici
+
     rssi_down = (rssi_uplink_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
                  + options.device_antenna_gain_dbi)
-    sensitivity = receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz)
-    return rssi_down >= sensitivity + options.device_rx_offset_db
+    return rssi_down >= _seuil_dispositif(radio, options, en_rx2)
 
 
 def _fenetre(debut: int, rx1: tuple[int, int], rx2: tuple[int, int]) -> AckWindow:
@@ -423,7 +433,6 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
             fenetre = _fenetre(instant, rx1, rx2)
             return None if fenetre is AckWindow.LATE else fenetre
 
-        decodable = _decodable(record.rssi_dbm, radio, options)
         serie = CounterSeries(start=fcnt_down_start, last=dernier_accepte.get(cle))
         verdict_compteur: Optional[CounterVerdict] = None
         emissions: list[AckEmission] = []
@@ -436,7 +445,11 @@ def plan_acks(records: Sequence, radios: Sequence[DeviceRadio], options, timing:
                 # Le terminal émet : il ne peut pas écouter. Sinon, il n'écoutait pas encore
                 # (classe A/B hors fenêtre) : l'ACK est tardif.
                 classe_emission = AckSort.LOST if emet_a(debut) else AckSort.LATE
-            elif not decodable:
+            elif not _decodable(record.rssi_dbm, radio, options,
+                                en_rx2=(ou_ecoute is AckWindow.RX2)):
+                # Seuil évalué **ici**, et non avant la boucle : la fenêtre écoutée n'est connue
+                # qu'une fois l'instant d'émission connu. C'est la même règle que
+                # `_seuil_dispositif` dans `trace_events`.
                 classe_emission = AckSort.LOST
             else:
                 # Le terminal ne voit que le champ de 16 bits : il le replace dans sa série.

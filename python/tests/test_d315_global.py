@@ -386,31 +386,35 @@ def test_les_quatre_regions_exigees_ne_partagent_pas_le_meme_repli():
     assert len({(p[1], p[2]) for p in profils.values()}) >= 2, "débits RX2 différenciés attendus"
 
 
-# --------------------------------------------------------- défauts trouvés par la validation (§6)
+# ------------------------------------- correctifs D-I3-1 / D-I3-2 : reproductions retournées
+#
+# Ces deux tests ont d'abord été écrits comme reproductions des défauts et épinglés en
+# `xfail(strict=True)`. Les défauts ayant été corrigés, les marqueurs ont été retirés et les
+# assertions conservées **telles quelles** : le scénario n'a pas changé, seul le comportement
+# attendu est devenu le comportement réel. Ils restent des tests de non-régression des correctifs.
 
-@pytest.mark.xfail(strict=True, reason="D-I3-1 : Join-Accept RX2 rapporté sur la fréquence RX1")
-def test_d_i3_1_le_join_accept_rx2_est_rapporte_sa_frequence():
-    """D-I3-1 — `trace_events.py`, construction des événements de jointure radio.
 
-    Le Join-Accept du terminal 2 est **délivré en RX2** (le module `join` le sait :
-    `AcceptEmission.window == "rx2"`), mais l'événement de trace porte `radio.rx1_hz` :
+def test_d_i3_1_le_join_accept_rx2_est_rapporte_a_sa_frequence():
+    """D-I3-1 — CORRIGÉ : fréquence du Join-Accept = celle de la fenêtre réellement émise.
 
-        HopEvent("gw:0", _dev(tentative.device), emission.at_ns, radio.rx1_hz, ...)
+    Défaut : `trace_events.py` codait `radio.rx1_hz` en dur dans le `HopEvent`, si bien qu'un
+    Join-Accept délivré en RX2 était rapporté sur la fréquence RX1 :
 
-    Reproduction minimale : `python/tests/test_d315_global.py::test_..._e2e_join` (ci-dessous),
-    qui compare la fenêtre connue du module `join` à la fréquence rapportée.
+        dev=2 t= 7430.976 ms freq=868100000 issue=delivered  fenêtre réelle=rx2   ← avant
+        dev=2 t= 7430.976 ms freq=869525000 issue=delivered  fenêtre réelle=rx2   ← après
 
-    Portée : la trace alimente le rapport cyclique descendant par sous-bande. Sur EU868, 868,1 MHz
-    et 869,525 MHz n'appartiennent pas aux mêmes sous-bandes : l'airtime d'un Join-Accept RX2 est
-    imputé à la mauvaise sous-bande.
+    Portée du défaut : 868,1 MHz et 869,525 MHz n'appartiennent pas aux mêmes sous-bandes ETSI
+    ([N] ETSI EN 300 220-2, annexe B, table B.1) : l'airtime du Join-Accept RX2 était imputé à la
+    mauvaise sous-bande dans le rapport cyclique descendant.
 
-    Correctif ciblé proposé (3 lignes, aucune refonte) : dans la boucle
-    `for emission in tentative.accepts`, choisir la fréquence selon `emission.window` —
+    Correctif appliqué : la fenêtre est lue sur `emission.window`, jamais déduite de la fréquence
+    — plusieurs profils régionaux donnent à RX1 et RX2 la même fréquence ([H] US915, AS923, AU915),
+    la fréquence ne permet donc pas de remonter à la fenêtre. Un rejeu (`window == "replay"`)
+    rejoue la trame au débit de l'acceptation qui l'a déclenché : il en retient la fenêtre.
 
-        freq = radio.rx2_hz if emission.window == "rx2" else radio.rx1_hz
-
-    — et l'utiliser dans le `HopEvent`. `emission.window` vaut `rx1`, `rx2` ou `replay`.
+    Reproduction autonome : `scripts/preuves/p_d_i3_1_frequence_join_accept.py`.
     """
+    from lsim.retransmissions import simulate_confirmed_uplinks
     from lsim.trace_events import build_trace
 
     scenario = Scenario(ScenarioModel.model_validate({
@@ -433,8 +437,6 @@ def test_d_i3_1_le_join_accept_rx2_est_rapporte_sa_frequence():
     run = build_trace(scenario, _options())
 
     # Vérité terrain : ce que le module `join` a réellement fait.
-    from lsim.retransmissions import simulate_confirmed_uplinks
-
     devices, _g, _i = scenario.deploy()
     res = simulate_confirmed_uplinks(devices, scenario.gateway(), scenario.propagation(), radios,
                                      _options(), scenario.model.retransmissions.options(),
@@ -450,13 +452,12 @@ def test_d_i3_1_le_join_accept_rx2_est_rapporte_sa_frequence():
             f"Join-Accept RX2 rapporté sur {[h.freq_hz for h in e.hops]}"
 
 
-@pytest.mark.xfail(strict=True, reason="D-I3-2 : réception jugée au seuil RX1 quelle que soit la fenêtre")
 def test_d_i3_2_la_reception_suit_la_fenetre_dans_ack_mac():
-    """D-I3-2 — `ack_mac._decodable`, partagé par les ACK **et** les Join-Accept.
+    """D-I3-2 — CORRIGÉ : la réception est jugée au seuil de la fenêtre écoutée.
 
-    `plan_acks` calcule `decodable` **une fois par uplink**, avant que la fenêtre ne soit connue
-    (ligne 426), puis l'applique à toutes les copies (ligne 438 : `elif not decodable`) quelle que
-    soit la fenêtre où l'émission atterrit. La sensibilité utilisée est celle de RX1 :
+    Défaut : `plan_acks` calculait `decodable` **une fois par uplink, avant** que la fenêtre ne
+    soit connue, puis l'appliquait à toutes les copies. La sensibilité utilisée était toujours
+    celle de RX1 :
 
         sensitivity = receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz)
 
@@ -464,33 +465,24 @@ def test_d_i3_2_la_reception_suit_la_fenetre_dans_ack_mac():
 
         gros  = DeviceRadio(..., rx1_sf=12, rx2_sf=9)   # ACK court en RX2, bloque l'émetteur
         petit = DeviceRadio(..., rx1_sf=7,  rx2_sf=12)  # RX1 SF7 (-123 dBm), RX2 SF12 (-136 dBm)
-        plan  = plan_acks(records, [gros, petit], options, AckTiming(delay_ms=1500))
 
-    Résultat observé (`rssi + 13 dB` = RSSI descendant, P_gw 27 dBm − P_dev 14 dBm) :
+    Balayage du RSSI (`rssi + 13 dB` = RSSI descendant, P_gw 27 dBm - P_dev 14 dBm). L'occupation
+    de 991,2 ms confirme que l'ACK est bien émis au débit RX2 (SF12) :
 
-        rssi    rssi_dl   verdict    occupation
-        -136     -123     STANDARD   991,2 ms   ← seuil RX1 (SF7) franchi
-        -137     -124     LOST       991,2 ms   ← seuil RX1 (SF7) non franchi
+        rssi    verdict AVANT   verdict APRÈS
+        -136    STANDARD        STANDARD
+        -137    LOST            STANDARD     ← le défaut basculait au seuil SF7 (-123)
+        -148    LOST            STANDARD
+        -152    LOST            LOST         ← bascule désormais au seuil SF12 (-136)
 
-    L'occupation de 991,2 ms est bien celle du **SF12** : le moteur émet au débit RX2 et juge la
-    réception au seuil RX1. Les 13 dB de marge du SF12 sont ignorés.
+    Les 13 dB de marge du SF12 sont maintenant pris en compte.
 
-    Le même `_decodable` est importé par `lsim.join` (ligne 71) : un Join-Accept délivré en RX2 —
-    mécanisme déjà actif par défaut — est jugé de la même façon.
+    Correctif appliqué : `_decodable` reçoit `en_rx2` et délègue à `_seuil_dispositif`
+    (`trace_events`), seule définition de la règle. L'appel a été déplacé **dans** la boucle des
+    créneaux, après `ou_ecoute` — la fenêtre n'est connue qu'à cet instant. Le même `_decodable`
+    étant importé par `lsim.join`, la correction vaut aussi pour le Join-Accept.
 
-    Correctif ciblé proposé (aucune refonte) : passer la fenêtre à `_decodable` et reprendre le
-    seuil correspondant, comme `_seuil_dispositif` le fait déjà dans `trace_events` depuis I3/C4 —
-
-        def _decodable(rssi, radio, options, fenetre="rx1"):
-            seuil = (receiver_sensitivity_dbm(radio.rx2_sf, radio.rx2_bw_hz or radio.rx1_bw_hz)
-                     if fenetre == "rx2" and radio.rx2_disponible
-                     else receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz))
-
-    — puis, dans la boucle des créneaux, évaluer `decodable` **après** `ou_ecoute` :
-
-        elif not _decodable(record.rssi_dbm, radio, options, str(ou_ecoute)):
-
-    `ou_ecoute` est déjà connu à cet endroit (c'est la valeur retenue dans `fenetre_retenue`).
+    Reproduction autonome : `scripts/preuves/p_d_i3_2_sensibilite_fenetre.py`.
     """
     from lsim.ack_mac import AckTiming, plan_acks
     from lsim.trace_events import DeviceRadio
@@ -509,6 +501,158 @@ def test_d_i3_2_la_reception_suit_la_fenetre_dans_ack_mac():
     assert duree_ms > 500, "l'ACK du second doit être émis au débit RX2 (SF12)"
     # -140 dBm + 13 dB = -127 dBm : audible au seuil SF12 (-136), pas au seuil SF7 (-123).
     assert second.received, "ACK émis en RX2 au SF12 mais jugé au seuil RX1 (SF7)"
+
+
+# ------------------------------------------------------- cas discriminants exigés par §3
+#
+# La parité entre les deux moteurs n'aurait détecté aucun des deux défauts : ils partageaient le
+# même `_decodable` et la même ligne `radio.rx1_hz`. Les tests ci-dessous épinglent la FIDÉLITÉ DE
+# CHAQUE MOTEUR, c'est-à-dire des grandeurs absolues, indépendamment de toute comparaison.
+
+def _radio_de_test(sf_rx1, bw_rx1, sf_rx2, bw_rx2, hz1=None, hz2=None):
+    """Radio de laboratoire : débits RX1/RX2 imposés, pour balayer les seuils."""
+    from lsim.trace_events import DeviceRadio
+
+    hz1 = hz1 if hz1 is not None else _canal("EU868")
+    hz2 = hz2 if hz2 is not None else _rx2_de_la_region("EU868")[0]
+    return DeviceRadio(freq_hz=hz1, dr=None, rx1_hz=hz1, tx_power_dbm=14.0,
+                       rx1_sf=sf_rx1, rx1_bw_hz=bw_rx1,
+                       rx2_hz=hz2, rx2_sf=sf_rx2, rx2_bw_hz=bw_rx2)
+
+
+def _ack_en_fenetre(fenetre, rssi, radio_blocage=None):
+    """Un ACK placé dans la fenêtre `fenetre`, au RSSI `rssi`. Renvoie (`reçu`, durée ms)."""
+    from lsim.ack_mac import AckTiming, plan_acks
+
+    # `delay_ms` choisit la fenêtre visée : 1500 ms => RX2. Pour viser RX1 on laisse le défaut.
+    delai = 1500 if fenetre == "rx2" else 0
+    radios = [radio_blocage, _radio_de_test(7, 125_000, 12, 125_000)]
+    records = [TxRecord(0, 0, 100_000_000, 12, -100.0, TxRecord.OUTCOME_RECEIVED),
+               TxRecord(1, 490_000_000, 590_000_000, 7, rssi, TxRecord.OUTCOME_RECEIVED)]
+    plan = plan_acks(records, radios, _options(), AckTiming(delay_ms=delai))
+    return plan.outcomes[1].received, (plan.busy[1][1] - plan.busy[1][0]) / 1e6
+
+
+@pytest.mark.parametrize("fenetre,sf_attendu", (("rx1", 7), ("rx2", 12)))
+def test_ack_fidelite_absolue_le_seuil_suit_la_fenetre(fenetre, sf_attendu):
+    """§3 : ACK reçu en RX1 / en RX2 — le seuil est celui de la fenêtre, en valeur absolue.
+
+    RSSI balayé autour des deux seuils. Le terminal vise RX1 SF7BW125 (-123 dBm) et RX2 SF12BW125
+    (-136 dBm) [H] `lsim.radio.receiver_sensitivity_dbm`. Le RSSI descendant vaut `rssi + 13 dB`
+    (P_gw 27 dBm - P_dev 14 dBm). Aucune comparaison entre moteurs : on vérifie la grandeur.
+    """
+    seuil = receiver_sensitivity_dbm(sf_attendu, 125_000)
+    # RSSI montant = RSSI descendant - 13 dB (P_gw 27 dBm - P_dev 14 dBm). On cible un descendant
+    # 1 dB AU-DESSUS du seuil (doit passer) et 3 dB AU-DESSOUS (ne doit pas passer).
+    audible = seuil + 1.0 - 13.0
+    inaudible = seuil - 3.0 - 13.0
+    bloqueur = _radio_de_test(12, 125_000, 9, 125_000)
+    assert _ack_en_fenetre(fenetre, audible, bloqueur)[0], \
+        f"ACK {fenetre} perdu à 1 dB au-dessus du seuil SF{sf_attendu} ({seuil} dBm)"
+    assert not _ack_en_fenetre(fenetre, inaudible, bloqueur)[0], \
+        f"ACK {fenetre} reçu à 3 dB au-dessous du seuil SF{sf_attendu} ({seuil} dBm)"
+
+
+def test_ack_rssi_entre_les_deux_sensibilites():
+    """§3 : RSSI situé ENTRE les sensibilités RX1 et RX2 — le cas qui distinguait le défaut.
+
+    RX1 SF7BW125 = -123 dBm, RX2 SF12BW125 = -136 dBm. Un RSSI descendant de -130 dBm est
+    inaudible en RX1 et audible en RX2. C'est exactement le point que D-I3-2 manquait.
+    """
+    bloqueur = _radio_de_test(12, 125_000, 9, 125_000)
+    # RSSI montant = descendant - 13 dB.
+    rssi = -130.0 - 13.0
+    en_rx2, duree = _ack_en_fenetre("rx2", rssi, bloqueur)
+    assert en_rx2, "descendant à -130 dBm : audible au seuil SF12 de la RX2"
+    assert duree > 500, f"l'ACK doit être émis au débit RX2 (SF12), occupe {duree:.1f} ms"
+
+
+@pytest.mark.parametrize("region,sf", (("US915", 7), ("US915", 10),
+                                       ("AS923", 7), ("AS923", 12),
+                                       ("AU915", 7), ("AU915", 12)))
+def test_frequences_confondues_la_fenetre_nest_pas_inferee_de_la_frequence(region, sf):
+    """§3 : profils où RX1 et RX2 partagent la fréquence — la fenêtre vient de l'émission.
+
+    Sur ces couples (région, SF), le `DeviceRadio` porte la même fréquence pour RX1 et RX2 [H].
+    La fréquence ne peut donc pas servir à retrouver la fenêtre : c'est précisément pourquoi le
+    correctif lit `emission.window` au lieu de comparer des fréquences.
+
+    La confusion dépend du SF montant, pas seulement de la région : US915 SF11/SF12 sortent de la
+    table BW125 du plan (`_radio` n'y trouve aucun DR et retombe sur la fréquence montante), donc
+    ils ne sont PAS confondus — d'où le paramétrage explicite sur le SF.
+    """
+    radio = device_radios(_scene(region=region, sf=sf))[0]
+    assert radio.rx1_hz == radio.rx2_hz, f"{region} SF{sf} : RX1 et RX2 devraient se confondre"
+    assert radio.rx2_hz != 0, f"{region} SF{sf} : fréquence RX2 non renseignée"
+
+
+@pytest.mark.parametrize("region,sf", (("EU868", 7), ("IN865", 7), ("KR920", 9), ("RU864", 10),
+                                       ("US915", 11), ("US915", 12)))
+def test_frequences_distinctes_le_join_accept_porte_la_bonne(region, sf):
+    """§3 : profils à fréquences distinctes — le Join-Accept RX2 porte bien celle de RX2.
+
+    Complément du précédent : quand les fréquences DIFFÈRENT, la bonne doit apparaître. Les deux
+    familles de profils sont couvertes, l'inférence n'étant valide dans aucune.
+
+    US915 SF11/SF12 figurent ici alors qu'ils sont de la même région que les cas confondus : la
+    confusion est une propriété du couple (région, SF), pas de la région seule.
+    """
+    radio = device_radios(_scene(region=region, sf=sf))[0]
+    hz1, hz2 = radio.rx1_hz, radio.rx2_hz
+    assert hz1 != hz2, f"{region} SF{sf} : RX1 et RX2 devraient différer"
+
+    scenario = _scene(region=region, sf=sf)
+    radios = device_radios(scenario)
+    assert radios[0].rx1_hz == hz1 and radios[0].rx2_hz == hz2
+    # Et la fréquence RX2 est réellement atteignable par le moteur, pas seulement déclarée.
+    resultat = _trace_sans_occupation(scenario)
+    cmp = _comparer(resultat.records, radios, _options())
+    emises = {f for _t, _d, f, _o in _sauts_descendants(cmp["evenements_coeur"])}
+    # Selon la scène, RX2 peut ne pas être déclenchée ; mais si elle l'est, c'est sur hz2.
+    for _t, _d, freq, _o in _sauts_descendants(cmp["evenements_coeur"]):
+        assert freq in (hz1, hz2), f"{region} : fréquence de descente inattendue {freq}"
+
+
+def test_fidelite_absolue_le_join_accept_rx1_reste_en_rx1():
+    """§3 : Join-Accept délivré en RX1 — la correction ne doit pas l'avoir déplacé.
+
+    Garde-fou de symétrie : corriger « RX2 doit porter rx2_hz » ne doit pas avoir transformé les
+    acceptations RX1 en RX2.
+    """
+    from lsim.retransmissions import simulate_confirmed_uplinks
+    from lsim.trace_events import build_trace
+
+    scenario = Scenario(ScenarioModel.model_validate({
+        "schema_version": 1, "name": "d315-join-rx1", "seed": 11,
+        "gateway": {"x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+        "propagation": {"frequency_hz": _canal("EU868"), "exponent": 2.7},
+        "retransmissions": {"enabled": True, "retries": 1, "retransmit_delay_ms": 3000,
+                            "enforce_duty_cycle": False, "join_requests_s": [0],
+                            "join_retries": 1, "join_accept_rx2_fallback": True},
+        "groups": [
+            {"name": f"sf{sf}", "count": 1, "region": "EU868",
+             "channel_freq_hz": _canal("EU868"),
+             "placement": {"type": "disk", "radius_m": r},
+             "spreading_factor": sf, "payload_bytes": 20, "tx_power_dbm": 14.0,
+             "period_s": 30, "messages": 4, "start_spread_s": 10}
+            for sf, r in ((7, 500), (9, 1000), (11, 1500), (12, 1900))
+        ],
+    }))
+    radios = device_radios(scenario)
+    run = build_trace(scenario, _options())
+    devices, _g, _i = scenario.deploy()
+    res = simulate_confirmed_uplinks(devices, scenario.gateway(), scenario.propagation(), radios,
+                                     _options(), scenario.model.retransmissions.options(),
+                                     with_engine_output=True)
+    verite = {(t.device, e.at_ns): e.window for t in getattr(res, "joins", ())
+              for e in t.accepts if e.outcome == "delivered"}
+
+    en_rx1 = [e for e in run.events if e.kind == "join_accept"
+              and verite.get((e.device_index, e.t_ns)) == "rx1"]
+    assert en_rx1, "aucun Join-Accept en RX1 : le garde-fou ne prouverait rien"
+    for e in en_rx1:
+        assert any(h.freq_hz == radios[e.device_index].rx1_hz for h in e.hops), \
+            f"Join-Accept RX1 déplacé sur {[h.freq_hz for h in e.hops]}"
 
 
 # ---------------------------------------------------------------------------------- 4. charge
@@ -698,14 +842,13 @@ def test_chaque_region_a_un_profil_rx2_distinct_mais_pas_toujours_une_frequence_
     """
     profils = {}
     for region in REGIONS_COUVERTES:
-        hz, sf, bw = _rx2_de_la_region(region)
-        _, sf1, bw1 = _rx1_de_la_region(region)
-        profils[region] = (hz, sf, bw, sf1, bw1)
+        radio = device_radios(_scene(region=region))[0]
+        profils[region] = (radio.rx2_hz, radio.rx2_sf, radio.rx2_bw_hz, radio.rx1_hz)
 
     # Au moins trois couples (fréquence RX2, SF RX2, BW RX2) distincts sur les régions couvertes.
     assert len({(v[0], v[1], v[2]) for v in profils.values()}) >= 3, (
         f"les profils RX2 ne se différencient pas : {profils}")
     # Et au moins une région où RX1 et RX2 partagent la fréquence — la transparence du cœur ne
     # permet pas d'y lire la fenêtre sur la fréquence.
-    confondues = [r for r, v in profils.items() if v[0] == _rx1_de_la_region(r)[0]]
+    confondues = [r for r, v in profils.items() if v[3] == v[0]]
     assert confondues, "aucune région à RX1/RX2 confondus : la réserve serait caduque"

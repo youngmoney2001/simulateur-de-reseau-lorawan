@@ -985,11 +985,26 @@ def _build_trace_retransmissions(scenario, devices, radios, gateway, propagation
                       radio.dr, None, issue_requete),), issue_requete))
         # Une émission par Join-Accept réellement transmis : RX1, puis RX2 en secours, puis rejeux.
         # Le rejeu reçu est « suppressed » au contrat : le terminal le décode et le refuse.
+        #
+        # Fréquence de la fenêtre **réellement émise** : RX1 et RX2 ne sont pas dans la même
+        # sous-bande, et l'imputation du rapport cyclique descendant en dépend. La fenêtre est lue
+        # sur l'émission (`emission.window`), jamais déduite de la fréquence : plusieurs profils
+        # régionaux (US915, AS923, AU915 [H]) donnent à RX1 et RX2 la même fréquence, donc la
+        # fréquence ne permet pas de remonter à la fenêtre.
+        #
+        # Un rejeu ne porte pas sa fenêtre (`REPLAY`) : il rejoue la trame de l'acceptation qui
+        # l'a déclenché, au même débit et sur la même fréquence. On retient donc la dernière
+        # fenêtre d'acceptation vue — les rejeux suivent immédiatement leur acceptation dans
+        # `tentative.accepts`.
+        fenetre_source = "rx1"
         for emission in tentative.accepts:
             issue = "suppressed" if emission.outcome == "replayed" else emission.outcome
+            if emission.window in ("rx1", "rx2"):
+                fenetre_source = emission.window
+            freq_hz = radio.rx2_hz if fenetre_source == "rx2" else radio.rx1_hz
             remappes.append(ProtocolEvent(
                 0, emission.at_ns, "join_accept", tentative.device, 0,
-                (HopEvent("gw:0", _dev(tentative.device), emission.at_ns, radio.rx1_hz,
+                (HopEvent("gw:0", _dev(tentative.device), emission.at_ns, freq_hz,
                           None, None, issue),), issue))
 
     # Jointures declarees (sans radio) : elles ouvrent une session, donc remettent les compteurs a
