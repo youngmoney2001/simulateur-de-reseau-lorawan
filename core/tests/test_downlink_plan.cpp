@@ -754,4 +754,92 @@ void run_downlink_plan_tests() {
             }
         }
     }
+
+    // -------------------------------------------------------------------------------
+    // Cas 13. Sensibilité de la fenêtre **réellement émise** (I3/C4).
+    //
+    // Le seuil de réception dépend du débit de la fenêtre, et RX2 n'a pas celui de RX1 : au
+    // SF12BW125 il est meilleur de 13 dB qu'au SF7BW125. Seuiller une descente émise en RX2 avec
+    // le seuil de RX1 la déclarait perdue alors que le dispositif l'entendait.
+    //
+    // **La parité ne voyait pas cette erreur : l'oracle Python la commettait à l'identique.** Ce
+    // cas épingle donc le cœur seul, indépendamment de tout oracle.
+    //
+    // Réglage : `rssi_dl = rssi + (27 dBm - 14 dBm)` = `rssi + 13 dB`. À -145 dBm, le lien tombe
+    // à -132 dBm — sourd au seuil SF7 (-123), audible au seuil SF12 (-136).
+    {
+        DeviceRadio gros = radio_sf7();
+        gros.rx1_sf = 12;  // descente longue : la RX1 du second dispositif est masquée
+        const DeviceRadio petit = radio_sf7();
+        const std::vector<DeviceRadio> radios{gros, petit};
+
+        constexpr std::uint32_t kCharge = 27;
+        constexpr std::uint32_t kTrame = 13 + kCharge;
+        PlanOptions o;
+        o.confirmed_uplinks = true;
+        o.downlink_every = 1;
+        o.downlink_payload_bytes = kCharge;
+        o.gateway_tx_power_dbm = 27.0;
+        o.rx2_fallback = true;
+
+        // Même instants, même fenêtre émise (RX2) : seul le SF de la fenêtre de secours change.
+        const std::vector<UplinkRecord> ups{
+            up(0, 0, 10'000'000, UplinkOutcome::Received, -145.0),
+            up(1, 490'000'000, 10'000'000, UplinkOutcome::Received, -145.0)};
+
+        // Verdict du saut passerelle → dispositif pour la descente du second.
+        const auto verdict = [&](std::uint8_t rx2_sf) {
+            std::vector<DeviceRx2> r2(2);
+            r2[0] = DeviceRx2{869'525'000, rx2_sf, 125'000};
+            r2[1] = DeviceRx2{869'525'000, rx2_sf, 125'000};
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            if (plan_downlinks(ups, radios, o, &r2, ev, bu) != PlanStatus::Ok) {
+                return static_cast<int>(-1);
+            }
+            for (const Event& e : ev) {
+                if (e.kind != EventKind::Downlink || e.device != 1) continue;
+                if (e.hops.empty()) continue;
+                return static_cast<int>(e.hops.back().outcome);
+            }
+            return static_cast<int>(-2);  // aucune descente pour le second dispositif
+        };
+
+        const int rx2_sf12 = verdict(12);
+        const int rx2_sf7 = verdict(7);
+        CHECK_EQ(rx2_sf12, static_cast<int>(Outcome::Delivered));
+        CHECK_EQ(rx2_sf7, static_cast<int>(Outcome::LostSensitivity));
+
+        // Contrôle négatif : franchement sous le seuil SF12, la descente reste perdue. La
+        // correction n'est pas un passe-droit — elle déplace le seuil, elle ne l'abaisse pas.
+        {
+            const std::vector<UplinkRecord> sourds{
+                up(0, 0, 10'000'000, UplinkOutcome::Received, -155.0),
+                up(1, 490'000'000, 10'000'000, UplinkOutcome::Received, -155.0)};
+            std::vector<DeviceRx2> r2(2, DeviceRx2{869'525'000, 12, 125'000});
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(sourds, radios, o, &r2, ev, bu), PlanStatus::Ok);
+            int vu = -2;
+            for (const Event& e : ev) {
+                if (e.kind != EventKind::Downlink || e.device != 1 || e.hops.empty()) continue;
+                vu = static_cast<int>(e.hops.back().outcome);
+            }
+            CHECK_EQ(vu, static_cast<int>(Outcome::LostSensitivity));
+        }
+
+        // Et la fenêtre retenue est bien RX2 : c'est la condition du cas, pas une supposition.
+        {
+            std::vector<DeviceRx2> r2(2, DeviceRx2{869'525'000, 12, 125'000});
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &r2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 2u);
+            for (const Event& e : ev) {
+                if (e.kind == EventKind::Downlink && e.device == 1 && !e.hops.empty()) {
+                    CHECK_EQ(e.hops.back().freq_hz, 869'525'000);
+                }
+            }
+        }
+    }
 }

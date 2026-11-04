@@ -148,6 +148,15 @@ class DeviceRadio:
     rx2_sf: int = 12         # SF du débit RX2 (repli régional ; 12 = défaut EU868)
     rx2_bw_hz: int = 125_000
 
+    @property
+    def rx2_disponible(self) -> bool:
+        """La fenêtre de secours est-elle matériellement renseignée ?
+
+        `rx2_hz == 0` : aucune fréquence régionale — on ne peut pas émettre, et la deviner
+        serait inventer une valeur réglementaire. `rx2_sf == 0` : pas de fenêtre de secours.
+        """
+        return self.rx2_hz != 0 and self.rx2_sf != 0
+
 
 @dataclass(frozen=True)
 class HopEvent:
@@ -342,12 +351,41 @@ def _downlink_airtime_ns(radio: DeviceRadio, payload_bytes: int, window: str = "
     return time_on_air_ns(config, payload_bytes)
 
 
-def _received_by_device(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions) -> bool:
+def _rssi_descendant(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions) -> float:
     """Réciprocité : RSSI descendant = RSSI montant - P_dev + P_gw + G_dev."""
-    rssi_dl = (r.rssi_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
-               + options.device_antenna_gain_dbi)
-    threshold = receiver_sensitivity_dbm(radio.rx1_sf, radio.rx1_bw_hz) + options.device_rx_offset_db
-    return rssi_dl >= threshold
+    return (r.rssi_dbm - radio.tx_power_dbm + options.gateway_tx_power_dbm
+            + options.device_antenna_gain_dbi)
+
+
+def _seuil_dispositif(radio: DeviceRadio, options: ProtocolOptions, en_rx2: bool = False) -> float:
+    """Seuil de sensibilité du récepteur, dans la fenêtre réellement émise.
+
+    Le seuil dépend du débit de la fenêtre, et RX2 n'a pas celui de RX1 : au SF12BW125 il est
+    meilleur d'une quinzaine de dB qu'au SF7BW125. Évaluer une descente émise en RX2 avec le
+    seuil de RX1 la déclarerait perdue alors que le dispositif l'entend — la parité entre les
+    deux moteurs ne dit rien de cette erreur, ils la commettaient tous les deux.
+    """
+    if en_rx2 and radio.rx2_disponible:
+        sf, bw = radio.rx2_sf, (radio.rx2_bw_hz or radio.rx1_bw_hz)
+    else:
+        sf, bw = radio.rx1_sf, radio.rx1_bw_hz
+    return receiver_sensitivity_dbm(sf, bw) + options.device_rx_offset_db
+
+
+def _duree_emise(job: "_Job", en_rx2: bool) -> int:
+    """Durée d'antenne de la fenêtre réellement émise, pas celle de RX1."""
+    return job.rx2_airtime_ns if en_rx2 else job.airtime_ns
+
+
+def _received_by_device(r: TxRecord, radio: DeviceRadio, options: ProtocolOptions,
+                        en_rx2: bool = False) -> bool:
+    """Le dispositif entend-il la descente, compte tenu de la fenêtre réellement émise ?
+
+    `en_rx2` : la descente a été repliée en RX2. Sans lui (ou à `False`), le seuil est celui de
+    RX1 — comportement d'avant I3, conservé pour les appelants qui ne savent pas encore quelle
+    fenêtre a abouti.
+    """
+    return _rssi_descendant(r, radio, options) >= _seuil_dispositif(radio, options, en_rx2)
 
 
 def _join_roles(records: Sequence[TxRecord], joined: dict[int, int],
@@ -364,16 +402,43 @@ def _join_roles(records: Sequence[TxRecord], joined: dict[int, int],
             for r in records]
 
 
-def _joined_times(jobs: Sequence[_Job], starts: Sequence[Optional[int]]) -> dict[int, int]:
-    """Instant de réception complète du premier join-accept délivré, par dispositif."""
+def _joined_times(jobs: Sequence[_Job], starts: Sequence[Optional[int]],
+                  fenetres: Optional[Sequence[Optional[str]]] = None,
+                  records: Optional[Sequence[TxRecord]] = None,
+                  radios: Optional[Sequence[DeviceRadio]] = None,
+                  options: Optional[ProtocolOptions] = None) -> dict[int, int]:
+    """Instant de réception complète du premier join-accept délivré, par dispositif.
+
+    La durée et la sensibilité sont celles de la fenêtre **réellement émise** (`fenetres`) : un
+    join-accept replié en RX2 finit plus tard et s'entend de plus loin. Sans `fenetres`, on
+    retombe sur RX1 — comportement d'avant I3.
+    """
     out: dict[int, int] = {}
     for k, job in enumerate(jobs):
         start = starts[k]
-        if job.kind != "join_accept" or start is None or job.device_missed or not job.received:
+        if job.kind != "join_accept" or start is None or job.device_missed:
             continue
-        end = start + job.airtime_ns
+        if not _recu_job(job, k, fenetres, records, radios, options):
+            continue
+        end = start + _duree_emise(job, bool(fenetres) and fenetres[k] == "rx2")
         out[job.device] = min(out.get(job.device, end), end)
     return out
+
+
+def _recu_job(job: "_Job", k: int,
+              fenetres: Optional[Sequence[Optional[str]]],
+              records: Optional[Sequence[TxRecord]],
+              radios: Optional[Sequence[DeviceRadio]],
+              options: Optional[ProtocolOptions]) -> bool:
+    """Sensibilité d'un job, évaluée sur la fenêtre réellement émise.
+
+    Retombe sur `job.received` (seuil RX1) quand l'appelant ne fournit pas la fenêtre ou la
+    trace — c'est le cas de tous les appelants d'avant I3.
+    """
+    if fenetres is None or records is None or radios is None or options is None:
+        return job.received
+    en_rx2 = fenetres[k] == "rx2"
+    return _received_by_device(records[job.record], radios[job.device], options, en_rx2)
 
 
 _MAC_NAME = {LinkCheckReq: "LinkCheckReq", DevStatusReq: "DevStatusReq", DeviceTimeReq: "DeviceTimeReq"}
@@ -579,11 +644,16 @@ def _schedule_gateway(jobs: Sequence[_Job],
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],
             starts: Sequence[Optional[int]], roles: Sequence[bool],
             mac: Optional[MacSchedule] = None,
-            fenetres: Optional[Sequence[Optional[str]]] = None) -> tuple[ProtocolEvent, ...]:
+            fenetres: Optional[Sequence[Optional[str]]] = None,
+            options: Optional[ProtocolOptions] = None) -> tuple[ProtocolEvent, ...]:
     """Événements dans l'ordre temporel, à partir de la trace et de la planification.
 
     `fenetres` : fenêtre réellement émise par job (`"rx1"`, `"rx2"` ou None). Sans elle, toutes
     les descentes sont rapportées en RX1 — comportement d'avant I2.
+
+    `options` : nécessaire pour évaluer la sensibilité **dans la fenêtre émise**. Sans lui, le
+    seuil reste celui de RX1 (comportement d'avant I3) : `job.received`, calculé à la
+    construction des jobs, avant que la fenêtre soit connue.
     """
     pending: list[tuple[int, int, str, int, tuple[HopEvent, ...], str]] = []
 
@@ -592,6 +662,14 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
 
     job_of = {job.record: k for k, job in enumerate(jobs)}
     ranks = _mac_ranks(records)
+    # Réception par job, seuillée dans la fenêtre réellement émise. Calculée ici, une fois la
+    # fenêtre connue : à la construction des jobs on ne sait pas encore si RX1 aboutira.
+    if options is None:
+        recu = [job.received for job in jobs]
+    else:
+        recu = [_received_by_device(records[job.record], radios[job.device], options,
+                                    bool(fenetres) and fenetres[k] == "rx2")
+                for k, job in enumerate(jobs)]
     # DevStatusAns : émise dans l'uplink suivant une DevStatusReq reçue. Confirmée seulement si
     # cet uplink est lui-même reçu par la passerelle ; sinon elle n'apparaît pas dans la trace.
     next_of: dict[int, int] = {}
@@ -603,7 +681,7 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
         last_of[r.device_index] = i
     ds_answer_at: set[int] = set()
     for k, job in enumerate(jobs):
-        if not job.carries_ds or starts[k] is None or job.device_missed or not job.received:
+        if not job.carries_ds or starts[k] is None or job.device_missed or not recu[k]:
             continue
         j = next_of.get(job.record)
         if j is not None and not roles[j] and records[j].outcome == TxRecord.OUTCOME_RECEIVED:
@@ -647,7 +725,7 @@ def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Se
             hop = HopEvent("gw:0", _dev(d), start, freq_dl, None, None, "not_listened")
             add(job.t_open, "rx_window_missed", d, [hop], "device_transmitting")
             continue
-        ok = job.received
+        ok = recu[k]
         down_hop = HopEvent("gw:0", _dev(d), start, freq_dl, None, None,
                             "delivered" if ok else "lost_sensitivity")
         if job.kind == "join_accept":
@@ -684,7 +762,8 @@ def _plan(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], options: P
     roles = _join_roles(records, joined, options)
     jobs = _downlink_jobs(records, radios, options, roles, mac)
     starts, fenetres, busy = _schedule_gateway(jobs, options)
-    return roles, jobs, starts, busy, fenetres, _joined_times(jobs, starts)
+    obtenues = _joined_times(jobs, starts, fenetres, records, radios, options)
+    return roles, jobs, starts, busy, fenetres, obtenues
 
 
 def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
@@ -701,7 +780,7 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
         roles, jobs, starts, _busy, fenetres, new_joined = _plan(records, radios, options,
                                                                  joined, mac)
         if new_joined == joined:
-            return _events(records, radios, jobs, starts, roles, mac, fenetres)
+            return _events(records, radios, jobs, starts, roles, mac, fenetres, options)
         signature = tuple(sorted(new_joined.items()))
         if signature in seen:
             raise RuntimeError(
@@ -1077,7 +1156,8 @@ def _build_trace_python(devices, radios, gateway, propagation, environment, rese
         roles, jobs, starts, new_busy, fenetres, new_joined = _plan(result.records, radios,
                                                                     options, joined, mac)
         if new_busy == busy and new_joined == joined:
-            events = _events(result.records, radios, jobs, starts, roles, mac, fenetres)
+            events = _events(result.records, radios, jobs, starts, roles, mac, fenetres,
+                             options)
             return TraceRun(
                 per_device=result.per_device,
                 totals=result.totals,

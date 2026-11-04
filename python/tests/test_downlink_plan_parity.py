@@ -15,7 +15,8 @@ from lsim.simulator import simulate_uplinks_trace
 def _python_plan(records, radios, options):
     jobs = _downlink_jobs(records, radios, options, [False] * len(records), None)
     starts, fenetres, busy = _schedule_gateway(jobs, options)
-    events = _events(records, radios, jobs, starts, [False] * len(records), None, fenetres)
+    events = _events(records, radios, jobs, starts, [False] * len(records), None, fenetres,
+                    options)
     return events, tuple(busy)
 
 

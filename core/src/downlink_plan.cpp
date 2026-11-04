@@ -74,7 +74,8 @@ struct Job {
     std::int64_t t_open = 0;
     std::int64_t airtime_ns = 0;
     std::int64_t rx1_hz = 0;
-    bool received = false;
+    bool received = false;      // seuil RX1 (réévalué si la descente part en RX2, voir plus bas)
+    double rssi_dl = 0.0;       // réciprocité, indépendant de la fenêtre
     bool device_missed = false;
     // Fenêtre de secours (I1). RX2 n'est ni RX1 ni une répétition : fréquence et débit régionaux
     // propres, donc temps d'antenne distinct — d'où `rx2_airtime_ns` calculé à part.
@@ -207,6 +208,7 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             return PlanStatus::InvalidRadio;
         }
         job.received = rssi_dl >= sens + options.device_rx_offset_db;
+        job.rssi_dl = rssi_dl;
         const std::int64_t nxt = next_start[i];
         job.device_missed = nxt != kNone && nxt < job.t_open + kRx1WindowNs;
         // Fenêtre de secours. Le repli est **opt-in** : il n'existe que si l'appelant a fourni une
@@ -356,6 +358,22 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         const bool rx2_emise = en_rx2[static_cast<std::size_t>(k)] != 0;
         const std::int64_t freq_dl = rx2_emise ? job.rx2_hz : job.rx1_hz;
         const bool manquee = rx2_emise ? job.device_missed_rx2 : job.device_missed;
+        // Sensibilité de la fenêtre **réellement émise**. Le seuil dépend du débit de cette
+        // fenêtre, et RX2 n'a pas celui de RX1 : au SF12BW125 il est meilleur d'une quinzaine de
+        // dB qu'au SF7BW125. Seuiller une descente RX2 avec RX1 la déclarerait perdue alors que
+        // le dispositif l'entend. Les deux moteurs commettaient la même erreur : la parité ne la
+        // voyait pas.
+        bool recu = job.received;
+        if (rx2_emise && job.rx2_disponible()) {
+            double sens_rx2 = 0.0;
+            const std::uint32_t bw = job.rx2_bw_hz != 0 ? job.rx2_bw_hz
+                                                        : radios[job.device].rx1_bw_hz;
+            if (lora::receiver_sensitivity_dbm(job.rx2_sf, static_cast<lora::Bandwidth>(bw),
+                                               sens_rx2) != lora::Status::Ok) {
+                return PlanStatus::InvalidRadio;
+            }
+            recu = job.rssi_dl >= sens_rx2 + options.device_rx_offset_db;
+        }
         Pending ev;
         ev.t = job.t_open;
         ev.ev.device = job.device;
@@ -382,10 +400,10 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         } else {
             ev.ev.t_ns = start;
             ev.ev.kind = job.kind;
-            ev.ev.outcome = job.received ? job.content : Outcome::LostSensitivity;
+            ev.ev.outcome = recu ? job.content : Outcome::LostSensitivity;
             Hop hop;
             hop.dir = HopDir::GwToDev;
-            hop.outcome = job.received ? Outcome::Delivered : Outcome::LostSensitivity;
+            hop.outcome = recu ? Outcome::Delivered : Outcome::LostSensitivity;
             hop.t_ns = start;
             hop.freq_hz = freq_dl;
             ev.ev.hops.push_back(hop);

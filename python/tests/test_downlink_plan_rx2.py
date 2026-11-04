@@ -128,7 +128,8 @@ def test_la_frequence_emise_est_celle_de_rx2():
     starts, fenetres, _occ = _schedule_gateway(jobs, _options())
     if fenetres[1] != "rx2":                     # garde-fou : le cas doit être celui attendu
         pytest.skip("la contention attendue n'est pas reproduite")
-    events = _events(records, (radio, radio), jobs, starts, [False, False], None, fenetres)
+    events = _events(records, (radio, radio), jobs, starts, [False, False], None, fenetres,
+                    _options())
     descendantes = [h for e in events if e.kind == "downlink" for h in e.hops
                     if h.from_id == "gw:0"]
     assert RX2_HZ in [h.freq_hz for h in descendantes]
@@ -320,7 +321,8 @@ def _parite(options, avec_region=False):
              if options.rx2_fallback else plan_native(records, radios, options))
     jobs = _downlink_jobs(records, radios, options, [False] * len(records), None)
     starts, fenetres, busy = _schedule_gateway(jobs, options)
-    events = _events(records, radios, jobs, starts, [False] * len(records), None, fenetres)
+    events = _events(records, radios, jobs, starts, [False] * len(records), None, fenetres,
+                    options)
     return natif, (events, tuple(busy))
 
 
