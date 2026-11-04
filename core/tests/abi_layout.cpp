@@ -424,6 +424,32 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 52;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 56;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 60;
+    // lsim_causal_args (enveloppe causale, I4)
+    inline constexpr size_t size_lsim_causal_args = 108;
+    inline constexpr size_t off_lsim_causal_args__struct_size = 0;
+    inline constexpr size_t off_lsim_causal_args__abi_version = 4;
+    inline constexpr size_t off_lsim_causal_args__devices = 8;
+    inline constexpr size_t off_lsim_causal_args__device_count = 12;
+    inline constexpr size_t off_lsim_causal_args__gateway = 16;
+    inline constexpr size_t off_lsim_causal_args__gateway_v2 = 20;
+    inline constexpr size_t off_lsim_causal_args__prop = 24;
+    inline constexpr size_t off_lsim_causal_args__env = 28;
+    inline constexpr size_t off_lsim_causal_args__radios = 32;
+    inline constexpr size_t off_lsim_causal_args__options = 36;
+    inline constexpr size_t off_lsim_causal_args__per_device = 40;
+    inline constexpr size_t off_lsim_causal_args__totals = 44;
+    inline constexpr size_t off_lsim_causal_args__records = 48;
+    inline constexpr size_t off_lsim_causal_args__record_capacity = 52;
+    inline constexpr size_t off_lsim_causal_args__record_count = 56;
+    inline constexpr size_t off_lsim_causal_args__busy_out = 60;
+    inline constexpr size_t off_lsim_causal_args__busy_capacity = 64;
+    inline constexpr size_t off_lsim_causal_args__busy_count = 68;
+    inline constexpr size_t off_lsim_causal_args__rx2 = 72;
+    inline constexpr size_t off_lsim_causal_args__rx2_count = 76;
+    inline constexpr size_t off_lsim_causal_args__device_rf = 80;
+    inline constexpr size_t off_lsim_causal_args__device_rf_count = 84;
+    inline constexpr size_t off_lsim_causal_args__gateway_rf = 88;
+    inline constexpr size_t off_lsim_causal_args__reserved = 92;
     // lsim_loop_region
     inline constexpr size_t size_lsim_loop_region = 160;
     inline constexpr size_t off_lsim_loop_region__dr_sf = 0;
@@ -959,6 +985,32 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 96;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 104;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 112;
+    // lsim_causal_args (enveloppe causale, I4)
+    inline constexpr size_t size_lsim_causal_args = 192;
+    inline constexpr size_t off_lsim_causal_args__struct_size = 0;
+    inline constexpr size_t off_lsim_causal_args__abi_version = 4;
+    inline constexpr size_t off_lsim_causal_args__devices = 8;
+    inline constexpr size_t off_lsim_causal_args__device_count = 16;
+    inline constexpr size_t off_lsim_causal_args__gateway = 24;
+    inline constexpr size_t off_lsim_causal_args__gateway_v2 = 32;
+    inline constexpr size_t off_lsim_causal_args__prop = 40;
+    inline constexpr size_t off_lsim_causal_args__env = 48;
+    inline constexpr size_t off_lsim_causal_args__radios = 56;
+    inline constexpr size_t off_lsim_causal_args__options = 64;
+    inline constexpr size_t off_lsim_causal_args__per_device = 72;
+    inline constexpr size_t off_lsim_causal_args__totals = 80;
+    inline constexpr size_t off_lsim_causal_args__records = 88;
+    inline constexpr size_t off_lsim_causal_args__record_capacity = 96;
+    inline constexpr size_t off_lsim_causal_args__record_count = 104;
+    inline constexpr size_t off_lsim_causal_args__busy_out = 112;
+    inline constexpr size_t off_lsim_causal_args__busy_capacity = 120;
+    inline constexpr size_t off_lsim_causal_args__busy_count = 128;
+    inline constexpr size_t off_lsim_causal_args__rx2 = 136;
+    inline constexpr size_t off_lsim_causal_args__rx2_count = 144;
+    inline constexpr size_t off_lsim_causal_args__device_rf = 152;
+    inline constexpr size_t off_lsim_causal_args__device_rf_count = 160;
+    inline constexpr size_t off_lsim_causal_args__gateway_rf = 168;
+    inline constexpr size_t off_lsim_causal_args__reserved = 176;
     // lsim_loop_region
     inline constexpr size_t size_lsim_loop_region = 160;
     inline constexpr size_t off_lsim_loop_region__dr_sf = 0;
@@ -1459,6 +1511,31 @@ static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_capacity) == expected::
 static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_count) == expected::off_lsim_plan_downlinks_v2_args__busy_count, "lsim_plan_downlinks_v2_args::busy_count");
 static_assert(offsetof(lsim_plan_downlinks_v2_args, rx2_count) == expected::off_lsim_plan_downlinks_v2_args__rx2_count, "lsim_plan_downlinks_v2_args::rx2_count");
 static_assert(offsetof(lsim_plan_downlinks_v2_args, reserved) == expected::off_lsim_plan_downlinks_v2_args__reserved, "lsim_plan_downlinks_v2_args::reserved");
+static_assert(sizeof(lsim_causal_args) == expected::size_lsim_causal_args, "lsim_causal_args : taille");
+static_assert(offsetof(lsim_causal_args, struct_size) == expected::off_lsim_causal_args__struct_size, "lsim_causal_args::struct_size");
+static_assert(offsetof(lsim_causal_args, abi_version) == expected::off_lsim_causal_args__abi_version, "lsim_causal_args::abi_version");
+static_assert(offsetof(lsim_causal_args, devices) == expected::off_lsim_causal_args__devices, "lsim_causal_args::devices");
+static_assert(offsetof(lsim_causal_args, device_count) == expected::off_lsim_causal_args__device_count, "lsim_causal_args::device_count");
+static_assert(offsetof(lsim_causal_args, gateway) == expected::off_lsim_causal_args__gateway, "lsim_causal_args::gateway");
+static_assert(offsetof(lsim_causal_args, gateway_v2) == expected::off_lsim_causal_args__gateway_v2, "lsim_causal_args::gateway_v2");
+static_assert(offsetof(lsim_causal_args, prop) == expected::off_lsim_causal_args__prop, "lsim_causal_args::prop");
+static_assert(offsetof(lsim_causal_args, env) == expected::off_lsim_causal_args__env, "lsim_causal_args::env");
+static_assert(offsetof(lsim_causal_args, radios) == expected::off_lsim_causal_args__radios, "lsim_causal_args::radios");
+static_assert(offsetof(lsim_causal_args, options) == expected::off_lsim_causal_args__options, "lsim_causal_args::options");
+static_assert(offsetof(lsim_causal_args, per_device) == expected::off_lsim_causal_args__per_device, "lsim_causal_args::per_device");
+static_assert(offsetof(lsim_causal_args, totals) == expected::off_lsim_causal_args__totals, "lsim_causal_args::totals");
+static_assert(offsetof(lsim_causal_args, records) == expected::off_lsim_causal_args__records, "lsim_causal_args::records");
+static_assert(offsetof(lsim_causal_args, record_capacity) == expected::off_lsim_causal_args__record_capacity, "lsim_causal_args::record_capacity");
+static_assert(offsetof(lsim_causal_args, record_count) == expected::off_lsim_causal_args__record_count, "lsim_causal_args::record_count");
+static_assert(offsetof(lsim_causal_args, busy_out) == expected::off_lsim_causal_args__busy_out, "lsim_causal_args::busy_out");
+static_assert(offsetof(lsim_causal_args, busy_capacity) == expected::off_lsim_causal_args__busy_capacity, "lsim_causal_args::busy_capacity");
+static_assert(offsetof(lsim_causal_args, busy_count) == expected::off_lsim_causal_args__busy_count, "lsim_causal_args::busy_count");
+static_assert(offsetof(lsim_causal_args, rx2) == expected::off_lsim_causal_args__rx2, "lsim_causal_args::rx2");
+static_assert(offsetof(lsim_causal_args, rx2_count) == expected::off_lsim_causal_args__rx2_count, "lsim_causal_args::rx2_count");
+static_assert(offsetof(lsim_causal_args, device_rf) == expected::off_lsim_causal_args__device_rf, "lsim_causal_args::device_rf");
+static_assert(offsetof(lsim_causal_args, device_rf_count) == expected::off_lsim_causal_args__device_rf_count, "lsim_causal_args::device_rf_count");
+static_assert(offsetof(lsim_causal_args, gateway_rf) == expected::off_lsim_causal_args__gateway_rf, "lsim_causal_args::gateway_rf");
+static_assert(offsetof(lsim_causal_args, reserved) == expected::off_lsim_causal_args__reserved, "lsim_causal_args::reserved");
 static_assert(sizeof(lsim_loop_region) == expected::size_lsim_loop_region, "lsim_loop_region : taille");
 static_assert(offsetof(lsim_loop_region, dr_sf) == expected::off_lsim_loop_region__dr_sf, "lsim_loop_region::dr_sf");
 static_assert(offsetof(lsim_loop_region, max_dr) == expected::off_lsim_loop_region__max_dr, "lsim_loop_region::max_dr");
@@ -1619,7 +1696,7 @@ inline int run() {
 int main() {
     printf("ABI %s : pointeur %zu octets, alignement max %zu\n", abi_layout::kAbiName,
                 abi_layout::kPointerSize, abi_layout::kMaxAlign);
-    printf("structures vérifiées : 55, grandeurs : 477\n");
+    printf("structures vérifiées : 56, grandeurs : 502\n");
     return abi_layout::run();
 }
 #endif

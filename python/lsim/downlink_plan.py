@@ -140,6 +140,47 @@ LIB.lsim_simulate_uplinks_causal_gw2_v3.argtypes = [
 ] + _CAUSAL_V3_APRES_GW
 
 
+class _CCausalArgs(ctypes.Structure):
+    """`lsim_causal_args` — enveloppe causale (jalon I4, variante C).
+
+    Les champs suivent **exactement** l'ordre de `core/include/lsim/c_api.h`, épinglé par
+    `static_assert` sur les deux cibles dans `core/tests/abi_layout.cpp` (192 octets en x86-64,
+    108 en i386). Chaque table optionnelle porte son propre pointeur **typé** : jamais `void*`.
+    Une confusion de table est donc une erreur ctypes, pas une corruption silencieuse.
+
+    Les six entrées plates demeurent exportées et utilisables ; c'est la production qui passe
+    par l'enveloppe, pour ne plus avoir à choisir entre elles.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
+        ("devices", ctypes.POINTER(_CEndDevice)), ("device_count", ctypes.c_size_t),
+        ("gateway", ctypes.POINTER(_CGateway)),          # exclusif avec gateway_v2
+        ("gateway_v2", ctypes.POINTER(_CGatewayV2)),     # exclusif avec gateway
+        ("prop", ctypes.POINTER(_CPropagation)),
+        ("env", ctypes.POINTER(_CEnvironment)),
+        ("radios", ctypes.POINTER(_CPlanDevice)),
+        ("options", ctypes.POINTER(_CPlanOptions)),
+        ("per_device", ctypes.POINTER(_CDeviceStats)),
+        ("totals", ctypes.POINTER(_CSimStats)),
+        ("records", ctypes.POINTER(_CTxRecord)),
+        ("record_capacity", ctypes.c_size_t), ("record_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("busy_out", ctypes.POINTER(_CInterval)),
+        ("busy_capacity", ctypes.c_size_t), ("busy_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("rx2", ctypes.POINTER(_CPlanDeviceRx2)), ("rx2_count", ctypes.c_size_t),
+        ("device_rf", ctypes.POINTER(_CDeviceRf)), ("device_rf_count", ctypes.c_size_t),
+        ("gateway_rf", ctypes.POINTER(_CGatewayRf)),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
+# Version d'ABI de l'enveloppe : doit égaler LSIM_CAUSAL_ABI_VERSION (c_api.h).
+CAUSAL_ABI_VERSION = 1
+
+LIB.lsim_simulate_uplinks_causal.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_causal.argtypes = [ctypes.POINTER(_CCausalArgs)]
+
+
 class _CPlanDownlinksV2Args(ctypes.Structure):
     _fields_ = [("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
                 ("uplinks", ctypes.POINTER(_CPlanUplink)), ("uplink_count", ctypes.c_size_t),
@@ -236,7 +277,9 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options,
         c_env_ref = None
     else:
         c_env_struct, keep = _c_environment(environment)
-        c_env_ref = ctypes.byref(c_env_struct)
+        # `pointer` et non `byref` : la valeur est stockée dans un CHAMP de structure.
+        # `byref` produit un CArgObject, non assignable à un champ (et sans durée de vie).
+        c_env_ref = ctypes.pointer(c_env_struct)
     c_radios = (_CPlanDevice * max(1, n))()
     for i, d in enumerate(radios):
         c_radios[i].freq_hz = d.freq_hz
@@ -273,21 +316,46 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options,
                 c_rx2[i].rx2_bw_hz = r.rx2_bw_hz
         n_rx2 = n
     with_rx2 = n_rx2 > 0
-    if with_rx2 or with_rf:
-        # v3 réunit les deux extensions. Sans table et sans frontal on reste en v1 : la base est
-        # inchangée à l'octet près (empreintes gelées).
-        causal_fn = (LIB.lsim_simulate_uplinks_causal_gw2_v3 if absolute is not None
-                     else LIB.lsim_simulate_uplinks_causal_v3)
-    elif absolute is not None:
-        causal_fn = LIB.lsim_simulate_uplinks_causal_gw2
+    # --- Appel par l'enveloppe causale (I4, variante C) -------------------------------
+    #
+    # Une seule entrée couvre les six combinaisons {passerelle v1, passerelle v2} x {sans frontal,
+    # avec frontaux} x {sans RX2, avec RX2}. Les six entrées plates demeurent exportées et
+    # inchangées, mais plus aucun appelant de production n'a à choisir entre elles : le choix est
+    # porté par les champs de la structure, ce qui supprime la combinatoire.
+    #
+    # L'équivalence avec l'entrée plate correspondante est vérifiée sur une chronologie commune
+    # (les deux chemins reçoivent les mêmes objets C) dans
+    # `python/tests/test_d315_causal_envelope.py`.
+    args = _CCausalArgs()
+    args.struct_size = ctypes.sizeof(_CCausalArgs)
+    args.abi_version = CAUSAL_ABI_VERSION
+    args.devices = c_devs if n else None
+    args.device_count = n
+    # Passerelle : v1 ou v2, exclusivement. `c_gw` est déjà du bon type selon `absolute`.
+    if absolute is not None:
+        args.gateway_v2 = ctypes.pointer(c_gw)
     else:
-        causal_fn = LIB.lsim_simulate_uplinks_causal_v1
-    args = [c_devs if n else None, n, ctypes.byref(c_gw), ctypes.byref(c_prop), c_env_ref,
-            c_stats if n else None, ctypes.byref(c_tot), records, capacity, ctypes.byref(count),
-            c_radios if n else None, ctypes.byref(c_opt), busy, cap_busy, ctypes.byref(n_busy)]
-    if with_rx2 or with_rf:
-        args += [c_rx2, n_rx2, c_dev_rf if n_dev_rf else None, n_dev_rf, c_gw_rf]
-    status = causal_fn(*args)
+        args.gateway = ctypes.pointer(c_gw)
+    args.prop = ctypes.pointer(c_prop)
+    args.env = c_env_ref
+    args.radios = c_radios if n else None
+    args.options = ctypes.pointer(c_opt)
+    args.per_device = c_stats if n else None
+    args.totals = ctypes.pointer(c_tot)
+    args.records = records
+    args.record_capacity = capacity
+    args.record_count = ctypes.pointer(count)
+    args.busy_out = busy
+    args.busy_capacity = cap_busy
+    args.busy_count = ctypes.pointer(n_busy)
+    args.rx2 = c_rx2
+    args.rx2_count = n_rx2
+    args.device_rf = c_dev_rf if n_dev_rf else None
+    args.device_rf_count = n_dev_rf
+    # `gateway_entry` rend une INSTANCE (ou None) : la conversion implicite de ctypes ne vaut que
+    # pour les arguments d'appel, un champ pointeur exige `pointer` explicite.
+    args.gateway_rf = ctypes.pointer(c_gw_rf) if c_gw_rf is not None else None
+    status = LIB.lsim_simulate_uplinks_causal(ctypes.byref(args))
     del keep
     if status != 0:
         raise StatusError(status)

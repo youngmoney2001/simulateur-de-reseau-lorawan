@@ -869,6 +869,71 @@ int32_t causal_v1_impl(const lsim_end_device* devices, size_t device_count,
                                         const lsim_plan_device_rx2* rx2 = nullptr,
                                         size_t rx2_count = 0);
 
+// ---- Enveloppe causale unique (I4) ----
+//
+// Les six entrées plates {passerelle v1, passerelle v2} x {sans/avec frontaux} x {sans/avec RX2}
+// sont remplacées par une seule entrée dont les arguments sont portés par une structure. Le choix
+// de variante devient un champ, plus un nom de symbole. Les entrées plates demeurent exportées et
+// inchangées : c'est un contrat envers les appelants externes.
+int32_t lsim_simulate_uplinks_causal(const lsim_causal_args* args) {
+    // 950 = LSIM_STATUS_PLAN_BASE ; +1 : refus de validation de l'enveloppe.
+    constexpr int32_t kRefus = LSIM_STATUS_PLAN_BASE + 1;
+    if (args == nullptr) return kRefus;
+    if (args->struct_size != sizeof(lsim_causal_args)) return kRefus;
+    if (args->abi_version != LSIM_CAUSAL_ABI_VERSION) return kRefus;
+
+    // Obligatoires. L'ensemble est **exactement** celui de `causal_v1_impl`, ni plus ni moins :
+    // `env` et `per_device` sont facultatifs (environnement absent, statistiques par terminal non
+    // demandées), et les trois tableaux d'entrée ne le sont qu'à effectif non nul. Ajouter une
+    // contrainte ici romprait un appel que l'entrée plate accepte.
+    if (args->prop == nullptr || args->options == nullptr || args->totals == nullptr ||
+        args->record_count == nullptr || args->busy_count == nullptr) {
+        return kRefus;
+    }
+    if (args->device_count > 0 &&
+        (args->devices == nullptr || args->per_device == nullptr || args->radios == nullptr)) {
+        return kRefus;
+    }
+    if (args->records == nullptr && args->record_capacity > 0) return kRefus;
+    if (args->busy_out == nullptr && args->busy_capacity > 0) return kRefus;
+
+    // Règle d'exclusivité de la passerelle : exactement un des deux pointeurs.
+    const bool gw1 = args->gateway != nullptr;
+    const bool gw2 = args->gateway_v2 != nullptr;
+    if (gw1 == gw2) return kRefus;  // ni l'un ni l'autre, ou les deux
+
+    // Pointeur et compte solidaires : une table est fournie entièrement ou pas du tout.
+    // Sans cette règle, un compte orphelin ferait lire une longueur qui n'est pas celle du
+    // tableau pointé — lecture hors bornes silencieuse (cf. DOWNLINK_PLAN_ABI_V2.md §2.3).
+    if ((args->rx2 == nullptr) != (args->rx2_count == 0)) return kRefus;
+    if ((args->device_rf == nullptr) != (args->device_rf_count == 0)) return kRefus;
+    // Et la longueur annoncée est celle attendue, jamais une autre.
+    if (args->rx2_count != 0 && args->rx2_count != args->device_count) return kRefus;
+    if (args->device_rf_count != 0 && args->device_rf_count != args->device_count) return kRefus;
+
+    // La passerelle v2 porte son propre modèle de sensibilité, validé comme dans gw2_v3.
+    lsim::sim::GatewayAbsoluteSensitivity absolute{};
+    const lsim::sim::GatewayAbsoluteSensitivity* absolu = nullptr;
+    const lsim_gateway* gateway = nullptr;
+    if (gw2) {
+        const lsim_gateway_v2* g = args->gateway_v2;
+        if (g->sensitivity_model > LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2) {
+            return rf_invalid();
+        }
+        absolute = to_absolute(g);
+        absolu = &absolute;
+        gateway = &g->base;
+    } else {
+        gateway = args->gateway;
+    }
+
+    return causal_v1_impl(args->devices, args->device_count, gateway, args->prop, args->env,
+                          args->per_device, args->totals, args->records, args->record_capacity,
+                          args->record_count, args->radios, args->options, args->busy_out,
+                          args->busy_capacity, args->busy_count, absolu, args->device_rf,
+                          args->device_rf_count, args->gateway_rf, args->rx2, args->rx2_count);
+}
+
 int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices, size_t device_count,
                                         const lsim_gateway* gateway, const lsim_propagation* prop,
                                         const lsim_environment* env, lsim_device_stats* per_device,

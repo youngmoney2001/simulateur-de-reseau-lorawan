@@ -1658,6 +1658,71 @@ LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v3(const lsim_end_device* devi
                                                      size_t device_rf_count,
                                                      const lsim_gateway_rf* gateway_rf);
 
+/* ------------------------------------------- Enveloppe causale unique (I4)
+ *
+ * Le chemin causal s'était fragmenté en six entrées : {passerelle v1, passerelle v2} x
+ * {sans frontal, avec frontaux} x {sans RX2, avec RX2}. Chaque appelant devait choisir la bonne
+ * combinaison, et chaque extension en aurait ajouté deux nouvelles.
+ *
+ * Cette entrée unique porte le choix dans la structure : la variante devient un champ, plus un
+ * nom de symbole. Les six entrées plates demeurent exportées et inchangées — c'est un contrat,
+ * pas une tolérance : des appelants externes les utilisent.
+ *
+ * Règles propres à l'enveloppe (au-delà de la validation de `causal_v1_impl`, qui s'applique
+ * telle quelle) :
+ *   - `gateway` et `gateway_v2` sont exclusifs : exactement un des deux, jamais aucun ni les deux.
+ *   - Pointeur et compte sont solidaires pour `rx2` et `device_rf` : une table est fournie
+ *     entièrement ou pas du tout. Un compte orphelin ferait lire une longueur qui n'est pas celle
+ *     du tableau pointé (lecture hors bornes silencieuse, cf. DOWNLINK_PLAN_ABI_V2.md §2.3).
+ *   - La longueur annoncée est celle attendue (`device_count`), jamais une autre.
+ *
+ * Refus de validation de l'enveloppe : LSIM_STATUS_PLAN_BASE + 1. Un refus de validation est
+ * décidé avant tout déréférencement : aucune table n'est lue si l'appel est refusé.
+ *
+ * Typage : chaque table porte son propre pointeur typé, jamais `void*`. Une confusion de table
+ * est une erreur de compilation ou de liaison, pas une corruption silencieuse. */
+#define LSIM_CAUSAL_ABI_VERSION 1u
+
+typedef struct lsim_causal_args {
+    uint32_t struct_size;   /* sizeof(lsim_causal_args) */
+    uint32_t abi_version;   /* LSIM_CAUSAL_ABI_VERSION */
+
+    const lsim_end_device* devices;   /* requis si device_count > 0 */
+    size_t device_count;
+
+    const lsim_gateway* gateway;      /* exclusif avec gateway_v2 */
+    const lsim_gateway_v2* gateway_v2;/* exclusif avec gateway */
+
+    const lsim_propagation* prop;     /* requis */
+    const lsim_environment* env;      /* NULL = pas d'environnement */
+
+    const lsim_plan_device* radios;   /* requis si device_count > 0 */
+    const lsim_plan_options* options; /* requis */
+
+    lsim_device_stats* per_device;    /* requis si device_count > 0 */
+    lsim_sim_stats* totals;           /* requis */
+
+    lsim_tx_record* records;          /* requis si record_capacity > 0 */
+    size_t record_capacity;
+    size_t* record_count;             /* requis */
+
+    lsim_interval* busy_out;          /* requis si busy_capacity > 0 */
+    size_t busy_capacity;
+    size_t* busy_count;               /* requis */
+
+    const lsim_plan_device_rx2* rx2;  /* NULL ou device_count entrées */
+    size_t rx2_count;
+
+    const lsim_device_rf* device_rf;  /* NULL ou device_count entrées */
+    size_t device_rf_count;
+
+    const lsim_gateway_rf* gateway_rf;/* NULL ou 1 entrée (passerelle unique) */
+
+    uint64_t reserved[2];
+} lsim_causal_args;
+
+LSIM_API int32_t lsim_simulate_uplinks_causal(const lsim_causal_args* args);
+
 LSIM_API int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices,
                                                 size_t device_count,
                                                 const lsim_gateway* gateway,
