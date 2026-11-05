@@ -214,7 +214,17 @@ def test_deux_fenetres_separees_par_un_intervalle_libre():
 
 
 def test_la_frequence_emise_est_celle_de_rx2():
-    """Une descente repliée n'est pas sur la fréquence de RX1 : les événements le disent."""
+    """Une descente repliée n'est pas sur la fréquence de RX1 : les événements le disent.
+
+    U0.4 : ce test **se sautait en silence** depuis U0.3. La descente du premier job était
+    artificiellement allongée à 1,5 s, ce qui masquait la RX1 du second (1,3 s) **et** sa RX2
+    (2,3 s) : `fenetres[1]` valait `None` et la garde `pytest.skip` se déclenchait. Le test ne
+    vérifiait donc plus rien depuis le passage à A6, tout en comptant parmi les succès.
+
+    La descente est ramenée à 0,5 s : elle masque la RX1 (ouverte à 1,3 s, émetteur pris
+    jusqu'à 1,6 s) mais pas la RX2 (2,3 s). Et la garde `skip` est remplacée par une assertion,
+    afin qu'un scénario devenu inopérant **échoue** au lieu de se taire.
+    """
     from lsim.trace_events import TxRecord
     radio = _radio()
     air_rx2 = _downlink_airtime_ns(radio, 10, "rx2")
@@ -224,12 +234,19 @@ def test_la_frequence_emise_est_celle_de_rx2():
                   outcome=TxRecord.OUTCOME_RECEIVED, rssi_dbm=-60.0)
     records = [r0, r1]
     jobs = _downlink_jobs(records, (radio, radio), _options(), [False, False], None)
-    # Le premier job est artificiellement allongé pour bloquer la fenêtre RX1 du second.
-    jobs[0] = _job(0, jobs[0].t_open, int(1.5 * SECONDE), air_rx2)
+    # Le premier job est artificiellement allongé pour bloquer la fenêtre RX1 du second,
+    # sans bloquer sa fenêtre de secours.
+    duree_artificielle = int(0.5 * SECONDE)
+    jobs[0] = _job(0, jobs[0].t_open, duree_artificielle, air_rx2)
     jobs[1] = _job(1, jobs[1].t_open, jobs[1].airtime_ns, air_rx2)
+
+    # Préconditions explicites : la RX1 du second est masquée, sa RX2 ne l'est pas.
+    fin_occupation = jobs[0].t_open + duree_artificielle
+    assert jobs[1].t_open < fin_occupation, "la RX1 du second doit être masquée"
+    assert jobs[1].t_open + SECONDE >= fin_occupation, "la RX2 du second doit rester libre"
+
     starts, fenetres, _occ = _schedule_gateway(jobs, _options())
-    if fenetres[1] != "rx2":                     # garde-fou : le cas doit être celui attendu
-        pytest.skip("la contention attendue n'est pas reproduite")
+    assert fenetres[1] == "rx2", "le second job doit être replié en RX2"
     events = _events(records, (radio, radio), jobs, starts, [False, False], None, fenetres,
                     _options())
     descendantes = [h for e in events if e.kind == "downlink" for h in e.hops
