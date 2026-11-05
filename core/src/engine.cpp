@@ -14,6 +14,7 @@
 #include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/link_budget.hpp"
+#include "lsim/radio_scheduler.hpp"
 
 namespace lsim::sim {
 namespace classb = lorawan::classb;
@@ -1663,12 +1664,13 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     std::vector<std::uint8_t> adr_reqs;  // ADRACKReq porté par l'émission (F14)
     std::vector<std::int8_t> drs;
     std::vector<std::int64_t> next_tx;  // émission suivante du même dispositif, -1 si aucune
-    std::vector<Interval> busy;         // émissions passerelle planifiées (croissantes, disjointes)
+    // Occupation de l'émetteur et placement des descentes : délégués à l'ordonnanceur radio
+    // (jalon U0.1), seul propriétaire de la chronologie d'émission. Il applique la règle A6
+    // (TS001 §3.3.5) : départ exact à l'ouverture de la fenêtre, aucun décalage intra-fenêtre.
+    lsim::radio::RadioScheduler scheduler;
     std::vector<LoopDownlink>& dls = out.downlinks;
-    const auto transmitting = [&busy](SimTime start, SimTime end) {
-        auto it = std::lower_bound(busy.begin(), busy.end(), start,
-                                   [](const Interval& b, SimTime s) { return b.end <= s; });
-        return it != busy.end() && it->start < end;
+    const auto transmitting = [&scheduler](SimTime start, SimTime end) {
+        return scheduler.transmitting(start, end);
     };
 
     // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
@@ -1919,31 +1921,38 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         // TS001 §3.3.5 : la descente débute exactement à l'ouverture de la fenêtre, sans décalage. La
         // fenêtre est indisponible si une émission planifiée chevauche [départ, départ + airtime) ;
         // la descente bascule alors sur RX2, puis est perdue si RX2 est aussi occupée.
-        SimTime t_open = ta.end + kLoopRxDelayNs;
-        SimTime start = t_open;
+        // Durées d'émission des deux fenêtres candidates, chacune avec ses propres paramètres
+        // radio : RX2 garde son SF régional, il n'est pas déduit de RX1.
+        //
+        // Les deux sont calculées ici, alors que l'ancien code ne calculait RX2 qu'après un
+        // échec de RX1. Ce changement est sans effet : la validité du calcul d'airtime ne dépend
+        // pas du SF. `lora::validate` n'exige qu'un SF dans [7, 12] (ou 5 en en-tête explicite),
+        // une bande connue, un codage dans [1, 4], une charge <= 255 octets et un préambule
+        // >= 6 symboles — toutes conditions identiques entre RX1 et RX2, le SF montant étant
+        // déjà contraint à [7, 12] par la validation des dispositifs. Les deux appels
+        // réussissent donc ou échouent ensemble.
         rad.rx1_sf = ta.sf;
-        SimTime air = 0;
-        if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
+        SimTime air_rx1 = 0;
+        if (plan::downlink_airtime_ns(rad, base + fopts, air_rx1) != lora::Status::Ok) {
             status = SimStatus::InvalidInput;
             return;
         }
-        bool scheduled = !transmitting(start, start + air);
-        if (!scheduled) {
-            t_open = ta.end + kLoopRx2DelayNs;
-            start = t_open;
-            rad.rx1_sf = kLoopRx2Sf;
-            if (plan::downlink_airtime_ns(rad, base + fopts, air) != lora::Status::Ok) {
-                status = SimStatus::InvalidInput;
-                return;
-            }
-            scheduled = !transmitting(start, start + air);
+        rad.rx1_sf = kLoopRx2Sf;
+        SimTime air_rx2 = 0;
+        if (plan::downlink_airtime_ns(rad, base + fopts, air_rx2) != lora::Status::Ok) {
+            status = SimStatus::InvalidInput;
+            return;
         }
-        if (scheduled) {
-            // Insertion ordonnée : la liste reste croissante et disjointe (requise par `transmitting`).
-            const auto pos = std::upper_bound(busy.begin(), busy.end(), start,
-                                              [](SimTime s, const Interval& b) { return s < b.start; });
-            busy.insert(pos, Interval{start, start + air});
-        }
+        // Placement A6 (TS001 §3.3.5) : RX1 à son ouverture, sinon RX2 à la sienne, sinon aucune
+        // émission. L'ordonnanceur enregistre l'occupation lui-même. Le prédicat `transmitting`
+        // reste utilisé plus bas pour le demi-duplex : une montante qui chevauche l'occupation
+        // est perdue (`lost_gateway_busy`) ; il lit donc la même source que le placement.
+        const lsim::radio::Placement place = scheduler.place(
+            ta.end + kLoopRxDelayNs, air_rx1, ta.end + kLoopRx2DelayNs, air_rx2, true);
+        const SimTime t_open = place.t_open_ns;
+        const SimTime start = place.start_ns;
+        const SimTime air = place.air_ns;
+        const bool scheduled = start >= 0;
         LoopDownlink dl;
         dl.uplink = static_cast<std::uint32_t>(a);
         dl.device = d;
@@ -2311,7 +2320,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         u.answer_ok = oks[a];
         out.uplinks.push_back(u);
     }
-    out.gateway_busy = busy;
+    out.gateway_busy = scheduler.occupancy();
     io.uplink_status = sts;
     // Trace v3 triée par temps ; à temps égal, l'ordre d'insertion (chronologie causale) est conservé.
     std::stable_sort(io.trace.begin(), io.trace.end(),
