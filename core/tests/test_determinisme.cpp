@@ -60,10 +60,15 @@ LoopRegion region() {
 }
 
 // Une exécution de la boucle fermée avec trace interne v3.
+//
+// `st` est dimensionné au nombre de dispositifs : un tableau de taille fixe a provoqué un
+// débordement de pile dès qu'un scénario a dépassé cette taille (détecté par AddressSanitizer en
+// CI, invisible en Release). Le moteur écrit `device_count` statistiques, sans quoi l'appel est
+// invalide — on ne peut donc pas se contenter d'un sous-dimensionnement « tolérant ».
 struct Run {
     LoopResult res;
     LoopChannelIo io;
-    DeviceStats st[4]{};
+    std::vector<DeviceStats> st;
     SimulationStats tot{};
 };
 
@@ -73,9 +78,10 @@ Run run(const std::vector<EndDeviceSpec>& d, const LoopOptions& opt) {
     std::vector<LoopRegion> rg(n, region());
     Run r;
     r.io.trace_v3 = true;
+    r.st.assign(n, DeviceStats{});
     CHECK_EQ(static_cast<int>(simulate_closed_loop_channels(
                  d.data(), n, rv.data(), rg.data(), GatewaySpec{}, PropagationSpec{}, nullptr, opt,
-                 r.st, r.tot, r.res, r.io)),
+                 r.st.data(), r.tot, r.res, r.io)),
              0);
     return r;
 }
