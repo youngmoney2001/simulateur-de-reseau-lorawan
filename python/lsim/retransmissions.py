@@ -49,7 +49,12 @@ MAX_RETRIES = 7                    # LoRaWAN : 0..7 réémissions au-delà de la
 # convergence de l'occupation radio (voir `_simulate_confirmed`) demande des passes
 # supplémentaires — mesuré : 75 itérations au maximum sur 500 scénarios denses, contre 27
 # avant. 128 laisse une marge de 1,7 × ; au-delà, l'erreur est explicite.
-MAX_ITERATIONS = 128
+#
+# Renommé en U0.5 (`MAX_ITERATIONS` → `MAX_ITERATIONS_REEMISSIONS`) : il existait une
+# **seconde** constante homonyme, `trace_events.MAX_ITERATIONS = 64`, indépendante de
+# celle-ci — aucun import croisé, points fixes non imbriqués. Le nom commun laissait croire
+# qu'elles étaient liées. `trace_events` garde sa valeur de 64.
+MAX_ITERATIONS_REEMISSIONS = 128
 
 
 def _canonique(intervalles) -> tuple:
@@ -379,6 +384,28 @@ def _match_ack(schedule, events) -> set[int]:
     return recus
 
 
+def _verifier_coherence_occupation(planned, recues) -> None:
+    """Lève si une descente planifiée recouvre une montante comptée comme reçue.
+
+    Un émetteur demi-duplex ne peut émettre pendant qu'il reçoit. Si le plan final recouvre
+    une montante reçue, le point fixe n'a pas abouti à une solution physique : on le dit, au
+    lieu de rendre silencieusement une trace impossible.
+
+    `planned` : intervalles d'occupation descendante. `recues` : intervalles des montantes
+    comptées comme reçues. Les deux sont comparés sous forme canonique.
+
+    Extraite de la boucle de point fixe pour être **testable directement** : le filet y est
+    inatteignable par construction (voir le commentaire à l'endroit de l'appel), donc aucune
+    suite de tests boîte noire ne peut en démontrer le fonctionnement.
+    """
+    for _d, _f in _canonique(planned):
+        for _a, _b in _canonique(recues):
+            if _d < _b and _a < _f:
+                raise RuntimeError(
+                    "occupation descendante incohérente avec la trace : une descente "
+                    f"[{_d}, {_f}) chevauche une montante reçue [{_a}, {_b})")
+
+
 def _prune_acknowledged(schedule):
     """Retire les réémissions qu'un ACK reçu avant leur départ rend impossibles.
 
@@ -573,6 +600,17 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     perimees = 0
     budget = retransmit.effective_retries
     vu: set[tuple] = set()
+    # Nombre **cumulé** de réémissions déjà programmées pour chaque trame.
+    #
+    # Il ne peut pas être lu sur `attempt.attempt` : `_prune_acknowledged` supprime, à chaque
+    # itération du point fixe, les réémissions qu'un ACK reçu avant leur départ rend impossibles.
+    # Supprimer un essai postérieur fait redescendre le dernier essai de la trame vers un rang
+    # antérieur, ce qui **rouvre le budget**. Comme l'ensemble des ACK reçus oscille avec
+    # l'occupation — l'inconnue même du point fixe — le budget était rouvert indéfiniment et
+    # aucune configuration assez dense ne pouvait converger (75 rembobinages mesurés sur
+    # 18 passes dans le cas étalon). `emis` ne décroît jamais : une trame est émise au plus
+    # `1 + budget` fois, comme le veut la politique de réémission.
+    emis: dict[tuple[int, int, int], int] = {}
     result = None
     events: tuple = ()
     planned: tuple = ()
@@ -589,7 +627,7 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     # Occupations déjà produites, pour détecter une oscillation de l'**occupation** elle-même —
     # distincte de celle du calendrier, gardée plus bas.
     occupations_vues: set = set()
-    for _iteration in range(MAX_ITERATIONS):
+    for _iteration in range(MAX_ITERATIONS_REEMISSIONS):
         # L'occupation **imposée** à cette itération est conservée, pour être comparée à celle
         # qui en sortira. Sans cette capture, la comparaison serait vide de sens : `occupation`
         # est réaffecté plus bas, avant le test de sortie.
@@ -689,7 +727,10 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
         for index in sorted(dernier.values()):
             attempt = schedule[index]
             cle = attempt.key
-            if cle in acquittees or attempt.attempt >= budget:
+            # Le budget porte sur le compte cumulé, non sur le rang courant — voir `emis` plus
+            # haut. Le rang reste le seul point de départ honnête pour une trame jamais
+            # réémise : `attempt.attempt` y égale le nombre de réémissions déjà programmées.
+            if cle in acquittees or emis.get(cle, attempt.attempt) >= budget:
                 continue
             debut = attempt.end_ns + retransmit.retransmit_delay_ms * 1_000_000
             if _is_stale(timelines, attempt.device, attempt.session, debut):
@@ -710,6 +751,7 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
                                      received=False, delivery=DownlinkDelivery.NONE,
                                      ack=AckReception.NONE, acked=False,
                                      f_cnt_up=attempt.f_cnt_up, session=attempt.session))
+            emis[cle] = emis.get(cle, attempt.attempt) + 1
         # --- Convergence de l'occupation radio (chemin MAC seulement) -----------------------
         # Sans la seconde condition, la boucle pouvait sortir dès la première itération : le
         # plan venait d'être produit sous une occupation vide, la trace qui l'avait engendré
@@ -743,22 +785,23 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
             raise RuntimeError("pas de point fixe des réémissions : calendrier répété à l'identique")
         vu.add(signature)
     else:
-        raise RuntimeError(f"pas de point fixe des réémissions après {MAX_ITERATIONS} itérations")
+        raise RuntimeError(f"pas de point fixe des réémissions après {MAX_ITERATIONS_REEMISSIONS} itérations")
 
     # --- Le résultat rendu doit être physiquement possible ---------------------------------
-    # Un émetteur demi-duplex ne peut émettre pendant qu'il reçoit. Si le plan final recouvre
-    # une montante comptée comme reçue, le point fixe n'a pas abouti à une solution physique :
-    # on le dit, au lieu de rendre silencieusement une trace impossible. C'est le filet qui
-    # rend la convergence vérifiable de l'extérieur, et non seulement espérée.
+    # Un émetteur demi-duplex ne peut émettre pendant qu'il reçoit. C'est le filet qui rend
+    # la convergence vérifiable de l'extérieur, et non seulement espérée.
+    #
+    # Il est **inatteignable en l'état** : la boucle ne sort que lorsque l'occupation produite
+    # égale l'occupation imposée, et la trace a été jouée sous cette même occupation — une
+    # montante qui la recouvre est donc `gateway_busy` (issue 3), jamais `received` (issue 2).
+    # Mesuré : 0 déclenchement sur les 400 configurations de l'audit. Il reste en place comme
+    # garantie contre une régression future de la condition de sortie, et il est testable
+    # directement (voir `_verifier_coherence_occupation`).
     if mac_plan is not None and result is not None:
-        _recues = tuple((int(r.start_ns), int(r.end_ns))
-                        for r in result.records if r.outcome == 2)
-        for _d, _f in _canonique(planned):
-            for _a, _b in _recues:
-                if _d < _b and _a < _f:
-                    raise RuntimeError(
-                        "occupation descendante incohérente avec la trace : une descente "
-                        f"[{_d}, {_f}) chevauche une montante reçue [{_a}, {_b})")
+        _verifier_coherence_occupation(
+            planned,
+            tuple((int(r.start_ns), int(r.end_ns))
+                  for r in result.records if r.outcome == 2))
 
     assert result is not None
     acquittees = {a.key for a in schedule if a.acked}

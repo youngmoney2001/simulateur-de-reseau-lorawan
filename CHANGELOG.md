@@ -2,6 +2,73 @@
 
 ## 0.1.0 (non publiée)
 
+### U0.5 — Convergence du point fixe : budget de réémissions cumulé
+
+Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre
+configurations denses qui oscillaient au lieu de converger**. Périmètre : la convergence
+seulement ; ni `DECALE`, ni A6, ni les règles MAC, ni l'ABI, ni le budget réglementaire
+descendant ne sont touchés.
+
+**Le défaut.** Le budget de réémissions portait sur le **rang courant** de l'essai
+(`attempt.attempt >= budget`). Or `_prune_acknowledged` est appelée à l'intérieur de la
+boucle de point fixe : elle supprime, à chaque itération, les réémissions qu'un ACK reçu
+avant leur départ rend impossibles. Supprimer un essai postérieur fait **redescendre** le
+dernier essai de la trame vers un rang antérieur, ce qui **rouvre le budget**. Comme
+l'ensemble des ACK reçus oscille avec l'occupation — l'inconnue même du point fixe — le
+budget était rouvert indéfiniment. Mesuré sur le cas étalon : **75 rembobinages sur
+18 passes**, et aucune borne sur le nombre total d'émissions d'une trame.
+
+Ce défaut est **antérieur à U0.4-bis** : il était masqué par la sortie prématurée que
+U0.4-bis a supprimée. Deux des quatre configurations convergeaient en **une seule passe**,
+sans jamais avoir rejoué la trace sous l'occupation qu'elles venaient de produire.
+
+**La correction.** Le budget est désormais compté **cumulativement** (`emis`), et ne décroît
+jamais : une trame est émise au plus `1 + retries` fois, comme le veut la politique de
+réémission. L'élagage reste dans la boucle — le déplacer après la boucle, variante mesurée
+et écartée, laisserait des réémissions fantômes occuper la radio et bloquer des
+transmissions réelles.
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Trois des quatre configurations denses convergent désormais, au lieu de lever une erreur.
+Sur les 400 configurations de l'audit, **8** voient leur résultat modifié
+(86, 117, 125, 189, 240, 288, 319, 365), d'au plus 4 transmissions et 4 trames livrées.
+Agrégats : 14 transmissions en moins, 2 montantes reçues en moins, 11 pertes d'occupation
+passerelle en moins, 6 trames livrées en moins. Aucune violation du demi-duplex n'apparaît :
+le test de balayage reste à zéro sur les 400.
+
+**Limite connue — une oscillation qui n'est pas un défaut de budget.** Une configuration
+(11 terminaux, période 15 s, `retries=3`) continue de lever une erreur explicite. Son
+oscillation est d'une autre nature : seules 9 trames sur 62 atteignent le budget, et la
+trajectoire est **identique** avec ou sans budget cumulé. C'est un cycle de période 3 de
+l'application (calendrier, occupation) → (calendrier, occupation), qu'aucune correction
+numérique ne résout ; la traiter demanderait une décision de modèle. Taux d'oscillation sur
+1 500 configurations denses : 0,33 % avant, **0,20 %** après.
+
+**Homonymie levée.** Il existait deux constantes `MAX_ITERATIONS` indépendantes — 128 dans
+`retransmissions` (point fixe des réémissions), 64 dans `trace_events` (deux boucles :
+jointures, et montantes ↔ descentes). Aucun import croisé, points fixes non imbriqués.
+Elles s'appellent désormais `MAX_ITERATIONS_REEMISSIONS` et `MAX_ITERATIONS_TRACE`.
+*Rupture pour d'éventuels importateurs directs* : ni l'une ni l'autre ne figure dans
+`lsim.__all__`.
+
+**Comparaison canonique partagée.** `trace_events` comparait les occupations par égalité de
+listes brutes, ce qui n'était correct que parce que `GatewayArbiter.occupation` se trouve
+être triée chronologiquement — une propriété d'implémentation, qu'aucun test ne verrouillait.
+La comparaison et la signature de détection de cycle passent par la forme canonique, comme
+dans `retransmissions`. Un test fige désormais l'ordre de l'arbitre.
+
+**Filet physique extrait et testé.** Le filet qui lève plutôt que de rendre une trace
+impossible est **inatteignable depuis la boucle** : celle-ci ne sort que lorsque l'occupation
+produite égale l'occupation imposée, et la trace a été jouée sous cette même occupation.
+Mesuré : 0 déclenchement sur les 400 configurations. Il est donc extrait en
+`_verifier_coherence_occupation` et testé directement — la mutation qui le neutralisait
+n'était détectée par aucune suite boîte noire.
+
+**Non traité ici** : le colmatage préventif des trois sites créant un arbitre isolé
+(`ack_mac.py:356`, `join.py:557`, `join.py:566`) — aucun n'est atteint par
+`simulate_confirmed_uplinks`, ses appelants de production passant toujours un arbitre ;
+l'oscillation structurelle décrite plus haut, qui relève d'une décision de modèle.
+
 ### U0.4-bis — Convergence de l'occupation radio sur le chemin MAC
 
 Sixième jalon de la refonte U0. Il corrige un contournement du demi-duplex **révélé par

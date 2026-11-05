@@ -16,7 +16,7 @@ Modèle de la passerelle (demi-duplex, un émetteur) :
 - pendant une émission de downlink, elle ne reçoit pas : une trame montante qui la chevauche est
   perdue (issue `lost_gateway_busy`). Les émissions de downlink dépendent des uplinks reçus, et
   inversement : le calcul itère jusqu'à un point fixe, sinon il échoue (pas de résultat faux).
-  La boucle s'arrête à `MAX_ITERATIONS` (64) ; si l'état se répète à l'identique, le cycle est
+  La boucle s'arrête à `MAX_ITERATIONS_TRACE` (64) ; si l'état se répète à l'identique, le cycle est
   signalé immédiatement : une répétition exacte ne peut pas converger, quel que soit le nombre
   de tours supplémentaires.
 
@@ -89,7 +89,7 @@ JOIN_ACCEPT_BYTES = 17
 # en 9 à 21 itérations ; les 69 configurations qui échouaient avec l'ancienne borne de 12 en
 # demandaient 13 à 21. 64 laisse une marge d'un facteur 3 sans changer une seule configuration
 # déjà convergente (celles-ci s'arrêtent au même point fixe, au même tour).
-MAX_ITERATIONS = 64
+MAX_ITERATIONS_TRACE = 64
 
 _UPLINK_OUTCOME = {
     TxRecord.OUTCOME_LOST_SENSITIVITY: "lost_sensitivity",
@@ -800,7 +800,7 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
     """
     joined: dict[int, int] = {}
     seen: dict[tuple, int] = {(): 0}
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    for iteration in range(1, MAX_ITERATIONS_TRACE + 1):
         roles, jobs, starts, _busy, fenetres, new_joined = _plan(records, radios, options,
                                                                  joined, mac)
         if new_joined == joined:
@@ -814,7 +814,7 @@ def build_protocol_events(records: Sequence[TxRecord], radios: Sequence[DeviceRa
         seen[signature] = iteration
         joined = new_joined
     raise RuntimeError("pas de point fixe pour les jointures (build_protocol_events) "
-                       f"après {MAX_ITERATIONS} itérations")
+                       f"après {MAX_ITERATIONS_TRACE} itérations")
 
 
 def _schedule_of(scenario: Scenario) -> Optional[MacSchedule]:
@@ -1039,7 +1039,7 @@ def build_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()
     Point fixe : les trames montantes dépendent des émissions passerelle, qui dépendent des
     uplinks reçus. L'itération s'arrête quand les émissions utilisées par le moteur sont celles
     que produit la trace obtenue. Une répétition exacte de l'état est un cycle : erreur explicite
-    immédiate. Pas de convergence après `MAX_ITERATIONS` itérations : erreur explicite aussi.
+    immédiate. Pas de convergence après `MAX_ITERATIONS_TRACE` itérations : erreur explicite aussi.
     Aucun résultat approximatif n'est renvoyé.
     """
     devices, group_of, _indices = scenario.deploy()
@@ -1193,15 +1193,22 @@ def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOpt
 def _build_trace_python(devices, radios, gateway, propagation, environment, reservations,
                         options: ProtocolOptions, mac: Optional[MacSchedule]) -> TraceRun:
     """Point fixe Python (oracle, et chemin avec jointure ou MAC) : voir `build_trace`."""
+    # La comparaison des occupations passe par une forme canonique, comme dans
+    # `retransmissions` : deux occupations sont égales dès qu'elles couvrent les mêmes
+    # intervalles, sans égard à l'ordre ni à d'éventuelles répétitions. La comparaison brute
+    # (`new_busy == busy`) n'était correcte que parce que `GatewayArbiter.occupation` se
+    # trouve être triée chronologiquement : une propriété d'implémentation, non une garantie.
+    from lsim.retransmissions import _canonique
+
     busy: list[tuple[int, int]] = []
     joined: dict[int, int] = {}
     seen: dict[tuple, int] = {((), ()): 0}
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    for iteration in range(1, MAX_ITERATIONS_TRACE + 1):
         result = simulate_uplinks_trace(devices, gateway, propagation, environment,
                                         gateway_busy=busy, reservations=reservations)
         roles, jobs, starts, new_busy, fenetres, new_joined = _plan(result.records, radios,
                                                                     options, joined, mac)
-        if new_busy == busy and new_joined == joined:
+        if _canonique(new_busy) == _canonique(busy) and new_joined == joined:
             events = _events(result.records, radios, jobs, starts, roles, mac, fenetres,
                              options)
             return TraceRun(
@@ -1212,7 +1219,7 @@ def _build_trace_python(devices, radios, gateway, propagation, environment, rese
                 events=events,
                 gateway_tx=tuple(busy),
             )
-        signature = (tuple(new_busy), tuple(sorted(new_joined.items())))
+        signature = (_canonique(new_busy), tuple(sorted(new_joined.items())))
         if signature in seen:
             raise RuntimeError(
                 "pas de point fixe entre trames montantes et émissions passerelle : état répété "
@@ -1222,7 +1229,7 @@ def _build_trace_python(devices, radios, gateway, propagation, environment, rese
         busy, joined = new_busy, new_joined
     raise RuntimeError(
         f"pas de point fixe entre trames montantes et émissions passerelle "
-        f"après {MAX_ITERATIONS} itérations")
+        f"après {MAX_ITERATIONS_TRACE} itérations")
 
 
 # --- Passerelles multiples -------------------------------------------------------------------

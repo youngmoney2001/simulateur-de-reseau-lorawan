@@ -20,7 +20,7 @@ import random
 
 import pytest
 
-from lsim.retransmissions import (MAX_ITERATIONS, RetransmissionOptions,
+from lsim.retransmissions import (MAX_ITERATIONS_REEMISSIONS, RetransmissionOptions,
                                   simulate_confirmed_uplinks)
 from lsim.simulator import EndDevice, Gateway, Propagation
 from lsim.trace_events import DeviceRadio, ProtocolOptions
@@ -298,10 +298,11 @@ def test_forme_canonique_triee_dedupliee_et_insensible_a_l_ordre():
 def test_budget_d_iterations_et_erreur_explicite():
     """[C] Le budget est borné, et l'erreur en cas de non-convergence est explicite.
 
-    `MAX_ITERATIONS` a été relevé de 32 à 128 : la convergence de l'occupation demande des
+    `MAX_ITERATIONS_REEMISSIONS` a été relevé de 32 à 128 : la convergence de l'occupation
+    demande des
     passes supplémentaires (75 mesurées au maximum sur 500 scénarios denses, contre 27 avant).
     """
-    assert MAX_ITERATIONS == 128
+    assert MAX_ITERATIONS_REEMISSIONS == 128
     # La limite est atteignable en principe mais ne doit jamais produire de résultat
     # silencieusement faux : le code lève, il ne rend pas.
     import inspect
