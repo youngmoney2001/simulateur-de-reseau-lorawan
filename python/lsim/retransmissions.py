@@ -54,6 +54,15 @@ MAX_RETRIES = 7                    # LoRaWAN : 0..7 réémissions au-delà de la
 # **seconde** constante homonyme, `trace_events.MAX_ITERATIONS = 64`, indépendante de
 # celle-ci — aucun import croisé, points fixes non imbriqués. Le nom commun laissait croire
 # qu'elles étaient liées. `trace_events` garde sa valeur de 64.
+#
+# Limite **empirique**, non démontrée. Depuis que la détection d'état répété porte sur la
+# paire (calendrier, occupation) — et non plus sur le calendrier seul — la borne théorique
+# d'atteinte du plafond est beaucoup plus grande : l'espace d'états est fini (le budget
+# cumulé borne le calendrier, l'occupation en découle) mais vaste. Mesuré : **74 passes au
+# plus** sur 1 500 scénarios denses, 23 sur le balayage de référence à 400, aucune
+# configuration au plafond. La marge n'est que de 1,7 ×, et elle n'a **pas** été éprouvée
+# au-delà de 16 terminaux. Le plafond reste le filet : il **lève** explicitement, il ne rend
+# jamais un résultat silencieusement faux.
 MAX_ITERATIONS_REEMISSIONS = 128
 
 
@@ -780,9 +789,23 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
             continue
         schedule = schedule + nouvelles
         schedule = _prune_acknowledged(schedule)
-        signature = tuple((a.device, a.session, a.frame, a.attempt, a.start_ns) for a in schedule)
+        # L'état du système est la **paire** (calendrier, occupation imposée), pas le
+        # calendrier seul. Un même calendrier peut revenir sous des occupations différentes :
+        # ce n'est pas un cycle, seulement une répétition d'une projection incomplète.
+        #
+        # La méprise a coûté un faux diagnostic : l'essai 334 était déclaré oscillant de
+        # période 3 alors qu'aucun état complet ne se répétait sur ses 22 passes. La garde
+        # l'arrêtait à la 8ᵉ ; il converge à la 22ᵉ (192 intervalles imposés = produits).
+        #
+        # L'occupation est prise sous forme canonique, comme la condition de sortie : deux
+        # occupations couvrant les mêmes intervalles sont le même état, quel que soit l'ordre
+        # de restitution de l'arbitre.
+        signature = (tuple((a.device, a.session, a.frame, a.attempt, a.start_ns)
+                           for a in schedule), _canonique(occupation_imposee))
         if signature in vu:
-            raise RuntimeError("pas de point fixe des réémissions : calendrier répété à l'identique")
+            raise RuntimeError(
+                "pas de point fixe des réémissions : état répété à l'identique (même "
+                "calendrier sous la même occupation)")
         vu.add(signature)
     else:
         raise RuntimeError(f"pas de point fixe des réémissions après {MAX_ITERATIONS_REEMISSIONS} itérations")

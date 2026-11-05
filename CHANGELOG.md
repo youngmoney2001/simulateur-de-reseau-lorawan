@@ -36,13 +36,17 @@ Agrégats : 14 transmissions en moins, 2 montantes reçues en moins, 11 pertes d
 passerelle en moins, 6 trames livrées en moins. Aucune violation du demi-duplex n'apparaît :
 le test de balayage reste à zéro sur les 400.
 
-**Limite connue — une oscillation qui n'est pas un défaut de budget.** Une configuration
-(11 terminaux, période 15 s, `retries=3`) continue de lever une erreur explicite. Son
-oscillation est d'une autre nature : seules 9 trames sur 62 atteignent le budget, et la
-trajectoire est **identique** avec ou sans budget cumulé. C'est un cycle de période 3 de
-l'application (calendrier, occupation) → (calendrier, occupation), qu'aucune correction
-numérique ne résout ; la traiter demanderait une décision de modèle. Taux d'oscillation sur
-1 500 configurations denses : 0,33 % avant, **0,20 %** après.
+**⚠ Diagnostic erroné, rectifié en U0.5-bis.** Ce jalon laissait une configuration
+(11 terminaux, période 15 s, `retries=3`) lever une erreur, décrite ici comme « un cycle de
+période 3 … qu'aucune correction numérique ne résout ». **Cette analyse était fausse**, et
+l'est restée faute d'avoir cherché plus loin que la garde qui la produisait. L'observation
+de départ était juste — seules 9 trames sur 62 atteignent le budget, trajectoire identique
+avec ou sans budget cumulé — mais la conclusion ne l'était pas : la configuration **converge**
+en 22 passes vers un point fixe cohérent (192 intervalles imposés = produits, aucune
+violation). La « période 3 » était un artefact : la garde comparait le **calendrier seul**,
+et le calendrier de 109 tentatives revient aux passes 3 et 7 **sous des occupations
+différentes** (195 puis 228 intervalles). Aucun état complet ne se répétait. Voir U0.5-bis.
+Taux d'oscillation sur 1 500 configurations denses : 0,33 % avant, **0,20 %** après.
 
 **Homonymie levée.** Il existait deux constantes `MAX_ITERATIONS` indépendantes — 128 dans
 `retransmissions` (point fixe des réémissions), 64 dans `trace_events` (deux boucles :
@@ -68,6 +72,76 @@ n'était détectée par aucune suite boîte noire.
 (`ack_mac.py:356`, `join.py:557`, `join.py:566`) — aucun n'est atteint par
 `simulate_confirmed_uplinks`, ses appelants de production passant toujours un arbitre ;
 l'oscillation structurelle décrite plus haut, qui relève d'une décision de modèle.
+
+### U0.5-bis — Détection d'état répété sur la paire (calendrier, occupation)
+
+Huitième jalon de la refonte U0. Il corrige un **faux diagnostic** porté par U0.5 et la
+garde qui l'avait produit. Périmètre strict : la détection des états répétés. Ni `DECALE`,
+ni A6, ni les règles MAC, ni l'ABI, ni le budget réglementaire descendant ne sont touchés ;
+le budget cumulé de réémissions et l'élagage dans la boucle sont **conservés**.
+
+**Le défaut.** La garde de détection des états répétés comparait le **calendrier seul** :
+
+```python
+signature = tuple((a.device, a.session, a.frame, a.attempt, a.start_ns) for a in schedule)
+```
+
+Or l'état du système est la **paire** (calendrier, occupation imposée). Un même calendrier
+peut revenir sous une occupation différente : ce n'est pas un cycle, seulement la répétition
+d'une projection incomplète de l'état.
+
+**Conséquence mesurée.** L'essai 334 — 11 terminaux, période 15 s, `retries=3` — était
+déclaré oscillant de période 3 et rejeté. En réalité :
+
+- le calendrier de 109 tentatives revient aux passes 3 et 7, sous des occupations imposées
+  de **195** puis **228** intervalles ;
+- **aucun état complet ne se répète** sur les 22 passes de la trajectoire ;
+- l'occupation converge par oscillation amortie : 156 → 204 → 174 → 192 → 174 → 213 → 168 →
+  195 → 180 → 189 → 180 → 198 → 186 → **192** ;
+- le point fixe est atteint à la 22ᵉ passe : 192 intervalles imposés = produits, 64 montantes
+  reçues, **0 violation** du demi-duplex, résultat identique sur trois exécutions.
+
+La garde interrompait donc une convergence en cours, et U0.5 en avait fait une « limite
+connue » au lieu d'y voir son propre défaut.
+
+**Pourquoi le budget cumulé ne pouvait pas y suffire.** Au moment du faux positif, seules
+**9 trames sur 62** atteignent le budget, et ce compte est **constant** d'un état à l'autre
+(9/9/9). Les trames qui saturent le budget ne sont pas celles qui alternent : 16 trames
+oscillent entre les rangs 0 et 1, en deux groupes en antiphase (terminaux 0, 2, 9, 10 contre
+terminal 3 ; terminaux 4 et 8 sur une autre phase). Borner le cumul plafonne la taille du
+calendrier, il ne stabilise pas l'alternance des ACK — ce qui explique que U0.5 ait résolu
+les essais 11, 61 et 318, mais pas celui-ci.
+
+**La correction.** La signature porte désormais sur l'état complet, occupation sous forme
+canonique :
+
+```python
+signature = (tuple((a.device, a.session, a.frame, a.attempt, a.start_ns)
+                   for a in schedule), _canonique(occupation_imposee))
+```
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Une configuration passe de « erreur explicite » à « résultat rendu » : l'essai 334 fournit
+désormais 111 transmissions, 64 montantes reçues, 59 trames livrées et 41 pertes
+d'occupation passerelle. Ce n'est pas une non-régression : c'est une configuration que le
+simulateur **refusait à tort**. Sur le balayage de référence à 400 configurations, **0
+modification** — compteurs identiques au bit près, nombre total de passes identique (1698).
+Sur 1 500 scénarios denses : **0 oscillation** (contre 3), soit 0,00 % contre 0,20 %.
+
+**Limite empirique de la borne d'itérations — à ne pas lire comme une garantie.** Depuis que
+la détection porte sur la paire (calendrier, occupation), la borne **théorique** d'atteinte
+du plafond est beaucoup plus grande : l'espace d'états est fini — le budget cumulé borne le
+calendrier, l'occupation en découle — mais vaste. Mesuré : **74 passes au plus** sur 1 500
+scénarios denses, 23 sur les 400 de référence, **aucune configuration au plafond**. La marge
+n'est que de **1,7 ×** et n'a **pas** été éprouvée au-delà de 16 terminaux. Le plafond de 128
+reste un filet empirique, non une borne démontrée : il **lève** explicitement
+(`pas de point fixe des réémissions après … itérations`) et ne rend jamais silencieusement
+un résultat faux. Les gardes d'oscillation du calendrier et de l'occupation, ainsi que le
+filet de cohérence physique, demeurent actifs.
+
+**Non traité ici** : le colmatage préventif des trois sites créant un arbitre isolé
+(`ack_mac.py:356`, `join.py:557`, `join.py:566`) — aucun n'est atteint par
+`simulate_confirmed_uplinks` ; toute autre refonte de la convergence.
 
 ### U0.4-bis — Convergence de l'occupation radio sur le chemin MAC
 

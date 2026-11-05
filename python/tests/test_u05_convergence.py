@@ -129,17 +129,61 @@ def test_configurations_denses_convergent(nom):
     assert r.frames_delivered > 0
 
 
-def test_l_oscillation_structurelle_leve_au_lieu_de_rendre():
-    """[C] L'essai 334 reste non convergent : c'est une **limite connue**, pas un défaut masqué.
+def test_essai_334_converge_vers_un_point_fixe_coherent():
+    """[C] L'essai 334 converge — et non pas « oscille structurellement ».
 
-    Son oscillation est d'une autre nature que les trois autres : seules 9 trames sur 62
-    atteignent le budget, et la trajectoire est **identique** avec ou sans budget cumulé.
-    C'est un cycle de période 3 de l'application (calendrier, occupation) → (calendrier,
-    occupation), qu'aucune correction numérique ne résout. Le code **lève** explicitement
-    au lieu de rendre une trace physiquement incohérente.
+    **Diagnostic d'U0.5 rectifié.** Il avait été décrit comme un cycle de période 3 que rien
+    ne pouvait résorber. C'était un artefact de la garde : celle-ci comparait le **calendrier
+    seul**, et le calendrier de 109 tentatives revient effectivement aux passes 3 et 7 — mais
+    sous des occupations imposées différentes (195 puis 228 intervalles). **Aucun état complet
+    ne se répétait** sur les 22 passes ; la garde arrêtait la convergence à la 8ᵉ.
+
+    Le point fixe existe : 192 intervalles imposés = produits, 64 montantes reçues, aucune
+    violation du demi-duplex. La garde portant désormais sur la paire (calendrier,
+    occupation), il est atteint.
     """
-    with pytest.raises(RuntimeError, match="pas de point fixe des réémissions"):
-        _jouer("334")
+    r = _jouer("334")
+    assert r.transmissions > 0
+    # Le résultat attendu, mesuré : il fige la convergence au lieu de la supposer.
+    assert r.transmissions == 111
+    assert r.received == 64
+    assert r.frames_delivered == 59
+    assert r.lost_gateway_busy == 41
+
+
+def test_essai_334_ne_consomme_pas_son_budget_dans_l_oscillation():
+    """[C] Ce n'était pas le budget qui alimentait l'oscillation — la preuve.
+
+    Au moment où la garde (ancienne) croyait détecter un cycle, seules **9 trames sur 62**
+    atteignaient le budget `retries=3`, et ce compte était **constant** d'un état à l'autre.
+    Borner le cumul des émissions ne pouvait donc pas stabiliser l'alternance des ACK : c'est
+    pourquoi U0.5 a résolu les essais 11, 61 et 318, mais pas celui-ci.
+    """
+    r = _jouer("334")
+    par_trame = collections.Counter((a.device, a.session, a.frame) for a in r.attempts)
+    # Au plus 1 + retries émissions par trame, comme la politique le veut.
+    assert max(par_trame.values()) <= 1 + _CONFIGURATIONS["334"]["opts"]["retries"]
+    # Et la convergence n'épuise pas ce budget : des trames restent en deçà.
+    assert sum(1 for v in par_trame.values()
+               if v < 1 + _CONFIGURATIONS["334"]["opts"]["retries"]) > 0
+
+
+def test_la_garde_compare_l_etat_complet_et_non_le_calendrier_seul():
+    """[C] La signature de détection porte sur la paire (calendrier, occupation imposée).
+
+    Un même calendrier sous une occupation différente n'est **pas** un état répété. C'est
+    toute la correction : la comparer au calendrier seul produisait des faux positifs et
+    interrompait des convergences en cours.
+    """
+    import inspect
+
+    source = inspect.getsource(simulate_confirmed_uplinks.__module__ and
+                               __import__("lsim.retransmissions", fromlist=["_"]))
+    attendu = ("signature = (tuple((a.device, a.session, a.frame, a.attempt, a.start_ns)\n"
+               "                           for a in schedule), _canonique(occupation_imposee))")
+    assert attendu in source, "la signature ne porte plus sur (calendrier, occupation)"
+    # L'ancienne forme, sur le calendrier seul, ne doit plus exister.
+    assert "for a in schedule)\n        if signature in vu" not in source
 
 
 # --------------------------------------------------------------------------- 4. homonymie
