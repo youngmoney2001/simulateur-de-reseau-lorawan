@@ -398,12 +398,20 @@ inline constexpr std::uint8_t kLoopCmdDeviceTime = 8;  // DeviceTimeAns (FOpts, 
 inline constexpr std::uint8_t kLoopCmdDevStatus = 16;  // DevStatusReq (FOpts, 1 octet)
 
 // Descente créée (ACK, donnée ou MAC seul) pour un uplink reçu.
+// Indice absent (jalon U0.2 : également la valeur d'absence de `frame_id`).
+inline constexpr std::uint32_t kLoopNoIndex = 0xFFFFFFFFU;
+
 struct LoopDownlink {
     std::uint32_t uplink = 0;                 // indice dans LoopResult::uplinks
     std::uint32_t device = 0;
     std::uint8_t kind = 3;                    // 1 ACK, 2 donnée, 3 MAC seul
     std::uint8_t commands = 0;                // kLoopCmd* (FOpts et réponses MAC)
     std::uint8_t queued = 0;                  // commandes de la file portées (pour `dispatch_lost`)
+    // Identifiant de trame (jalon U0.2) : attribué une fois à la demande de descente, monotone
+    // dans l'ordre des demandes, jamais réattribué ni renuméroté. Il identifie la trame, là où
+    // `uplink` identifie son déclencheur et où l'indice dans `LoopResult::downlinks` n'est qu'une
+    // position. Placé dans le bourrage : la taille et tous les décalages existants sont inchangés.
+    std::uint32_t frame_id = kLoopNoIndex;
     SimTime t_open = 0;
     SimTime start_ns = -1;                    // -1 : pas de créneau passerelle dans la RX1
     SimTime air_ns = 0;
@@ -479,7 +487,6 @@ enum class LoopDownlinkLoss : std::uint8_t {
     BelowSensitivity = 3,     // niveau reçu sous la sensibilité du terminal
 };
 
-inline constexpr std::uint32_t kLoopNoIndex = 0xFFFFFFFFU;
 
 enum class LoopTraceAction : std::uint8_t { Created, Renewed, Expired };
 
@@ -502,6 +509,12 @@ struct LoopTraceEvent {
     std::uint8_t reason_channel = 0;   // Apply : motif (LoopLinkAdrReason) par partie
     std::uint8_t reason_dr = 0;
     std::uint8_t reason_power = 0;
+    // Identifiant de trame (jalon U0.2) : recopie de `LoopDownlink::frame_id` pour les
+    // événements qui se rapportent à une trame descendante, `kLoopNoIndex` sinon. Il permet de
+    // corréler les événements d'une même trame à travers un tri ultérieur de la trace, ce que
+    // l'indice `downlink` ne garantit pas dès que la trace est réordonnée par un consommateur.
+    // Placé dans le bourrage : la taille et tous les décalages existants sont inchangés.
+    std::uint32_t frame_id = kLoopNoIndex;
     bool operator==(const LoopTraceEvent& o) const {
         return t_ns == o.t_ns && device == o.device && uplink == o.uplink && downlink == o.downlink &&
                loss == o.loss && kind == o.kind &&
@@ -511,6 +524,53 @@ struct LoopTraceEvent {
                reason_dr == o.reason_dr && reason_power == o.reason_power;
     }
 };
+
+// Rang des événements de trace à instant égal (jalon U0.2).
+//
+// La trace est ordonnée par `(t_ns, rang)`, puis par ordre d'insertion. Le rang rend l'ordre
+// **explicite** : il ne dépend plus de la place des appels d'émission dans le code, et il
+// survive à l'ajout ultérieur de nouvelles classes d'événements (contrat U0.3+).
+//
+// La table suit **l'ordre de traitement du moteur**, pas un ordre d'affichage commode : elle est
+// donc cohérente avec les rangs de la file d'événements (`kLoopRankCheck` < `kLoopRankStart` <
+// `kLoopRankEnd`). Un `Check` est traité avant un `End` de même instant ; les événements qu'il
+// émet (`Downlink`, `Apply`) précèdent donc ceux émis par `on_received` depuis `End`.
+//
+// Justification détaillée et limites : `docs/DETERMINISME.md` §2.
+inline constexpr std::uint8_t kTraceRankDownlink = 0;  // issue radio : traitée en premier (Check)
+inline constexpr std::uint8_t kTraceRankApply = 1;     // application terminal, même Check
+inline constexpr std::uint8_t kTraceRankExpired = 2;   // exclusion expirée : nettoyage d'état
+inline constexpr std::uint8_t kTraceRankUplink = 3;    // montante reçue
+inline constexpr std::uint8_t kTraceRankAnswer = 4;    // réponse portée par la montante
+inline constexpr std::uint8_t kTraceRankExclusion = 5; // conséquence d'une réponse négative
+inline constexpr std::uint8_t kTraceRankDecision = 6;  // décision ADR du serveur
+inline constexpr std::uint8_t kTraceRankRequest = 7;   // requête planifiée dans la descente
+
+// Rang d'un événement de trace à instant égal.
+inline std::uint8_t loop_trace_rank(const LoopTraceEvent& e) {
+    switch (e.kind) {
+        case LoopTraceKind::Uplink:      return kTraceRankUplink;
+        case LoopTraceKind::LinkAdrAns:  return kTraceRankAnswer;
+        case LoopTraceKind::Exclusion:
+            return e.action == LoopTraceAction::Expired ? kTraceRankExpired : kTraceRankExclusion;
+        case LoopTraceKind::AdrDecision: return kTraceRankDecision;
+        case LoopTraceKind::LinkAdrReq:  return kTraceRankRequest;
+        case LoopTraceKind::Downlink:    return kTraceRankDownlink;
+        case LoopTraceKind::Apply:       return kTraceRankApply;
+    }
+    return kTraceRankDownlink;  // inatteignable : l'énumération est close
+}
+
+// Ordre des événements de trace : `(t_ns, rang)`.
+//
+// Extrait en fonction nommée pour être testable isolément : le rang prime sur l'ordre
+// d'insertion, ce qu'aucune scène de simulation ne peut mettre en évidence aujourd'hui (les deux
+// coïncident par construction, la table ayant été dérivée de l'ordre de traitement). Le tri qui
+// l'utilise reste **stable** : à rang égal, l'ordre de création est conservé.
+inline bool loop_trace_before(const LoopTraceEvent& x, const LoopTraceEvent& y) {
+    if (x.t_ns != y.t_ns) return x.t_ns < y.t_ns;
+    return loop_trace_rank(x) < loop_trace_rank(y);
+}
 
 struct LoopChannelIo {
     const LoopChannelConfig* config = nullptr;  // `config_count` entrées, `device_count` attendu

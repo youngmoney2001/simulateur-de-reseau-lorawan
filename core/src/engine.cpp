@@ -1675,6 +1675,9 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
 
     // Traitement d'un uplink reçu : réponses MAC, décision ADR, descente.
     LoopMacQueueStats qs;
+    // Compteur de trames (jalon U0.2) : identifiant de trame descendant, attribué à la demande.
+    // Il est monotone dans l'ordre des demandes, jamais réattribué, et ne dépend d'aucun tri.
+    std::uint32_t next_frame_id = 0;
     std::vector<std::vector<std::uint32_t>> dl_items;  // commandes de la file par descente
     // Trace interne v3 : sans effet sur la simulation (aucune lecture ne dépend d'elle).
     const auto emit = [&io](LoopTraceEvent e) -> void {
@@ -1965,6 +1968,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         dl.air_ns = air;
         dl.req_dr = sv.pend_dr;
         dl.req_power_index = sv.pend_power;
+        dl.frame_id = next_frame_id++;
         dls.push_back(dl);
         // LinkADRReq : vue du serveur, ChMaskCntl 0 sur le bloc 0 (utilisée seulement si LinkADR est portée).
         LoopLinkAdrRequest rq;
@@ -1987,6 +1991,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
             e.device = d;
             e.uplink = static_cast<std::uint32_t>(a);
             e.downlink = static_cast<std::uint32_t>(dls.size() - 1);
+            e.frame_id = dl.frame_id;
             e.kind = LoopTraceKind::LinkAdrReq;
             e.origin = LoopTraceOrigin::SimulatorPolicy;
             e.dr = rq.dr;
@@ -2194,6 +2199,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     e.device = dl.device;
                     e.uplink = dl.uplink;
                     e.downlink = static_cast<std::uint32_t>(ev.index);
+                    e.frame_id = dl.frame_id;
                     e.kind = LoopTraceKind::Downlink;
                     e.origin = LoopTraceOrigin::Radio;
                     e.flag = ok;
@@ -2262,6 +2268,7 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                         e.device = static_cast<std::uint32_t>(i);
                         e.uplink = dls[ev.index].uplink;
                         e.downlink = static_cast<std::uint32_t>(ev.index);
+                        e.frame_id = dls[ev.index].frame_id;
                         e.kind = LoopTraceKind::Apply;
                         e.origin = LoopTraceOrigin::Normative;
                         e.status = dg.status.to_wire();
@@ -2322,9 +2329,13 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
     }
     out.gateway_busy = scheduler.occupancy();
     io.uplink_status = sts;
-    // Trace v3 triée par temps ; à temps égal, l'ordre d'insertion (chronologie causale) est conservé.
-    std::stable_sort(io.trace.begin(), io.trace.end(),
-                     [](const LoopTraceEvent& x, const LoopTraceEvent& y) { return x.t_ns < y.t_ns; });
+    // Trace v3 ordonnée par `(t_ns, rang)`, puis par ordre d'insertion.
+    //
+    // Le rang rend l'ordre à instant égal **explicite** (jalon U0.2) : il ne dépend plus de la
+    // place des appels d'émission dans `on_received`, et il survive à l'ajout de nouvelles
+    // classes d'événements. Le tri reste **stable** : deux événements de même rang au même
+    // instant conservent leur ordre de création, qui est déterministe.
+    std::stable_sort(io.trace.begin(), io.trace.end(), &loop_trace_before);
     io.downlink_requests = dl_requests;
     io.downlink_diagnoses = dl_diag;
     io.downlink_diagnoses.resize(dls.size());
