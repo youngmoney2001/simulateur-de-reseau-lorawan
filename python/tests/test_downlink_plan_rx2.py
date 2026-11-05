@@ -55,15 +55,23 @@ def _options_satures(repli=True):
 
 
 # ------------------------------------------------------------------ l'unité : deux jobs, un émetteur
-# Le premier job occupe [1 s, 2,5 s]. Le second ouvre à 1,1 s : sa fenêtre RX1 (1,1 s → 2,1 s)
-# est déjà perdue, l'émetteur étant pris jusqu'à 2,5 s. Sa fenêtre RX2 ouvre à 2,1 s et ferme à
-# 3,1 s : le placement à 2,5 s y tombe. C'est le cas « RX1 refusée puis RX2 acceptée ».
+# Le premier job occupe [1 s, 1,5 s]. Le second ouvre à 1,1 s : sa fenêtre RX1 (1,1 s → 2,1 s)
+# est déjà perdue, l'émetteur étant pris jusqu'à 1,5 s. Sa fenêtre RX2 ouvre à 2,1 s et ferme à
+# 3,1 s : l'émetteur y est libre, la descente part **à l'ouverture**. C'est le cas « RX1 refusée
+# puis RX2 acceptée ».
+#
+# U0.3 / A6 : la première descente durait 1,5 s, laissant l'émetteur pris jusqu'à 2,5 s ; la RX2
+# (2,1 s) était alors émise à 2,5 s, soit 0,4 s après son ouverture. L'ancienne règle « attend la
+# libération de l'émetteur » l'autorisait, A6 l'interdit. Le scénario est donc recalé pour que la
+# RX2 soit réellement disponible à son ouverture — seul cas où une émission est légitime. Le cas
+# symétrique, RX2 masquée donc refusée sans occupation, est épinglé plus bas par
+# `test_rx2_aussi_masquee_est_refusee_sans_occupation`.
 
 def _deux_jobs():
     radio = _radio()
     air_rx1 = _downlink_airtime_ns(radio, 10, "rx1")
     air_rx2 = _downlink_airtime_ns(radio, 10, "rx2")
-    return [_job(0, 1 * SECONDE, int(1.5 * SECONDE), air_rx2),
+    return [_job(0, 1 * SECONDE, int(0.5 * SECONDE), air_rx2),
             _job(1, int(1.1 * SECONDE), air_rx1, air_rx2)], air_rx1, air_rx2
 
 
@@ -75,15 +83,16 @@ def test_rx1_disponible_est_toujours_preferee():
     assert fenetres[0] == "rx1"
     # Une seule occupation pour ce job : RX2 n'est pas venue s'y ajouter.
     assert [iv for iv in occupation if iv[0] == 1 * SECONDE] == [
-        (1 * SECONDE, int(2.5 * SECONDE))]
+        (1 * SECONDE, int(1.5 * SECONDE))]
 
 
 def test_rx1_refusee_puis_rx2_acceptee():
     """Le cœur du jalon : RX2 n'est émise que parce que RX1 n'a pas abouti."""
     jobs, _a1, air_rx2 = _deux_jobs()
     starts, fenetres, occupation = _schedule_gateway(jobs, _options())
-    # RX2 s'ouvre une seconde après RX1 (RECEIVE_DELAY2), l'émetteur est libre à 2,5 s.
-    assert starts[1] == int(2.5 * SECONDE)
+    # RX2 s'ouvre une seconde après RX1 (RECEIVE_DELAY2), à 2,1 s. A6 : l'émission part à
+    # l'ouverture, et non à la première libération de l'émetteur — intervenue dès 1,5 s.
+    assert starts[1] == int(2.1 * SECONDE)
     assert fenetres[1] == "rx2"
 
 
@@ -107,8 +116,101 @@ def test_le_temps_d_antenne_suit_la_fenetre_reellement_emise():
     jobs, air_rx1, air_rx2 = _deux_jobs()
     assert air_rx2 > 10 * air_rx1, "le scénario doit rendre l'écart RX1/RX2 visible"
     _starts, _fen, occupation = _schedule_gateway(jobs, _options())
-    debut_rx2 = int(2.5 * SECONDE)
+    debut_rx2 = int(2.1 * SECONDE)
     assert [iv for iv in occupation if iv[0] == debut_rx2] == [(debut_rx2, debut_rx2 + air_rx2)]
+
+
+def test_contact_exact_a_l_ouverture_n_est_pas_un_chevauchement():
+    """U0.3 / A6 : une occupation qui s'achève **exactement** à l'ouverture ne bloque pas.
+
+    L'intervalle d'occupation est semi-ouvert `[début, fin)` : le contact n'est pas un
+    chevauchement. Une règle qui compterait la borne de fin comme encore occupée — ou qui
+    raisonnerait sur des intervalles fermés — rejetterait cette fenêtre à tort, alors que
+    l'émetteur est libre à la nanoseconde même où elle s'ouvre.
+
+    C'est le pendant exact du test homonyme du cœur C++ (`test_downlink_plan.cpp`, cas 14-D).
+    """
+    radio = _radio()
+    air = _downlink_airtime_ns(radio, 10, "rx1")
+    # Le premier job occupe [1 s, 1 s + air) ; le second ouvre à l'instant même de la libération.
+    jobs = [_job(0, 1 * SECONDE, air, air), _job(1, 1 * SECONDE + air, air, air)]
+    starts, fenetres, occupation = _schedule_gateway(jobs, _options())
+
+    assert starts == [1 * SECONDE, 1 * SECONDE + air]   # les deux à leur ouverture exacte
+    assert fenetres == ["rx1", "rx1"]                   # la seconde n'a pas eu besoin du repli
+    assert len(occupation) == 2
+
+
+def test_une_nanoseconde_de_trop_et_la_fenetre_est_perdue():
+    """Paire de la scène précédente : une nanoseconde de chevauchement suffit à faire refuser.
+
+    Seule une nanoseconde sépare les deux scènes, et pourtant les verdicts sont opposés. C'est ce
+    qui distingue un chevauchement réel d'une approximation : une règle « à la nanoseconde près »
+    n'aurait pas départagé les deux cas.
+
+    Sans cette paire, un oracle qui rejetterait au contact exact passerait inaperçu : le test
+    précédent échouerait, mais on pourrait le « corriger » en assouplissant la règle au lieu de
+    la rendre exacte.
+    """
+    radio = _radio()
+    air = _downlink_airtime_ns(radio, 10, "rx1")
+    # Le second ouvre une nanoseconde avant la libération de l'émetteur : sa RX1 est refusée, sa
+    # RX2 (une seconde plus tard) est libre et le rattrape — à l'ouverture de la RX2.
+    jobs = [_job(0, 1 * SECONDE, air, air), _job(1, 1 * SECONDE + air - 1, air, air)]
+    starts, fenetres, occupation = _schedule_gateway(jobs, _options())
+
+    assert starts[0] == 1 * SECONDE
+    assert starts[1] == 2 * SECONDE + air - 1   # ouverture exacte de la RX2
+    assert fenetres == ["rx1", "rx2"]
+    assert len(occupation) == 2
+
+
+def test_rx2_aussi_masquee_est_refusee_sans_occupation():
+    """U0.3 / A6 : une RX2 chevauchée à son ouverture est refusée, sans occupation fictive.
+
+    C'est l'ancien réglage de `_deux_jobs` : la première descente durait 1,5 s et libérait
+    l'émetteur à 2,5 s, soit 0,4 s **après** l'ouverture de la RX2 du second job (2,1 s).
+
+    Avant U0.3 l'émission était décalée à 2,5 s et l'émetteur l'inscrivait. A6 l'interdit —
+    TS001-1.0.4 §3.3.5 demande une émission « précisément au début » de la fenêtre. La descente
+    est donc perdue et, point décisif, **aucune occupation n'est enregistrée** : l'émetteur ne
+    porte aucune trace d'une tentative qui n'a pas abouti.
+
+    Sans ce test, « repli RX2 accepté » et « occupation limitée aux émissions réelles » ne
+    seraient pas départagés : un repli qui inscrirait une occupation fantôme passerait inaperçu.
+    """
+    jobs, _air_rx1, _air_rx2 = _deux_jobs()
+    # On rétablit la descente longue du premier job : l'émetteur est pris de 1 s à 2,5 s.
+    jobs[0] = _job(0, jobs[0].t_open, int(1.5 * SECONDE), _air_rx2)
+    starts, fenetres, occupation = _schedule_gateway(jobs, _options())
+
+    assert starts[0] == 1 * SECONDE          # la première, elle, est émise à son ouverture
+    assert starts[1] is None                 # RX1 masquée, puis RX2 masquée à son ouverture
+    assert fenetres[1] is None               # aucune fenêtre n'a abouti
+    # Une seule occupation : celle de l'émission réellement acceptée. Rien pour les deux refus.
+    assert occupation == [(1 * SECONDE, int(2.5 * SECONDE))]
+
+
+def test_deux_fenetres_separees_par_un_intervalle_libre():
+    """U0.3 / A6 : deux fenêtres séparées par un intervalle libre sont **toutes deux** émises.
+
+    C'est le piège qu'une borne monotone « occupé jusqu'à » (`busy_until`) ne sait pas éviter :
+    une fois l'émetteur occupé, une telle borne ne décroît jamais. Or ici la seconde fenêtre
+    s'ouvre après la fin de la première, elle doit donc être acceptée **à son ouverture**.
+
+    Le placement d'A6 porte sur un chevauchement réel, pas sur une borne : c'est précisément la
+    différence avec la règle historique, et la raison pour laquelle le `RadioScheduler` du cœur
+    tient une liste d'intervalles et non un scalaire.
+    """
+    radio = _radio()
+    air = _downlink_airtime_ns(radio, 10, "rx1")
+    # [1 s, 1 s + air) puis, bien plus tard, [4 s, 4 s + air) : aucun recouvrement possible.
+    jobs = [_job(0, 1 * SECONDE, air, air), _job(1, 4 * SECONDE, air, air)]
+    starts, fenetres, occupation = _schedule_gateway(jobs, _options())
+
+    assert starts == [1 * SECONDE, 4 * SECONDE]   # chacune à son ouverture exacte
+    assert fenetres == ["rx1", "rx1"]             # aucune n'a eu besoin du repli
+    assert len(occupation) == 2
 
 
 def test_la_frequence_emise_est_celle_de_rx2():

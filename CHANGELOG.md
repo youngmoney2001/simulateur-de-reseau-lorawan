@@ -2,6 +2,37 @@
 
 ## 0.1.0 (non publiée)
 
+### U0.3 — Placement temporel A6 : un ordonnanceur radio commun
+
+Quatrième jalon de la refonte U0. Le `RadioScheduler` devient la référence commune de placement
+des descentes, dans le **chemin causal** comme dans le **planificateur**.
+
+**Règle (arbitrage A6, TS001-1.0.4 §3.3.5).** Une descente part **exactement** à l'ouverture de
+RX1 ou de RX2, ou n'est pas émise. Aucun décalage intra-fenêtre : si l'émetteur émet encore à
+l'ouverture, la fenêtre est manquée **sans occupation fictive**.
+
+- `RadioScheduler::place_at` : nouvelle entrée pour le planificateur, qui examine une fenêtre à
+  la fois et garde l'ordonnancement (l'ordre d'examen, le report de la RX2 à sa propre
+  ouverture). La **règle** reste entièrement dans le composant radio.
+- `DownlinkScheduler::placer` (chemin causal) et `_schedule_gateway` (planificateur par lot)
+  délèguent tous deux à `place_at` : plus aucune logique concurrente, plus de
+  `any_busy` / `busy_until` dupliqués. L'occupation publiée est reprise telle quelle de
+  l'ordonnanceur.
+- `lsim.arbitre.GatewayArbiter` : nouvelle règle `EXACTE` (A6), activée pour la descente de
+  données. Les Join-Accept, ACK MAC et réémissions restent sur `DECALE` — chemins disjoints et
+  documentés, migration hors jalon.
+- `lsim::radio::Interval` et `SimTime` sont désormais définis par `radio_scheduler.hpp`, sans
+  dépendance : `engine.hpp` et `downlink_plan.hpp` les réutilisent (dispositions identiques,
+  aucune conversion).
+
+**Conséquences assumées.** Le repli RX2, implémenté mais qui ne se déclenchait jamais, devient
+effectif. Les scènes de contention perdent des descentes que l'ancienne règle émettait **après**
+l'ouverture de la fenêtre. Les scènes sans descente et sans contention sont strictement
+inchangées : empreintes gelées `d2cb0fac…` / `ed126d7f…` invariantes, vecteurs de déterminisme
+`65ce329f…` bit à bit identiques, performance 1,00 × la référence.
+
+Détail complet, tableau des différences et preuves : `docs/PLACEMENT_TEMPOREL_A6.md`.
+
 ### D3.15 / I3 — Repli RX2 : exposition, sensibilité de la fenêtre émise, cohérence des moteurs
 
 Troisième jalon, découpé en quatre incréments. Il traite les deux défauts classés Haute et le

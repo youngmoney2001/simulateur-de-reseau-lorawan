@@ -626,10 +626,13 @@ def _schedule_gateway(jobs: Sequence[_Job],
     Sans `options` (ou `rx2_fallback=False`), le comportement est celui d'avant I2, à
     l'identique : la file ne contient que des demandes RX1.
     """
-    from lsim.arbitre import EmissionRequest, GatewayArbiter
+    from lsim.arbitre import EXACTE, EmissionRequest, GatewayArbiter
 
     repli_actif = options is not None and options.rx2_fallback
-    arbitre = GatewayArbiter()
+    # U0.3 / A6 : la descente part **exactement** à l'ouverture de RX1 ou de RX2, et non à la
+    # libération de l'émetteur. C'est la règle du `RadioScheduler` du cœur, dont cet arbitre est
+    # l'oracle de parité — les deux doivent appliquer la même formule.
+    arbitre = GatewayArbiter(regle_placement=EXACTE)
     starts: list[Optional[int]] = [None] * len(jobs)
     fenetres: list[Optional[str]] = [None] * len(jobs)
 

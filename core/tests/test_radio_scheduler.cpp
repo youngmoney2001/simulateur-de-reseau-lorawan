@@ -15,8 +15,8 @@ namespace {
 
 using lsim::radio::PlacementVerdict;
 using lsim::radio::RadioScheduler;
-using lsim::sim::Interval;
-using lsim::sim::SimTime;
+using lsim::radio::Interval;
+using lsim::radio::SimTime;
 
 constexpr SimTime kS = 1'000'000'000;
 
@@ -140,6 +140,43 @@ void test_emission_debordant_la_fenetre_est_placee() {
     CHECK_TRUE(sch.occupancy()[0].end > ouverture + 1 * kS);  // dépasse la fenêtre
 }
 
+void test_place_at_fenetre_libre_entre_deux_emissions() {
+    // Même scène que ci-dessus, mais par `place_at` — l'entrée employée par le planificateur
+    // (jalon U0.3), qui examine une fenêtre à la fois et garde l'ordonnancement pour lui.
+    //
+    // Deux émissions encadrent une fenêtre libre : [1 s, 2 s) et [20 s, 21 s). Une borne de fin
+    // — « occupé jusqu'à » la fin de la dernière émission inscrite — refuserait l'ouverture à
+    // 10 s, puisque 21 s la dépasse. Le chevauchement réel l'accepte : rien n'émet à 10 s.
+    //
+    // Ce test est la raison d'être de l'occupation sous forme de liste d'intervalles, et non d'un
+    // scalaire : c'est lui qui échoue si l'on remplace le chevauchement par une borne.
+    RadioScheduler sch;
+    sch.seed({Interval{1 * kS, 2 * kS}, Interval{20 * kS, 21 * kS}});
+    CHECK_TRUE(sch.place_at(10 * kS, kAirSf7));
+    CHECK_EQ(sch.occupancy().size(), std::size_t{3});
+    CHECK_EQ(sch.occupancy()[1].start, 10 * kS);  // insérée à sa place, liste croissante
+
+    // Et la fenêtre réellement masquée, elle, reste refusée : la règle n'est pas assouplie.
+    CHECK_TRUE(!sch.place_at(21 * kS - 1, kAirSf7));
+    CHECK_EQ(sch.occupancy().size(), std::size_t{3});  // refus : aucune occupation
+}
+
+void test_place_at_ouvertures_dans_le_desordre() {
+    // `place_at` est publique : rien ne garantit que les ouvertures arrivent dans l'ordre. Une
+    // borne de fin ne s'en sortirait pas ; le chevauchement réel, si.
+    RadioScheduler sch;
+    sch.seed({Interval{10 * kS, 11 * kS}});
+    // Placée **avant** l'émission déjà inscrite : aucun chevauchement, donc acceptée.
+    CHECK_TRUE(sch.place_at(5 * kS, kAirSf7));
+    CHECK_EQ(sch.occupancy().size(), std::size_t{2});
+    CHECK_EQ(sch.occupancy()[0].start, 5 * kS);   // insérée avant : liste maintenue croissante
+    CHECK_EQ(sch.occupancy()[1].start, 10 * kS);
+    // Une fenêtre entre les deux reste libre.
+    CHECK_TRUE(sch.place_at(7 * kS, kAirSf7));
+    CHECK_EQ(sch.occupancy().size(), std::size_t{3});
+    CHECK_EQ(sch.occupancy()[1].start, 7 * kS);
+}
+
 void test_transmitting_chevauchement_reel() {
     RadioScheduler sch;
     sch.seed({Interval{10 * kS, 11 * kS}});
@@ -164,4 +201,6 @@ void run_radio_scheduler_tests() {
     test_occupation_croissante_et_disjointe();
     test_emission_debordant_la_fenetre_est_placee();
     test_transmitting_chevauchement_reel();
+    test_place_at_fenetre_libre_entre_deux_emissions();
+    test_place_at_ouvertures_dans_le_desordre();
 }

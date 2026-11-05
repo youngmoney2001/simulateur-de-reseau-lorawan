@@ -241,8 +241,9 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
     // ce que fait l'arbitre Python (`GatewayArbiter`, tas sur `ready_ns`) et l'on s'y aligne.
     std::vector<std::int64_t> starts(jobs.size(), kNone);
     std::vector<std::uint8_t> en_rx2(jobs.size(), 0);
-    bool any_busy = false;
-    std::int64_t busy_until = 0;
+    // U0.3 : l'occupation et la règle de placement vivent dans l'ordonnanceur radio, unique
+    // propriétaire des décisions temporelles (option C). `busy` en est la copie.**
+    lsim::radio::RadioScheduler sched;
 
     if (rx2 == nullptr) {
         std::vector<std::size_t> order(jobs.size());
@@ -252,12 +253,9 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         });
         for (std::size_t k : order) {
             const Job& job = jobs[k];
-            const std::int64_t start = any_busy ? std::max(job.t_open, busy_until) : job.t_open;
-            if (start - job.t_open >= kRx1WindowNs) continue;  // indisponible dans la RX1
-            starts[k] = start;
-            busy_until = start + job.airtime_ns;
-            any_busy = true;
-            busy.push_back(Interval{start, busy_until});
+            // A6 : émission à l'ouverture exacte, ou pas d'émission.
+            if (!sched.place_at(job.t_open, job.airtime_ns)) continue;
+            starts[k] = job.t_open;
         }
     } else {
         // (ouverture, phase, indice) : la phase départage à ouverture égale — une RX2 naît après
@@ -284,8 +282,8 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             file.pop();
             Job& job = jobs[e.index];
             if (e.phase == 0) {
-                const std::int64_t start = any_busy ? std::max(job.t_open, busy_until) : job.t_open;
-                if (start - job.t_open >= kRx1WindowNs) {
+                // A6 : émission à l'ouverture exacte de RX1, ou repli.
+                if (!sched.place_at(job.t_open, job.airtime_ns)) {
                     // RX1 perdue : seconde fenêtre, une seule fois, avec ses propres paramètres.
                     // Le repli est opt-in et n'opère que si la fenêtre RX2 est renseignée.
                     if (options.rx2_fallback && job.rx2_disponible()) {
@@ -293,23 +291,28 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                     }
                     continue;
                 }
-                starts[e.index] = start;
-                busy_until = start + job.airtime_ns;
-                any_busy = true;
-                busy.push_back(Interval{start, busy_until});
+                starts[e.index] = job.t_open;
             } else {
                 // Repli RX2. Le temps d'antenne est celui de RX2, pas celui de RX1 : au SF12, la
                 // même trame occupe l'émetteur une vingtaine de fois plus longtemps.
                 const std::int64_t ouverture = job.t_open_rx2();
-                const std::int64_t start = any_busy ? std::max(ouverture, busy_until) : ouverture;
-                if (start - ouverture >= kRx2WindowNs) continue;  // indisponible dans la RX2 aussi
-                starts[e.index] = start;
+                // A6 : émission à l'ouverture exacte de RX2, ou fenêtre manquée **sans
+                // occupation fictive**.
+                if (!sched.place_at(ouverture, job.rx2_airtime_ns)) continue;
+                starts[e.index] = ouverture;
                 en_rx2[e.index] = 1;
-                busy_until = start + job.rx2_airtime_ns;
-                any_busy = true;
-                busy.push_back(Interval{start, busy_until});
             }
         }
+    }
+
+    // A6 : l'occupation ne contient que les émissions réellement acceptées. Elle est reprise
+    // telle quelle de l'ordonnanceur radio — une seconde liste entretenue en parallèle serait
+    // une logique concurrente, donc une source de divergence.`plan::Interval` et
+    // `radio::Interval` ont la même disposition ; la conversion est une recopie.
+    const std::vector<lsim::radio::Interval>& occupation = sched.occupancy();
+    busy.reserve(occupation.size());
+    for (const lsim::radio::Interval& iv : occupation) {
+        busy.push_back(Interval{iv.start, iv.end});
     }
 
     // Événements (`_events`) : ordre d'insertion = enregistrement, puis job ; tri stable par temps.
@@ -534,9 +537,10 @@ std::vector<Interval> DownlinkScheduler::placer(std::int64_t frontiere) {
             return poses;
         }
 
-        const std::int64_t start = any_busy_ ? std::max(e.pret, busy_until_) : e.pret;
-        const std::int64_t fenetre = (e.phase == 0) ? kRx1WindowNs : kRx2WindowNs;
-        if (start - e.pret >= fenetre) {
+        // U0.3 / A6 : une descente commence **exactement** à l'ouverture de la fenêtre, ou n'est
+        // pas émise du tout. Aucun décalage intra-fenêtre n'est appliqué — l'émetteur n'est
+        // occupé que par les émissions réellement acceptées (un refus ne crée aucune occupation).
+        if (!sched_.place_at(e.pret, air_utile)) {
             // Fenêtre manquée. En RX1, la seconde fenêtre entre dans la file à son propre
             // instant d'ouverture — pas maintenant : des descentes encore en attente peuvent
             // être plus précoces qu'elle.
@@ -549,9 +553,7 @@ std::vector<Interval> DownlinkScheduler::placer(std::int64_t frontiere) {
             }
             continue;
         }
-        any_busy_ = true;
-        busy_until_ = start + air_utile;
-        poses.push_back(Interval{start, busy_until_});
+        poses.push_back(Interval{e.pret, e.pret + air_utile});
     }
     return poses;
 }

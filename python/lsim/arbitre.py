@@ -17,11 +17,15 @@ l'**occupation** : qui émet, quand, et combien de temps.
 1. **Un seul émetteur.** À tout instant, la passerelle n'émet qu'une descente. Toute descente —
    Join-Accept RX1, Join-Accept RX2, rejeu, ACK, downlink de données, réponse MAC — passe par
    `GatewayArbiter`.
-2. **File monotone.** `début = max(instant_prêt, occupé_jusqu'à)` ; `occupé_jusqu'à` ne décroît
-   jamais dans une passe. C'est le modèle « une file d'émission » : une descente retardée reste
-   derrière celles qui la précèdent. C'est aussi, au bit près, la règle historique de
-   `_schedule_gateway` et du planificateur du cœur C++, dont la parité est exigée par
-   `tests/test_downlink_plan_parity.py`.
+2. **Deux règles de placement, sur des chemins disjoints.** Depuis U0.3, la **descente de
+   données** applique A6 (`EXACTE`) : `début = ouverture`, et refus sur chevauchement réel —
+   voir `docs/PLACEMENT_TEMPOREL_A6.md`. Les Join-Accept, les ACK MAC et les réémissions
+   restent sur la règle historique `DECALE` : `début = max(instant_prêt, ouverture,
+   occupé_jusqu'à)`, `occupé_jusqu'à` ne décroît jamais dans une passe. C'est le modèle
+   « une file d'émission » : une émission retardée reste derrière celles qui la précèdent.
+   Les deux règles sont portées par cette classe, choisies à la construction ; ce ne sont **pas**
+   deux implémentations d'une même décision, mais deux décisions distinctes. La migration des
+   trois chemins restants est un jalon séparé.
 3. **Ordre chronologique, évalué en file d'événements.** Les demandes sont placées par
    `instant_prêt` croissant ; une demande née du placement d'une autre (RX2 après un RX1 manqué)
    entre dans la file à son propre instant, donc **avant** les demandes déjà déposées qui sont
@@ -59,6 +63,20 @@ fermeture = fenêtre[1] si fenêtre else None
 si fermeture est définie et début >= fermeture :
     allow_late  -> verdict LATE           (émise, occupée, mais plus écoutée — l'ACK retardé)
     sinon       -> verdict WINDOW_MISSED  (rien n'est émis, aucune occupation)
+
+Règle `EXACTE` (A6, U0.3 — la descente de données, chemin `trace_events._schedule_gateway`) :
+
+    ouverture = fenêtre[0] si fenêtre else ready_ns
+    début     = max(ready_ns, ouverture)              # l'occupation n'est PAS consultée
+    si [début, début + durée) chevauche une émission planifiée :
+        verdict WINDOW_MISSED                         # aucune émission, aucune occupation
+    sinon :
+        verdict EMITTED
+
+Le chevauchement est **réel** (`début < fin and d < fin`), sur intervalle semi-ouvert : une
+émission qui s'achève exactement à l'ouverture ne bloque pas la fenêtre. C'est la différence
+essentielle avec `DECALE`, et la raison pour laquelle deux fenêtres séparées par un intervalle
+libre sont toutes deux émises sous A6.
 sinon :
     verdict EMITTED
 
@@ -117,6 +135,24 @@ NOT_NEEDED = "not_needed"        # devenue sans objet avant d'être émise : **a
 DUTY_CYCLE = "duty_cycle"        # refusée par le rapport cyclique : **aucune** émission
 
 VERDICTS = (EMITTED, LATE, WINDOW_MISSED, NOT_NEEDED, DUTY_CYCLE)
+
+# Règles de placement temporel (arbitrage U0-A6).
+#
+# DECALE (règle historique). `début = max(prêt, ouverture, occupé_jusqu'à)` : une descente dont
+#   l'émetteur est pris attend sa libération, tant que le départ reste dans la fenêtre. Elle est
+#   donc émise **après** l'ouverture, d'un délai qui n'est borné que par la durée de la fenêtre.
+# EXACTE (A6, TS001-1.0.4 §3.3.5 : « précisément au début » de la fenêtre). `début =
+#   max(prêt, ouverture)`, sans jamais considérer l'occupation : si l'émetteur émet encore à cet
+#   instant, la fenêtre est manquée et **rien n'est émis** — aucune occupation, aucune attente.
+#
+# Seule la descente de données (`trace_events._schedule_gateway`) est passée à EXACTE en U0.3 ;
+# les Join-Accept, les ACK MAC et les réémissions restent sur DECALE, leur migration n'étant pas
+# du ressort de ce jalon. Les deux règles coexistent donc **le temps du jalon**, sur des chemins
+# disjoints et documentés — ce ne sont pas deux implémentations de la même décision.
+DECALE = "decale"
+EXACTE = "exacte"
+
+REGLES_PLACEMENT = (DECALE, EXACTE)
 
 #: Réaction au placement d'une demande : `(émission, déposer) -> None`. `déposer` renvoie le
 #: ticket de la nouvelle demande, ce qui permet à l'appelant de la retrouver après résolution.
@@ -235,15 +271,27 @@ class GatewayArbiter:
 
     def __init__(self, policy: ArbitrationPolicy = ArbitrationPolicy(),
                  occupation: Sequence[tuple[int, int]] = (),
-                 duty_cycle: Optional["DownlinkDutyCycle"] = None):
+                 duty_cycle: Optional["DownlinkDutyCycle"] = None,
+                 regle_placement: str = DECALE):
+        if regle_placement not in REGLES_PLACEMENT:
+            raise ValueError(f"règle de placement inconnue : {regle_placement!r}")
+        # A6 et l'attente réglementaire sont incompatibles : l'un impose le départ à l'ouverture,
+        # l'autre le repousse. Le budget descendant n'étant pas activé (arbitrage U0-4), la
+        # descente de données ne fournit jamais de `duty_cycle` ; le refus est un garde-fou.
+        if regle_placement == EXACTE and duty_cycle is not None:
+            raise ValueError("A6 (placement exact) est incompatible avec un budget descendant")
         self.policy = policy
         self.duty_cycle = duty_cycle
+        self.regle_placement = regle_placement
         self._requetes: dict[int, EmissionRequest] = {}
         self._ensuite: dict[int, Reaktion] = {}
         self._emissions: dict[int, Emission] = {}
         self._ordre: list[int] = []
         self._occupation: list[tuple[int, int]] = list(occupation)
         self._occupe_jusqua = max((fin for _debut, fin in occupation), default=0)
+        # Sous A6 la borne monotone `occupé_jusqu'à` est remplacée par une recherche de
+        # chevauchement réel : deux fenêtres séparées par un intervalle libre ne se bloquent pas.
+        self._borne_a_chevauchement = (regle_placement == EXACTE)
         self._ticket = 0
         self._file: list[tuple[int, int, int]] = []
         self._resolu = False
@@ -301,14 +349,44 @@ class GatewayArbiter:
         self._resolu = True
         return tuple(self._emissions[t] for t in self._ordre)
 
+    def _chevauche(self, debut: int, fin: int) -> bool:
+        """Vrai si l'émetteur émet déjà pendant `[début, fin)`.
+
+        Test de **chevauchement réel**, pas de borne monotone : une occupation qui s'achève
+        exactement à `début` ne bloque pas l'émission. C'est la différence qui distingue A6 de la
+        règle historique sur deux fenêtres séparées par un intervalle libre.
+        """
+        return any(debut < f and d < fin for d, f in self._occupation)
+
     def _placer(self, ticket: int, demande: EmissionRequest) -> Emission:
         if demande.condition is not None and not demande.condition():
             return Emission(ticket, demande.label, demande.device, demande.ready_ns,
                             demande.duration_ns, demande.window, demande.ready_ns,
                             demande.ready_ns, NOT_NEEDED)
         ouverture = demande.window[0] if demande.window is not None else demande.ready_ns
-        debut = max(demande.ready_ns, ouverture, self._occupe_jusqua)
         fermeture = demande.window[1] if demande.window is not None else None
+
+        # --- A6 : départ exact à l'ouverture, refus sur chevauchement réel (U0.3) -------------
+        # Aucune attente, aucun décalage. Une fenêtre est manquée si l'émetteur émet encore à
+        # l'instant où elle s'ouvre ; elle est alors refusée **sans occupation**, y compris quand
+        # il se libère une nanoseconde plus tard. C'est la règle du `RadioScheduler` du cœur.
+        if self._borne_a_chevauchement:
+            debut = max(demande.ready_ns, ouverture)
+            fin_exacte = debut + demande.duration_ns
+            if fermeture is not None and debut >= fermeture:
+                return Emission(ticket, demande.label, demande.device, demande.ready_ns,
+                                demande.duration_ns, demande.window, debut, debut,
+                                WINDOW_MISSED)
+            if self._chevauche(debut, fin_exacte):
+                return Emission(ticket, demande.label, demande.device, demande.ready_ns,
+                                demande.duration_ns, demande.window, debut, debut,
+                                WINDOW_MISSED)
+            self._occupation.append((debut, fin_exacte))
+            self._occupe_jusqua = max(self._occupe_jusqua, fin_exacte)
+            return Emission(ticket, demande.label, demande.device, demande.ready_ns,
+                            demande.duration_ns, demande.window, debut, fin_exacte, EMITTED)
+
+        debut = max(demande.ready_ns, ouverture, self._occupe_jusqua)
         # Rapport cyclique descendant. La contrainte porte sur le **début**, comme
         # l'occupation de l'émetteur : la sous-bande impose une attente, on ne l'anticipe pas.
         # Ce n'est pas un report : si l'attente sort l'émission de sa fenêtre, le verdict est

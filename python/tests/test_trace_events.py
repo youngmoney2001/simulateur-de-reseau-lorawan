@@ -262,11 +262,26 @@ def test_gateway_serializes_downlinks_and_drops_late_ones():
         return _Job(record=0, device=0, kind="ack", content="ack_only", t_open=t_open,
                     airtime_ns=airtime, rx1_hz=868_100_000, received=True, device_missed=False)
 
-    # Deux réponses qui tombent presque ensemble : la seconde attend la fin de la première.
+    # Deux réponses qui tombent presque ensemble.
+    #
+    # U0.3 / A6 : la seconde est **perdue**, elle n'attend pas. L'émetteur émet encore à 1,05 s,
+    # instant d'ouverture de la seconde fenêtre : la descente n'est pas émise, et aucune
+    # occupation n'est inscrite pour elle. Avant U0.3 elle était décalée à 1,3 s — 0,25 s après
+    # son ouverture — ce que TS001-1.0.4 §3.3.5 n'autorise pas (« précisément au début » de la
+    # fenêtre). C'est la différence de la plus grande portée du jalon : l'émetteur n'attend plus,
+    # il perd la fenêtre.
     starts, _fen, busy = _schedule_gateway([job(1_000_000_000, 300_000_000),
                                             job(1_050_000_000, 300_000_000)])
-    assert starts == [1_000_000_000, 1_300_000_000]
-    assert busy == [(1_000_000_000, 1_300_000_000), (1_300_000_000, 1_600_000_000)]
+    assert starts == [1_000_000_000, None]
+    assert busy == [(1_000_000_000, 1_300_000_000)]  # une seule émission : l'occupation la suit
+
+    # En revanche, une seconde fenêtre qui s'ouvre **après** la fin de la première est émise à
+    # son ouverture : le placement porte sur un chevauchement réel, pas sur une borne monotone
+    # « occupé jusqu'à », qui n'aurait jamais décroisé et l'aurait rejetée à tort.
+    starts, _fen, busy = _schedule_gateway([job(1_000_000_000, 300_000_000),
+                                            job(1_400_000_000, 300_000_000)])
+    assert starts == [1_000_000_000, 1_400_000_000]
+    assert busy == [(1_000_000_000, 1_300_000_000), (1_400_000_000, 1_700_000_000)]
 
     # Une réponse qui ne peut partir qu'après la fenêtre RX1 du dispositif est perdue.
     starts, _fen, busy = _schedule_gateway([job(1_000_000_000, 1_500_000_000),

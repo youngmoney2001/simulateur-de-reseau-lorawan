@@ -23,12 +23,14 @@
 #include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
 #include "lsim/loop_adr.hpp"
+#include "lsim/radio_scheduler.hpp"
 
 namespace lsim::sim {
 
 namespace downlink = lorawan::downlink;
 
-using SimTime = std::int64_t;  // nanosecondes
+// Le moteur réutilise les types du composant radio : mêmes dispositions, aucun conversion.
+using SimTime = lsim::radio::SimTime;  // nanosecondes
 
 struct Event {
     SimTime time = 0;
@@ -249,10 +251,7 @@ enum class TxOutcome : std::uint8_t {
 };
 
 // Intervalle [start, end) pendant lequel la passerelle émet (demi-duplex : elle ne reçoit pas).
-struct Interval {
-    SimTime start = 0;
-    SimTime end = 0;
-};
+using Interval = lsim::radio::Interval;
 
 // Une transmission de la trace, dans l'ordre temporel (début, puis ordre de file).
 // Les temps sont ceux du moteur : même horloge pour toute la trace et les événements.

@@ -43,6 +43,10 @@ struct PlanCase {
     std::vector<lsim_plan_uplink> ups;
     std::vector<lsim_plan_device> devs;
     lsim_plan_options opts;
+    // Table RX2 valide (SF12) fournie par défaut : le repli est actif dès qu'elle est passée à
+    // l'enveloppe v2. `received` ne garde que les montantes reçues, pour retrouver les ouvertures.
+    std::vector<lsim_plan_device_rx2> rx2;
+    std::vector<lsim_plan_uplink> received;
 };
 
 PlanCase make_plan_case() {
@@ -59,6 +63,7 @@ PlanCase make_plan_case() {
         u.outcome = (k % 4 == 3) ? static_cast<std::uint8_t>(1) : static_cast<std::uint8_t>(2);
         u.rssi_dbm = -60.0;
         c.ups.push_back(u);
+        if (u.outcome == 2) c.received.push_back(u);
         t += 120'000'000;
     }
     for (int k = 0; k < 3; ++k) {
@@ -78,6 +83,12 @@ PlanCase make_plan_case() {
     c.opts.gateway_tx_power_dbm = 14.0;
     c.opts.device_antenna_gain_dbi = 0.0;
     c.opts.device_rx_offset_db = 0.0;
+    c.rx2.resize(3);
+    for (auto& r : c.rx2) {
+        r.rx2_hz = 869'525'000;
+        r.rx2_sf = 12;
+        r.rx2_bw_hz = 125'000;
+    }
     return c;
 }
 
@@ -325,7 +336,17 @@ void run_downlink_plan_tests() {
             CHECK_EQ(b2[k].end_ns, b1[k].end_ns);
         }
 
-        // 8b. rx2 renseigné (SF 12, fréquence et largeur valides) : toujours aucun repli RX2.
+        // 8b. rx2 renseigné : le repli devient actif et, sous A6, il se déclenche réellement.
+        //
+        // L'enveloppe C active le repli par la seule présence de la table
+        // (`po.rx2_fallback = (rx2 != nullptr)`) : fournir la table **est** l'opt-in. Ce
+        // comportement existait avant U0.3 mais ne produisait jamais d'émission, la règle à
+        // décalage faisant toujours tenir la descente dans la seconde de la fenêtre. A6 supprime
+        // ce décalage : une RX1 chevauchée à son ouverture est perdue, et le repli part.
+        //
+        // La v2 produit donc **davantage** d'occupation que la v1, qui n'a pas de table. C'est une
+        // conséquence voulue de l'arbitrage A6, pas une divergence d'implémentation — le cas 8d
+        // vérifie que, sans contention, les deux enveloppes restent identiques.
         std::vector<lsim_plan_device_rx2> rx2(c.devs.size());
         for (auto& r : rx2) {
             r.rx2_hz = 869'525'000;
@@ -334,8 +355,72 @@ void run_downlink_plan_tests() {
         }
         const int32_t r3 = run_v2(rx2.data(), ev3.data(), &n3, b3.data(), &nb3);
         CHECK_EQ(r3, r1);
+        CHECK_TRUE(nb3 > nb1);  // au moins une descente rattrapée en RX2
+        // Les émissions que la v1 plaçait sont retrouvées **telles quelles** : la v2 ne décale
+        // rien de ce qui existait déjà, elle ajoute les fenêtres de secours.
+        for (size_t k = 0; k < nb1; ++k) {
+            CHECK_EQ(b3[k].start_ns, b1[k].start_ns);
+            CHECK_EQ(b3[k].end_ns, b1[k].end_ns);
+        }
+        // Chaque émission supplémentaire est une RX2 : elle part exactement 1 s après une
+        // ouverture de RX1 (`t_open_rx2 = t_open + 1 s`) et porte la fréquence de la RX2.
+        for (size_t k = nb1; k < nb3; ++k) {
+            const std::int64_t ouverture_rx1 = b3[k].start_ns - 1'000'000'000;
+            bool rx1_correspondante = false;
+            for (const lsim_plan_uplink& u : c.received) {
+                if (u.end_ns + 1'000'000'000 == ouverture_rx1) rx1_correspondante = true;
+            }
+            CHECK_TRUE(rx1_correspondante);  // ouverture exacte de la RX2, aucun décalage
+        }
+    }
+
+    // 8d. Sans contention, la table RX2 ne change rien : parité stricte v1 / v2 avec repli actif.
+    //
+    // Les montantes sont espacées de 600 ms, très au-delà du temps d'antenne d'une descente
+    // (au plus ~0,10 s au SF7) : aucune fenêtre n'est masquée, donc aucun repli ne se déclenche.
+    // La parité observée en 8a ne dépend donc pas de l'absence de table, mais du repli — ce qui
+    // isole la cause de l'écart constaté en 8b.
+    {
+        PlanCase c = make_plan_case();
+        c.ups.clear();
+        std::int64_t t = 0;
+        for (std::uint32_t k = 0; k < 6; ++k) {
+            lsim_plan_uplink u{};
+            u.device_index = k % 3;
+            u.start_ns = t;
+            u.end_ns = t + 20'000'000;
+            u.spreading_factor = 7;
+            u.outcome = 2;
+            u.rssi_dbm = -60.0;
+            c.ups.push_back(u);
+            t += 600'000'000;
+        }
+        const std::size_t cap = 32;
+        std::vector<lsim_plan_event> ev1(cap), ev3(cap);
+        std::vector<lsim_interval> b1(cap), b3(cap);
+        size_t n1 = 0, nb1 = 0, n3 = 0, nb3 = 0;
+        CHECK_EQ(lsim_plan_downlinks_v1(c.ups.data(), c.ups.size(), c.devs.data(), c.devs.size(),
+                                       &c.opts, ev1.data(), cap, &n1, b1.data(), cap, &nb1), 0);
+        lsim_plan_downlinks_v2_args a{};
+        a.struct_size = sizeof(a);
+        a.abi_version = LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION;
+        a.uplinks = c.ups.data();
+        a.uplink_count = c.ups.size();
+        a.devices = c.devs.data();
+        a.device_count = c.devs.size();
+        a.options = &c.opts;
+        a.rx2 = c.rx2.data();
+        a.rx2_count = c.devs.size();
+        a.events = ev3.data();
+        a.event_capacity = cap;
+        a.event_count = &n3;
+        a.busy = b3.data();
+        a.busy_capacity = cap;
+        a.busy_count = &nb3;
+        CHECK_EQ(lsim_plan_downlinks_v2(&a), 0);
         CHECK_EQ(n3, n1);
         CHECK_EQ(nb3, nb1);
+        CHECK_TRUE(nb1 > 0);
         for (size_t k = 0; k < n1; ++k) check_events_equal(ev3[k], ev1[k]);
         for (size_t k = 0; k < nb1; ++k) {
             CHECK_EQ(b3[k].start_ns, b1[k].start_ns);
@@ -600,7 +685,12 @@ void run_downlink_plan_tests() {
     //     Sans repli, la seconde descente est perdue.
     {
         DeviceRadio gros = radio_sf7();
-        gros.rx1_sf = 12;  // ACK long : l'émetteur est pris bien au-delà de la fenêtre du second
+        // U0.3 : SF11, et non SF12. La descente du premier doit masquer la RX1 du second mais
+        // **libérer l'émetteur avant l'ouverture de sa RX2** (2,5 s). Avec A6 il n'y a plus de
+        // décalage : une fenêtre chevauchée à son ouverture est refusée, elle n'attend pas. Au
+        // SF12 l'émetteur restait pris jusqu'à 2,98 s et la RX2 était perdue — cas désormais
+        // couvert par 12g ci-dessous.
+        gros.rx1_sf = 11;
         const DeviceRadio petit = radio_sf7();
         const std::vector<DeviceRadio> radios{gros, petit};
 
@@ -654,9 +744,11 @@ void run_downlink_plan_tests() {
             std::vector<Interval> bu;
             CHECK_EQ(plan_downlinks(ups, radios, avec, &rx2, ev, bu), PlanStatus::Ok);
             CHECK_EQ(bu.size(), 2u);  // une seule émission par descente : aucun doublon RX1/RX2
-            // Le repli s'ouvre une seconde après RX1 et démarre dès que l'émetteur est libre.
-            CHECK_EQ(bu[1].start_ns, bu[0].end_ns);
-            CHECK_TRUE(bu[1].start_ns >= 2 * kS);  // RECEIVE_DELAY2 = 2 s après la fin de la montante
+            // A6 : la RX2 est émise **exactement à son ouverture** (fin de la montante + 2 s),
+            // et non « dès que l'émetteur est libre ». Ici l'émetteur est libre dès 1,75 s, soit
+            // 0,75 s avant l'ouverture : l'ancienne règle aurait émis à 1,75 s.
+            CHECK_EQ(bu[1].start_ns, 2 * kS + 500'000'000);
+            CHECK_TRUE(bu[1].start_ns > bu[0].end_ns);  // l'émetteur s'est vraiment libéré avant
             // L'occupation porte la durée **réelle** : celle de RX2, pas celle de RX1.
             CHECK_EQ(bu[1].end_ns - bu[1].start_ns, air_rx2);
             // Et l'événement porte la fréquence de la fenêtre réellement émise.
@@ -725,7 +817,7 @@ void run_downlink_plan_tests() {
             CHECK_TRUE(b1.empty());  // la RX1 est manquée, la seconde fenêtre est en attente
             const auto b2 = s_avec.drain();
             CHECK_EQ(b2.size(), 1u);  // rattrapée en RX2, à la purge
-            CHECK_EQ(b2[0].start_ns, a0[0].end_ns);
+            CHECK_EQ(b2[0].start_ns, 2 * kS + 500'000'000);  // A6 : ouverture exacte de la RX2
             CHECK_EQ(b2[0].end_ns - b2[0].start_ns, air_rx2);  // durée réelle, pas celle de RX1
             CHECK_TRUE(b2[0].start_ns >= 2 * kS);
         }
@@ -756,6 +848,67 @@ void run_downlink_plan_tests() {
     }
 
     // -------------------------------------------------------------------------------
+    // Cas 12g. U0.3 / A6 : une fenêtre chevauchée à son ouverture est **refusée**, et ne crée
+    // aucune occupation fictive.
+    //
+    // Mêmes instants que le cas 12, mais la première descente est au SF12 : elle occupe
+    // l'émetteur de 1,01 s à 2,98 s. La RX1 du second dispositif (1,5 s) est masquée — comme en
+    // 12 — **et sa RX2 (2,5 s) l'est aussi**.
+    //
+    // Avant U0.3 la RX2 était émise à 2,98 s, soit 0,48 s après son ouverture : l'émetteur
+    // attendait sa libération. A6 l'interdit (TS001-1.0.4 §3.3.5 : émission « précisément au
+    // début » de la fenêtre). La descente est donc perdue, et surtout **l'émetteur ne porte
+    // aucune trace de cette tentative** : une seule occupation, celle de la première descente.
+    //
+    // Ce cas est la contrepartie négative de 12b : sans lui, « repli RX2 réussi » et « occupation
+    // uniquement pour les émissions acceptées » ne seraient pas départagés.
+    {
+        DeviceRadio gros = radio_sf7();
+        gros.rx1_sf = 12;  // descente longue : masque la RX1 **et** la RX2 du second
+        const DeviceRadio petit = radio_sf7();
+        const std::vector<DeviceRadio> radios{gros, petit};
+
+        PlanOptions o;
+        o.confirmed_uplinks = true;
+        o.downlink_every = 1;
+        o.downlink_payload_bytes = 27;
+        o.gateway_tx_power_dbm = 27.0;
+        o.rx2_fallback = true;  // le repli est demandé, mais la fenêtre n'est pas disponible
+
+        const std::vector<UplinkRecord> ups{up(0, 0, 10'000'000, UplinkOutcome::Received),
+                                            up(1, 490'000'000, 10'000'000, UplinkOutcome::Received)};
+        std::vector<DeviceRx2> rx2(2, DeviceRx2{869'525'000, 12, 125'000});
+
+        // Planification par lot : une seule émission, aucune occupation au-delà de la première.
+        {
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), 1u);
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);  // ouverture exacte de la RX1 du premier
+            // Le second dispositif n'a rien reçu, et aucune fenêtre ne lui a été imputée.
+            std::size_t manquees = 0;
+            for (const Event& e : ev) {
+                if (e.kind == EventKind::RxWindowMissed) ++manquees;
+            }
+            CHECK_EQ(manquees, 1u);
+        }
+
+        // Même chose au planificateur incrémental : le repli est tenté puis abandonné, sans
+        // laisser d'occupation.
+        {
+            DownlinkScheduler s(radios, o);
+            CHECK_EQ(s.status(), PlanStatus::Ok);
+            std::vector<Interval> tout;
+            for (const Interval& i : s.on_received(0, 10'000'000, rx2[0])) tout.push_back(i);
+            for (const Interval& i : s.on_received(1, 500'000'000, rx2[1])) tout.push_back(i);
+            for (const Interval& i : s.drain()) tout.push_back(i);
+            CHECK_EQ(tout.size(), 1u);
+            CHECK_EQ(tout[0].start_ns, kS + 10'000'000);
+        }
+    }
+
+    // -------------------------------------------------------------------------------
     // Cas 13. Sensibilité de la fenêtre **réellement émise** (I3/C4).
     //
     // Le seuil de réception dépend du débit de la fenêtre, et RX2 n'a pas celui de RX1 : au
@@ -769,7 +922,9 @@ void run_downlink_plan_tests() {
     // à -132 dBm — sourd au seuil SF7 (-123), audible au seuil SF12 (-136).
     {
         DeviceRadio gros = radio_sf7();
-        gros.rx1_sf = 12;  // descente longue : la RX1 du second dispositif est masquée
+        // U0.3 : SF11 et non SF12 (voir cas 12). La RX1 du second doit être masquée, mais sa RX2
+        // doit rester disponible à son ouverture — sans quoi il n'y a plus de descente à seuiller.
+        gros.rx1_sf = 11;
         const DeviceRadio petit = radio_sf7();
         const std::vector<DeviceRadio> radios{gros, petit};
 
@@ -840,6 +995,225 @@ void run_downlink_plan_tests() {
                     CHECK_EQ(e.hops.back().freq_hz, 869'525'000);
                 }
             }
+        }
+    }
+
+    // -------------------------------------------------------------------------------
+    // Cas 14. U0.3 / A6 — scènes discriminantes du placement.
+    //
+    // Chaque scène est jouée **deux fois** : sur le planificateur par lot (`plan_downlinks`) et
+    // sur le planificateur incrémental du chemin causal (`DownlinkScheduler`). Les deux doivent
+    // produire la même occupation, sinon `trace_events` lève « occupation passerelle incohérente
+    // entre le moteur et le planificateur ».
+    //
+    // Les scènes D et E forment la paire décisive : elles ne diffèrent que d'une nanoseconde et
+    // doivent aboutir à des verdicts opposés. C'est ce qui distingue un placement « à
+    // l'ouverture exacte » d'un placement « dès que l'émetteur est libre », et c'est ce qui
+    // empêche de remplacer le chevauchement réel par une borne de fin.
+    //
+    // Toutes les préconditions sont **vérifiées** : si un temps d'antenne changeait au point de
+    // rendre une scène inopérante, le test échouerait bruyamment au lieu de passer à côté.
+    //
+    // Réglage commun : deux dispositifs, ACK à chaque uplink reçu (`downlink_every = 0`), au
+    // SF7 sauf mention contraire. L'émission du premier dispositif sert d'occupation connue ;
+    // celle du second est la fenêtre observée.
+    {
+        const DeviceRadio sf7 = radio_sf7();
+        // Trame d'ACK : 12 octets, valeur déjà employée par les cas précédents.
+        constexpr std::uint32_t kAckBytes = 12;
+        // Trame de données : 13 octets d'en-tête + 10 de charge (même valeur que le cœur).
+        constexpr std::uint32_t kTrameDonnees = 23;
+        std::int64_t air = 0;
+        CHECK_EQ(downlink_airtime_ns(sf7, kAckBytes, air), lsim::lora::Status::Ok);
+        CHECK_TRUE(air > 0);
+
+        // Temps d'antenne d'une descente SF12, pour les scènes qui ont besoin d'une émission
+        // longue : c'est aussi celui de la fenêtre RX2, dont le SF propre est conservé.
+        DeviceRadio radio_long = sf7;
+        radio_long.rx1_sf = 12;
+        std::int64_t air_long = 0;
+        CHECK_EQ(downlink_airtime_ns(radio_long, kAckBytes, air_long), lsim::lora::Status::Ok);
+
+        // Joue une scène sur les deux planificateurs et retourne l'occupation de chacun.
+        // `rx2_hz` non nul ⇒ table RX2 fournie ⇒ repli actif (opt-in par la table).
+        const auto jouer = [&](const std::vector<DeviceRadio>& radios,
+                               const std::vector<UplinkRecord>& ups, PlanOptions o,
+                               std::uint8_t rx2_sf) {
+            std::vector<DeviceRx2> r2(radios.size(), DeviceRx2{869'525'000, rx2_sf, 125'000});
+            std::vector<Event> ev;
+            std::vector<Interval> par_lot;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &r2, ev, par_lot), PlanStatus::Ok);
+
+            DownlinkScheduler incr(radios, o);
+            CHECK_EQ(incr.status(), PlanStatus::Ok);
+            std::vector<Interval> causal;
+            for (const UplinkRecord& u : ups) {
+                for (const Interval& i : incr.on_received(u.device, u.end_ns, r2[u.device])) {
+                    causal.push_back(i);
+                }
+            }
+            for (const Interval& i : incr.drain()) causal.push_back(i);
+
+            // L'égalité des deux producteurs est exigée par le chemin causal (`trace_events`).
+            CHECK_EQ(causal.size(), par_lot.size());
+            for (std::size_t k = 0; k < std::min(causal.size(), par_lot.size()); ++k) {
+                CHECK_EQ(causal[k].start_ns, par_lot[k].start_ns);
+                CHECK_EQ(causal[k].end_ns, par_lot[k].end_ns);
+            }
+            return par_lot;
+        };
+
+        // --- A. RX1 libre : émission exactement à l'ouverture de RX1 -------------------------
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            const std::vector<UplinkRecord> ups{up(0, 0, 10'000'000, UplinkOutcome::Received)};
+            const auto bu = jouer({sf7}, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{1});
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);  // ouverture exacte, aucun décalage
+            CHECK_EQ(bu[0].end_ns, kS + 10'000'000 + air);
+        }
+
+        // --- B. RX1 occupée : repli en RX2, à l'ouverture de RX2 -----------------------------
+        // L'émission du premier dispositif recouvre l'ouverture de la RX1 du second, mais se
+        // termine bien avant l'ouverture de sa RX2 (une seconde plus tard).
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            o.rx2_fallback = true;
+            // L'émission du premier va de 1,01 s à 1,01 s + air. Le second uplink finit à 25 ms :
+            // sa RX1 ouvre à 1,025 s, en pleine émission ; sa RX2 ouvre à 2,025 s, où
+            // l'émetteur est libre depuis longtemps.
+            constexpr std::int64_t kFinUtile = 25'000'000;
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, kFinUtile - 10'000'000, 10'000'000, UplinkOutcome::Received)};
+            // Préconditions : la RX1 du second est bien masquée, et ses montantes ne se
+            // chevauchent pas (sinon l'uplink serait perdu et la scène ne dirait plus rien).
+            CHECK_TRUE(kS + 10'000'000 < kS + kFinUtile);
+            CHECK_TRUE(kS + kFinUtile < kS + 10'000'000 + air);
+            CHECK_TRUE(kFinUtile - 10'000'000 > 10'000'000);
+            const std::vector<DeviceRadio> radios{sf7, sf7};
+            std::int64_t air_rx2 = 0;
+            DeviceRadio en_rx2 = sf7;
+            en_rx2.rx1_sf = 12;
+            CHECK_EQ(downlink_airtime_ns(en_rx2, kAckBytes, air_rx2), lsim::lora::Status::Ok);
+            const auto bu = jouer(radios, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
+            // RX2 : ouverture exacte (RX1 + 1 s), et durée de RX2 — pas celle de RX1.
+            CHECK_EQ(bu[1].start_ns, kS + kFinUtile + kS);
+            CHECK_EQ(bu[1].end_ns, bu[1].start_ns + air_rx2);
+            CHECK_TRUE(air_rx2 > air);  // le repli coûte l'émetteur : la scène est probante
+        }
+
+        // --- C. RX1 et RX2 occupées : aucune émission, aucune occupation fictive -------------
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            o.rx2_fallback = true;
+            // Le premier dispositif émet une descente de données au SF12 — un ACK (12 octets,
+            // 0,99 s) ne suffirait pas : il faut masquer la RX1 **et** la RX2 du second, soit plus
+            // d'une seconde d'occupation.
+            o.downlink_every = 1;
+            o.downlink_payload_bytes = 10;
+            std::int64_t air_donnees = 0;
+            CHECK_EQ(downlink_airtime_ns(radio_long, kTrameDonnees, air_donnees),
+                     lsim::lora::Status::Ok);
+            const std::vector<DeviceRadio> radios{radio_long, sf7};
+            const std::int64_t ouverture_rx1 = kS + 25'000'000;
+            const std::int64_t ouverture_rx2 = ouverture_rx1 + kS;
+            // Précondition : les deux fenêtres du second sont réellement masquées. Sans elle, un
+            // changement de temps d'antenne ferait passer le test à côté de ce qu'il épingle.
+            CHECK_TRUE(kS + 10'000'000 + air_donnees > ouverture_rx2);
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, 25'000'000 - 10'000'000, 10'000'000, UplinkOutcome::Received)};
+            const auto bu = jouer(radios, ups, o, 12);
+            // Une seule occupation : celle de l'émission réellement acceptée. Les deux fenêtres
+            // refusées du second dispositif n'en laissent aucune trace.
+            CHECK_EQ(bu.size(), std::size_t{1});
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
+            CHECK_EQ(bu[0].end_ns, kS + 10'000'000 + air_donnees);
+        }
+
+        // --- D. Occupation se terminant **exactement** à l'ouverture : émission autorisée -----
+        // Le second uplink finit à `air` : sa RX1 ouvre exactement à la libération de
+        // l'émetteur. Intervalle semi-ouvert : le contact n'est pas un chevauchement.
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, air, 10'000'000, UplinkOutcome::Received)};
+            CHECK_TRUE(air > 10'000'000);  // les deux montantes ne se chevauchent pas
+            const auto bu = jouer({sf7, sf7}, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            CHECK_EQ(bu[1].start_ns, kS + 10'000'000 + air);  // ouverture exacte, aucun repli
+        }
+
+        // --- E. Occupation chevauchant **réellement** la fenêtre : refus ----------------------
+        // Strictement la même scène que D, à une nanoseconde près : l'émetteur est encore pris
+        // une nanoseconde après l'ouverture. La fenêtre est manquée. Le repli est actif mais la
+        // RX2, une seconde plus tard, est libre — la descente part donc en RX2.
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            o.rx2_fallback = true;
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, air - 1, 10'000'000, UplinkOutcome::Received)};
+            const auto bu = jouer({sf7, sf7}, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            // RX1 refusée : une nanoseconde de trop. Rattrapée en RX2, à l'ouverture de celle-ci.
+            CHECK_EQ(bu[1].start_ns, kS + 10'000'000 + air - 1 + kS);
+            // La paire D/E prouve que le refus vient d'un chevauchement réel et non d'une borne :
+            // une borne « occupé jusqu'à » n'aurait pas départagé deux instants si proches.
+        }
+
+        // --- F. Deux fenêtres séparées par un intervalle libre : les deux sont émises ---------
+        // Le piège d'une borne monotone « occupé jusqu'à » : une fois l'émetteur occupé, une
+        // telle borne ne décroît jamais et rejetterait la seconde fenêtre à tort. Le placement
+        // porte donc sur un chevauchement réel, pas sur une borne.
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, 3 * kS, 10'000'000, UplinkOutcome::Received)};
+            CHECK_TRUE(kS + 10'000'000 + air < 4 * kS + 10'000'000);  // intervalle libre réel
+            const auto bu = jouer({sf7, sf7}, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
+            CHECK_EQ(bu[1].start_ns, 4 * kS + 10'000'000);  // à son ouverture, pas après
+        }
+
+        // --- G. Une émission acceptée occupe l'émetteur ; un refus n'en laisse aucune ---------
+        // Reprise de C sans repli : le second dispositif n'a aucune fenêtre, et l'occupation est
+        // exactement celle de la seule émission acceptée — ni plus, ni décalée.
+        {
+            PlanOptions o;
+            o.confirmed_uplinks = true;
+            o.downlink_every = 0;
+            o.downlink_every = 1;
+            o.downlink_payload_bytes = 10;
+            std::int64_t air_donnees = 0;
+            CHECK_EQ(downlink_airtime_ns(radio_long, kTrameDonnees, air_donnees),
+                     lsim::lora::Status::Ok);
+            const std::vector<DeviceRadio> radios{radio_long, sf7};
+            const std::vector<UplinkRecord> ups{
+                up(0, 0, 10'000'000, UplinkOutcome::Received),
+                up(1, 25'000'000 - 10'000'000, 10'000'000, UplinkOutcome::Received)};
+            const auto bu = jouer(radios, ups, o, 12);
+            CHECK_EQ(bu.size(), std::size_t{1});
+            CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
+            CHECK_EQ(bu[0].end_ns, kS + 10'000'000 + air_donnees);
         }
     }
 }

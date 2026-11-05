@@ -33,12 +33,19 @@
 #include <cstdint>
 #include <vector>
 
-#include "lsim/engine.hpp"
-
+// Composant volontairement **sans dépendance** : il n'inclut aucun en-tête du projet, de sorte que
+// `engine.hpp` et `downlink_plan.hpp` puissent l'un et l'autre s'en servir — `engine.hpp` incluant
+// déjà `downlink_plan.hpp`, une dépendance de ce fichier vers le moteur rendrait la réciproque
+// impossible.
 namespace lsim::radio {
 
-using lsim::sim::Interval;
-using lsim::sim::SimTime;
+using SimTime = std::int64_t;  // nanosecondes
+
+// Intervalle **semi-ouvert** `[start, end)`.
+struct Interval {
+    SimTime start = 0;
+    SimTime end = 0;
+};
 
 // Verdict d'un placement.
 enum class PlacementVerdict : std::uint8_t {
@@ -76,6 +83,16 @@ public:
     // paramètres régionaux — un dispositif sans RX2 renseignée ne tente pas de repli).
     Placement place(SimTime rx1_open_ns, SimTime rx1_air_ns,
                     SimTime rx2_open_ns, SimTime rx2_air_ns, bool rx2_allowed);
+
+    // Place une émission à une **fenêtre unique**, sans repli : émise exactement à `open_ns`, ou
+    // refusée. Refusée n'occupe pas l'émetteur.
+    //
+    // Le planificateur (jalon U0.3) l'emploie pour les deux phases : il garde la responsabilité de
+    // l'ordonnancement — une fenêtre RX2 entre dans la file à sa propre ouverture, après les
+    // fenêtres plus précoces déjà déposées, ce que `place()` ne sait pas exprimer puisqu'il
+    // enchaîne RX1 puis RX2 dans le même appel. La **règle** de placement reste entièrement ici :
+    // départ exact à l'ouverture, chevauchement réel, et occupation seulement si acceptée.
+    bool place_at(SimTime open_ns, SimTime air_ns);
 
     // Émissions réellement planifiées, croissantes et disjointes, dans l'ordre de placement.
     const std::vector<Interval>& occupancy() const noexcept { return busy_; }

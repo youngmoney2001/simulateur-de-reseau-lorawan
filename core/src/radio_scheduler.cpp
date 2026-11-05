@@ -56,6 +56,14 @@ Placement RadioScheduler::place(SimTime rx1_open_ns, SimTime rx1_air_ns,
     return p;
 }
 
+bool RadioScheduler::place_at(SimTime open_ns, SimTime air_ns) {
+    if (transmitting(open_ns, open_ns + air_ns)) {
+        return false;  // aucune occupation enregistrée : la fenêtre est refusée, rien n'est émis
+    }
+    insert(open_ns, open_ns + air_ns);
+    return true;
+}
+
 void RadioScheduler::insert(SimTime start, SimTime end) {
     const auto pos = std::upper_bound(busy_.begin(), busy_.end(), start,
                                       [](SimTime s, const Interval& b) { return s < b.start; });

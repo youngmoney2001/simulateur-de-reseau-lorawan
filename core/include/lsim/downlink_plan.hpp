@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "lsim/lora_phy.hpp"
+#include "lsim/radio_scheduler.hpp"
 
 namespace lsim::plan {
 
@@ -175,11 +176,15 @@ public:
     // montante courante, mais aussi d'éventuelles fenêtres RX2 différées d'une montante
     // antérieure et dont l'ouverture vient d'arriver.
     //
-    // Avertissement : depuis I1, la RX2 n'est **pas** placée immédiatement. Elle entre dans la
-    // file à son propre instant d'ouverture (fin + 2 s), donc après les descentes déjà déposées
-    // qui sont plus tardives qu'elle. Placer la RX2 sur-le-champ placerait la descente trop tôt
-    // et ferait diverger l'occupation de celle de `plan_downlinks` (tas), ce que le chemin
-    // causal vérifie à l'égalité (`trace_events` : « occupation passerelle incohérente »).
+    // Avertissement : la RX2 n'est **pas** placée immédiatement. Elle entre dans la file à son
+    // propre instant d'ouverture (fin + 2 s), donc après les descentes déjà déposées qui sont
+    // plus tardives qu'elle. Placer la RX2 sur-le-champ placerait la descente trop tôt et
+    // ferait diverger l'occupation de celle de `plan_downlinks` (tas), ce que le chemin causal
+    // vérifie à l'égalité (`trace_events` : « occupation passerelle incohérente »).
+    //
+    // U0.3 renforce cette contrainte : A6 interdisant tout décalage, une RX2 placée sur-le-champ
+    // serait émise avant son ouverture, ce qui n'a pas de sens. Le report n'est donc plus une
+    // simple précaution de parité, il est exigé par la règle de placement elle-même.
     std::vector<Interval> on_received(std::uint32_t device, std::int64_t end_ns,
                                       const DeviceRx2& rx2);
 
@@ -217,8 +222,12 @@ private:
     std::vector<Essai> pendantes_;  // tentatives dont l'ouverture n'est pas encore atteinte
     std::int64_t ordre_ = 0;
     PlanStatus status_ = PlanStatus::Ok;
-    bool any_busy_ = false;
-    std::int64_t busy_until_ = 0;
+
+    // Occupation de l'émetteur et règle de placement (jalon U0.3) : déléguées au composant
+    // radio, qui applique A6 — départ exact à l'ouverture, chevauchement réel, occupation
+    // seulement pour les émissions acceptées. Le planificateur garde l'**ordonnancement** :
+    // l'ordre d'examen des fenêtres et le report de la RX2 à sa propre ouverture.
+    lsim::radio::RadioScheduler sched_;
 };
 
 }  // namespace lsim::plan
