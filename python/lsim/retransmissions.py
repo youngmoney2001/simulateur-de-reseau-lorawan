@@ -45,7 +45,24 @@ RX1_DELAY_NS = 1_000_000_000       # RECEIVE_DELAY1 (cœur : downlink_plan.cpp)
 RX1_WINDOW_NS = 1_000_000_000      # durée de la fenêtre RX1 (hypothèse du cœur)
 RX2_DELAY_NS = 2_000_000_000       # RECEIVE_DELAY2 (hypothèse du cœur, classe A)
 MAX_RETRIES = 7                    # LoRaWAN : 0..7 réémissions au-delà de la première
-MAX_ITERATIONS = 32
+# Budget d'itérations du point fixe des réémissions. Relevé de 32 à 128 en U0.4-bis : la
+# convergence de l'occupation radio (voir `_simulate_confirmed`) demande des passes
+# supplémentaires — mesuré : 75 itérations au maximum sur 500 scénarios denses, contre 27
+# avant. 128 laisse une marge de 1,7 × ; au-delà, l'erreur est explicite.
+MAX_ITERATIONS = 128
+
+
+def _canonique(intervalles) -> tuple:
+    """Forme canonique d'une occupation : triée, dédupliquée, entiers natifs.
+
+    Deux occupations sont égales dès qu'elles contiennent les mêmes intervalles, quel que
+    soit l'ordre de production ou d'éventuelles répétitions. Comparer les listes brutes
+    rendrait la convergence dépendante de l'ordre d'insertion de l'arbitre — et donc
+    d'un détail d'implémentation, pas de la physique.
+    """
+    if not intervalles:
+        return ()
+    return tuple(sorted({(int(d), int(f)) for d, f in intervalles}))
 
 
 class DownlinkDelivery(str, Enum):
@@ -569,7 +586,14 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
     occupation: tuple = ()
     mac_plan = None
     dernier_devoir = duty_cycle
+    # Occupations déjà produites, pour détecter une oscillation de l'**occupation** elle-même —
+    # distincte de celle du calendrier, gardée plus bas.
+    occupations_vues: set = set()
     for _iteration in range(MAX_ITERATIONS):
+        # L'occupation **imposée** à cette itération est conservée, pour être comparée à celle
+        # qui en sortira. Sans cette capture, la comparaison serait vide de sens : `occupation`
+        # est réaffecté plus bas, avant le test de sortie.
+        occupation_imposee = occupation
         # Un émetteur neuf à chaque itération : aucune occupation d'une passe précédente ne
         # survit à la suivante, et la convergence se lit sur l'égalité des occupations.
         #
@@ -686,8 +710,32 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
                                      received=False, delivery=DownlinkDelivery.NONE,
                                      ack=AckReception.NONE, acked=False,
                                      f_cnt_up=attempt.f_cnt_up, session=attempt.session))
+        # --- Convergence de l'occupation radio (chemin MAC seulement) -----------------------
+        # Sans la seconde condition, la boucle pouvait sortir dès la première itération : le
+        # plan venait d'être produit sous une occupation vide, la trace qui l'avait engendré
+        # n'était jamais refaite avec lui, et une descente pouvait chevaucher une montante
+        # comptée comme reçue — un émetteur demi-duplex émettant pendant qu'il reçoit.
+        #
+        # Le chemin causal (`mac_plan is None`) n'est **pas** concerné : son occupation vient
+        # du `RadioScheduler` du cœur, qui applique le demi-duplex par construction (U0.4).
+        # `occupation` n'y est jamais réaffecté : la comparaison n'y aurait pas de sens.
+        #
+        # L'arbitre n'est délibérément **pas** amorcé avec l'occupation précédente : il la
+        # redérive depuis un émetteur libre. L'amorcer compterait deux fois la même émission,
+        # puisqu'il la verrait comme occupée par lui-même.
         if not nouvelles:
-            break
+            if mac_plan is None or _canonique(planned) == _canonique(occupation_imposee):
+                break
+            # Calendrier stable, occupation encore instable : on rejoue la trace avec
+            # l'occupation produite. Le calendrier ne change pas, donc la garde d'oscillation
+            # **du calendrier** ne s'applique pas ici ; c'est celle de l'occupation qui opère.
+            cle_occupation = _canonique(planned)
+            if cle_occupation in occupations_vues:
+                raise RuntimeError(
+                    "pas de point fixe de l'occupation radio : la même occupation revient "
+                    "sans jamais égaler celle qui l'a produite")
+            occupations_vues.add(cle_occupation)
+            continue
         schedule = schedule + nouvelles
         schedule = _prune_acknowledged(schedule)
         signature = tuple((a.device, a.session, a.frame, a.attempt, a.start_ns) for a in schedule)
@@ -696,6 +744,21 @@ def _simulate_confirmed(devices: Sequence, gateway, propagation, radios, options
         vu.add(signature)
     else:
         raise RuntimeError(f"pas de point fixe des réémissions après {MAX_ITERATIONS} itérations")
+
+    # --- Le résultat rendu doit être physiquement possible ---------------------------------
+    # Un émetteur demi-duplex ne peut émettre pendant qu'il reçoit. Si le plan final recouvre
+    # une montante comptée comme reçue, le point fixe n'a pas abouti à une solution physique :
+    # on le dit, au lieu de rendre silencieusement une trace impossible. C'est le filet qui
+    # rend la convergence vérifiable de l'extérieur, et non seulement espérée.
+    if mac_plan is not None and result is not None:
+        _recues = tuple((int(r.start_ns), int(r.end_ns))
+                        for r in result.records if r.outcome == 2)
+        for _d, _f in _canonique(planned):
+            for _a, _b in _recues:
+                if _d < _b and _a < _f:
+                    raise RuntimeError(
+                        "occupation descendante incohérente avec la trace : une descente "
+                        f"[{_d}, {_f}) chevauche une montante reçue [{_a}, {_b})")
 
     assert result is not None
     acquittees = {a.key for a in schedule if a.acked}

@@ -2,6 +2,41 @@
 
 ## 0.1.0 (non publiée)
 
+### U0.4-bis — Convergence de l'occupation radio sur le chemin MAC
+
+Sixième jalon de la refonte U0. Il corrige un contournement du demi-duplex **révélé par
+l'audit** des chemins ACK, Join-Accept et réémissions, et non par une erreur de placement.
+
+**Le défaut.** Le point fixe des réémissions (`_simulate_confirmed`) sortait dès qu'aucune
+réémission nouvelle n'était nécessaire, sans vérifier que l'occupation produite était celle
+qui avait servi à calculer la trace. Le plan pouvait donc contenir une descente chevauchant
+une montante comptée comme reçue : **un émetteur demi-duplex émettant pendant qu'il reçoit**.
+Mesuré avant correction : 95 configurations sur 400, 708 intervalles fautifs.
+
+**La correction.** La sortie exige désormais la stabilité du calendrier **et** de l'occupation.
+S'y ajoutent une comparaison canonique (triée, dédupliquée), une garde d'oscillation de
+l'occupation, un budget porté de 32 à 128 itérations (75 mesurées au plus sur 500 scénarios
+denses), et un filet qui **lève** plutôt que de rendre une trace physiquement impossible.
+L'arbitre n'est pas amorcé avec l'occupation précédente : il la redérive depuis un émetteur
+libre, faute de quoi la même émission serait comptée deux fois.
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Sur les 400 configurations de l'audit, 103 voient leur résultat modifié, **toutes** sur le
+chemin MAC ; le chemin causal est strictement inchangé. Agrégats sur les 365 configurations
+MAC : 708 violations supprimées, 586 pertes d'occupation passerelle supplémentaires, 102
+montantes reçues en moins, 488 réémissions en plus, 7 trames livrées en moins. Ces écarts ne
+sont pas des régressions : les configurations concernées renvoyaient une trace que le matériel
+ne pourrait pas produire. Les configurations déjà cohérentes — dont tous les scénarios
+historiques à 5 terminaux testés — sont inchangées.
+
+**Non-convergence assumée.** Sur 500 scénarios denses, 4 configurations oscillent
+(occupation mesurée : 84, 50, 96, 64, 94, 72, 72, 76, 70, 84… sans jamais se stabiliser) et
+lèvent désormais une erreur explicite. Ces 4 renvoyaient auparavant un résultat comptant
+22, 148, 37 et 24 violations : le code refuse maintenant de les rendre.
+
+**Non traité ici** : `DECALE` et A6 inchangés, aucune règle MAC modifiée, ABI intacte, budget
+réglementaire descendant toujours désactivé, chemin multi-passerelles non migré.
+
 ### U0.4 — Occupation radio : source unique et cohérence du demi-duplex
 
 Cinquième jalon de la refonte U0. Le moteur causal n'entretient plus de copie locale de
