@@ -490,7 +490,10 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
     std::vector<std::size_t> order(txs.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
     std::optional<plan::DownlinkScheduler> scheduler;
-    std::vector<Interval> planned;  // descentes planifiées (chemin causal), triées et disjointes
+    // U0.4 : il n'y a **plus** de copie locale de l'occupation. Le demi-duplex interroge
+    // l'ordonnanceur radio du planificateur, qui est le même état que celui du placement : une
+    // trame est déclarée « perdue, passerelle en émission » exactement quand l'émetteur émet.
+    // Une liste entretenue à côté (`planned`) pouvait diverger sans qu'aucun test ne le voie.
     if (causal != nullptr) {
         std::stable_sort(order.begin(), order.end(),
                          [&txs](std::size_t a, std::size_t b) { return txs[a].end < txs[b].end; });
@@ -504,7 +507,7 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         DeviceStats& st = per_device[ta.device];
         TxOutcome outcome = TxOutcome::LostSensitivity;
 
-        const bool on_air_gw = causal != nullptr ? transmitting_in(planned, ta.start, ta.end)
+        const bool on_air_gw = causal != nullptr ? scheduler->transmitting(ta.start, ta.end)
                                                  : transmitting_in(busy, ta.start, ta.end);
         if (ta.rssi_dbm < sensitivity[ta.device]) {
             ++st.lost_sensitivity;
@@ -547,21 +550,24 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
         }
         outcomes[a] = outcome;
         if (scheduler && outcome == TxOutcome::Received) {
-            for (const plan::Interval& iv : scheduler->on_received(ta.device, ta.end)) {
-                planned.push_back(Interval{iv.start_ns, iv.end_ns});
-            }
+            // L'ordonnanceur enregistre l'occupation lui-même ; la valeur de retour n'est plus
+            // recopiée dans une liste parallèle.
+            scheduler->on_received(ta.device, ta.end);
         }
     }
     // Purge : la dernière fenêtre RX2 différée n'a pas eu de montante suivante pour la déclencher.
     if (scheduler) {
-        for (const plan::Interval& iv : scheduler->drain()) {
-            planned.push_back(Interval{iv.start_ns, iv.end_ns});
-        }
+        scheduler->drain();
     }
     if (scheduler && scheduler->status() != plan::PlanStatus::Ok) return SimStatus::InvalidInput;
     if (causal != nullptr && causal->busy_out != nullptr) {
+        // U0.4 : `busy_out` est **dérivé** de l'occupation de l'ordonnanceur, et non reconstitué
+        // au fil des appels. Il contient donc exactement les émissions acceptées — rien de plus,
+        // rien de moins, et dans l'ordre garanti croissant et disjoint de l'ordonnanceur.
         causal->busy_out->clear();
-        for (const Interval& iv : planned) causal->busy_out->push_back(plan::Interval{iv.start, iv.end});
+        for (const lsim::radio::Interval& iv : scheduler->occupancy()) {
+            causal->busy_out->push_back(plan::Interval{iv.start, iv.end});
+        }
     }
     if (trace != nullptr) {
         trace->reserve(txs.size());

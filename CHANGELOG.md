@@ -2,6 +2,32 @@
 
 ## 0.1.0 (non publiée)
 
+### U0.4 — Occupation radio : source unique et cohérence du demi-duplex
+
+Cinquième jalon de la refonte U0. Le moteur causal n'entretient plus de copie locale de
+l'occupation : le demi-duplex interroge l'ordonnanceur radio **qui a décidé le placement**.
+
+**Ce qui change.** Le chemin causal maintenait un `std::vector<Interval> planned`, alimenté par les
+valeurs de retour de `DownlinkScheduler::on_received()`. Le placement décidait sur l'état de
+l'ordonnanceur, le demi-duplex lisait la copie : deux états pour une même réalité, et aucun
+contrôle de leur égalité. `DownlinkScheduler` expose désormais `occupancy()` — l'occupation de
+l'ordonnanceur radio, sans liste parallèle — et `transmitting()`, le **même** test que le
+placement. `busy_out` en est **dérivé**, et non reconstitué au fil des appels.
+
+**Ce qui ne change pas.** Comportement bit à bit identique : empreintes gelées
+`d2cb0fac…` / `ed126d7f…` invariantes, les neuf scènes de la sonde d'occupation gardent leurs
+comptes, durées et empreintes, et l'égalité moteur/planificateur reste acquise sur les neuf.
+
+**Garanties épinglées par les tests.** Une émission acceptée réserve exactement
+`[ouverture, ouverture + temps d'antenne)` ; une émission refusée n'en réserve aucune ; deux
+émissions disjointes sont toutes deux possibles ; une occupation s'achevant exactement à
+l'instant de disponibilité suivant ne provoque pas de faux conflit ; ACK, Join-Accept et
+réémission passent par un émetteur unique et ne peuvent pas émettre par-dessus une émission
+déjà acceptée.
+
+**Non traité ici** (limites du mandat) : migration du multi-passerelles, budget réglementaire
+descendant, retrait de `GatewayArbiter` — ses responsabilités ne sont pas toutes identifiées.
+
 ### U0.3 — Placement temporel A6 : un ordonnanceur radio commun
 
 Quatrième jalon de la refonte U0. Le `RadioScheduler` devient la référence commune de placement

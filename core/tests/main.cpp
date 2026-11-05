@@ -34,6 +34,7 @@ void run_closed_loop_v3_crossval_tests();
 void run_closed_loop_v3_api_tests();
 void run_rf_frontend_tests();
 void run_radio_scheduler_tests();
+void run_occupation_radio_tests();
 void run_determinisme_tests();
 
 int main() {
@@ -48,6 +49,7 @@ int main() {
     run_closed_loop_v3_api_tests();
     run_rf_frontend_tests();
     run_radio_scheduler_tests();
+    run_occupation_radio_tests();
     run_determinisme_tests();
     run_link_budget_tests();
     run_lorawan_frame_tests();

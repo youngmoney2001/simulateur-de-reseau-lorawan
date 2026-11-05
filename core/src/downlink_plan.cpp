@@ -512,6 +512,10 @@ std::vector<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::
 
 std::vector<Interval> DownlinkScheduler::drain() { return placer(kInf); }
 
+bool DownlinkScheduler::transmitting(std::int64_t start, std::int64_t end) const {
+    return sched_.transmitting(start, end);
+}
+
 std::vector<Interval> DownlinkScheduler::placer(std::int64_t frontiere) {
     std::vector<Interval> poses;
     while (!pendantes_.empty()) {

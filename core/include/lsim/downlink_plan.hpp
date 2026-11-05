@@ -192,6 +192,35 @@ public:
     // trace épuisée, sinon la dernière fenêtre RX2 différée ne serait jamais émise.
     std::vector<Interval> drain();
 
+    // -------------------------------------------------------------------------------------------
+    // Source de vérité de l'occupation (jalon U0.4)
+    //
+    // Le planificateur ne détient **pas** de seconde liste d'occupation : celle-ci est celle de
+    // l'ordonnanceur radio, restituée telle quelle. Le moteur causal s'en sert pour le demi-duplex
+    // et pour restituer `busy_out`, au lieu d'entretenir une copie qu'il faudrait maintenir en
+    // phase — une divergence entre les deux était indétectable.
+    //
+    // Propriétés garanties par le composant radio, et donc par cette accesseur :
+    //   * ne contient que les émissions **acceptées** : un refus n'inscrit rien ;
+    //   * chaque intervalle est exactement `[ouverture, ouverture + temps d'antenne)`, sans garde ;
+    //   * la liste est croissante et ses intervalles disjoints (prérequis de `transmitting`).
+    //
+    // Le type reste celui du composant radio (`radio::Interval`) et non celui du plan
+    // (`plan::Interval`) : ce sont deux structures de mêmes champs et de même disposition, la
+    // seconde étant celle de la frontière ABI. Les unifier n'est pas nécessaire à la cohérence —
+    // ce qui compte est qu'il n'y ait qu'un seul **état**, pas une seule écriture — et le
+    // renommage toucherait une soixantaine de sites sans gain. La conversion, à la frontière, est
+    // une recopie explicite.
+    const std::vector<lsim::radio::Interval>& occupancy() const noexcept {
+        return sched_.occupancy();
+    }
+
+    // Vrai si l'émetteur émet déjà pendant `[start, end)`.
+    //
+    // C'est le **même** test que celui du placement : demi-duplex et décision d'émission lisent
+    // donc exactement le même état, ce qui était l'objet du jalon.
+    bool transmitting(std::int64_t start, std::int64_t end) const;
+
 private:
     std::vector<Interval> placer(std::int64_t frontiere);
     // Une tentative de descente en attente de placement.
