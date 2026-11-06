@@ -1593,11 +1593,30 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                         device_antenna_gain_dbi=options.device_antenna_gain_dbi,
                         device_rx_offset_db=options.device_rx_offset_db,
                         join=options.join, rx2_sf=_rx2_spreading_factor(scenario))
+    # I5-a : ces radios étaient calculées plus haut mais ne franchissaient pas la frontière ; le
+    # moteur retenait donc l'hypothèse « RX1 au SF montant, 125 kHz ». Une table rx2 impose en
+    # retour `rule.rx2_sf == 0` (décision i5-a-2) : la fenêtre de repli est alors décrite par la
+    # table, seule source, et non plus par un scalaire qui la doublerait.
+    #
+    # Sans plan régional, `dr` est None : RX1 vaut alors (SF montant, 125 kHz), la diagonale — la
+    # table n'aurait aucun effet. On ne la passe pas, ce qui conserve la garantie d'I3 :
+    # « aucun scénario historique ne change ».
+    if any(r.dr is None for r in radios):
+        radios_table, rx2 = None, None
+    else:
+        radios_table, rx2 = radios, _table_rx2(radios)
+        if any(r.rx2_sf for r in rx2):
+            rule = DownlinkRule(ack_uplinks=rule.ack_uplinks, every=rule.every,
+                                payload_bytes=rule.payload_bytes,
+                                gateway_tx_power_dbm=rule.gateway_tx_power_dbm,
+                                device_antenna_gain_dbi=rule.device_antenna_gain_dbi,
+                                device_rx_offset_db=rule.device_rx_offset_db,
+                                join=rule.join, rx2_sf=0)
     mesh = None
     plan: Optional[_MeshReturn] = None
     if scenario.model.mesh is None:
         result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
-                                          scenario.environment)
+                                          scenario.environment, radios=radios_table, rx2=rx2)
     else:
         # Point fixe sur (départs au plus tôt des descentes, délai frontière de chaque uplink) :
         # la passe jointe (montant et descente partagent le temps d'antenne) dépend des descentes,
@@ -1608,7 +1627,8 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
         delay_in: dict = {m: 0 for m in range(total)}  # hypothèse initiale : frontière directe
         for _ in range(MAX_MESH_RETURN_ITERATIONS):
             result = simulate_multi_downlinks(devices, gateways, scenario.propagation(), rule,
-                                              scenario.environment, dl_ready_ns=ready)
+                                              scenario.environment, dl_ready_ns=ready,
+                                              radios=radios_table, rx2=rx2)
             msg_of, rec_by_end = _message_index(devices, result.trace)
             requests, pre_status, msg_dl = _downlink_requests(scenario, models, options, result,
                                                               delay_in, msg_of, rec_by_end)
