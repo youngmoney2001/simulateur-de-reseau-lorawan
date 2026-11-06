@@ -244,3 +244,101 @@ Contrôles ABI : **+1 symbole**, **0 retiré** ; structures existantes à taille
 2. **Le site 3 change le taux de livraison**, pas seulement l'occupation. Toute comparaison
    avant/après devra séparer les deux effets.
 3. **Les deux arbitrages sont rendus** : option B (§4.2) et refus du conflit `rx2` (§4.3).
+
+---
+
+## 11. Bilan d'exécution
+
+Ajouté après coup, une fois le lot terminé. Suit l'usage établi en I6-c (§9 de
+`docs/I6_C_PARITE_N.md`) : ce qui a été fait, les décisions prises **en cours d'implémentation**
+parce que le plan ne les tranchait pas, et les preuves.
+
+### 11.1 Les sept étapes
+
+| # | Étape | Commits | État |
+|---|---|---|---|
+| 1 | Cœur C++ : trois sites corrigés | `1ff90c0` | fait |
+| 2 | Frontière C : enveloppe `lsim_multi_dl_args` | `ef974cf` | fait |
+| 3 | Harnais ABI : deux tables de disposition | `58e688a` | fait |
+| 4 | Pont Python jusqu'au moteur | `1a04b43` | fait |
+| 5 | `build_multi_trace` transmet ses radios | `b05d7b2` | fait |
+| 6 | Tests du pont | `d25a367` | fait |
+| 7 | Mutations | — | fait (§11.4) |
+
+### 11.2 Décisions prises en cours d'implémentation
+
+Le plan ne les tranchait pas ; elles l'ont été à l'implémentation et sont documentées ici.
+
+**(a) `reserved` de l'enveloppe validé à zéro.** Suivi de O1 et bbb3 : un appelant qui renseigne
+`reserved` parle une ABI future, l'ignorer serait un repli silencieux. Précédent :
+`LSIM_STATUS_CHANNEL_RESERVED_NONZERO` en I4.
+
+**(b) Sans plan régional, les tables ne sont pas passées.** `device_radios` rend `dr = None`
+sans région ; RX1 vaut alors (SF montant, 125 kHz), la diagonale — la table n'aurait aucun
+effet. Elle n'est donc pas transmise, ce qui conserve la garantie d'I3 : « aucun scénario
+historique ne change ». Première tentative sans cette condition : **20 échecs et 14 erreurs**
+dans `test_mesh_trace.py`.
+
+**(c) `radios` transmis sous un autre nom.** La variable `radios` sert plus bas dans
+`build_multi_trace` (`radios[d]`). Les tables passées au moteur utilisent `radios_table`, sinon
+la mise à `None` du point (b) cassait l'aval.
+
+**(d) `_CPlanDevice` / `_CPlanDeviceRx2` définies dans `_native`.** `downlink_plan` et
+`trace_events` importent tous deux `simulator` ; définir ces structures là où l'enveloppe en a
+besoin fermait un cycle. Elles sont définies au plus bas niveau et réimportées — les appelants
+de `downlink_plan` ne voient aucune différence.
+
+### 11.3 Un écart qui n'en était pas un
+
+À SF12/125 kHz, le moteur produisait 991 232 000 ns là où ma référence Python en attendait
+1 155 072 000. Après examen, **c'était ma référence qui était fausse** : je comparais à une
+trame de données (`kDataFrameOverhead`, 13 octets) alors que le moteur émettait un ACK
+(`kAckFrameBytes`, 12 octets), LDRO activé puisque `tsym = 32,768 ms > 16 ms`. Les trois cas
+concordent alors au nanoseconde. Noté parce que la symétrie est trompeuse : le même chiffre
+s'obtient avec LDRO faux et 13 octets, et avec LDRO vrai et 8 à 12 octets.
+
+### 11.4 Mutations
+
+| Id | Mutation | Détectée |
+|---|---|---|
+| M1 | Validation de l'enveloppe neutralisée (`struct_size`/`abi_version`/`reserved`) | **oui**, 2 échecs Python |
+| M2 | Contrôle des comptes de tables neutralisé | **oui**, segfault (lecture hors bornes) |
+| M3 | Bande RX1 forcée à 125 kHz | **oui**, 2 C++ + 4 Python |
+| M4 | SF RX1 forcé au SF montant (`ta.sf`) | **oui**, 1 C++ + 6 Python |
+
+M3 et M4 ne font échouer que les cas **hors diagonale** : `(SF montant, 125 kHz)` passe à juste
+titre, puisque la mutation y reproduit l'hypothèse historique.
+
+Reprises de l'étape 1 (9 mutations, 7 détectées) : M10 (validation de bande RX1) et M11
+(validation de SF RX2) restent **non détectées**, `time_on_air` rejetant les mêmes entrées — le
+refus est identique, seule sa provenance change. Limite maintenue, non masquée.
+
+### 11.5 Deux tests écrits vacuous, découverts par la mutation
+
+Noté parce que la leçon est générale.
+
+1. **T-A-5** croyait vérifier `struct_size` / `abi_version` / `reserved` en appelant l'enveloppe
+   avec des pointeurs nuls : l'appel échouait de toute façon (`NullOutput`), pour une raison
+   sans rapport. M1 ne faisait rien échouer. Corrigé par un **contrôle positif** — une
+   enveloppe complète et valide doit renvoyer 0 — à partir duquel chaque champ est corrompu.
+2. **T-A-6** croyait vérifier le contrôle des comptes côté cœur, mais le pont Python valide
+   `len(radios) == device_count` **avant** l'appel natif : la défense du C n'était jamais
+   exercée. Test ajouté via l'enveloppe, en contournant le pont.
+
+### 11.6 Preuves
+
+    C++            690 127 vérifications, 0 échec
+    ctest          1/1
+    Python         2477 passed / 15 failed  (2457 avant + 20 nouveaux)
+    échecs         liste comparée par diff avant/après : identique
+    symboles       102 -> 103, 0 retiré
+
+Effet mesuré sur un scénario réel (`build_multi_trace`, ACK, SF montant 7) :
+
+| Région | RX1 du plan | Sans table | Avec tables | Effet |
+|---|---|---|---|---|
+| EU868 | SF7 / 125 kHz | 56 576 000 | 56 576 000 | identique |
+| US915 | SF7 / 500 kHz | 56 576 000 | 14 144 000 | **corrigé (4,00x)** |
+| AU915 | SF7 / 500 kHz | 56 576 000 | 14 144 000 | **corrigé (4,00x)** |
+
+EU868, AS923, IN865, KR920 et RU864 sont sur la diagonale et ne bougent pas.
