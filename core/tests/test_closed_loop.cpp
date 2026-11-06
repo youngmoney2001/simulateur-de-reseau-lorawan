@@ -277,6 +277,7 @@ void test_rx2_fallback_when_gateway_busy() {
         dev(10.0, 7, 12 * kS / 10, 60 * kS, 1),  // RX1 occupée, RX2 libre (descente du dispositif 0 jusqu'à 3,15 s)
     };
     lsim::plan::DeviceRadio rv[2] = {radio(), radio()};
+    for (int k = 0; k < 2; ++k) rv[k].rx1_sf = d[k].spreading_factor;
     LoopRegion regions[2] = {region(), region()};
     DeviceStats st[2];
     SimulationStats tot;
@@ -323,6 +324,7 @@ void test_no_shift_inside_busy_windows() {
         dev(10.0, 7, 1 * kS, 60 * kS, 1),
     };
     lsim::plan::DeviceRadio rv[2] = {radio(), radio()};
+    for (int k = 0; k < 2; ++k) rv[k].rx1_sf = d[k].spreading_factor;
     LoopRegion regions[2] = {region(), region()};
     DeviceStats st[2];
     SimulationStats tot;
@@ -358,6 +360,7 @@ void test_exact_overlap_accepts_window_before_later_emission() {
         dev(10.0, 7, 1'850'000'000, 3600 * kS, 1),  // B
     };
     lsim::plan::DeviceRadio rv[3] = {radio(), radio(), radio()};
+    for (int k = 0; k < 3; ++k) rv[k].rx1_sf = d[k].spreading_factor;
     LoopRegion regions[3] = {region(), region(), region()};
     const LoopMacSlot slots[] = {
         {0, 1, 0, kLoopMacLinkCheck},
@@ -868,6 +871,7 @@ void test_absolute_gateway_no_sf5_downlink() {
     // Descente SF5 vers le dispositif : sensibilité du terminal NV, refus explicite.
     const EndDeviceSpec d[] = {dev(10.0, 5, 0, 60 * kS, 2)};
     lsim::plan::DeviceRadio rv[1] = {radio()};
+    rv[0].rx1_sf = 5;
     LoopRegion regions[1] = {region()};
     DeviceStats st[1];
     SimulationStats tot;
@@ -1342,7 +1346,9 @@ SimStatus run_multi_channels(const std::vector<EndDeviceSpec>& devs, const std::
     std::vector<lsim::plan::DeviceRadio> rv;
     std::vector<LoopRegion> regions;
     for (std::size_t i = 0; i < devs.size(); ++i) {
-        rv.push_back(radio());
+        lsim::plan::DeviceRadio r = radio();
+        r.rx1_sf = devs[i].spreading_factor;
+        rv.push_back(r);
         regions.push_back(region());
     }
     LoopOptions opt;
@@ -2116,6 +2122,112 @@ void test_explicit_defaults_equal_legacy_path() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// I5-c : RX1DROffset, entrée dédiée `LoopChannelIo::rx1_dr_offset`.
+//
+// Formule : RX1_DR = clamp(DR courant du terminal − offset, 0, max_dr), puis SF = dr_sf[RX1_DR].
+// Le DR courant n'est connu que sous `options.adr`, seul régime où l'offset peut être appliqué ;
+// sans ADR le SF ne bouge jamais et la table de radios, déjà calculée avec l'offset, fait foi.
+//
+// Un seul dispositif par exécution : avec deux, la descente du second est repliée en RX2 dès que
+// la première occupe la passerelle, et RX2 porte son propre SF régional — l'offset y est sans
+// effet, ce qui masquerait la propriété testée.
+// ---------------------------------------------------------------------------
+
+struct OffsetRun {
+    SimStatus status = SimStatus::Ok;
+    std::size_t downlinks = 0;
+    std::size_t delivered = 0;
+    SimTime air = 0;  // durée d'antenne de la descente RX1
+};
+
+// `offsets.size()` dispositifs SF7 (donc DR5 dans `region()`), ADR active, une descente
+// LinkCheck chacun. Un vecteur vide = entrée nulle.
+OffsetRun run_with_offset(const std::vector<std::uint8_t>& offsets, std::size_t n = 1) {
+    // `n` est le nombre de dispositifs, distinct de `offsets.size()` : un vecteur vide désigne
+    // l'entrée nulle, pas l'absence de dispositif.
+    std::vector<EndDeviceSpec> devs;
+    std::vector<lsim::plan::DeviceRadio> rv(n);
+    std::vector<LoopRegion> regions(n);
+    std::vector<LoopMacSlot> slots;
+    for (std::size_t i = 0; i < n; ++i) {
+        devs.push_back(dev(10.0, 7, 0, 60 * kS, 1));
+        rv[i] = radio();
+        rv[i].rx1_sf = 7;
+        regions[i] = region();
+        slots.push_back({static_cast<std::uint32_t>(i), 1, 0, kLoopMacLinkCheck});
+    }
+    LoopOptions opt;
+    opt.adr = true;  // seul régime où le DR courant du terminal est connu
+    opt.mac = slots.data();
+    opt.mac_count = slots.size();
+    LoopChannelIo io;
+    if (!offsets.empty()) {
+        io.rx1_dr_offset = offsets.data();
+        io.rx1_dr_offset_count = offsets.size();
+    }
+    std::vector<DeviceStats> st(n);
+    SimulationStats tot;
+    LoopResult res;
+    OffsetRun out;
+    out.status = simulate_closed_loop_channels(devs.data(), n, rv.data(), regions.data(),
+                                               GatewaySpec{}, PropagationSpec{}, nullptr, opt,
+                                               st.data(), tot, res, io);
+    out.downlinks = res.downlinks.size();
+    for (const LoopDownlink& dl : res.downlinks) {
+        if (dl.delivered) ++out.delivered;
+        out.air = dl.air_ns;
+    }
+    return out;
+}
+
+// T-C-8 : l'offset est effectif, ADR active. Le dispositif émet en SF7, donc DR5 ; l'offset 3 le
+// fait descendre à clamp(5−3, 0, 5) = DR2 = SF10. Chaque pas de SF double l'airtime, soit un
+// facteur 8 sur trois pas (~46 ms contre ~289 ms) : on vérifie au moins un facteur 5.
+// Contrôle positif obligatoire (dixième garde-fou) : le test n'affirme pas « ça change », mais
+// « sans offset la descente a bien lieu, et avec l'offset 3 elle dure bien plus longtemps ».
+// Un moteur qui ignorerait l'offset échouerait la dernière assertion au lieu de la passer.
+void test_rx1_dr_offset_is_effective_with_adr() {
+    const OffsetRun o0 = run_with_offset({0});  // clamp(5−0) = DR5 = SF7
+    const OffsetRun o3 = run_with_offset({3});  // clamp(5−3) = DR2 = SF10
+    CHECK_EQ(static_cast<int>(o0.status), static_cast<int>(SimStatus::Ok));
+    CHECK_EQ(static_cast<int>(o3.status), static_cast<int>(SimStatus::Ok));
+    CHECK_EQ(o0.delivered, std::size_t{1});  // contrôle positif : la descente RX1 a bien eu lieu
+    CHECK_TRUE(o3.air > 5 * o0.air);         // SF10 contre SF7 : trois pas, facteur ~8
+}
+
+// T-C-9 : la relation est strictement croissante sur toute la table. Chaque pas d'offset monte
+// d'un SF, donc allonge la descente ; ce balayage interdit un décrochage partiel, par exemple un
+// moteur qui n'appliquerait l'offset qu'à partir d'un certain rang.
+void test_rx1_dr_offset_is_monotone_over_the_table() {
+    SimTime prev = 0;
+    for (std::uint8_t o = 0; o <= 5; ++o) {
+        const OffsetRun r = run_with_offset({o});
+        CHECK_EQ(static_cast<int>(r.status), static_cast<int>(SimStatus::Ok));
+        CHECK_TRUE(r.air > prev);  // strictement croissant : SF7, 8, 9, 10, 11, 12
+        prev = r.air;
+    }
+}
+
+// T-C-10 : refus explicite au-delà de `max_dr` de la région (jamais de saturation silencieuse,
+// arbitrage bbb3), avec contrôle positif : la dernière valeur admise doit être acceptée.
+void test_rx1_dr_offset_out_of_range_is_refused() {
+    const OffsetRun borne = run_with_offset({5});  // region() a max_dr = 5 : accepté
+    const OffsetRun depasse = run_with_offset({6});
+    CHECK_EQ(static_cast<int>(borne.status), static_cast<int>(SimStatus::Ok));
+    CHECK_EQ(static_cast<int>(depasse.status), static_cast<int>(SimStatus::InvalidInput));
+}
+
+// T-C-11 (mutation) : entrée nulle = offset 0 partout. C'est la propriété qui rend l'extension
+// non régressive ; la casser signifierait que l'entrée est devenue obligatoire.
+void test_rx1_dr_offset_null_equals_zero() {
+    const OffsetRun nulle = run_with_offset({});
+    const OffsetRun zero = run_with_offset({0});
+    CHECK_EQ(static_cast<int>(nulle.status), static_cast<int>(zero.status));
+    CHECK_EQ(nulle.air, zero.air);
+    CHECK_EQ(nulle.delivered, zero.delivered);
+}
+
 void run_closed_loop_tests() {
     test_mac_queue_lifecycle_under_mixed_load();
     test_mac_queue_fairness_bounded_wait();
@@ -2166,6 +2278,10 @@ void run_closed_loop_tests() {
     test_absolute_gateway_sf5_threshold();
     test_absolute_gateway_refusals();
     test_absolute_gateway_no_sf5_downlink();
+    test_rx1_dr_offset_is_effective_with_adr();
+    test_rx1_dr_offset_is_monotone_over_the_table();
+    test_rx1_dr_offset_out_of_range_is_refused();
+    test_rx1_dr_offset_null_equals_zero();
     test_mac_reservations_and_answers();
     test_mac_queue_defers_expires_and_conserves();
     test_mac_queue_zero_deferrals_expires_at_once();

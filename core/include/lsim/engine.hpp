@@ -575,6 +575,12 @@ struct LoopChannelIo {
     const LoopChannelConfig* config = nullptr;  // `config_count` entrées, `device_count` attendu
     // Entrée : vrai pour produire la trace interne v3 (désactivée par défaut, sans effet radio).
     bool trace_v3 = false;
+    // Entrée (I5-c) : RX1DROffset par dispositif, `rx1_dr_offset_count` entrées.
+    // `nullptr` (ou count nul) = 0 partout, c'est-à-dire le réglage du serveur et le
+    // comportement historique. Entrée dédiée plutôt qu'un champ de `LoopRegion` : celle-ci
+    // est une structure d'ABI C dont la taille est figée, celle-ci ne l'est pas.
+    const std::uint8_t* rx1_dr_offset = nullptr;
+    std::size_t rx1_dr_offset_count = 0;
     // Sortie : trace v3 triée par temps (ordre d'insertion à temps égal) ; vide si désactivée.
     std::vector<LoopTraceEvent> trace;
     std::size_t config_count = 0;

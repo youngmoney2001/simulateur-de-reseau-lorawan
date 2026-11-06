@@ -474,7 +474,11 @@ void test_engine_no_gateway_slot_loss_is_converted() {
     const std::vector<EndDeviceSpec> devs = {device_spec(10.0, 12, 1), device_spec(10.0, 7, 1)};
     std::vector<EndDeviceSpec> d = devs;
     d[1].start_offset_ns = kS;
-    const std::vector<lsim::plan::DeviceRadio> rv = {radio_spec(), radio_spec()};
+    // I5-c : la perte NoGatewaySlot attendue vient de l'occupation produite par la descente du
+    // dispositif 0 (SF12). La table doit la déclarer : le SF de RX1 n'est plus déduit du SF
+    // montant.
+    std::vector<lsim::plan::DeviceRadio> rv = {radio_spec(), radio_spec()};
+    for (std::size_t k = 0; k < d.size(); ++k) rv[k].rx1_sf = d[k].spreading_factor;
     const std::vector<LoopRegion> regions = {region_spec(), region_spec()};
     const std::vector<LoopMacSlot> slots = {{0, 1, 0, kLoopMacLinkCheck}, {1, 1, 0, kLoopMacLinkCheck}};
     LoopOptions opt;

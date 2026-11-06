@@ -1522,6 +1522,31 @@ LoopChannelSet set_from_block0(std::uint16_t bits) {
 }
 
 // Temps d'antenne d'un uplink à 125 kHz (CR 4/5, en-tête explicite), en ns.
+// I5-c : SF de la fenêtre RX1 d'un dispositif.
+//
+// RP002-1.0.4 : `RX1_DR = clamp(DR − RX1DROffset, 0, max_dr)` pour les régions à règle
+// arithmétique (EU868, EU433, RU864, IN865, AS923, KR920). Le DR **courant** est celui du
+// terminal, pas celui de la configuration initiale : l'ADR le déplace en cours de simulation,
+// et c'est précisément pour l'avoir ignoré qu'une correction antérieure a échoué (lot I5-b).
+//
+// `dr` vaut −1 quand l'ADR est inactif (`engine.cpp` : `dev[i].dr` n'est renseigné que sous
+// `options.adr`). Le SF ne bouge alors jamais : la table `radios[]`, déjà calculée avec
+// l'offset, fait foi et l'appelant ne doit pas la réécrire.
+//
+// Renvoie faux si le DR courant est inconnu (ADR inactif) ou si le DR RX1 n'est pas défini
+// dans la région.
+bool loop_rx1_sf(const LoopRegion& rg, std::int8_t dr, std::uint8_t offset, std::uint8_t& sf_out) {
+    if (dr < 0) return false;
+    if (offset > rg.max_dr) return false;
+    const int clamped = static_cast<int>(dr) - static_cast<int>(offset);
+    const std::uint8_t rx1_dr = static_cast<std::uint8_t>(clamped < 0 ? 0 : clamped);
+    if (rx1_dr > rg.max_dr) return false;
+    const std::uint8_t sf = rg.dr_sf[rx1_dr];
+    if (sf == 0) return false;
+    sf_out = sf;
+    return true;
+}
+
 bool uplink_airtime(std::uint8_t sf, std::uint32_t bytes, SimTime& out) {
     lora::RadioConfig rc;
     rc.spreading_factor = sf;
@@ -1563,10 +1588,17 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         const LoopChannelConfig* cfg = io.config;  // entrées conservées, sorties remises à zéro
         const std::size_t cfg_count = io.config_count;
         const bool trace_on = io.trace_v3;
+        // I5-c : les entrées RX1DROffset sont des **entrées**, elles survivent à la réinitialisation
+        // au même titre que `config` et `trace_v3`. Les omettre les remettrait à zéro, c'est-à-dire
+        // « offset nul partout », donc une entrée acceptée puis ignorée silencieusement.
+        const std::uint8_t* offs = io.rx1_dr_offset;
+        const std::size_t offs_count = io.rx1_dr_offset_count;
         io = LoopChannelIo{};
         io.config = cfg;
         io.config_count = cfg_count;
         io.trace_v3 = trace_on;
+        io.rx1_dr_offset = offs;
+        io.rx1_dr_offset_count = offs_count;
     }
     if (device_count > kMaxEndDevices) return SimStatus::TooManyDevices;
     if (device_count > 0 && (devices == nullptr || per_device == nullptr || radios == nullptr)) {
@@ -1635,7 +1667,20 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
             for (std::uint8_t k = 0; k <= rg.max_tx_power_index; ++k) {
                 if (!(rg.duty_limit[k] > 0.0 && rg.duty_limit[k] <= 1.0)) return SimStatus::InvalidInput;
             }
+            // I5-c : la radio de la table est désormais **lue** par le chemin boucle fermée
+            // (au moins quand l'ADR est inactif). Elle doit donc être valide, faute de quoi
+            // un SF hors bornes atteindrait le calcul d'airtime sans jamais être vu.
+            if (radios[i].rx1_sf < 7 || radios[i].rx1_sf > 12) return SimStatus::InvalidInput;
+            if (radios[i].rx1_bw_hz != 125'000 && radios[i].rx1_bw_hz != 250'000 &&
+                radios[i].rx1_bw_hz != 500'000)
+                return SimStatus::InvalidInput;
             step_db[i] = rg.power_step_tenth_db / 10.0;
+        }
+        // I5-c : RX1DROffset par dispositif. Refus explicite hors bornes de la région — jamais
+        // de saturation silencieuse (arbitrage bbb3). `nullptr` = 0 partout.
+        if (io.rx1_dr_offset != nullptr && io.rx1_dr_offset_count > 0) {
+            if (io.rx1_dr_offset_count != n) return SimStatus::InvalidInput;
+            if (io.rx1_dr_offset[i] > regions[i].max_dr) return SimStatus::InvalidInput;
         }
         if (options.adr) {
             const LoopRegion& rg = regions[i];
@@ -2026,7 +2071,16 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
         // >= 6 symboles — toutes conditions identiques entre RX1 et RX2, le SF montant étant
         // déjà contraint à [7, 12] par la validation des dispositifs. Les deux appels
         // réussissent donc ou échouent ensemble.
-        rad.rx1_sf = ta.sf;
+        // I5-c : RX1DROffset appliqué au DR **courant** du terminal. Sans ADR le DR est
+        // inconnu (−1) et le SF ne bouge pas : la table, déjà calculée avec l'offset, fait foi.
+        {
+            const std::uint8_t off =
+                (io.rx1_dr_offset != nullptr && io.rx1_dr_offset_count > 0) ? io.rx1_dr_offset[d] : 0u;
+            std::uint8_t sf_rx1 = 0;
+            // Sans ADR (`dr < 0`) le SF ne bouge jamais : la table, déjà calculée avec
+            // l'offset, fait foi. La réécrire avec `ta.sf` annulerait l'offset.
+            if (loop_rx1_sf(regions[d], dev[d].dr, off, sf_rx1)) rad.rx1_sf = sf_rx1;
+        }
         SimTime air_rx1 = 0;
         if (plan::downlink_airtime_ns(rad, base + fopts, air_rx1) != lora::Status::Ok) {
             status = SimStatus::InvalidInput;
@@ -2269,7 +2323,21 @@ SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_
                     const Tx& ta = txs[dl.uplink];
                     plan::DeviceRadio rad = radios[dl.device];
                     const bool rx2 = dl.t_open == ta.end + kLoopRx2DelayNs;
-                    rad.rx1_sf = rx2 ? kLoopRx2Sf : ta.sf;
+                    if (rx2) {
+                        rad.rx1_sf = kLoopRx2Sf;
+                    } else {
+                        // I5-c : même résolution que pour l'airtime — l'offset s'applique au
+                        // DR courant du terminal, pas à celui de la configuration initiale.
+                        const std::uint32_t dev_idx = dl.device;
+                        const std::uint8_t off =
+                            (io.rx1_dr_offset != nullptr && io.rx1_dr_offset_count > 0)
+                                ? io.rx1_dr_offset[dev_idx]
+                                : 0u;
+                        std::uint8_t sf_rx1 = 0;
+                        // Idem : sans ADR, la table fait foi (elle porte déjà l'offset).
+                        if (loop_rx1_sf(regions[dev_idx], dev[dev_idx].dr, off, sf_rx1))
+                            rad.rx1_sf = sf_rx1;
+                    }
                     const RadioFrontend& lo_rf = devices[dl.device].rf;
                     const double lo_chain = lo_rf.present() ? lo_rf.chain_db() : 0.0;
                     const double lo_rx_gain =
