@@ -85,6 +85,20 @@ DATA_FRAME_OVERHEAD_BYTES = 13
 # Join-accept sans CFList : MHDR (1) + AppNonce (3) + NetID (3) + DevAddr (4) + DLSettings (1)
 # + RxDelay (1) + MIC (4).
 JOIN_ACCEPT_BYTES = 17
+# --- Motifs d'issue d'une fenêtre descendante (validation transverse, §24) ----------------
+# Deux familles **disjointes**, jamais confondues (§24.4.1) : `capacite` — la fenêtre ne peut
+# pas porter la trame, `fil > N` — et `temporel` — elle le peut, mais l'émetteur est occupé à
+# l'ouverture. Un motif de capacité n'entraîne aucune occupation ; un motif temporel non plus,
+# mais pour une raison différente, que la distinction a précisément pour objet de rendre visible.
+MOTIF_PAYLOAD_TOO_LARGE = "payload_too_large"    # la charge applicative seule dépasse N
+MOTIF_FOPTS_OVERFLOW = "fopts_overflow"          # charge ≤ N, mais charge + |FOpts| > N
+MOTIF_RX2_CAPACITY = "rx2_capacity"              # RX1 échouée, RX2 ne peut pas porter la trame
+MOTIF_NO_WINDOW_CAPACITY = "no_window_capacity"  # aucune fenêtre candidate ne le peut
+MOTIF_WINDOW_MISSED = "window_missed"            # émetteur occupé à l'ouverture (indispo.)
+
+MOTIFS_CAPACITE = (MOTIF_PAYLOAD_TOO_LARGE, MOTIF_FOPTS_OVERFLOW,
+                   MOTIF_RX2_CAPACITY, MOTIF_NO_WINDOW_CAPACITY)
+MOTIFS_TEMPOREL = (MOTIF_WINDOW_MISSED,)
 # Borne de sécurité de la boucle à point fixe (uplinks <-> descentes), en itérations.
 # Mesuré (D3.2, 120 configurations de référence, 2 000 dispositifs) : le point fixe est atteint
 # en 9 à 21 itérations ; les 69 configurations qui échouaient avec l'ancienne borne de 12 en
@@ -154,6 +168,12 @@ class DeviceRadio:
     rx1_bw_hz: int = 125_000
     rx2_hz: int = 0          # fréquence de la fenêtre RX2 (0 : non renseignée)
     rx2_sf: int = 12         # SF du débit RX2 (repli régional ; 12 = défaut EU868)
+    # Charge utile maximale **N** de chaque fenêtre, pour le DR descendant réellement utilisé.
+    # `None` = aucune contrainte applicable — sans plan régional il n'existe pas de N (§22.7) ;
+    # ce n'est pas une dispense, c'est l'absence de la grandeur à comparer. Renseigné par
+    # `_radio`, seul endroit où le plan est connu et où le DR peut être résolu sans ambiguïté.
+    rx1_max_payload: Optional[int] = None
+    rx2_max_payload: Optional[int] = None
     rx2_bw_hz: int = 125_000
 
     @property
@@ -226,6 +246,29 @@ class _Job:
     rx2_bw_hz: int = 0
     rx2_airtime_ns: int = 0   # 0 tant que `rx2_disponible` est faux
     device_missed_rx2: bool = False  # le dispositif émet pendant sa fenêtre RX2
+    # --- Conformité de la charge (validation transverse, §24) -----------------------------
+    # `charge_contrainte` est la grandeur comparée à N : **charge + |FOpts|**, et non la
+    # trame entière. Rappel : N borne la charge utile (FRMPayload), M = N + 8 borne le
+    # MACPayload, et PHYPayload = 13 + charge + |FOpts|. Comparer `fil` à N sous-utiliserait
+    # la capacité de 13 octets et rejetterait des trames légales (§25.2.1).
+    charge_contrainte: int = 0              # 0 hors descente applicative
+    soumis_a_n: bool = False                # seules les descentes applicatives y sont soumises
+    rx1_max_payload: Optional[int] = None   # N de RX1 ; None = inconnu (pas de plan régional)
+    rx2_max_payload: Optional[int] = None   # N de RX2 ; None = inconnu
+
+    @property
+    def rx1_eligible(self) -> bool:
+        """La fenêtre RX1 peut-elle porter la trame ? (R-N1 : validation par fenêtre.)"""
+        if not self.soumis_a_n or self.rx1_max_payload is None:
+            return True          # trames MAC, ou sans région : aucune contrainte applicable
+        return self.charge_contrainte <= self.rx1_max_payload
+
+    @property
+    def rx2_eligible(self) -> bool:
+        """La fenêtre RX2 peut-elle porter la trame ? Évaluée indépendamment de RX1."""
+        if not self.soumis_a_n or self.rx2_max_payload is None:
+            return True
+        return self.charge_contrainte <= self.rx2_max_payload
 
     @property
     def rx2_disponible(self) -> bool:
@@ -287,9 +330,24 @@ def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> 
                 rx2_sf, rx2_bw_hz = int(m2.group(1)), int(m2.group(2)) * 1000
         except (ValueError, KeyError, IndexError):
             rx2_hz, rx2_sf, rx2_bw_hz = 0, 12, 125_000
+    # N des deux fenêtres, dérivé du SF et de la bande **réellement** émis — donc après
+    # résolution du canal pour RX1 — et non du seul DR montant. Chaque fenêtre est évaluée
+    # pour elle-même (R-N1) ; RX2 sur ses propres paramètres, jamais sur ceux de l'uplink.
+    def _n(sf: int, bw_hz: int) -> Optional[int]:
+        if sf == 0 or bw_hz == 0:
+            return None
+        try:
+            return plan.max_frm_payload(plan.dr_of_downlink_datr(f"SF{sf}BW{bw_hz // 1000}"))
+        except (ValueError, KeyError, IndexError):
+            return None
+
     return DeviceRadio(freq_hz=freq_hz, dr=dr, rx1_hz=rx1_hz, tx_power_dbm=tx_power_dbm,
                        rx1_sf=rx1_sf, rx1_bw_hz=rx1_bw_hz,
-                       rx2_hz=rx2_hz, rx2_sf=rx2_sf, rx2_bw_hz=rx2_bw_hz)
+                       rx2_hz=rx2_hz, rx2_sf=rx2_sf, rx2_bw_hz=rx2_bw_hz,
+                       rx1_max_payload=_n(rx1_sf, rx1_bw_hz),
+                       # RX2 non renseignée (`rx2_hz == 0`) : il n'y a pas de fenêtre de
+                       # secours, donc pas de N de repli — et rien à comparer.
+                       rx2_max_payload=_n(rx2_sf, rx2_bw_hz) if rx2_hz else None)
 
 
 def _rx2_spreading_factor(scenario: Scenario) -> int:
@@ -577,6 +635,10 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
 
         nxt = next_start.get(i)
         ouverture_rx2 = t_open + (RECEIVE_DELAY2_NS - RECEIVE_DELAY1_NS)
+        # Seules les descentes **applicatives** sont soumises à N. Les trames MAC (ack,
+        # mac_answer, downlink MAC seul) et le Join-Accept gardent leurs règles propres et
+        # ne sont jamais refusés pour dépassement (§24.4.2, garde-fou 14).
+        soumis_a_n = kind == "downlink" and content in ("data", "data_ack")
         jobs.append(_Job(
             record=i, device=d, kind=kind, content=content, t_open=t_open, airtime_ns=airtime,
             rx1_hz=radio.rx1_hz,
@@ -586,6 +648,9 @@ def _downlink_jobs(records: Sequence[TxRecord], radios: Sequence[DeviceRadio],
             rx2_hz=radio.rx2_hz, rx2_sf=radio.rx2_sf, rx2_bw_hz=radio.rx2_bw_hz,
             rx2_airtime_ns=airtime_rx2,
             device_missed_rx2=nxt is not None and nxt < ouverture_rx2 + RX2_WINDOW_NS,
+            charge_contrainte=(options.downlink_payload_bytes + len(fopts)) if soumis_a_n else 0,
+            soumis_a_n=soumis_a_n,
+            rx1_max_payload=radio.rx1_max_payload, rx2_max_payload=radio.rx2_max_payload,
         ))
     return jobs
 
@@ -615,8 +680,27 @@ def _schedule_gateway(jobs: Sequence[_Job],
                      ) -> tuple[list[Optional[int]], list[Optional[str]], list[tuple[int, int]]]:
     """Sérialise les downlinks sur la passerelle (un émetteur).
 
+    Enveloppe de compatibilité : le contrat de retour à trois valeurs est préservé à
+    l'identique pour la trentaine d'appelants existants — l'un d'eux compare le tuple
+    entier. Les motifs sont exposés par `_schedule_gateway_with_motifs`.
+    """
+    debuts, fenetres, occupation, _motifs = _schedule_gateway_with_motifs(jobs, options)
+    return debuts, fenetres, occupation
+
+
+def _schedule_gateway_with_motifs(
+        jobs: Sequence[_Job],
+        options: Optional[ProtocolOptions] = None,
+) -> tuple[list[Optional[int]], list[Optional[str]], list[tuple[int, int]],
+           list[Optional[str]]]:
+    """Sérialise les downlinks **et** rapporte le motif d'issue de chaque job.
+
     Retourne `(début par job ou None si aucune fenêtre n'a abouti, fenêtre réellement émise —
-    `"rx1"`, `"rx2"` ou None, intervalles d'émission)`.
+    `"rx1"`, `"rx2"` ou None, intervalles d'émission, motif d'issue)`.
+
+    Le motif renseigne **tout** job non émis, et distingue deux familles disjointes
+    (§24.4.1) : `capacite` — la fenêtre ne peut pas porter la trame — et `temporel` — elle
+    le peut, mais l'émetteur est occupé à l'ouverture.
 
     L'émetteur est celui de `lsim.arbitre.GatewayArbiter`, partagé avec les Join-Accept et la
     couche MAC : une seule file, `début = max(ouverture, occupé_jusqu'à)`, abandon si le
@@ -643,6 +727,7 @@ def _schedule_gateway(jobs: Sequence[_Job],
     arbitre = GatewayArbiter(regle_placement=EXACTE)
     starts: list[Optional[int]] = [None] * len(jobs)
     fenetres: list[Optional[str]] = [None] * len(jobs)
+    motifs: list[Optional[str]] = [None] * len(jobs)
 
     def fenetre(k: int, job: _Job, rx2: bool) -> EmissionRequest:
         if rx2:
@@ -655,22 +740,44 @@ def _schedule_gateway(jobs: Sequence[_Job],
                                window=(job.t_open, job.t_open + RX1_WINDOW_NS))
 
     def apres(k: int, rx2: bool):
-        """Réaction d'un placement : retient l'émission, ou demande la fenêtre de secours."""
+        """Réaction d'un placement : retient l'émission, ou demande la fenêtre de secours.
+
+        **R-N3.** L'inéligibilité d'une fenêtre ne clôt pas le parcours : RX2 reste
+        examinable quand RX1 n'a pas abouti, et réciproquement. Seule une fenêtre
+        inéligible n'est **jamais réservée** (R-N2) — elle ne fait l'objet d'aucune demande.
+
+        **`condition` n'est pas utilisé** pour l'éligibilité : une `condition` fausse
+        produit `NOT_NEEDED` et **supprime la réaction** (`arbitre.py`), ce qui
+        désactiverait le repli. Le filtrage est donc fait ici, en amont du dépôt.
+        """
         def reagir(emission, deposer) -> None:
             if emission.emitted:
                 starts[k] = emission.start_ns
                 fenetres[k] = "rx2" if rx2 else "rx1"
                 return
             if rx2 or not repli_actif or not jobs[k].rx2_disponible:
+                # Fenêtre manquée pour cause d'occupation : famille `temporel`.
+                motifs[k] = MOTIF_WINDOW_MISSED
+                return
+            if not jobs[k].rx2_eligible:
+                # R-N2 : aucune demande déposée, donc aucune occupation. Famille `capacite`.
+                motifs[k] = MOTIF_RX2_CAPACITY
                 return
             # RX1 n'a pas abouti — seconde fenêtre, une seule fois, avec ses propres paramètres.
             deposer(fenetre(k, jobs[k], True), ensuite=apres(k, True))
         return reagir
 
     for k, job in enumerate(jobs):
-        arbitre.demand(fenetre(k, job, False), ensuite=apres(k, False))
+        if job.rx1_eligible:
+            arbitre.demand(fenetre(k, job, False), ensuite=apres(k, False))
+        elif job.rx2_eligible and repli_actif and job.rx2_disponible:
+            # R-N1/R-N3 : RX1 ne peut pas porter la trame — elle n'est ni réservée ni émise —
+            # mais le terminal ouvre RX2 comme le protocole le prévoit, et RX2 est examinée.
+            arbitre.demand(fenetre(k, job, True), ensuite=apres(k, True))
+        else:
+            motifs[k] = MOTIF_NO_WINDOW_CAPACITY
     arbitre.resolve()
-    return starts, fenetres, list(arbitre.occupation)
+    return starts, fenetres, list(arbitre.occupation), motifs
 
 
 def _events(records: Sequence[TxRecord], radios: Sequence[DeviceRadio], jobs: Sequence[_Job],

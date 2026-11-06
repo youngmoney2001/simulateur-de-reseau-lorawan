@@ -54,7 +54,12 @@ def _scene(region="EU868", sf=9, count=60, spread=30, messages=2, payload=20):
     return devices, scenario, device_radios(scenario)
 
 
-def _options(repli=True, payload=200):
+def _options(repli=True, payload=40):
+    """**40 octets, et non 200.** Les scènes portent une région (EU868, SF9 par défaut), donc
+    la validation transversale s'applique : RX1 tombe sur DR3 (N = 115) et RX2 sur DR0
+    (N = 51). À 200 octets aucune fenêtre ne peut porter la trame — le repli ne pouvait pas
+    être exercé. À 40 octets il l'est, tout en restant sous le plafond du repli.
+    """
     return ProtocolOptions(confirmed_uplinks=True, downlink_every=1,
                            downlink_payload_bytes=payload, gateway_tx_power_dbm=27.0,
                            rx2_fallback=repli)

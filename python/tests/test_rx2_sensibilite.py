@@ -22,9 +22,9 @@ from lsim.plan import get_plan
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario, ScenarioModel
 from lsim.simulator import simulate_uplinks_trace
-from lsim.trace_events import (DeviceRadio, ProtocolOptions, _downlink_airtime_ns,
-                               _downlink_jobs, _events, _schedule_gateway, _seuil_dispositif,
-                               device_radios)
+from lsim.trace_events import (DATA_FRAME_OVERHEAD_BYTES, DeviceRadio, ProtocolOptions,
+                               _downlink_airtime_ns, _downlink_jobs, _events,
+                               _schedule_gateway, _seuil_dispositif, device_radios)
 
 SECONDE = 1_000_000_000
 RX1_HZ = 868_100_000
@@ -50,8 +50,15 @@ def _radio(rx2_hz=869_525_000, rx2_sf=12, rx2_bw_hz=125_000, sf=7, tx_power_dbm=
                        rx2_bw_hz=rx2_bw_hz)
 
 
-def _options(repli=True, every=1, payload=200, gain=0.0, offset=0.0):
-    """Descentes de 200 octets à chaque uplink reçu : l'émetteur sature, des RX1 sont perdues."""
+def _options(repli=True, every=1, payload=40, gain=0.0, offset=0.0):
+    """Descentes de 40 octets à chaque uplink reçu : l'émetteur sature, des RX1 sont perdues.
+
+    **40 octets, et non 200.** Les scènes portent une région, donc la validation transversale
+    s'applique : RX2 tombe sur le DR de repli, dont N vaut 51 (EU868, AS923, IN865 — DR0 et
+    DR2). À 200 octets le repli est refusé pour dépassement de capacité, et les tests ne
+    démontrent plus rien. À 40 octets la contention est réelle **et** le repli reste
+    physiquement possible (§23.8 : plafond du repli = N(RX2)).
+    """
     return ProtocolOptions(confirmed_uplinks=True, downlink_every=every,
                            downlink_payload_bytes=payload, gateway_tx_power_dbm=27.0,
                            device_antenna_gain_dbi=gain, device_rx_offset_db=offset,
@@ -258,7 +265,10 @@ def test_repli_effectif_sur_plusieurs_regions(region):
     assert emis_rx2, f"{region} : le repli n'a jamais été exercé"
     # Fréquence de la fenêtre de secours, et durée d'antenne du débit de cette fenêtre.
     assert all(jobs[k].rx2_hz == hz for k in emis_rx2)
-    air_rx2 = {_downlink_airtime_ns(radios[jobs[k].device], 200 + 13, "rx2") for k in emis_rx2}
+    # Taille de trame dérivée des options, et non figée : la charge a été recalibrée sous
+    # N(RX2) pour que le repli reste physiquement possible (voir `_options`).
+    trame = DATA_FRAME_OVERHEAD_BYTES + options.downlink_payload_bytes + len(jobs[emis_rx2[0]].fopts)
+    air_rx2 = {_downlink_airtime_ns(radios[jobs[k].device], trame, "rx2") for k in emis_rx2}
     assert air_rx2 <= {b - a for a, b in busy}
     # Et le cœur est d'accord, au saut près.
     coeur = plan_native_v2(records, radios, options, _rx2_des_radios(radios))

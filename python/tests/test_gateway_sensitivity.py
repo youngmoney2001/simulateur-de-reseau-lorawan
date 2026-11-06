@@ -178,8 +178,21 @@ def test_scenario_sf5_run_uses_the_absolute_engine():
 
 
 def test_causal_trace_refuses_sf5_downlinks_explicitly():
+    """Une descente vers RX1 SF5 est refusée explicitement, jamais maquillée.
+
+    Le refus vient désormais de **P1**, en amont : EU868 n'a aucun DR montant pour SF5, donc
+    la radio est refusée à sa construction, avant même que la sensibilité de passerelle ne
+    soit consultée (`downlink_plan.py` levait `SensitivityError` pour la même raison
+    matérielle). Le scénario est doublement invalide — pas de DR montant **et** pas de
+    sensibilité SF5 — et P1 exprime la cause la plus fondamentale.
+
+    L'intention du test est inchangée : SF5 est refusé, jamais simulé silencieusement. Seul
+    le mécanisme qui porte le refus a changé. La couverture complémentaire est dans
+    `test_unsupported_uplink_datarate.py` (EU868 SF5 et SF6).
+    """
+    from lsim.plan import UnsupportedUplinkDataRateError
     from lsim.trace_events import build_trace
-    with pytest.raises(SensitivityError, match="descente vers RX1 SF5 refusée"):
+    with pytest.raises(UnsupportedUplinkDataRateError, match="SF5"):
         build_trace(load_scenario(_yaml(PROFILE_SENS)))
 
 

@@ -46,12 +46,22 @@ def _options(repli=True, every=2, payload=10):
 
 
 def _options_satures(repli=True):
-    """Descentes de 200 octets à chaque uplink reçu : l'émetteur sature, des RX1 sont perdues.
+    """Descentes de 40 octets à chaque uplink reçu : l'émetteur sature, des RX1 sont perdues.
 
     Avec `downlink_every=2` et 10 octets, aucune fenêtre RX1 n'est manquée dans ce scénario : le
     repli n'aurait rien à rattraper et les tests de repli ne prouveraient rien.
+
+    **40 octets, et non 200.** Le scénario porte `region: EU868`, donc la validation
+    transversale s'applique : RX1 tombe sur DR5 (N = 222) mais **RX2 sur DR0 (N = 51)**. Une
+    descente de 200 octets est éligible en RX1 et **physiquement intransportable en RX2** — le
+    repli était donc refusé, et les tests qui comptent dessus ne démontraient plus rien. C'est
+    la lacune transverse que la validation rend visible (§21.6, §23.8).
+
+    À 40 octets la contention est réelle **et** le repli reste physiquement possible :
+    mesuré sur ce scénario, 26 RX1 abouties, **20 replis RX2**, 164 fenêtres perdues. La
+    frontière est exacte — 51 octets donnent encore 10 replis, 52 n'en donnent plus aucun.
     """
-    return _options(repli=repli, every=1, payload=200)
+    return _options(repli=repli, every=1, payload=40)
 
 
 # ------------------------------------------------------------------ l'unité : deux jobs, un émetteur
