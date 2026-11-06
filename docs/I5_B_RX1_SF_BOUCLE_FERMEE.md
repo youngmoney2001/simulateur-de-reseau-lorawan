@@ -143,3 +143,91 @@ vacuous.
 
 Aucune modification d'ABI : le chemin emprunté ne change pas, seules les valeurs lues
 diffèrent. À vérifier (`nm -D` : 103 symboles, 0 retiré).
+
+---
+
+## 12. Bilan d'exécution — **le lot est clos sans modification**
+
+Ce chapitre rapporte l'exécution du plan §5–§8. **Sa conclusion infirme l'hypothèse du lot.**
+Toutes les modifications décrites aux §5 et §7 ont été appliquées, mesurées, puis **retirées**.
+Le dépôt est revenu à `ff89f49`, arbre propre.
+
+### 12.1 Ce qui a été fait
+
+Les trois patches du §5.1 ont été appliqués à `engine.cpp` et compilés, puis les tests C++
+corrigés pour renseigner `rx1_sf` explicitement. La suite C++ est passée de **690 127/690 127**
+à **691 079/691 079** — mais **un test Python a basculé** :
+
+```
+test_mac_loop.py::test_byte_accounting_separates_reserved_sent_and_confirmed
+    assert 266 == 268   (confirmed_ds_answers)
+```
+
+Un seul test, mais un écart de sens : il porte sur la **comptabilité MAC**, c'est-à-dire sur
+l'objet même de la boucle fermée.
+
+### 12.2 La cause : ADR, que le plan n'avait pas prise en compte
+
+Le scénario du test est **EU868 + `link_adr: true`**. Mesure directe :
+
+| Scénario                  | `rx1_sf` de la table | SF montants observés   |
+|---------------------------|----------------------|------------------------|
+| EU868, **sans** ADR       | 9                    | `{9: 1200}`            |
+| EU868, **avec** ADR       | 9                    | `{7: 396, 9: 804}`     |
+
+La table `radios[]` est **statique** : elle est construite une fois, depuis la configuration
+initiale (SF9). Or l'ADR déplace 396 des 1 200 montantes vers **SF7** en cours de simulation.
+L'ancien code lisait `ta.sf`, c'est-à-dire le SF de l'uplink **courant** ; il **suivait l'ADR**.
+Le code modifié lisait la table figée : il aurait émis des descentes RX1 en SF9 vers des
+terminaux montant en SF7.
+
+### 12.3 Pourquoi `ta.sf` est correct et non un défaut
+
+Deux raisons, indépendantes :
+
+1. **EU868 à RX1DROffset = 0 a un mapping RX1 identité sur le SF.**
+   RP002-1.0.5, §3.3 : `RX1DROffset = 0` par défaut. Table 5 : EU868 DR0..DR5 = SF12..SF7 à
+   125 kHz. Donc RX1 DR = DR montant ⇒ **même SF**. `ta.sf` **est** la valeur régionale.
+2. **Seul EU868 atteint la boucle fermée avec ADR.** Mesuré : US915 et AU915 sont refusés —
+   « plan US915 sans table TXPower, LinkADR refusé ». Le conflit ADR/table statique ne peut
+   donc pas se produire ailleurs.
+
+La bande, elle, vient bien de la table (`rx1_bw_hz` = 125 kHz EU868, 500 kHz US915/AU915) —
+mesuré. Le chemin mono lisait donc **déjà** la table pour la bande, et `ta.sf` pour un SF qui
+lui est identique.
+
+### 12.4 Correction de l'analogie avec I5-a
+
+L'audit §3.3 avançait « le mono a le même défaut sur le SF, mais pas sur la bande ». C'est
+**inexact**, et la différence est structurale :
+
+|                     | I5-a (chemin multi)                        | I5-b (chemin mono)                              |
+|---------------------|--------------------------------------------|-------------------------------------------------|
+| Ce qui était jeté   | `rx1_bw_hz` de la table                    | `rx1_sf` de la table                            |
+| Ce qui le remplaçait| bande **codée en dur** 125 kHz             | SF **courant** `ta.sf`, suivi par ADR           |
+| Statut              | **défaut réel**, actif (facteur 4,00x)     | **non-défaut** : valeur équivalente, et plus juste |
+| Bande               | erronée                                    | correcte (lue de la table)                      |
+
+I5-a jetait une valeur pour une **constante fausse**. I5-b remplaçait une valeur par une autre
+qui lui est **égale** (EU868, offset 0) et qui, sous ADR, est **la seule correcte**.
+
+### 12.5 Le point restant n'est pas ici
+
+Ce que le repérage initial visait vraiment est ailleurs : **`plan.rx1()` conserve
+toujours le SF.** Mesuré (§2) sur les 7 régions et tous les DR 125 kHz : jamais un changement
+de SF. C'est une **lacune de contenu régional** — le mapping RX1 de RP002 (tables 17, 26, 46,
+…) n'est pas implanté — et non une erreur de plomberie dans `engine.cpp`. Elle est du
+ressort de la lacune RP002, déjà identifiée et hors du périmètre de ce lot.
+
+### 12.6 État final vérifié
+
+| Indicateur | Avant (référence) | Après (arbre propre) |
+|------------|-------------------|----------------------|
+| C++        | 690 127 / 690 127 | **690 127 / 690 127**|
+| ctest      | 1 / 1             | **1 / 1**            |
+| Python     | 2477 p, 15 f, 1 s | **2477 p, 15 f, 1 s**|
+| `git status`| propre           | **propre** (`ff89f49`)|
+
+**Aucune ligne de code n'a été conservée.** Le lot s'achève sur une infirmation documentée,
+ce qui est un résultat : la question « le chemin mono a-t-il le défaut d'I5-a ? » reçoit une
+réponse **non**, démontrée, au lieu d'être laissée ouverte.
