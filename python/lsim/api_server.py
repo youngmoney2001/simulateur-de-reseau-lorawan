@@ -645,7 +645,8 @@ class RunService:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
             dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
             energies = device_energies_protocol(devices, dl_airtime, [c.sent for c in per_device],
-                                                job.energy_profile)
+                                                job.energy_profile,
+                                                [c.airtime_ns for c in per_device])
             energy_rows = {r.device_index: r for r in energies}
         if len(events) > MAX_TRACE_EVENTS_PER_RUN:
             raise ApiError(422, "limit_exceeded", "événements au-delà de la borne du run")

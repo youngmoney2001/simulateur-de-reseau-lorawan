@@ -1,4 +1,4 @@
-"""Bloc `mac:` du scénario : validation, empreinte et compatibilité (phase 1, sans effet moteur encore)."""
+"""Bloc `mac:` du scénario : validation, empreinte et compatibilité (phase 1)."""
 
 from pathlib import Path
 
@@ -9,6 +9,8 @@ from lsim.scenario import MacModel, load_scenario
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "mesh_relais_quartier.yaml"
+# Le bloc `mac:` exige une passerelle unique : exemple sans mesh ni « gateways ».
+SINGLE_GATEWAY = ROOT / "examples" / "quartier_sf9.yaml"
 
 
 def test_existing_scenario_has_no_mac_block_and_keeps_its_hash():
@@ -18,7 +20,7 @@ def test_existing_scenario_has_no_mac_block_and_keeps_its_hash():
 
 
 def test_mac_block_changes_hash_and_is_validated(tmp_path):
-    text = EXAMPLE.read_text(encoding="utf-8")
+    text = SINGLE_GATEWAY.read_text(encoding="utf-8")
     plain = tmp_path / "plain.yaml"
     plain.write_text(text, encoding="utf-8")
     with_mac = tmp_path / "mac.yaml"

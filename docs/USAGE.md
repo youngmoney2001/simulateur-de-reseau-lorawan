@@ -43,6 +43,10 @@ Champs principaux :
 Un groupe peut porter une région (`region`, ex. `EU868`) : le duty cycle effectif est alors le
 plus restrictif entre `duty_cycle` et la sous-bande de `channel_freq_hz`.
 
+Le YAML ne porte **aucun frontal RF** : ni `rf:` à la racine, ni `rf:` dans un groupe (champ
+refusé). Les gains d'antenne et pertes de câble se déclarent uniquement dans l'API Python, par
+`DeviceRf` / `GatewayRf`. Périmètre complet : `docs/RF_MODEL.md` §7 et §8.
+
 ## 3. Ligne de commande
 
 ```bash
@@ -130,7 +134,7 @@ Limites des trames de données :
 - FPending, ADR et commandes MAC (FOpts, FPort 0) ne sont pas interprétés.
 - Canal ou débit hors du plan : rejet (le MIC 1.1 exige TxCh et TxDr).
 - US915 et AU915 : le groupe de scénario peut porter `sub_band` (1 à 8) ; son canal doit alors appartenir à la sous-bande. Règle LinkADRReq (ChMaskCntl 0 à 7) dans `lsim.channel_mask`.
-- Sous-bande de la passerelle (`lsim serve --region US915|AU915 --sub-band N`, défaut 1) : la passerelle Basic Station annonce les 8 canaux 125 kHz et le canal 500 kHz de la sous-bande (radio_0, radio_1 pour le 500 kHz). À chaque jointure, le serveur envoie un LinkADRReq (ChMaskCntl 5, DataRate et TXPower ignorés) qui restreint le dispositif à cette sous-bande. Il part en FOpts du downlink et est renvoyé à chaque downlink tant que le dispositif ne répond pas par un LinkADRAns complet (débit, puissance, masque) : au plus 8 essais, persistés dans la table `mac_pending`. Limites : le dispositif ne reçoit la commande que s'il ouvre RX1 après un uplink ; une passerelle Semtech UDP se configure côté passerelle (GWMP ne permet pas au serveur de changer son plan de canaux) ; LR-FHSS non géré (voir section 5quater).
+- Sous-bande de la passerelle (`lsim serve --region US915|AU915 --sub-band N`, défaut 1) : la passerelle Basic Station annonce les 8 canaux 125 kHz et le canal 500 kHz de la sous-bande (radio_0, radio_1 pour le 500 kHz). À chaque jointure, le serveur envoie un LinkADRReq (ChMaskCntl 5, DataRate et TXPower ignorés) qui restreint le dispositif à cette sous-bande. Il part en FOpts du downlink et est renvoyé à chaque downlink tant que le dispositif ne répond pas par un LinkADRAns complet (débit, puissance, masque). TS001 §5 ne fixe ni plafond ni backoff pour cette réémission : aucun plafond par défaut (`MAC_MAX_ATTEMPTS = None`, facultatif). La demande est persistée dans la table `mac_pending`. **Comportement actuel du chemin en direct :** un LinkADRAns négatif (au moins un bit à 0) ferme la demande, est journalisé, et la même configuration n'est pas renvoyée (refus non persisté). Un refus partiel n'est pas gardé ouvert sur ce chemin : ce traitement, prévu par le modèle de canaux, est reporté à l'étape 7. Le modèle d'exclusions par canal (refus attribué aux suspects, exclusions de 100 uplinks, trace interne) n'est implémenté que dans la boucle fermée C++ ; voir `docs/CHANNEL_MASK_MODEL.md`. La trace v3 n'est pas exposée par l'interface Python. Limite du chemin en direct : `answer_ok` (ABI v2) ne porte que les bits débit et puissance ; `ChannelMaskACK` n'est pas transmis. Limites : le dispositif ne reçoit la commande que s'il ouvre RX1 après un uplink ; une passerelle Semtech UDP se configure côté passerelle (GWMP ne permet pas au serveur de changer son plan de canaux) ; LR-FHSS non géré (voir section 5quater).
 - AU915 : RX1 suit le canal montant modulo 8 et la table RX1DROffset 0 (DR0→DR10 … DR6→DR11, RP002-1.0.3) ; les charges maximales sont celles de la table « not repeater compatible » (RP002-1.0.2), à confirmer contre le PDF complet ; pas de fenêtre de répéteur.
 - Pas de limite d'écart de compteur (MAX_FCNT_GAP supprimé en 1.0.4+) : l'intégrité repose sur le MIC.
 - Pas de rotation de la clé de données ; une restauration complète d'une ancienne base rétablit ses compteurs (la protection relève de la sauvegarde).
@@ -282,6 +286,237 @@ cd web && npm ci && LSIM_API_URL=http://127.0.0.1:8765 npx vite --port 5173  # p
 Le studio appelle `/api` (proxy Vite vers `LSIM_API_URL`). Le jeton est saisi dans la page ; il reste
 dans l'onglet et n'apparaît jamais dans une URL. Tests : `npm test` (modules) et `npm run test:e2e`
 (Chromium réel ; variables `CHROME_PATH`, `LSIM_LIBRARY`, `PYTHON`).
+
+## 5octies. Retransmissions des uplinks confirmés
+
+Un bloc `retransmissions:` **facultatif** transforme les uplinks du scénario en uplinks confirmés :
+une trame non acquittée est réémise après RX2, dans la limite des tentatives.
+
+```yaml
+retransmissions:
+  retries: 3                 # 0 à 7 ; 0 = aucune réémission (moteur actuel)
+  retransmit_delay_ms: 3000  # >= 2000 : une réémission ne peut pas partir avant RX2
+  enforce_duty_cycle: true   # refuse une réémission qui dépasserait le rapport cyclique
+  energy_profile: rak4631    # facultatif : ajoute le relevé d'énergie
+  ack_delay_ms: 0            # 0 à 60000 : retard du réseau avant d'émettre l'ACK
+  ack_repetitions: 1         # 1 à 3 : copies du même ACK (même FCntDown)
+  fcnt_up_start: 0           # premier FCntUp de chaque terminal (0 à 2^32-1)
+  fcnt_down_start: 0         # premier compteur descendant (NFCntDown et AFCntDown)
+  downlink_payload: false    # la descente porte une charge utile : AFCntDown, événement data_ack
+  session_joins_s: []        # instants (s) des Join-Accept acceptés ; [] = une seule session
+  join_requests_s: []        # instants (s) des Join-Request : jointure jouée par le moteur radio
+  join_retries: 1            # 1 à 3 tentatives par jointure (10 s entre deux essais)
+  join_accept_rx2_fallback: true  # RX2 seulement si RX1 n'a pas abouti (fenêtre de secours)
+  join_accept_replays: 0     # 0 à 2 Join-Accept rejoués après acceptation (reçus puis refusés)
+```
+
+La classe d'écoute est une propriété du groupe :
+
+```yaml
+groups:
+  - name: terminaux
+    device_class: A          # A (défaut), B ou C — voir docs/MAC_CONSOLIDATION.md
+```
+
+| Règle | Comportement |
+|---|---|
+| Bloc absent | aucune réémission, chemin historique, hash inchangé |
+| `retries: 0` | aucune transmission ajoutée : le scénario emprunte le chemin historique |
+| Paramètre hors bornes, clé inconnue, profil d'énergie inconnu | `ValidationError` explicite |
+| Rapport cyclique dépassé | la réémission est **refusée et comptée**, jamais forcée |
+| Bloc `enabled: false` | équivaut à `retries: 0` |
+| `ack_delay_ms` / `ack_repetitions` / `fcnt_up_start` / `fcnt_down_start` / `downlink_payload` / `session_joins_s` / `join_requests_s` / `join_retries` / `join_accept_rx2_fallback` / `join_accept_replays` / `device_class` à leur valeur par défaut | absents du hash : le hash d'un scénario écrit avant eux ne change pas |
+| `session_joins_s` et `join_requests_s` ensemble | refusé : le modèle déclaré et le modèle radio sont exclusifs |
+| Émetteur de la passerelle | une seule descente à la fois : Join-Accept, ACK et downlinks passent par le même arbitre (`lsim.arbitre`) |
+| Join-Request et rapport cyclique | le budget du terminal s'applique ; une tentative refusée n'est **pas** émise (`enforce_duty_cycle` pour le désactiver) |
+| `FCntUp` | identifie la trame : toutes les réémissions d'une même trame le partagent |
+| `FCntDown` | série **par terminal** et **par série** (`NFCntDown` pour un ACK seul, `AFCntDown` sinon) ; un ACK émis consomme un numéro, ses copies le conservent |
+
+### Émetteur partagé : Join-Accept, ACK et downlinks (D3.13)
+
+Les descentes ne sont pas indépendantes : la passerelle n'a **qu'un émetteur**. Join-Accept RX1 et
+RX2, ACK des uplinks et downlinks de données passent par le même arbitre
+(`lsim.arbitre.GatewayArbiter`), dans l'ordre chronologique :
+
+- une émission en cours en retarde une autre ;
+- une descente dont la fenêtre est couverte **n'est pas émise** (`gateway_busy`) et n'occupe rien ;
+- une trame montante qui chevauche une descente est perdue (demi-duplex, par le point fixe).
+
+Aucune priorité n'est inventée entre un Join-Accept et l'ACK d'un autre terminal : LoRaWAN n'en
+définit pas. À instant égal, l'ordre est celui du dépôt.
+
+**Règle de départ et durée d'occupation** : `début = max(instant_prêt, ouverture de fenêtre,
+occupé_jusqu'à)` ; l'émetteur est occupé de `début` à `début + temps d'antenne`, sans garde ni temps
+de retournement. Le verdict porte sur le **début** : une descente commencée dans la fenêtre est
+émise entière, même si elle finit après la fermeture, et elle occupe l'émetteur au-delà.
+
+**Causalité des tentatives.** L'issue d'un Join-Accept n'est connue qu'après le placement partagé.
+Une tentative de secours n'est donc jamais retirée du calendrier sur une prévision : elle l'est
+seulement quand la jointure a été **observée**. Un terminal dont la première tentative échoue parce
+qu'un ACK occupait RX1 et RX2 effectue bien sa tentative suivante.
+
+Le Join-Request consomme le rapport cyclique du groupe (`duty_cycle`, et la limite de sous-bande
+régionale). Une tentative qui dépasse le budget n'est pas émise du tout : elle ne provoque aucune
+collision et n'apparaît pas comme une transmission dans la trace.
+
+```yaml
+groups:
+  - name: terminaux
+    duty_cycle: 0.01       # 1 % ; la sous-bande régionale peut être plus restrictive
+retransmissions:
+  enforce_duty_cycle: true # false : le budget n'est pas appliqué (ni aux réémissions)
+  join_requests_s: [10]
+```
+
+**Un budget cumulatif, pas une fenêtre glissante.** Le rapport cyclique est un budget montant par
+terminal : `airtime cumulé + airtime <= rapport × instant`, en nanosecondes, le cumul étant pris
+depuis l'origine de la simulation. Une émission ancienne pèse donc encore sur le droit courant. Il
+s'applique à **toutes** les tentatives réelles du terminal, et une tentative refusée n'est pas
+enregistrée comme une émission — elle ne consomme aucun budget.
+
+Ce qui **n'est pas** modélisé : le rapport cyclique **descendant** de la passerelle, les cartes
+radio multiples, et la durée d'ouverture des fenêtres (1 s, hypothèse du simulateur — LoRaWAN ne
+fixe que le délai). Détails et mesures : `docs/MAC_CONSOLIDATION.md` §10.
+
+### Compteurs : rejeu, désynchronisation, débordement
+
+Le terminal ne reçoit que le champ `FCnt` de **16 bits** ; il le replace dans sa série 32 bits
+(`lsim.fcnt.CounterSeries`). Quatre verdicts en sortent, visibles dans `AckOutcome.counter` :
+
+| Verdict | Quand | Effet |
+|---|---|---|
+| `OK` | compteur reconstruit strictement supérieur au dernier accepté | ACK retenu (`STANDARD`) |
+| `REPLAY` | champ identique à celui du dernier ACK accepté | copie ignorée (`DUPLICATE`), série inchangée |
+| `GAP` | écart supérieur à 16 384 | ACK rejeté (`GAP`), série inchangée |
+| `EXHAUSTED` | série arrivée à 2^32 | aucun ACK numéroté ; nouvelle jointure, hors modèle |
+
+**Deux séries, deux événements.** Un ACK seul consomme `NFCntDown` et apparaît en `ack_only` ; avec
+`downlink_payload: true`, la descente porte une charge utile, consomme `AFCntDown` et apparaît en
+`data_ack`. Les deux séries partent du même `fcnt_down_start` mais avancent séparément. Une nouvelle
+**session** repart de zéro : `plan_acks(sessions=...)` et `DeviceCounters.renew_session()` le
+modélisent, et le compteur 0 de la nouvelle session n'est pas rejeté comme rejeu de l'ancienne. Une
+jointure déclarée dans le scénario (`session_joins_s`) ouvre cette nouvelle session : `FCntUp` et
+les deux séries descendantes repartent de zéro, et les trames de l'ancienne session cessent d'être
+réémises (voir `docs/MAC_CONSOLIDATION.md` §8).
+
+**Statut des règles** : la reconstruction 16 → 32 bits et le rejeu strictement croissant sont des
+règles de la spécification. La borne de 16 384 est la valeur historique `MAX_FCNT_GAP` des versions
+≤ 1.0.3, **retirée de LoRaWAN 1.0.4 et suivants** (RP002) : le simulateur l'applique comme
+**politique de rejeu explicite**, parce qu'il rejoue des trames à champ 16 bits. Ce n'est pas une
+exigence de 1.0.4, et c'est écrit ainsi dans le code (`lsim/fcnt.py`). Limite : aucun scénario livré
+ne produit `GAP` — la copie d'un ACK est un `DUPLICATE`, jamais un saut de 65 536.
+
+`build_trace` et `run_scenario` empruntent alors un chemin dédié qui renvoie une entrée de trace
+**par transmission**, avec les indices des terminaux du scénario, ainsi qu'un objet
+`trace.retransmissions` (essais, ACK, doublons, tentatives bloquées).
+
+### Ce que le modèle distingue
+
+| Notion | Où elle vit |
+|---|---|
+| Livraison de la descente | verdict du planificateur : livrée, sous la sensibilité, non planifiée |
+| Réception de l'ACK | la descente tombe dans la fenêtre RX1 de **cette** trame |
+| Acquittement logique | la réception ci-dessus concerne bien cette trame |
+
+Le cœur ne modélise pas le contenu de la trame ACK : l'appariement se fait par fenêtre, ce qui est
+exact tant qu'un seul ACK est attendu par fenêtre. `AckFrame` porte déjà les champs
+(`frame_counter_up`, `frame_counter_down`) qu'une représentation MAC complète utilisera.
+
+### Couche MAC de l'ACK (`lsim.ack_mac`) — tardif et dupliqué, de bout en bout
+
+Le planificateur du cœur place la descente à `fin + RECEIVE_DELAY1` et **abandonne** celle qui ne
+tient pas dans RX1 : il ne peut produire ni ACK tardif ni ACK dupliqué. Deux réglages du bloc
+`retransmissions:` activent à la place une couche MAC Python, qui les rend possibles sans toucher
+au cœur ni à l'ABI.
+
+| Réglage | Effet mesuré (`build_trace`) |
+|---|---|
+| `ack_delay_ms: 2500` | 6 transmissions, 6 ACK émis, **0 reçu**, 0/2 livrée : l'ACK tombe après la fermeture de RX2 ; l'airtime est consommée et la passerelle occupée |
+| `ack_delay_ms: 1500` | l'ACK tombe dans RX2 (`fin + 2 s`, durée 1 s) et **est reçu** |
+| `ack_delay_ms: 0` (témoin) | 2 transmissions, 2 ACK reçus, 2/2 livrées — comportement du cœur |
+| `ack_repetitions: 2` | 2 transmissions, **4 ACK émis**, 2 reçus, **2 doublons ignorés**, 2/2 livrées |
+
+La réception n'est pas recalculée : la recette radio (réciprocité, sensibilité, marge du récepteur)
+est celle du cœur, et un test de parité vérifie que la couche MAC reproduit le planificateur natif
+quand elle est laissée à ses valeurs par défaut.
+
+L'émission de l'ACK commence à `fin + 1 s + delay_ms`. Frontières **mesurées** (balayage de 0 à
+2 500 ms, pas de 50 ms, sur `retransmissions_ack_tardif.yaml`) :
+
+| Fenêtre | Ouverture | Durée | `delay_ms` qui y tombe | Réception |
+|---|---|---|---|---|
+| RX1 | `fin + 1 s` | 1 s | 0 à 999 | reçu |
+| RX2 | `fin + 2 s` | 1 s | 1000 à 1999 | reçu |
+| aucune (`LATE`) | après RX2 | — | 2000 et au-delà : l'ACK est émis, jamais entendu |
+
+Une passerelle occupée peut repousser l'émission (`max(ouverture + delay, fin d'occupation)`) : un
+ACK prévu dans RX1 peut donc basculer en RX2, ou hors fenêtre, selon le trafic.
+
+### Taxonomie et classes d'écoute
+
+Chaque émission d'ACK reçoit une classe, exposée par `trace.retransmissions` :
+
+| Classe | Sens | Compteur |
+|---|---|---|
+| `STANDARD` | reçue dans une fenêtre écoutée, `FCntDown` inédit | `ack_standard` |
+| `LATE` | émise après la fermeture des fenêtres | `ack_late` |
+| `LOST` | dans une fenêtre mais non décodable, ou terminal en train d'émettre | `ack_lost` |
+| `DUPLICATE` | même `FCntDown` déjà accepté, rejeté par le contrôle de rejeu | `ack_duplicate` |
+| `NOT_SENT` | aucun ACK : uplink non reçu | `ack_not_sent` |
+
+Même scénario à `ack_delay_ms: 2500` : un terminal de **classe A** ne reçoit aucun ACK (6 tardifs,
+0/2 livrée) ; un terminal de **classe C**, qui écoute en continu, reçoit les deux (2/2 livrée).
+La classe B se comporte comme A pour l'ACK — ses *ping slots* sont un autre mécanisme, non
+modélisé ici. Détail et limites : `docs/MAC_CONSOLIDATION.md`.
+
+### Les ACK dans la trace
+
+Chaque émission d'ACK de la couche MAC devient un `ProtocolEvent` de type `ack`, à l'instant exact
+où elle commence et avec le même verdict que les compteurs. Le vocabulaire est celui du contrat
+(`lsim.api_contract`), sans valeur nouvelle :
+
+| Classe | `event.outcome` | `hops[0].outcome` | Sens |
+|---|---|---|---|
+| `STANDARD` | `ack_only` | `delivered` | reçu dans une fenêtre écoutée |
+| `LATE` | `not_listened` | `not_listened` | émis après RX2 : personne n'écoute |
+| `LOST` (fenêtre manquée) | `device_transmitting` | `not_listened` | le terminal émet au moment de l'ouverture |
+| `LOST` (non décodable) | `lost_sensitivity` | `lost_sensitivity` | sous la sensibilité du récepteur |
+| `DUPLICATE` | `suppressed` | `delivered` | copie reçue, rejetée par le contrôle de rejeu |
+| `NOT_SENT` | — | — | uplink non reçu : rien n'est émis |
+
+Une émission = un événement : sur `retransmissions_ack_tardif.yaml`, six ACK tardifs donnent six
+événements `not_listened` et six intervalles dans `gateway_tx`. Sans la couche MAC
+(`ack_delay_ms: 0`), la trace garde les événements du planificateur du cœur. Détail :
+`docs/MAC_CONSOLIDATION.md` §4.1.
+
+### Ce qui n'est pas modélisé
+
+- **Aucune perte d'ACK avec un récepteur nominal** : le planificateur causal livre l'ACK de toute
+  trame qu'il reçoit. Observer une perte d'ACK exige une hypothèse de récepteur dégradé
+  (`ProtocolOptions(device_rx_offset_db=...)`), pas un réglage du scénario.
+- L'ACK tardif et l'ACK dupliqué ne peuvent pas être produits par le planificateur du cœur ; ils le
+  sont par la couche MAC Python (`ack_delay_ms` / `ack_repetitions`), qui n'est **pas** dans le cœur
+  C++ et n'est appelée que lorsque l'un de ces deux réglages sort de sa valeur par défaut.
+- `ack_repetitions > 1` est une hypothèse de réseau (répétition du même ACK), pas un mécanisme
+  LoRaWAN standard : LoRaWAN 1.0.4 ne répète pas la trame d'acquittement en classe A.
+- Un ACK émis hors fenêtre (`LATE`) est rangé avec les pertes de sensibilité dans
+  `DownlinkDelivery`, qui n'a pas de verdict « hors fenêtre » ; la fenêtre exacte reste lisible
+  dans `AckOutcome.window`.
+- Le compteur de doublons déduplique côté réseau ; il ne remplace pas une trace MAC complète.
+- Aucun `FCntUp` / `FCntDown` n'est réellement décrémenté : l'identité de la trame est l'indice de
+  trame du scénario, pas un compteur de trame.
+- L'énergie n'est pas ventilée entre émission, écoute RX1/RX2 et veille.
+
+### Exemples exécutables
+
+| Fichier | Ce qu'il démontre |
+|---|---|
+| `docs/exemples/retransmissions_nominal.yaml` | uplink reçu, ACK reçu, aucune réémission |
+| `docs/exemples/retransmissions_collision.yaml` | collision, réémission réussie, refus par rapport cyclique |
+| `docs/exemples/retransmissions_doublons.yaml` | trafic dense : réémissions et borne de tentatives |
+| `docs/exemples/retransmissions_ack_perdu.yaml` | ACK perdus et **doublons réseau** (avec récepteur à +10 dB) |
+| `docs/exemples/retransmissions_ack_tardif.yaml` | `ack_delay_ms: 2500` : ACK émis après RX2, jamais reçu, 0/2 livrée |
+| `docs/exemples/retransmissions_ack_duplique.yaml` | `ack_repetitions: 2` : 4 ACK émis, 2 reçus, 2 doublons ignorés |
 
 ## 6. Limites connues
 

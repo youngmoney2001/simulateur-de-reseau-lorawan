@@ -135,6 +135,52 @@ void test_simulate_with_environment() {
              500 + 5);
 }
 
+void test_v104_c_api_vectors() {
+    // Mêmes vecteurs que test_secure_frame.cpp (recalculés hors C++ avec cryptography).
+    uint8_t app_key[16];
+    for (int i = 0; i < 16; ++i) app_key[i] = static_cast<uint8_t>(0x10 + i);
+    const uint8_t an[3] = {0x01, 0x02, 0x03};
+    const uint8_t ni[3] = {0x00, 0x00, 0x13};
+    const uint8_t dn[2] = {0xaa, 0x55};
+    lsim_session_keys_10 k{};
+    CHECK_EQ(lsim_derive_session_keys_10(app_key, an, ni, dn, &k), 0);
+    CHECK_EQ(k.nwk_s_key[0], uint8_t{0x1b});
+    CHECK_EQ(k.app_s_key[15], uint8_t{0xfd});
+
+    lsim_session_keys_10 keys{};
+    for (int i = 0; i < 16; ++i) {
+        keys.nwk_s_key[i] = static_cast<uint8_t>(i);
+        keys.app_s_key[i] = static_cast<uint8_t>(0xf0 + i);
+    }
+    lsim_uplink_frame f{};
+    f.dev_addr = 0x01020304u;
+    f.mtype = 2;
+    f.fcnt = 5;
+    f.fopts[0] = 0x02;
+    f.fopts_len = 1;
+    f.has_fport = 1;
+    f.fport = 1;
+    f.payload_len = 5;
+    std::memcpy(f.payload, "hello", 5);
+    lsim_uplink_context c{};
+    c.fcnt32 = 5;
+    uint8_t wire[64];
+    size_t n = 0;
+    CHECK_EQ(lsim_seal_uplink_10(&f, &keys, &c, wire, sizeof wire, &n), 0);
+    const uint8_t expected[19] = {0x40, 0x04, 0x03, 0x02, 0x01, 0x01, 0x05, 0x00, 0x02, 0x01,
+                                  0xc5, 0xcb, 0x1f, 0xc5, 0xa6, 0x9b, 0x45, 0x16, 0x09};
+    CHECK_EQ(n, size_t{19});
+    CHECK_TRUE(std::memcmp(wire, expected, 19) == 0);
+
+    lsim_uplink_frame out{};
+    CHECK_EQ(lsim_open_uplink_10(wire, n, &keys, &c, &out), 0);
+    CHECK_EQ(out.payload_len, 5);
+    CHECK_TRUE(std::memcmp(out.payload, "hello", 5) == 0);
+    // Le profil 1.1 ne doit pas accepter une trame 1.0.x.
+    lsim_session_keys_11 k11 = derive();
+    CHECK_TRUE(lsim_open_uplink(wire, n, &k11, &c, &out) != 0);
+}
+
 void test_status_ranges_are_disjoint() {
     // Un statut de crypto (100+) ne doit jamais se confondre avec un PHY (0..99).
     lsim_session_keys_11 k{};
@@ -163,6 +209,53 @@ void test_simulate_totals() {
     CHECK_EQ(tot.sent, uint64_t{0});
 }
 
+
+void test_one_entry_per_transmission_matches_a_periodic_device() {
+    // Propriété dont dépend l'implémentation des réémissions (python/lsim/retransmissions.py) :
+    // un terminal périodique à k émissions équivaut à k entrées à une émission, aux mêmes
+    // instants. Le moteur ne prenant en entrée que des calendriers périodiques, une réémission —
+    // qui n'est pas périodique — est représentée de cette façon.
+    const lsim_gateway g{0.0, 0.0, 0.0, 0.0};
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
+
+    lsim_end_device periodic[2] = {
+        {10.0, 0.0, 7, 10, 14.0, 0, 60'000'000'000LL, 3, 1.0},
+        {2000.0, 0.0, 7, 10, 14.0, 30'000'000'000LL, 60'000'000'000LL, 3, 1.0},
+    };
+    lsim_device_stats per_ref[2]{};
+    lsim_sim_stats tot_ref{};
+    CHECK_EQ(lsim_simulate_uplinks(periodic, 2, &g, &p, per_ref, &tot_ref), 0);
+    CHECK_EQ(tot_ref.sent, uint64_t{6});
+
+    lsim_end_device une[6]{};
+    for (int i = 0; i < 2; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            lsim_end_device& d = une[i * 3 + k];
+            d = periodic[i];
+            d.start_offset_ns = periodic[i].start_offset_ns +
+                                static_cast<int64_t>(k) * 60'000'000'000LL;
+            d.messages = 1;
+        }
+    }
+    lsim_device_stats per_une[6]{};
+    lsim_sim_stats tot_une{};
+    CHECK_EQ(lsim_simulate_uplinks(une, 6, &g, &p, per_une, &tot_une), 0);
+
+    CHECK_EQ(tot_une.sent, tot_ref.sent);
+    CHECK_EQ(tot_une.received, tot_ref.received);
+    CHECK_EQ(tot_une.lost_sensitivity, tot_ref.lost_sensitivity);
+    CHECK_EQ(tot_une.lost_collision, tot_ref.lost_collision);
+    CHECK_EQ(tot_une.airtime_ns, tot_ref.airtime_ns);
+    for (int i = 0; i < 2; ++i) {
+        uint64_t recu = 0, perdu = 0;
+        for (int k = 0; k < 3; ++k) {
+            recu += per_une[i * 3 + k].received;
+            perdu += per_une[i * 3 + k].lost_collision + per_une[i * 3 + k].lost_sensitivity;
+        }
+        CHECK_EQ(recu, per_ref[i].received);
+        CHECK_EQ(perdu, per_ref[i].lost_collision + per_ref[i].lost_sensitivity);
+    }
+}
 
 void test_join_roundtrip_and_vectors() {
     const uint8_t key[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
@@ -245,13 +338,71 @@ void test_multi_gateway_c_api() {
                                            per_gw, nullptr, nullptr, nullptr, 0, nullptr) != 0);
 }
 
+void test_gateway_v2_absolute_abi() {
+    // ABI v1 et v2 modèle 0 : mêmes sorties. Modèle 1 : seuil absolu SF5 documenté, refus sinon.
+    const lsim_propagation p{868.1e6, 1.0, 2.7, 6.0, 0.0, 0};
+    lsim_end_device d7[1] = {{10.0, 0.0, 7, 10, 14.0, 0, 600000000000LL, 1, 1.0}};
+    lsim_end_device d5[1] = {{10.0, 0.0, 5, 10, 14.0, 0, 600000000000LL, 1, 1.0}};
+    lsim_device_stats per[1]{};
+    lsim_sim_stats tot{};
+    lsim_tx_record rec1[4]{};
+    lsim_tx_record rec2[4]{};
+    size_t n1 = 0;
+    size_t n2 = 0;
+    const lsim_gateway g1{0.0, 0.0, 0.0, 0.0};
+    lsim_gateway_v2 g2{};
+    g2.base = g1;
+    g2.sensitivity_model = LSIM_SENSITIVITY_MODEL_NONE;
+
+    // Modèle 0 et SF7 : identique à la v1 (statut, nombre d'enregistrements, RSSI).
+    const int32_t s1 = lsim_simulate_uplinks_trace_v2(d7, 1, &g1, &p, nullptr, per, &tot, rec1, 4, &n1,
+                                                      nullptr, 0, nullptr, 0);
+    const int32_t s2 = lsim_simulate_uplinks_trace_gw2(d7, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                                       nullptr, 0, nullptr, 0);
+    CHECK_EQ(s1, 0);
+    CHECK_EQ(s2, 0);
+    CHECK_EQ(n1, n2);
+    CHECK_TRUE(n1 == 1 && rec1[0].rssi_dbm == rec2[0].rssi_dbm && rec1[0].outcome == rec2[0].outcome);
+
+    // Modèle 0 et SF5 : refusé, comme en v1 (référence SX1276 sans SF5).
+    CHECK_TRUE(lsim_simulate_uplinks_trace_v2(d5, 1, &g1, &p, nullptr, per, &tot, rec1, 4, &n1,
+                                              nullptr, 0, nullptr, 0) != 0);
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+
+    // Modèle 1 : SF5/125 kHz documenté à −150 dBm : accepté.
+    g2.sensitivity_model = LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2;
+    g2.present = 1U;
+    g2.sensitivity_dbm[0][0] = -150.0;
+    CHECK_EQ(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                             nullptr, 0, nullptr, 0), 0);
+    CHECK_EQ(n2, size_t{1});
+    CHECK_EQ(tot.received, uint64_t{1});
+
+    // Modèle 1 : paire absente (SF7 non documenté) : refus, pas de repli.
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d7, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+    // Modèle 1 avec décalage non nul : refus.
+    g2.base.rx_sensitivity_offset_db = 2.0;
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+    g2.base.rx_sensitivity_offset_db = 0.0;
+    // Modèle inconnu : refus.
+    g2.sensitivity_model = 7U;
+    CHECK_TRUE(lsim_simulate_uplinks_trace_gw2(d5, 1, &g2, &p, nullptr, per, &tot, rec2, 4, &n2,
+                                               nullptr, 0, nullptr, 0) != 0);
+}
+
 void run_c_api_tests() {
     test_multi_gateway_c_api();
     test_derive_matches_cpp_vectors();
     test_null_pointers_refused();
     test_seal_open_roundtrip_and_tamper();
+    test_v104_c_api_vectors();
     test_status_ranges_are_disjoint();
     test_simulate_totals();
     test_simulate_with_environment();
     test_join_roundtrip_and_vectors();
+    test_gateway_v2_absolute_abi();
+    test_one_entry_per_transmission_matches_a_periodic_device();
 }

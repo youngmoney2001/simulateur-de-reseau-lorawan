@@ -82,7 +82,7 @@
         },
         "spreading_factor": {
           "maximum": 12,
-          "minimum": 7,
+          "minimum": 5,
           "title": "Spreading Factor",
           "type": "integer"
         },

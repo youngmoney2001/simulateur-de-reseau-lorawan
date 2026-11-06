@@ -108,7 +108,9 @@
             "lost_collision",
             "rx_window_missed",
             "mesh_hop",
-            "mesh_downlink_hop"
+            "mesh_downlink_hop",
+            "mac_request",
+            "mac_answer"
           ],
           "title": "Kind",
           "type": "string"

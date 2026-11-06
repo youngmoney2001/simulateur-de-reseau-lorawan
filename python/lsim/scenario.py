@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lsim.materials import MATERIAL_NAMES, traversal_loss
 from lsim.environment import (
@@ -31,6 +31,8 @@ from lsim.environment import (
     load_dem_csv,
 )
 from lsim.simulator import EndDevice, Gateway, Propagation
+from lsim.gateway_sensitivity import (CATALOG, MODEL_ID, SF5_REGION, AbsoluteSensitivity,
+                                     SensitivityError)
 from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
                                    rx_sensitivity_offset_db)
 
@@ -45,14 +47,73 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SensitivityPoint(_Strict):
+    """Un seuil absolu publié (dBm) pour une bande et un SF."""
+
+    bandwidth_hz: Literal[125000, 250000, 500000] = 125000
+    sf: int = Field(ge=5, le=12)
+    dbm: float = Field(ge=-160.0, le=-60.0)
+
+
+class SensitivityModel(_Strict):
+    """Sensibilité absolue de la passerelle (`sensibilite-par-sf-v2`), jamais déduite du relatif.
+
+    Soit `profile` (nom du catalogue `lsim.gateway_sensitivity.CATALOG`), soit `points` explicites
+    avec `source` et `conditions`. Une paire SF/bande absente est refusée à la validation.
+    """
+
+    model: Literal["sensibilite-par-sf-v2"]
+    profile: Optional[str] = Field(None, min_length=1, max_length=64)
+    source: Optional[str] = Field(None, min_length=1, max_length=500)
+    conditions: Optional[str] = Field(None, min_length=1, max_length=500)
+    points: Optional[list[SensitivityPoint]] = Field(None, min_length=1, max_length=24)
+
+    def absolute(self) -> AbsoluteSensitivity:
+        if (self.profile is None) == (self.points is None):
+            raise ValueError("sensibilité : exactement un de « profile » ou « points »")
+        if self.profile is not None:
+            if self.profile not in CATALOG:
+                raise ValueError(f"profil de sensibilité inconnu : {self.profile!r}")
+            return CATALOG[self.profile]
+        if self.source is None or self.conditions is None:
+            raise ValueError("points explicites : « source » et « conditions » requises")
+        try:
+            return AbsoluteSensitivity(
+                points=tuple((p.bandwidth_hz, p.sf, p.dbm) for p in self.points),
+                source=self.source, conditions=self.conditions)
+        except SensitivityError as exc:
+            raise ValueError(str(exc)) from None
+
+
 class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
     antenna_gain_dbi: float = 0.0
+    # Puissance d'émission de la passerelle, **conduite en sortie d'émetteur** (dBm), avant
+    # câble et antenne : même convention que `group.tx_power_dbm` côté terminal. `None`
+    # (défaut) : la valeur vient des options de protocole
+    # (`ProtocolOptions.gateway_tx_power_dbm`, 14,0 dBm) — comportement historique inchangé.
+    # La PIRE qui en découle (conduite + gain − perte) départage les sous-bandes ETSI : voir
+    # `lsim.power`. Plafond : 27 dBm, puissance publiée des fiches du catalogue.
+    tx_power_dbm: Optional[float] = Field(None, ge=-10.0, le=27.0)
     # Multi-passerelles seulement : nom unique, profil du catalogue, relais mesh.
     name: Optional[str] = Field(None, min_length=1, max_length=64)
     profile: Optional[str] = Field(None, min_length=1, max_length=64)
     mesh: bool = False
+    # Sensibilité absolue (modèle sensibilite-par-sf-v2). Absent = modèle relatif, hash inchangé.
+    sensitivity: Optional[SensitivityModel] = None
+    # Frontal RF v4 de la passerelle (None = neutre). Le gain remplace `antenna_gain_dbi`.
+    rf: Optional[RfModel] = None
+
+    @model_validator(mode="after")
+    def _rf_gain_not_duplicated(self) -> "GatewayModel":
+        if (self.rf is not None and self.rf.antenna_gain_dbi is not None
+                and "antenna_gain_dbi" in self.model_fields_set
+                and abs(self.antenna_gain_dbi - self.rf.antenna_gain_dbi) > 1e-9):
+            raise ValueError(
+                "gateway : antenna_gain_dbi et rf.antenna_gain_dbi diffèrent — le gain du "
+                "frontal remplacerait le champ scalaire ; n'en déclarer qu'un")
+        return self
 
 
 class MeshModel(_Strict):
@@ -106,11 +167,131 @@ class ExplicitPlacement(_Strict):
 Placement = Annotated[Union[DiskPlacement, ExplicitPlacement], Field(discriminator="type")]
 
 
+class RetransmissionsModel(_Strict):
+    """Retransmissions des uplinks confirmés (bloc `retransmissions:` du scénario).
+
+    Absent : aucune réémission, comportement historique, hash inchangé. Présent : le scénario force
+    les uplinks confirmés et réémet tant que l'ACK n'est pas reçu.
+
+    `retries: 0` est accepté et n'ajoute aucune transmission : c'est le moteur actuel.
+    """
+
+    enabled: bool = True
+    retries: int = Field(3, ge=0, le=7)
+    retransmit_delay_ms: int = Field(3_000, ge=2_000, le=60_000)
+    enforce_duty_cycle: bool = True
+    # Profil énergétique utilisé pour le relevé d'énergie de la simulation (None : pas de relevé).
+    energy_profile: Optional[str] = None
+    # Comportement du réseau vis-à-vis de l'ACK. Par défaut : planificateur du cœur (RX1, un envoi).
+    # Une valeur non nulle de `ack_delay_ms`, ou `ack_repetitions` > 1, active la couche MAC.
+    ack_delay_ms: int = Field(0, ge=0, le=60_000)
+    ack_repetitions: int = Field(1, ge=1, le=3)
+    # La descente porte une charge utile applicative : elle consomme AFCntDown (`data_ack`).
+    downlink_payload: bool = False
+    # Instants (s) des Join-Accept acceptés : chacun ouvre une session et remet les compteurs à
+    # zéro. Vide : une seule session, ouverte avant le scénario. Modèle **déclaré**, sans radio.
+    session_joins_s: list[int] = Field(default_factory=list, max_length=16)
+    # Instants (s) des Join-Request : la jointure passe alors par le moteur radio (temps de vol,
+    # collisions, sensibilité) et n'ouvre une session que si le Join-Accept est reçu.
+    join_requests_s: list[int] = Field(default_factory=list, max_length=16)
+    join_retries: int = Field(1, ge=1, le=3)
+    # RX2 est la fenêtre de secours de RX1 : elle n'est émise que si RX1 n'a pas abouti.
+    join_accept_rx2_fallback: bool = True
+    # Join-Accept rejoués après acceptation (même JoinNonce) : reçus puis refusés.
+    join_accept_replays: int = Field(0, ge=0, le=2)
+
+    @field_validator("session_joins_s", "join_requests_s")
+    @classmethod
+    def _jointures_croissantes(cls, valeurs: list[int], info) -> list[int]:
+        nom = f"retransmissions.{info.field_name}"
+        for valeur in valeurs:
+            if not 0 <= valeur:
+                raise ValueError(f"{nom} : instants positifs attendus")
+        for precedent, suivant in zip(valeurs, valeurs[1:]):
+            if suivant <= precedent:
+                raise ValueError(f"{nom} : instants strictement croissants attendus")
+        return valeurs
+
+    @model_validator(mode="after")
+    def _une_seule_forme_de_jointure(self):
+        if self.session_joins_s and self.join_requests_s:
+            raise ValueError("retransmissions : session_joins_s (déclaré) et join_requests_s "
+                             "(radio) ne peuvent pas être utilisés ensemble")
+        return self
+    # Premier FCntUp de chaque terminal (compteur 32 bits, comme `lsim.session`).
+    fcnt_up_start: int = Field(0, ge=0, le=2**32 - 1)
+    # Premier compteur descendant de chaque terminal : départ des deux séries `NFCntDown` et
+    # `AFCntDown` de la couche MAC (les deux partent de la même valeur de session).
+    fcnt_down_start: int = Field(0, ge=0, le=2**32 - 1)
+
+    @model_validator(mode="after")
+    def _known_energy_profile(self) -> "RetransmissionsModel":
+        if self.energy_profile is not None:
+            from lsim.energy_report import profile_name
+            try:
+                profile_name(self.energy_profile)
+            except ValueError as exc:
+                raise ValueError(f"retransmissions.energy_profile : {exc}") from exc
+        return self
+
+    def options(self):
+        from lsim.retransmissions import RetransmissionOptions
+        return RetransmissionOptions(enabled=self.enabled, retries=self.retries,
+                                     retransmit_delay_ms=self.retransmit_delay_ms,
+                                     enforce_duty_cycle=self.enforce_duty_cycle,
+                                     ack_delay_ms=self.ack_delay_ms,
+                                     ack_repetitions=self.ack_repetitions,
+                                     fcnt_up_start=self.fcnt_up_start,
+                                     fcnt_down_start=self.fcnt_down_start,
+                                     downlink_payload=self.downlink_payload,
+                                     session_joins_s=tuple(self.session_joins_s),
+                                     join_requests_s=tuple(self.join_requests_s),
+                                     join_retries=self.join_retries,
+                                     join_accept_rx2_fallback=self.join_accept_rx2_fallback,
+                                     join_accept_replays=self.join_accept_replays)
+
+    @property
+    def is_active(self) -> bool:
+        """Vrai quand des réémissions sont possibles : sinon le chemin historique suffit."""
+        return self.enabled and self.retries > 0
+
+
+class RfModel(_Strict):
+    """Frontal RF v4 d'un groupe ou d'une passerelle (ABI v4).
+
+    Les deux champs sont **indépendants** : un champ absent n'est pas un champ nul, c'est une
+    donnée non fournie. Le bloc doit en déclarer au moins un.
+
+    - terminal : la chaîne `gain - perte` s'applique au montant et au descendant (antenne
+      réciproque), comptée une fois ;
+    - passerelle : le gain présent **remplace** `gateway.antenna_gain_dbi`, la perte de câble
+      s'ajoute (sémantique de `apply_gateway_rf` dans `core/src/c_api_ext.cpp`).
+    """
+
+    antenna_gain_dbi: Optional[float] = Field(None, ge=-40.0, le=40.0)
+    cable_loss_db: Optional[float] = Field(None, ge=0.0, le=40.0)
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> "RfModel":
+        if self.antenna_gain_dbi is None and self.cable_loss_db is None:
+            raise ValueError(
+                "rf : au moins un champ est requis (antenna_gain_dbi ou cable_loss_db)")
+        return self
+
+    def device(self):
+        from lsim.rf import DeviceRf
+        return DeviceRf(antenna_gain_dbi=self.antenna_gain_dbi, cable_loss_db=self.cable_loss_db)
+
+    def gateway(self):
+        from lsim.rf import GatewayRf
+        return GatewayRf(antenna_gain_dbi=self.antenna_gain_dbi, cable_loss_db=self.cable_loss_db)
+
+
 class GroupModel(_Strict):
     name: str = Field(min_length=1, max_length=64)
     count: Optional[int] = Field(default=None, ge=1, le=MAX_DEVICES)
     placement: Placement
-    spreading_factor: int = Field(7, ge=7, le=12)
+    spreading_factor: int = Field(7, ge=5, le=12)
     payload_bytes: int = Field(10, ge=0, le=255)
     tx_power_dbm: float = 14.0
     period_s: float = Field(600.0, gt=0)
@@ -124,6 +305,18 @@ class GroupModel(_Strict):
     # `channel_freq_hz` doit appartenir à cette sous-bande.
     sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
+    # Classe LoRaWAN du terminal : A et B ouvrent RX1/RX2 après chaque uplink ; C écoute en
+    # continu. Les ping slots de la classe B ne sont pas modélisés ici : seul l'ACK (descente de
+    # classe A) dépend de ce champ.
+    device_class: Literal["A", "B", "C"] = "A"
+    # Frontal RF v4 commun aux terminaux du groupe (None = neutre).
+    rf: Optional[RfModel] = None
+    # RX1DROffset des terminaux du groupe (RP002-1.0.4). 0 = réglage du serveur, valeur
+    # historique : sans ce champ, le comportement est inchangé.
+    # Borné ici à 7, largeur du champ MAC (DLsettings bits 6:4). La borne **régionale**, plus
+    # stricte — US915 n'admet que 0..3 — est vérifiée à l'usage, contre le plan, car elle
+    # dépend de `region` qui peut être absent.
+    rx1_dr_offset: int = Field(0, ge=0, le=7)
 
     @property
     def effective_duty_cycle(self) -> float:
@@ -148,6 +341,25 @@ class GroupModel(_Strict):
         return self
 
     @model_validator(mode="after")
+    def _rx1_dr_offset_dans_les_bornes_regionales(self) -> "GroupModel":
+        """La borne régionale de RX1DROffset est plus stricte que celle du champ MAC.
+
+        US915 n'admet que 0..3 alors que le champ DLsettings en code 0..7. Refusé ici, à la
+        lecture du scénario, plutôt qu'à la simulation : une valeur hors bornes est une
+        erreur de configuration, pas une scène lente — et la refuser au plus tôt évite de
+        produire une chronologie qui ne correspond à rien.
+        """
+        if self.region is None or self.rx1_dr_offset == 0:
+            return self
+        from lsim.plan import get_plan
+        plan = get_plan(self.region)
+        if self.rx1_dr_offset > plan.rx1_dr_offset_max:
+            raise ValueError(
+                f"groupe {self.name!r} : RX1DROffset {self.rx1_dr_offset} hors bornes pour "
+                f"{self.region} (0..{plan.rx1_dr_offset_max}, RP002-1.0.4)")
+        return self
+
+    @model_validator(mode="after")
     def _region_known_and_in_plan(self) -> "GroupModel":
         if self.region is None:
             return self
@@ -160,11 +372,17 @@ class GroupModel(_Strict):
             ch = profile.channel_at(self.channel_freq_hz)
             if ch is None:
                 raise ValueError(f"{self.region} : canal {self.channel_freq_hz} Hz absent du plan")
-            if (profile.power_basis == "eirp" and ch.max_eirp_dbm is not None
-                    and self.tx_power_dbm > ch.max_eirp_dbm + 1e-9):
-                raise ValueError(
-                    f"{self.region} : PIRE {self.tx_power_dbm} dBm au-dessus de la limite "
-                    f"{ch.max_eirp_dbm} dBm du canal")
+            if profile.power_basis == "eirp" and ch.max_eirp_dbm is not None:
+                # Comparaison en PIRE : `tx_power_dbm` est une puissance conduite, la
+                # chaîne `gain - perte` du frontal s'ajoute (`lsim.power.device_tx`).
+                # Sans bloc `rf`, la chaîne est nulle et le comportement est identique
+                # à l'ancienne comparaison sur `tx_power_dbm` seul.
+                from lsim.power import device_tx
+                pire = device_tx(self).eirp_dbm
+                if pire > ch.max_eirp_dbm + 1e-9:
+                    raise ValueError(
+                        f"{self.region} : PIRE {pire} dBm au-dessus de la limite "
+                        f"{ch.max_eirp_dbm} dBm du canal")
         return self
         from lsim.regions import PROFILES
         if self.region not in PROFILES:
@@ -243,15 +461,57 @@ class EnergyModel(_Strict):
     profile: Literal["rak4631", "sx1262-stm32l072"]
 
 
+class ChannelDefModel(_Strict):
+    """Canal défini du terminal (RP002 EU863-870) : index 0..79, débits supportés dr_min..dr_max."""
+
+    index: int = Field(ge=0, le=79)
+    dr_min: int = Field(0, ge=0, le=7)
+    dr_max: int = Field(7, ge=0, le=7)
+
+    @model_validator(mode="after")
+    def _range(self) -> "ChannelDefModel":
+        if self.dr_min > self.dr_max:
+            raise ValueError("canal : dr_min > dr_max")
+        return self
+
+
 class MacModel(_Strict):
     """Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).
 
-    Phase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période
-    d'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :
-    le bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.
+    Phase 1 (passerelle unique), rangs 1-based des émissions du dispositif :
+    - `link_check_every` : LinkCheckReq (1 octet) dans l'uplink de rang multiple de N ; reçue, elle
+      est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;
+    - `device_status_every` : DevStatusReq dans le downlink répondant à un uplink reçu de rang
+      multiple de N. Le dispositif répond par DevStatusAns (3 octets) dans son uplink suivant, si
+      la requête lui parvient. Cette réponse est réservée conservativement dans cet uplink
+      suivant : le temps d'antenne le compte, même si la requête n'est pas reçue.
+    Les octets réservés allongent le temps d'antenne des émissions concernées (moteur natif) ; les
+    octets émis effectivement n'apparaissent dans la trace qu'une fois confirmés.
+    Refusé avec plusieurs passerelles ou un mesh.
+
+    Marge de LinkCheckAns (indicative, pas la marge SNR normative) :
+        M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)
+    où S_ref est la sensibilité SX1276 utilisée par le simulateur pour décider de la perte : M
+    mesure la marge au-dessus du seuil de réception, en dB. `link_margin_installation_db` est une
+    marge d'installation soustraite (0 par défaut), comme dans l'ADR.
     """
     link_check_every: int = Field(0, ge=0, le=1000)
     device_status_every: int = Field(0, ge=0, le=1000)
+    link_margin_installation_db: int = Field(0, ge=0, le=60)
+    device_time_every: int = Field(0, ge=0, le=1000)
+    # Boucle fermée (LinkADRReq / DutyCycleReq) : passerelle unique, sans jointure, plan régional
+    # avec table TXPower (EU868 seulement, voir lsim.regions.POWER_TABLES). Décision ADR côté
+    # serveur sur les 20 dernières trames reçues ; marge = `link_margin_installation_db`.
+    # `duty_cycle_exponent` k : DutyCycleReq avec 1/2^k (None : pas de DutyCycleReq).
+    link_adr: bool = False
+    duty_cycle_exponent: Optional[int] = Field(None, ge=0, le=15)
+    # Canaux (correction ChannelMask, étape 1) : deux vues strictement séparées.
+    #   `device_channels` : capacité réelle du terminal (canaux définis et débits supportés) ;
+    #   `server_channel_plan` : canaux que le serveur croit définis (sa propre vue).
+    # Le moteur ne les utilise pas encore : tant que l'étape 3 n'est pas validée, toute valeur
+    # est refusée explicitement (pas de paramètre silencieusement inactif).
+    device_channels: Optional[list[ChannelDefModel]] = Field(None, max_length=80)
+    server_channel_plan: Optional[list[int]] = Field(None, max_length=80)
 
 
 class ScenarioModel(_Strict):
@@ -261,17 +521,77 @@ class ScenarioModel(_Strict):
     gateway: GatewayModel = GatewayModel()
     gateways: Optional[list[GatewayModel]] = Field(None, min_length=1, max_length=MAX_GATEWAYS)
     mesh: Optional[MeshModel] = None
+    # Retransmissions des uplinks confirmés. Absent : comportement historique.
+    retransmissions: Optional[RetransmissionsModel] = None
     propagation: PropagationModel = PropagationModel()
     environment: Optional[EnvironmentModel] = None
     energy: Optional[EnergyModel] = None
     mac: Optional[MacModel] = None
     groups: list[GroupModel] = Field(min_length=1)
 
+    def _sensitivity_rules(self) -> None:
+        """Sensibilité absolue et SF5/SF6 : refus explicites, aucun repli silencieux."""
+        for g in self.groups:
+            if g.spreading_factor == 6:
+                raise ValueError(f"groupe {g.name!r} : SF6 non modélisé (en-tête implicite seulement)")
+        sf5 = [g.name for g in self.groups if g.spreading_factor == 5]
+        gws = [self.gateway, *(self.gateways or [])]
+        if all(g.sensitivity is None for g in gws):
+            if sf5:
+                raise ValueError(f"groupe {sf5[0]!r} : SF5 exige le modèle {MODEL_ID} "
+                                 "(bloc « sensitivity » de la passerelle)")
+            return
+        if self.gateways is not None or self.mesh is not None:
+            raise ValueError(f"{MODEL_ID} : passerelle unique uniquement "
+                             "(pas de « gateways » ni de mesh)")
+        gw = self.gateway
+        if gw.profile is not None:
+            raise ValueError(f"{MODEL_ID} et profil de passerelle {gw.profile!r} incompatibles : "
+                             "le seuil absolu remplace le décalage relatif, sans conversion")
+        sens = gw.sensitivity.absolute()
+        for g in self.groups:
+            if g.spreading_factor == 5 and g.region != SF5_REGION:
+                raise ValueError(f"groupe {g.name!r} : SF5 (DR13) réservé à la région {SF5_REGION}")
+            if g.region not in (None, SF5_REGION):
+                raise ValueError(f"groupe {g.name!r} : région {g.region!r} hors de {MODEL_ID} "
+                                 f"({SF5_REGION} seulement)")
+            try:
+                sens.lookup(g.spreading_factor, 125_000)
+            except SensitivityError as exc:
+                raise ValueError(f"groupe {g.name!r} : {exc}") from None
+        if self.mac is not None and sf5:
+            raise ValueError(f"groupe {sf5[0]!r} : SF5 avec bloc « mac » refusé "
+                             "(sensibilité du terminal NV)")
+
     @model_validator(mode="after")
     def _limits(self) -> "ScenarioModel":
+        self._sensitivity_rules()
         names = [g.name for g in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("les noms de groupes doivent être uniques")
+        if self.mac is not None and (self.mac.device_channels is not None
+                                     or self.mac.server_channel_plan is not None):
+            raise ValueError("mac : « device_channels » et « server_channel_plan » ne sont pas "
+                             "encore actifs dans le moteur (étape 3 de la correction ChannelMask)")
+        if self.mac is not None and (self.mac.link_adr or self.mac.duty_cycle_exponent is not None):
+            if self.gateways is not None or self.mesh is not None:
+                raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
+                                 "(pas de « gateways » ni de mesh)")
+        if self.mac is not None and (self.mac.link_check_every or self.mac.device_status_every
+                                     or self.mac.device_time_every):
+            if self.gateways is not None or self.mesh is not None:
+                raise ValueError("commandes MAC : passerelle unique uniquement "
+                                 "(pas de « gateways » ni de mesh)")
+            # Réservation maximale d'une émission : LinkCheckReq (1) + DeviceTimeReq (1) + DevStatusAns (3),
+            # plus LinkADRAns (2) et DutyCycleAns (1) si la boucle fermée les porte.
+            extra = ((1 if self.mac.link_check_every else 0) + (1 if self.mac.device_time_every else 0)
+                     + (3 if self.mac.device_status_every else 0))
+            if self.mac.link_adr or self.mac.duty_cycle_exponent is not None:
+                extra += 3
+            for g in self.groups:
+                if g.payload_bytes + extra > 255:
+                    raise ValueError(f"groupe {g.name!r} : charge de {g.payload_bytes} octets + "
+                                     f"{extra} octets MAC réservés dépasse 255")
         if self.gateways is None:
             if self.mesh is not None:
                 raise ValueError("mesh exige la liste « gateways » (plusieurs passerelles)")
@@ -340,9 +660,23 @@ class Scenario:
         # Profil énergie absent : hash des scénarios antérieurs inchangé.
         if model.energy is None:
             dumped.pop("energy", None)
+        # Frontaux RF absents : hash des scénarios antérieurs inchangé. Un bloc présent reste
+        # haché (le scénario n'est alors plus identique à son équivalent sans RF, à dessein).
+        self._strip_absent_rf(model, dumped)
         # Bloc MAC absent : hash des scénarios antérieurs inchangé.
         if model.mac is None:
             dumped.pop("mac", None)
+        else:
+            # Champs de la boucle fermée à leur valeur par défaut : hash inchangé.
+            if not model.mac.link_adr:
+                dumped["mac"].pop("link_adr", None)
+            if model.mac.duty_cycle_exponent is None:
+                dumped["mac"].pop("duty_cycle_exponent", None)
+            # Champs de canaux absents : hash des scénarios antérieurs inchangé.
+            if model.mac.device_channels is None:
+                dumped["mac"].pop("device_channels", None)
+            if model.mac.server_channel_plan is None:
+                dumped["mac"].pop("server_channel_plan", None)
         # Multi-passerelles et mesh absents : hash des scénarios antérieurs inchangé.
         if model.gateways is None:
             dumped.pop("gateways", None)
@@ -350,11 +684,20 @@ class Scenario:
             dumped.pop("mesh", None)
         gw_dumps = ([dumped["gateway"]] if model.gateways is None else dumped.get("gateways", []))
         for gw_dump in gw_dumps:
-            for key in ("name", "profile"):
+            for key in ("name", "profile", "sensitivity"):
                 if gw_dump.get(key) is None:
                     gw_dump.pop(key, None)
             if not gw_dump.get("mesh"):
                 gw_dump.pop("mesh", None)
+            # Puissance d'émission non déclarée : hors du hash, donc scénarios antérieurs
+            # inchangés (elle est alors fournie par les options de protocole).
+            if gw_dump.get("tx_power_dbm") is None:
+                gw_dump.pop("tx_power_dbm", None)
+        if model.gateways is not None:
+            # `gateways` déclaré : le champ scalaire `gateway` subsiste à sa valeur par défaut
+            # et reste haché tel quel (comportement historique, y compris ses valeurs nulles).
+            # Seul le champ ajouté en est retiré, pour ne pas en déplacer l'empreinte.
+            dumped["gateway"].pop("tx_power_dbm", None)
         if model.gateways is None:
             dumped["gateway"] = gw_dumps[0]
         # Champs optionnels à leur valeur par défaut : absents du hash (scénarios antérieurs inchangés).
@@ -366,6 +709,12 @@ class Scenario:
             if group.get("region") is None:
                 group.pop("region", None)
                 group.pop("channel_freq_hz", None)
+            if group.get("device_class") == "A":
+                group.pop("device_class", None)
+            # RX1DROffset à 0 = réglage du serveur, donc absent du hash : un scénario écrit
+            # avant l'introduction du champ garde exactement la même empreinte.
+            if group.get("rx1_dr_offset") == 0:
+                group.pop("rx1_dr_offset", None)
         # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
         for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
             for ob in env_dump.get("obstacles", []):
@@ -388,6 +737,18 @@ class Scenario:
         """Profil énergie déclaré dans le YAML, ou None."""
         return self.model.energy.profile if self.model.energy is not None else None
 
+    def device_classes(self) -> list[str]:
+        """Classe LoRaWAN de chaque terminal déployé, dans l'ordre de `deploy()`.
+
+        Le groupe porte la classe ; le déploiement énumère les groupes dans l'ordre du fichier,
+        donc l'alignement est direct. Aucune position n'est tirée : le compteur de chaque groupe
+        suffit, et aucune consommation du générateur aléatoire n'est ajoutée.
+        """
+        classes: list[str] = []
+        for groupe in self.model.groups:
+            classes.extend([groupe.device_class] * groupe.device_count)
+        return classes
+
     def deploy(self) -> tuple[list[EndDevice], list[str], list[int]]:
         """Retourne (dispositifs, nom de groupe par dispositif, index dans le groupe).
 
@@ -407,14 +768,18 @@ class Scenario:
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
-                    duty_cycle=g.effective_duty_cycle))
+                    duty_cycle=g.effective_duty_cycle,
+                    rf=g.rf.device() if g.rf is not None else None))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group
 
     def gateway(self) -> Gateway:
         g = self.model.gateway
-        return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi)
+        return Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                       tx_power_dbm=g.tx_power_dbm,
+                       absolute_sensitivity=None if g.sensitivity is None else g.sensitivity.absolute(),
+                       rf=g.rf.gateway() if g.rf is not None else None)
 
     def gateway_models(self) -> list[GatewayModel]:
         """Toutes les passerelles, dans l'ordre du fichier (une seule si « gateway »)."""
@@ -424,9 +789,54 @@ class Scenario:
 
     def gateways(self) -> list[Gateway]:
         return [Gateway(x_m=g.x_m, y_m=g.y_m, antenna_gain_dbi=g.antenna_gain_dbi,
+                        tx_power_dbm=g.tx_power_dbm,
                         rx_sensitivity_offset_db=(rx_sensitivity_offset_db(get_profile(g.profile))
-                                                  if g.profile is not None else 0.0))
+                                                  if g.profile is not None else 0.0),
+                        rf=g.rf.gateway() if g.rf is not None else None)
                 for g in self.gateway_models()]
+
+    @staticmethod
+    def _strip_absent_rf(model, dumped) -> None:
+        """Retire du hachage les blocs `rf:` absents : hash des scénarios antérieurs inchangé."""
+        if model.retransmissions is None:
+            dumped.pop("retransmissions", None)
+        else:
+            # Champs ajoutés par la couche MAC, à leur valeur par défaut : retirés du hachage,
+            # comme pour `mac` — le hash des scénarios écrits avant eux reste inchangé.
+            bloc = dumped["retransmissions"]
+            if model.retransmissions.ack_delay_ms == 0:
+                bloc.pop("ack_delay_ms", None)
+            if model.retransmissions.ack_repetitions == 1:
+                bloc.pop("ack_repetitions", None)
+            if model.retransmissions.fcnt_up_start == 0:
+                bloc.pop("fcnt_up_start", None)
+            if model.retransmissions.fcnt_down_start == 0:
+                bloc.pop("fcnt_down_start", None)
+            if not model.retransmissions.downlink_payload:
+                bloc.pop("downlink_payload", None)
+            if not model.retransmissions.session_joins_s:
+                bloc.pop("session_joins_s", None)
+            if not model.retransmissions.join_requests_s:
+                bloc.pop("join_requests_s", None)
+            if model.retransmissions.join_retries == 1:
+                bloc.pop("join_retries", None)
+            if model.retransmissions.join_accept_rx2_fallback:
+                bloc.pop("join_accept_rx2_fallback", None)
+            if model.retransmissions.join_accept_replays == 0:
+                bloc.pop("join_accept_replays", None)
+        if model.gateway.rf is None:
+            dumped["gateway"].pop("rf", None)
+        for groupe, groupe_dump in zip(model.groups, dumped["groups"]):
+            if groupe.rf is None:
+                groupe_dump.pop("rf", None)
+        if model.gateways is not None:
+            for passerelle, passerelle_dump in zip(model.gateways, dumped["gateways"]):
+                if passerelle.rf is None:
+                    passerelle_dump.pop("rf", None)
+
+    def retransmission_options(self):
+        """Options de réémission du scénario, ou None si le bloc est absent ou désactivé."""
+        return None if self.model.retransmissions is None else self.model.retransmissions.options()
 
     @property
     def is_multi_gateway(self) -> bool:

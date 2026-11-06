@@ -83,6 +83,26 @@ export function timelineBounds(events) {
   return { startNs: start, endNs: end };
 }
 
+// Libellé lisible d'un événement MAC (sans DOM). Les commandes sont celles du codec ; une réponse
+// en descente n'indique que la livraison de la trame qui la porte, pas une commande appliquée.
+export function macLabel(event) {
+  if (event.kind === "mac_request") {
+    return `Demande MAC du dispositif : ${event.outcome}`;
+  }
+  if (event.kind === "mac_answer") {
+    if (event.outcome === "DevStatusAns") {
+      return "Réponse MAC : DevStatusAns (uplink suivant, réservé)";
+    }
+    return `Réponse MAC en descente : ${event.outcome === "delivered" ? "reçue" : "non reçue"}`;
+  }
+  return null;
+}
+
+// Vrai pour les événements MAC (classe de journal dédiée).
+export function isMacEvent(event) {
+  return event.kind === "mac_request" || event.kind === "mac_answer";
+}
+
 // Ligne de journal lisible pour un événement.
 export function journalRow(event, deviceGroups) {
   const source = event.device_index !== undefined && event.device_index !== null
@@ -93,9 +113,11 @@ export function journalRow(event, deviceGroups) {
     t_ns: BigInt(event.t_ns),
     time: `${(Number(event.t_ns) / 1e9).toFixed(3)} s`,
     kind: event.kind,
+    label: macLabel(event) ?? event.kind,
+    mac: isMacEvent(event),
     source,
     outcome: event.outcome,
-    cls: outcomeClass(event.outcome),
+    cls: isMacEvent(event) ? "mac" : outcomeClass(event.outcome),
     hops: (event.hops ?? []).map((h) => `${h.from_id} → ${h.to_id} : ${h.outcome}`),
   };
 }

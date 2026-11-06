@@ -139,23 +139,25 @@ def _uplink(rec, fcnt, fopts=b""):
     return _rxpk(wire, 903.9, "SF10BW125")
 
 
-def test_link_adr_resent_until_max_attempts_without_answer(store):
+def test_link_adr_resent_on_every_uplink_without_answer(store):
+    # TS001 §5 : réémission décidée à chaque trame reçue sans la réponse attendue. Aucun plafond
+    # normatif ni temporisation : la commande reste en attente tant qu'elle n'est pas acquittée.
+    assert MAC_MAX_ATTEMPTS is None  # plafond d'implémentation désactivé par défaut
     handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
     _join(handler)
     with store.transaction() as tx:
         rec = tx.session_by_eui(DEV)
-    sent = 0
-    for fcnt in range(MAC_MAX_ATTEMPTS + 2):
+    rounds = 40  # bien au-delà de 8 essais
+    for fcnt in range(rounds):
         outcome = handler.handle(_uplink(rec, fcnt))
-        if outcome.txpk is not None:
-            sent += 1
-            frame = open_downlink(outcome.txpk.payload, rec.keys,
-                                  DownlinkContext(conf_fcnt=0, nfcnt32=fcnt, afcnt32=0))
-            assert frame.fopts == link_adr_payload(US915, 2)
-    # Un LinkADRReq par uplink, jusqu'à MAC_MAX_ATTEMPTS, puis abandon.
-    assert sent == MAC_MAX_ATTEMPTS
+        assert outcome.txpk is not None  # un LinkADRReq par uplink, sans temporisation
+        frame = open_downlink(outcome.txpk.payload, rec.keys,
+                              DownlinkContext(conf_fcnt=0, nfcnt32=fcnt, afcnt32=0))
+        assert frame.fopts == link_adr_payload(US915, 2)
     with store.transaction() as tx:
-        assert tx.pending_mac(DEV) == []
+        pending = tx.pending_mac(DEV)
+        assert [item.cid for item in pending] == [3]
+        assert pending[0].attempts == rounds
 
 
 def test_link_adr_stops_after_acknowledgement(store):
@@ -173,7 +175,9 @@ def test_link_adr_stops_after_acknowledgement(store):
         assert tx.pending_mac(DEV) == []
 
 
-def test_negative_answer_keeps_command_pending(store):
+def test_negative_answer_closes_demand_without_resending(store):
+    # Réponse négative (un bit à 0) : la commande n'a pas réussi. La demande est close et
+    # journalisée ; la même configuration n'est pas renvoyée aux uplinks suivants.
     handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
     _join(handler)
     with store.transaction() as tx:
@@ -181,7 +185,29 @@ def test_negative_answer_keeps_command_pending(store):
     refused = mac.encode(mac.LinkAdrAns(channel_mask_ack=False, data_rate_ack=True, power_ack=True))
     handler.handle(_uplink(rec, 0, fopts=refused))
     with store.transaction() as tx:
-        assert [item.cid for item in tx.pending_mac(DEV)] == [3]
+        assert tx.pending_mac(DEV) == []
+    later = handler.handle(_uplink(rec, 1))
+    assert later.txpk is None  # rien à renvoyer
+
+    
+def test_negative_answer_on_any_single_bit_is_refusal(store):
+    # TS001 §5.2 : un seul bit à 0 suffit pour qu'une commande échoue (état précédent conservé).
+    handler = build_handler(store, {DEV: DeviceKeys(NWK, app_key=APP)}, NET_ID, US915, 2)
+    _join(handler)
+    with store.transaction() as tx:
+        rec = tx.session_by_eui(DEV)
+    patterns = [(False, True, True), (True, False, True), (True, True, False)]
+    for k, bits in enumerate(patterns):
+        with store.transaction() as tx:
+            tx.enqueue_mac(DEV, 3, link_adr_payload(US915, 2))
+        first = handler.handle(_uplink(rec, 3 * k))  # envoyé une fois
+        assert first.txpk is not None
+        refusal = mac.encode(mac.LinkAdrAns(channel_mask_ack=bits[0], data_rate_ack=bits[1],
+                                            power_ack=bits[2]))
+        handler.handle(_uplink(rec, 3 * k + 1, fopts=refusal))
+        with store.transaction() as tx:
+            assert tx.pending_mac(DEV) == []
+        assert handler.handle(_uplink(rec, 3 * k + 2)).txpk is None
 
 
 def test_rejoin_resets_attempts(store):

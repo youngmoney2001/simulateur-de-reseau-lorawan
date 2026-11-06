@@ -1,0 +1,34 @@
+# Cas 5 — ACK dupliqué : le réseau répète la trame d'acquittement.
+#
+# Chaque ACK est émis deux fois, à `fin + 1 s` puis à `fin + 1 s + airtime` : les deux copies
+# tombent dans RX1 et portent le même FCntDown. Le terminal n'en retient qu'une ; la seconde est
+# écartée. Une trame acquittée n'est pas réémise, et le réseau n'en livre pas deux.
+#
+# Ce que ce fichier mesure : deux émissions d'ACK par trame, un seul acquittement logique, et
+# l'airtime supplémentaire consommé sur la passerelle.
+schema_version: 1
+name: Réémissions — ACK dupliqué écarté par FCntDown
+seed: 1
+gateway:
+  x_m: 0
+  y_m: 0
+retransmissions:
+  retries: 2
+  ack_repetitions: 2
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: terminal
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 9
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 2
+    start_spread_s: 10

@@ -36,7 +36,12 @@ add_library(lsim_objects OBJECT
     core/src/lorawan_keys.cpp
     core/src/secure_frame.cpp
     core/src/engine.cpp
+    core/src/loop_adr.cpp
     core/src/c_api_ext.cpp
+    core/src/closed_loop_v3_validate.cpp
+    core/src/closed_loop_v3_config.cpp
+    core/src/closed_loop_v3_output.cpp
+    core/src/c_api_closed_loop_v3.cpp
     core/src/join.cpp
     core/src/mac_commands.cpp
     core/src/c_api_mac.cpp
@@ -52,6 +57,9 @@ add_library(lsim_objects OBJECT
     core/src/c_api_session.cpp
     core/src/class_b.cpp
     core/src/downlink.cpp
+    core/src/downlink_plan.cpp
+    core/src/radio_scheduler.cpp
+    core/src/c_api_plan.cpp
     core/src/c_api_class_b.cpp
     core/src/environment.cpp
     core/src/mesh.cpp
@@ -84,6 +92,18 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_crypto.cpp
         core/tests/test_secure_frame.cpp
         core/tests/test_engine.cpp
+        core/tests/test_closed_loop.cpp
+        core/tests/test_abi_v3_prep.cpp
+        core/tests/test_channel_config_v3.cpp
+        core/tests/test_closed_loop_v3_buffers.cpp
+        core/tests/test_closed_loop_v3_crossval.cpp
+        core/tests/test_closed_loop_v3_api.cpp
+        core/tests/test_rf_frontend.cpp
+        core/tests/test_radio_scheduler.cpp
+        core/tests/test_occupation_radio.cpp
+        core/tests/test_determinisme.cpp
+        core/tests/test_multi_dl_rx1.cpp
+        core/tests/test_loop_adr.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp
         core/tests/test_mac_commands.cpp
@@ -94,6 +114,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_session.cpp
         core/tests/test_class_b.cpp
         core/tests/test_downlink.cpp
+        core/tests/test_downlink_plan.cpp
         core/tests/test_environment.cpp
         core/tests/test_materials.cpp
         core/tests/test_energy.cpp

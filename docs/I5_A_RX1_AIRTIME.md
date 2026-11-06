@@ -1,0 +1,344 @@
+# I5-a — Temps d'antenne et sensibilité des descentes du moteur multi-passerelles
+
+Conception, avant toute ligne de code. Fait suite à `docs/I5_AUDIT_MULTI.md` (écart n°1) et à la
+décision de traiter **d'abord** cet écart, en lot borné.
+
+---
+
+## 1. Objet
+
+Corriger le calcul du temps d'antenne **descendant** et de la **sensibilité de réception
+descendante** dans `simulate_uplinks_multi_downlinks`, qui reposent aujourd'hui sur deux
+hypothèses fausses : le débit RX1 égale le SF montant, et la bande vaut 125 kHz.
+
+Ne pas toucher au temps d'antenne montant, ni au périmètre fonctionnel (boucle fermée
+mono-passerelle), ni au chemin `plan`.
+
+---
+
+## 2. Les trois sites du défaut
+
+Tous dans `core/src/engine.cpp`, tous dans `simulate_uplinks_multi_downlinks`.
+
+### 2.1 Site 1 — bande du temps d'antenne descendant, codée en dur
+
+```cpp
+// core/src/engine.cpp:966-971
+// Airtime d'un downlink au débit RX1 (= SF de l'uplink, BW 125 kHz), ...
+SimStatus downlink_airtime(std::uint8_t sf, std::uint32_t payload_bytes, SimTime& out) {
+    rc.spreading_factor = sf;
+    rc.bandwidth = lora::Bandwidth::Bw125kHz;   // <- littéral
+```
+
+### 2.2 Site 2 — le SF employé est le SF montant
+
+```cpp
+// core/src/engine.cpp:1163
+if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
+std::uint8_t sf_used = ta.sf;
+```
+
+`ta.sf` est posé en `:1082` (`tx.sf = d.spreading_factor;`), donc le SF **montant**. Le repli RX2
+(`:1185`) prend bien son SF de `rule.rx2_sf`, mais retombe sur le site 1 pour la bande.
+
+### 2.3 Site 3 — la sensibilité de réception descendante, elle aussi en 125 kHz
+
+```cpp
+// core/src/engine.cpp:1209
+if (lora::receiver_sensitivity_dbm(sf_used, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
+```
+
+Ce site est **indépendant** des deux autres et n'avait pas été relevé par l'audit : la décision
+« la descente est-elle reçue ? » est prise avec un seuil de sensibilité calculé à la mauvaise
+bande. Le corriger change le taux de livraison, pas seulement l'occupation.
+
+### 2.4 Gravité (mesurée — voir `I5_AUDIT_MULTI.md` §3.2)
+
+Facteur d'erreur du temps d'antenne réservé : **0,04x à 96x** selon le DR RX1 réellement imposé.
+Exact **uniquement** sur la diagonale « RX1 = SF montant à 125 kHz ». La sensibilité (site 3) suit la même
+loi : le seuil de 500 kHz est **plus haut** de 6 à 7 dB que celui de 125 kHz (mesuré : SF12
+−136 dBm à 125 kHz contre −130 dBm à 500 kHz), employer celui de 125 kHz rend donc la réception
+**trop permissive** — elle accepte des descentes qui devraient être perdues.
+
+---
+
+## 3. Ce qui manque : le chemin multi ne reçoit aucune table radio
+
+C'est le fait structurant. `simulate_uplinks_multi_downlinks` (`engine.hpp:728`) reçoit
+`const EndDeviceSpec* devices` ; `EndDeviceSpec` (`engine.hpp:116-131`) ne porte que
+`spreading_factor` (montant) et `payload_bytes`. **Aucun** `rx1_sf`, **aucun** `rx1_bw_hz`.
+
+Aux deux entrées C (`c_api.h:571` et `:1820`), aucune table radio non plus — contrairement à
+`lsim_simulate_uplinks_causal_v3` (`c_api.h:1687`) qui prend `const lsim_plan_device* radios`.
+
+Côté Python, les données **existent déjà** et sont calculées pour rien :
+`build_multi_trace` fait `radios = device_radios(scenario)` (`trace_events.py:1586`) puis appelle
+`simulate_multi_downlinks(...)` (`simulator.py:705`) dont la signature n'accepte que `device_rf`
+et `gateway_rf` — les **frontaux**, qui sont une autre grandeur.
+
+**La correction est donc d'abord un problème de transport, pas un problème de formule.**
+
+### 3.1 Les types existent déjà
+
+| Donnée | Type C existant | Champ | Source Python |
+|---|---|---|---|
+| SF et bande de RX1 | `lsim_plan_device` | `rx1_sf`, `rx1_bw_hz` | `DeviceRadio.rx1_sf`, `.rx1_bw_hz` |
+| SF et bande de RX2 | `lsim_plan_device_rx2` | `rx2_sf`, `rx2_bw_hz` | `DeviceRadio.rx2_sf`, `.rx2_bw_hz` |
+
+`lsim_plan_device_rx2` vient d'I3 ; Python remplit `rx2_bw_hz` en le **lisant du profil
+régional** (`trace_events.py:330`). Aucune nouvelle structure n'est à inventer.
+
+---
+
+## 4. Conception
+
+### 4.1 Règle de comportement
+
+Passer une table de radios à l'entrée multi, c'est **demander** la fidélité RX1/RX2. Ne pas la
+passer conserve le comportement actuel **à l'identique**. Exactement la convention déjà établie
+pour la table `rx2` d'I3 : « compter des entrées, c'est demander le repli ».
+
+Aucune modification silencieuse des entrées existantes : `lsim_simulate_uplinks_multi_dl` et
+`_v2` gardent leurs résultats **au bit près**.
+
+### 4.2 Trois options pour la forme de l'entrée
+
+| | Option | Coût | Avantage | Inconvénient |
+|---|---|---|---|---|
+| **A** | Nouvelle entrée plate `_multi_dl_v3` avec `radios` + `rx2` ajoutés | faible | précédent `causal_v3` | 4 entrées à terme : {sans, avec radios} × {sans, avec frontal} |
+| **B** | Enveloppe `lsim_multi_dl_args` à pointeurs typés | moyen | une seule entrée, extensible ; variante retenue en I4 | nouvelle structure, harnais ABI à étendre |
+| **C** | Ajouter `rx1_sf`/`rx1_bw_hz` à `lsim_end_device` | nul | rien à transporter | **refusé** : change la taille d'une structure utilisée par des dizaines d'entrées — rupture d'ABI déguisée en extension |
+
+**Décision : option B.** C'est la variante déjà retenue en I4 pour une raison qui s'applique ici
+mot pour mot : le cartésien des tables optionnelles. Le multi en a deux aujourd'hui (frontaux) et
+en aurait quatre avec les radios. I4 a tranché ce exact problème. Une seule entrée
+`lsim_simulate_uplinks_multi_dl_env` remplace donc la prolifération à venir.
+
+### 4.3 Contrat de l'enveloppe (option B)
+
+```c
+typedef struct lsim_multi_dl_args {
+    uint32_t struct_size;
+    uint32_t abi_version;                 /* LSIM_MULTI_DL_ABI_VERSION = 1 */
+    const lsim_end_device*   devices;     /* obligatoire                */
+    size_t                   device_count;
+    const lsim_gateway*      gateways;    /* obligatoire, 1..64         */
+    size_t                   gateway_count;
+    const lsim_propagation*  prop;        /* obligatoire                */
+    const lsim_downlink_rule* rule;       /* obligatoire                */
+    const lsim_environment*  env;         /* NULL admis                 */
+    const lsim_plan_device*  radios;      /* NULL : comportement actuel */
+    size_t                   radio_count; /* device_count si non NULL   */
+    const lsim_plan_device_rx2* rx2;      /* NULL : repli inactif       */
+    size_t                   rx2_count;
+    const lsim_device_rf*    device_rf;   /* NULL admis (frontal)       */
+    size_t                   device_rf_count;
+    const lsim_gateway_rf*   gateway_rf;  /* NULL admis (frontal)       */
+    size_t                   gateway_rf_count;
+    const int64_t*           dl_ready_ns; /* NULL admis                 */
+    /* sorties … */
+    uint64_t reserved[2];                 /* doit être nul (O1, bbb3)   */
+} lsim_multi_dl_args;
+```
+
+Règles, calquées sur I6-c et I4 :
+
+- chaque table non nulle annonce son compte, vérifié **avant toute lecture** ;
+- `struct_size`, `abi_version` et `reserved` nul validés d'abord (O1, bbb3) ;
+- `radios` non nul ⇒ `radio_count == device_count`, sinon refus ;
+- une table non nulle dont le SF est hors 7..12 ou la bande hors {125k, 250k, 500k} ⇒ refus
+  (`InvalidRadio`), jamais de repli sur une valeur par défaut ;
+- **`rx2` non nul ⇒ `rule.rx2_sf` doit valoir 0.** Le repli est alors évalué avec `rx2_sf` /
+  `rx2_bw_hz` **de la table**, et non plus avec `rule.rx2_sf` à 125 kHz. Une même grandeur exprimée
+  à deux endroits est une ambiguïté, pas une redondance tolérable : refus explicite, jamais de
+  précédence implicite (bbb3).
+  Précédent direct dans le dépôt : `lsim_gateway_v2` (`c_api.h:342`) — « Avec le modèle 1,
+  `base.rx_sensitivity_offset_db` doit valoir 0 (pas de conversion implicite) ». Même motif : une
+  source riche rend le scalaire historique neutre au lieu de le concurrencer.
+
+### 4.4 Le calcul corrigé
+
+```
+air_rx1 = airtime(radios[d].rx1_sf, radios[d].rx1_bw_hz, payload)
+air_rx2 = airtime(rx2[d].rx2_sf,    rx2[d].rx2_bw_hz,    payload)
+sens    = receiver_sensitivity_dbm(sf_utilisé, bande_utilisée)
+```
+
+Le SF et la bande employés sont **ceux de la fenêtre réellement utilisée** — jamais ceux de
+l'uplink, jamais une constante. C'est la règle R-N1 d'I6-c, appliquée au chemin multi.
+
+---
+
+## 5. Modifications prévues
+
+| Fichier | nature |
+|---|---|
+| `core/src/engine.cpp` | `downlink_airtime` prend une bande ; `simulate_uplinks_multi_downlinks` surcharge avec radios + rx2 ; trois sites corrigés |
+| `core/include/lsim/engine.hpp` | surcharge de `simulate_uplinks_multi_downlinks` ; `MultiDownlinkRule` inchangé |
+| `core/include/lsim/c_api.h` | `lsim_multi_dl_args`, `LSIM_MULTI_DL_ABI_VERSION`, `lsim_simulate_uplinks_multi_dl_env` |
+| `core/src/c_api_ext.cpp` | entrée à enveloppe + validations |
+| `core/tests/abi_layout.cpp` | tables i386 / x86-64 de la nouvelle structure |
+| `python/lsim/_native.py`, `simulator.py` | pont, nouvelle fonction `simulate_multi_downlinks_env` |
+| `python/lsim/trace_events.py` | `build_multi_trace` passe enfin les `radios` qu'il calcule déjà |
+| `python/tests/test_multi_dl_rx1.py` | tests du lot |
+
+---
+
+## 6. Tests prévus
+
+| Id | Propriété |
+|---|---|
+| T-A-1 | Sans table de radios, les résultats sont **identiques** à l'entrée `_multi_dl` actuelle (empreintes) |
+| T-A-2 | Avec `radios` où RX1 = (SF montant, 125 kHz), résultats identiques — la diagonale de la table de sensibilité |
+| T-A-3 | Avec `radios` où RX1 = (SF_x, 500 kHz), le temps d'antenne réservé est celui de la table de sensibilité, mesuré |
+| T-A-4 | La sensibilité de réception descendante suit la bande de la fenêtre (site 3), pas 125 kHz |
+| T-A-5 | `struct_size`, `abi_version`, `reserved` non nul ⇒ refus |
+| T-A-6 | Comptes incohérents (`radio_count` ≠ `device_count`) ⇒ refus, sans lecture |
+| T-A-7 | SF hors 7..12 ou bande hors {125k, 250k, 500k} ⇒ `InvalidRadio`, aucun repli |
+| T-A-8 | Table `rx2` fournie avec `rule.rx2_sf != 0` ⇒ refus explicite ; `rule.rx2_sf == 0` ⇒ repli évalué sur la table |
+| T-A-9 | Parité : `build_multi_trace` avec et sans table produit les même événements quand RX1 = (SF montant, 125 kHz) |
+| T-A-10 | Mutation : forcer la bande à 125 kHz doit faire échouer T-A-3 et T-A-4 |
+
+---
+
+## 7. Ordre d'exécution
+
+1. Cœur C++ (surcharge, trois sites).
+2. Frontière C (enveloppe, validations).
+3. Harnais ABI.
+4. Pont Python + `build_multi_trace`.
+5. Tests T-A-1…T-A-10.
+6. Non-régression : suite C++ et suite Python, comparées à `6615536`.
+7. Mutations.
+
+---
+
+## 8. Commandes
+
+```
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+PYTHONPATH=python LSIM_LIBRARY=<chemin>/liblsim_core.so pytest -q python/tests
+```
+
+Contrôles ABI : **+1 symbole**, **0 retiré** ; structures existantes à taille constante.
+
+---
+
+## 9. Hors périmètre
+
+| Exclu | Pourquoi |
+|---|---|
+| Écart n°2 — boucle fermée multi-passerelles | lot distinct, décision reportée |
+| Le défaut équivalent sur le SF dans le chemin mono (`engine.cpp:1943`) | touche les deux moteurs ; changerait des résultats existants — lot distinct, comme I3/C4 |
+| Fréquence RX2 dans le multi (non modélisée aujourd'hui) | lot distinct |
+| Contraintes de charge N dans le chemin multi | I6-c a traité le chemin `plan` seulement |
+
+---
+
+## 10. Réserves
+
+1. **Aucune affirmation régionale.** Ce lot transporte le DR des fenêtres ; il ne décide pas
+   lequel impose chaque région. Produire les bonnes tables reste à la charge de l'appelant
+   (Python les a déjà via `device_radios`, qui les lit du profil régional — `trace_events.py:330`).
+2. **Le site 3 change le taux de livraison**, pas seulement l'occupation. Toute comparaison
+   avant/après devra séparer les deux effets.
+3. **Les deux arbitrages sont rendus** : option B (§4.2) et refus du conflit `rx2` (§4.3).
+
+---
+
+## 11. Bilan d'exécution
+
+Ajouté après coup, une fois le lot terminé. Suit l'usage établi en I6-c (§9 de
+`docs/I6_C_PARITE_N.md`) : ce qui a été fait, les décisions prises **en cours d'implémentation**
+parce que le plan ne les tranchait pas, et les preuves.
+
+### 11.1 Les sept étapes
+
+| # | Étape | Commits | État |
+|---|---|---|---|
+| 1 | Cœur C++ : trois sites corrigés | `1ff90c0` | fait |
+| 2 | Frontière C : enveloppe `lsim_multi_dl_args` | `ef974cf` | fait |
+| 3 | Harnais ABI : deux tables de disposition | `58e688a` | fait |
+| 4 | Pont Python jusqu'au moteur | `1a04b43` | fait |
+| 5 | `build_multi_trace` transmet ses radios | `b05d7b2` | fait |
+| 6 | Tests du pont | `d25a367` | fait |
+| 7 | Mutations | — | fait (§11.4) |
+
+### 11.2 Décisions prises en cours d'implémentation
+
+Le plan ne les tranchait pas ; elles l'ont été à l'implémentation et sont documentées ici.
+
+**(a) `reserved` de l'enveloppe validé à zéro.** Suivi de O1 et bbb3 : un appelant qui renseigne
+`reserved` parle une ABI future, l'ignorer serait un repli silencieux. Précédent :
+`LSIM_STATUS_CHANNEL_RESERVED_NONZERO` en I4.
+
+**(b) Sans plan régional, les tables ne sont pas passées.** `device_radios` rend `dr = None`
+sans région ; RX1 vaut alors (SF montant, 125 kHz), la diagonale — la table n'aurait aucun
+effet. Elle n'est donc pas transmise, ce qui conserve la garantie d'I3 : « aucun scénario
+historique ne change ». Première tentative sans cette condition : **20 échecs et 14 erreurs**
+dans `test_mesh_trace.py`.
+
+**(c) `radios` transmis sous un autre nom.** La variable `radios` sert plus bas dans
+`build_multi_trace` (`radios[d]`). Les tables passées au moteur utilisent `radios_table`, sinon
+la mise à `None` du point (b) cassait l'aval.
+
+**(d) `_CPlanDevice` / `_CPlanDeviceRx2` définies dans `_native`.** `downlink_plan` et
+`trace_events` importent tous deux `simulator` ; définir ces structures là où l'enveloppe en a
+besoin fermait un cycle. Elles sont définies au plus bas niveau et réimportées — les appelants
+de `downlink_plan` ne voient aucune différence.
+
+### 11.3 Un écart qui n'en était pas un
+
+À SF12/125 kHz, le moteur produisait 991 232 000 ns là où ma référence Python en attendait
+1 155 072 000. Après examen, **c'était ma référence qui était fausse** : je comparais à une
+trame de données (`kDataFrameOverhead`, 13 octets) alors que le moteur émettait un ACK
+(`kAckFrameBytes`, 12 octets), LDRO activé puisque `tsym = 32,768 ms > 16 ms`. Les trois cas
+concordent alors au nanoseconde. Noté parce que la symétrie est trompeuse : le même chiffre
+s'obtient avec LDRO faux et 13 octets, et avec LDRO vrai et 8 à 12 octets.
+
+### 11.4 Mutations
+
+| Id | Mutation | Détectée |
+|---|---|---|
+| M1 | Validation de l'enveloppe neutralisée (`struct_size`/`abi_version`/`reserved`) | **oui**, 2 échecs Python |
+| M2 | Contrôle des comptes de tables neutralisé | **oui**, segfault (lecture hors bornes) |
+| M3 | Bande RX1 forcée à 125 kHz | **oui**, 2 C++ + 4 Python |
+| M4 | SF RX1 forcé au SF montant (`ta.sf`) | **oui**, 1 C++ + 6 Python |
+
+M3 et M4 ne font échouer que les cas **hors diagonale** : `(SF montant, 125 kHz)` passe à juste
+titre, puisque la mutation y reproduit l'hypothèse historique.
+
+Reprises de l'étape 1 (9 mutations, 7 détectées) : M10 (validation de bande RX1) et M11
+(validation de SF RX2) restent **non détectées**, `time_on_air` rejetant les mêmes entrées — le
+refus est identique, seule sa provenance change. Limite maintenue, non masquée.
+
+### 11.5 Deux tests écrits vacuous, découverts par la mutation
+
+Noté parce que la leçon est générale.
+
+1. **T-A-5** croyait vérifier `struct_size` / `abi_version` / `reserved` en appelant l'enveloppe
+   avec des pointeurs nuls : l'appel échouait de toute façon (`NullOutput`), pour une raison
+   sans rapport. M1 ne faisait rien échouer. Corrigé par un **contrôle positif** — une
+   enveloppe complète et valide doit renvoyer 0 — à partir duquel chaque champ est corrompu.
+2. **T-A-6** croyait vérifier le contrôle des comptes côté cœur, mais le pont Python valide
+   `len(radios) == device_count` **avant** l'appel natif : la défense du C n'était jamais
+   exercée. Test ajouté via l'enveloppe, en contournant le pont.
+
+### 11.6 Preuves
+
+    C++            690 127 vérifications, 0 échec
+    ctest          1/1
+    Python         2477 passed / 15 failed  (2457 avant + 20 nouveaux)
+    échecs         liste comparée par diff avant/après : identique
+    symboles       102 -> 103, 0 retiré
+
+Effet mesuré sur un scénario réel (`build_multi_trace`, ACK, SF montant 7) :
+
+| Région | RX1 du plan | Sans table | Avec tables | Effet |
+|---|---|---|---|---|
+| EU868 | SF7 / 125 kHz | 56 576 000 | 56 576 000 | identique |
+| US915 | SF7 / 500 kHz | 56 576 000 | 14 144 000 | **corrigé (4,00x)** |
+| AU915 | SF7 / 500 kHz | 56 576 000 | 14 144 000 | **corrigé (4,00x)** |
+
+EU868, AS923, IN865, KR920 et RU864 sont sur la diagonale et ne bougent pas.

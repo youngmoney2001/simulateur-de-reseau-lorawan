@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <vector>
 
 #include "check.hpp"
 #include "lsim/lorawan_keys.hpp"
@@ -327,6 +328,154 @@ void test_downlink_tamper_and_counter_checks() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Profil 1.0.x. Vecteurs recalculés indépendamment avec la bibliothèque cryptography
+// (AES-ECB et CMAC, script hors dépôt) : ils ne proviennent pas du code C++.
+// ---------------------------------------------------------------------------
+
+std::vector<std::uint8_t> from_hex(const char* hex) {
+    std::vector<std::uint8_t> out;
+    for (std::size_t i = 0; hex[i] != '\0' && hex[i + 1] != '\0'; i += 2) {
+        const auto nib = [](char c) -> std::uint8_t {
+            return static_cast<std::uint8_t>(c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10);
+        };
+        out.push_back(static_cast<std::uint8_t>((nib(hex[i]) << 4) | nib(hex[i + 1])));
+    }
+    return out;
+}
+
+bool bytes_equal_hex(const std::uint8_t* data, std::size_t len, const char* hex) {
+    const std::vector<std::uint8_t> exp = from_hex(hex);
+    return exp.size() == len && std::memcmp(exp.data(), data, len) == 0;
+}
+
+SessionKeys10 keys_10() {
+    SessionKeys10 k{};
+    for (std::size_t i = 0; i < 16; ++i) {
+        k.nwk_s_key[i] = static_cast<std::uint8_t>(i);          // 00..0f
+        k.app_s_key[i] = static_cast<std::uint8_t>(0xf0 + i);   // f0..ff
+    }
+    return k;
+}
+
+void test_v104_key_derivation_vector() {
+    Key128 app_key{};
+    for (std::size_t i = 0; i < 16; ++i) app_key[i] = static_cast<std::uint8_t>(0x10 + i);
+    const std::array<std::uint8_t, 3> an = {0x01, 0x02, 0x03};
+    const std::array<std::uint8_t, 3> ni = {0x00, 0x00, 0x13};
+    const std::array<std::uint8_t, 2> dn = {0xaa, 0x55};
+    SessionKeys10 k{};
+    CHECK_EQ(static_cast<int>(derive_session_keys_10(app_key, an, ni, dn, k)),
+             static_cast<int>(lsim::crypto::CryptoStatus::Ok));
+    CHECK_TRUE(bytes_equal_hex(k.nwk_s_key.data(), 16, "1be2e9a6e593fa22099353a50240aff0"));
+    CHECK_TRUE(bytes_equal_hex(k.app_s_key.data(), 16, "32b9f4258cbf3ad0e1d2acafb90720fd"));
+}
+
+void test_v104_uplink_vector_fopts_in_clear() {
+    // FOpts (LinkCheckReq) en clair sur le fil ; FRMPayload chiffré avec AppSKey (FPort 1).
+    const SessionKeys10 k = keys_10();
+    DataFrame f;
+    f.mtype = MType::UnconfirmedDataUp;
+    f.dev_addr = 0x01020304u;
+    f.fcnt = 5;
+    f.fopts[0] = 0x02;
+    f.fopts_len = 1;
+    f.has_fport = true;
+    f.fport = 1;
+    const char* text = "hello";
+    f.frm_payload_len = 5;
+    std::memcpy(f.frm_payload.data(), text, 5);
+    std::uint8_t wire[64];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_uplink_10(f, k, Context10{5}, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(bytes_equal_hex(wire, n, "40040302010105000201c5cb1fc5a69b451609"));
+    CHECK_EQ(wire[8], std::uint8_t{0x02});  // FOpts en clair
+
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_uplink_10(wire, n, k, Context10{5}, out)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(std::memcmp(out.frm_payload.data(), "hello", 5) == 0);
+    CHECK_EQ(out.fopts_len, std::uint8_t{1});
+    CHECK_EQ(out.fopts[0], std::uint8_t{0x02});
+}
+
+void test_v104_port0_uses_nwk_skey() {
+    // FPort 0 : FRMPayload chiffré avec NwkSKey (et non AppSKey), FOpts absentes.
+    const SessionKeys10 k = keys_10();
+    DataFrame f;
+    f.mtype = MType::UnconfirmedDataUp;
+    f.dev_addr = 0x01020304u;
+    f.fcnt = 5;
+    f.has_fport = true;
+    f.fport = 0;
+    f.frm_payload_len = 2;
+    f.frm_payload[0] = 0x02;
+    f.frm_payload[1] = 0x03;
+    std::uint8_t wire[64];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_uplink_10(f, k, Context10{5}, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(bytes_equal_hex(wire, n, "4004030201000500003d985663af94"));
+    // Ouverture avec la mauvaise clé (AppSKey pour le port 0) : MIC rejeté.
+    SessionKeys10 wrong = k;
+    wrong.nwk_s_key = k.app_s_key;
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_uplink_10(wire, n, wrong, Context10{5}, out)),
+             static_cast<int>(SecureStatus::MicMismatch));
+}
+
+void test_v104_downlink_vector_and_tamper() {
+    const SessionKeys10 k = keys_10();
+    DataFrame f;
+    f.mtype = MType::UnconfirmedDataDown;
+    f.dev_addr = 0x01020304u;
+    f.fcnt = 5;
+    f.has_fport = true;
+    f.fport = 1;
+    f.frm_payload_len = 2;
+    f.frm_payload[0] = 'o';
+    f.frm_payload[1] = 'k';
+    std::uint8_t wire[64];
+    std::size_t n = 0;
+    CHECK_EQ(static_cast<int>(seal_downlink_10(f, k, Context10{5}, wire, sizeof wire, n)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(bytes_equal_hex(wire, n, "600403020100050001a42c99fbfef5"));
+    DataFrame out;
+    CHECK_EQ(static_cast<int>(open_downlink_10(wire, n, k, Context10{5}, out)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(std::memcmp(out.frm_payload.data(), "ok", 2) == 0);
+    // Trame modifiée : MIC rejeté avant tout déchiffrement, rien n'est exposé.
+    std::uint8_t bad[64];
+    std::memcpy(bad, wire, n);
+    bad[9] ^= 0x01;
+    DataFrame out2;
+    CHECK_EQ(static_cast<int>(open_downlink_10(bad, n, k, Context10{5}, out2)),
+             static_cast<int>(SecureStatus::MicMismatch));
+    CHECK_EQ(out2.frm_payload_len, std::uint8_t{0});
+    // Compteur différent : rejet.
+    DataFrame out3;
+    CHECK_EQ(static_cast<int>(open_downlink_10(wire, n, k, Context10{6}, out3)),
+             static_cast<int>(SecureStatus::FCntMismatch));
+}
+
+void test_v104_profile_is_separate_from_v11() {
+    // Le même message n'a pas le même MIC en 1.0.x et en 1.1 : les deux profils sont distincts.
+    const SessionKeys10 k10 = keys_10();
+    SessionKeys11 k11 = reference_keys();
+    DataFrame f = make_frame(1, "hello");
+    std::uint8_t w10[64];
+    std::uint8_t w11[64];
+    std::size_t n10 = 0;
+    std::size_t n11 = 0;
+    CHECK_EQ(static_cast<int>(seal_uplink_10(f, k10, Context10{5}, w10, sizeof w10, n10)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_EQ(static_cast<int>(seal_uplink(f, k11, ctx_for(5), w11, sizeof w11, n11)),
+             static_cast<int>(SecureStatus::Ok));
+    CHECK_TRUE(n10 == n11);
+    CHECK_TRUE(std::memcmp(w10 + n10 - 4, w11 + n11 - 4, 4) != 0);
+}
+
 void run_secure_frame_tests() {
     test_downlink_fport_uses_afcntdwn_and_roundtrips();
     test_downlink_without_fport_uses_nfcntdwn();
@@ -341,4 +490,9 @@ void run_secure_frame_tests() {
     test_wrong_keys_rejected();
     test_buffer_too_small();
     test_fuzz_open_rejects_random_frames();
+    test_v104_key_derivation_vector();
+    test_v104_uplink_vector_fopts_in_clear();
+    test_v104_port0_uses_nwk_skey();
+    test_v104_downlink_vector_and_tamper();
+    test_v104_profile_is_separate_from_v11();
 }

@@ -1,0 +1,308 @@
+[
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 13
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 19,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 13
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 19,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 19,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 15
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": false,
+    "downlink_every": 0
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 0,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 16
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 0,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 0,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 14
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 7,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "none",
+   "maxit": 128
+  },
+  "converge": true,
+  "iterations": 21
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "inter",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ },
+ {
+  "config": {
+   "source": "quartier_sf9.yaml",
+   "count": 2000,
+   "graine": 36,
+   "jeu": "join+conf+dl1",
+   "options": {
+    "join": true,
+    "confirmed_uplinks": true,
+    "downlink_every": 1
+   },
+   "amortissement": "union",
+   "maxit": 128
+  },
+  "converge": false,
+  "iterations": 128
+ }
+]

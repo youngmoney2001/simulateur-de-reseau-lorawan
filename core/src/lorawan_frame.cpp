@@ -7,7 +7,7 @@ namespace lsim::lorawan {
 namespace {
 
 constexpr std::uint8_t kMajorLoRaWanR1 = 0;
-constexpr std::uint8_t kMaxFPort = 223;  // 225..255 réservés, 224 = test
+constexpr std::uint8_t kMaxFPort = 224;  // 225..255 réservés ; 224 = test MAC (TS001 §4.3.2)
 
 bool is_uplink(MType t) {
     return t == MType::UnconfirmedDataUp || t == MType::ConfirmedDataUp;

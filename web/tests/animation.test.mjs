@@ -78,3 +78,22 @@ test("collectPages lit toutes les pages et refuse un dépassement", async () => 
   assert.deepEqual(await collectPages(async (c) => pages[c]), [1, 2, 3]);
   await assert.rejects(() => collectPages(async (c) => pages[c], 2), /trop d'événements/);
 });
+
+test("journal MAC : libellés et classe dédiée, sans lien avec l'issue radio", async () => {
+  const { macLabel, isMacEvent, journalRow } = await import("../src/studio/animation.js");
+  const req = { seq: 1, t_ns: 5, kind: "mac_request", device_index: 0, outcome: "LinkCheckReq", hops: [] };
+  const ans = { seq: 2, t_ns: 9, kind: "mac_answer", device_index: 0, outcome: "delivered", hops: [] };
+  const dsa = { seq: 3, t_ns: 12, kind: "mac_answer", device_index: 0, outcome: "DevStatusAns", hops: [] };
+  const lost = { seq: 4, t_ns: 13, kind: "mac_answer", device_index: 0, outcome: "lost_sensitivity", hops: [] };
+  assert.equal(macLabel(req), "Demande MAC du dispositif : LinkCheckReq");
+  assert.equal(macLabel(ans), "Réponse MAC en descente : reçue");
+  assert.equal(macLabel(lost), "Réponse MAC en descente : non reçue");
+  assert.match(macLabel(dsa), /DevStatusAns/);
+  assert.equal(macLabel({ kind: "uplink", outcome: "delivered" }), null);
+  assert.equal(isMacEvent(req), true);
+  assert.equal(isMacEvent({ kind: "uplink" }), false);
+  const row = journalRow(req, ["capteur-a"]);
+  assert.equal(row.cls, "mac");
+  assert.equal(row.label, "Demande MAC du dispositif : LinkCheckReq");
+  assert.equal(journalRow({ seq: 5, t_ns: 1, kind: "uplink", device_index: 0, outcome: "delivered", hops: [] }, ["capteur-a"]).cls, "ok");
+});

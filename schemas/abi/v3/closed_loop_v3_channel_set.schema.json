@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "ChannelDefinitionV3": {
+      "additionalProperties": false,
+      "description": "Débits supportés par un canal défini (dr_mask : bit n = DRn). Un canal absent n'est pas défini.",
+      "properties": {
+        "index": {
+          "exclusiveMaximum": 80,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "dr_mask": {
+          "maximum": 255,
+          "minimum": 1,
+          "title": "Dr Mask",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "dr_mask"
+      ],
+      "title": "ChannelDefinitionV3",
+      "type": "object"
+    },
+    "ChannelElementV3": {
+      "additionalProperties": false,
+      "description": "Configuration d'un dispositif (une entrée par `device_index`).\n\n`present = false` : tous les autres champs doivent être vides ; le moteur applique les valeurs par\ndéfaut EU868 (canaux 0..2, DR0..DR5 ; vue serveur 0..2). `present = true` : configuration explicite.\nLes canaux 16..79 sont des emplacements de l'ABI mais sont refusés (A1).",
+      "properties": {
+        "device_index": {
+          "exclusiveMaximum": 10000,
+          "minimum": 0,
+          "title": "Device Index",
+          "type": "integer"
+        },
+        "present": {
+          "title": "Present",
+          "type": "boolean"
+        },
+        "defined": {
+          "items": {
+            "$ref": "#/$defs/ChannelDefinitionV3"
+          },
+          "maxItems": 80,
+          "title": "Defined",
+          "type": "array"
+        },
+        "enabled": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 80,
+          "title": "Enabled",
+          "type": "array"
+        },
+        "server_defined": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 80,
+          "title": "Server Defined",
+          "type": "array"
+        }
+      },
+      "required": [
+        "device_index",
+        "present"
+      ],
+      "title": "ChannelElementV3",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Configuration canal d'un appel v3.\n\nMode historique : `channel_plan = none` et aucun élément (équivalent à `channels = NULL`,\n`channel_count = 0`) : le moteur utilise son chemin historique, sans configuration.\nMode explicite : `channel_plan = eu868_rp002_1_0_5` et exactement un élément par dispositif\n(`channel_count == device_count`, indices de dispositifs uniques et couvrant 0..device_count-1).",
+  "properties": {
+    "channel_plan": {
+      "default": "none",
+      "enum": [
+        "none",
+        "eu868_rp002_1_0_5"
+      ],
+      "title": "Channel Plan",
+      "type": "string"
+    },
+    "elements": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/ChannelElementV3"
+          },
+          "maxItems": 10000,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Elements"
+    }
+  },
+  "title": "ChannelSetV3",
+  "type": "object"
+}

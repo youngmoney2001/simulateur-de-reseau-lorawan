@@ -93,6 +93,51 @@ void test_sensitivity_250_500_datasheet_values() {
              static_cast<int>(Status::InvalidSpreadingFactor));
 }
 
+void test_sx1303_profile_sf5_and_default_unchanged() {
+    // DR13 (SF5/125 kHz) : valeur indicative du SX1303 ; le profil SX1276 n'a pas de SF5.
+    double s = 0.0;
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(5, Bandwidth::Bw125kHz,
+                                                       ReceiverProfile::Sx1303Gateway, s)),
+             static_cast<int>(Status::Ok));
+    CHECK_NEAR(s, -121.0, 1e-9);
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(12, Bandwidth::Bw125kHz,
+                                                       ReceiverProfile::Sx1303Gateway, s)),
+             static_cast<int>(Status::Ok));
+    CHECK_NEAR(s, -141.0, 1e-9);
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(5, Bandwidth::Bw125kHz,
+                                                       ReceiverProfile::Sx1276Reference, s)),
+             static_cast<int>(Status::InvalidSpreadingFactor));
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw250kHz,
+                                                       ReceiverProfile::Sx1303Gateway, s)),
+             static_cast<int>(Status::UncalibratedSensitivity));
+    // Profil par défaut : SX1276 inchangé (SF7 = −123 dBm).
+    CHECK_EQ(static_cast<int>(receiver_sensitivity_dbm(7, Bandwidth::Bw125kHz,
+                                                       ReceiverProfile::Sx1276Reference, s)),
+             static_cast<int>(Status::Ok));
+    CHECK_NEAR(s, -123.0, 1e-9);
+    // Sensibilité SX1303 décroissante avec SF (plus négative), comme la table SX1276.
+    double prev = 0.0;
+    receiver_sensitivity_dbm(5, Bandwidth::Bw125kHz, ReceiverProfile::Sx1303Gateway, prev);
+    for (std::uint8_t sf = 6; sf <= 12; ++sf) {
+        double cur = 0.0;
+        receiver_sensitivity_dbm(sf, Bandwidth::Bw125kHz, ReceiverProfile::Sx1303Gateway, cur);
+        CHECK_TRUE(cur < prev);
+        prev = cur;
+    }
+    // Airtime SF5 : Tsym = 0,256 ms ; 12 octets, CR 4/5, CRC, en-tête explicite, préambule 8.
+    // Symboles de charge utile : 8 + ceil((96 - 20 + 28 + 16) / 20) × 5 = 8 + 6 × 5 = 38.
+    // Total : (8 + 4,25 + 38) × 0,256 ms = 12,864 ms.
+    RadioConfig c5 = make(5, Bandwidth::Bw125kHz);
+    const AirtimeResult r5 = time_on_air(c5, 12);
+    CHECK_EQ(static_cast<int>(r5.status), static_cast<int>(Status::Ok));
+    CHECK_EQ(r5.nanoseconds, std::int64_t{12'864'000});
+    // SF6 reste refusé (en-tête implicite seulement) ; SF5 en en-tête implicite aussi refusé.
+    RadioConfig c5i = make(5, Bandwidth::Bw125kHz);
+    c5i.explicit_header = false;
+    CHECK_EQ(static_cast<int>(time_on_air(c5i, 12).status),
+             static_cast<int>(Status::InvalidSpreadingFactor));
+}
+
 void test_rejects_invalid_inputs() {
     CHECK_EQ(static_cast<int>(time_on_air(make(6, Bandwidth::Bw125kHz), 1).status),
              static_cast<int>(Status::InvalidSpreadingFactor));
@@ -123,4 +168,5 @@ void run_lora_phy_tests() {
     test_sensitivity_125khz_table();
     test_sensitivity_250_500_datasheet_values();
     test_rejects_invalid_inputs();
+    test_sx1303_profile_sf5_and_default_unchanged();
 }

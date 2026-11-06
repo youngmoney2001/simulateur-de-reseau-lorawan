@@ -75,4 +75,33 @@ LSIM_API SecureStatus open_downlink(const std::uint8_t* in, std::size_t len,
                                     const SessionKeys11& keys, const DownlinkContext& ctx,
                                     DataFrame& out);
 
+// ---------------------------------------------------------------------------
+// Profil LoRaWAN 1.0.x (TS001-1.0.x §4.3.3, §4.4) : profil par défaut.
+//   * FOpts en clair (jamais chiffrés) ;
+//   * MIC = CMAC(NwkSKey, B0 | msg)[0..3], avec un compteur FCnt 32 bits ;
+//   * FRMPayload : NwkSKey si FPort == 0, AppSKey sinon ;
+//   * downlink : un seul compteur FCntDown (fourni dans Context10::fcnt32).
+// Le profil 1.1 ci-dessus reste disponible séparément.
+// ---------------------------------------------------------------------------
+
+struct Context10 {
+    std::uint32_t fcnt32 = 0;  // FCntUp (uplink) ou FCntDown (downlink), 32 bits
+};
+
+LSIM_API SecureStatus seal_uplink_10(const DataFrame& frame, const SessionKeys10& keys,
+                                     const Context10& ctx, std::uint8_t* out, std::size_t cap,
+                                     std::size_t& out_written);
+
+LSIM_API SecureStatus open_uplink_10(const std::uint8_t* in, std::size_t len,
+                                     const SessionKeys10& keys, const Context10& ctx,
+                                     DataFrame& out);
+
+LSIM_API SecureStatus seal_downlink_10(const DataFrame& frame, const SessionKeys10& keys,
+                                       const Context10& ctx, std::uint8_t* out, std::size_t cap,
+                                       std::size_t& out_written);
+
+LSIM_API SecureStatus open_downlink_10(const std::uint8_t* in, std::size_t len,
+                                       const SessionKeys10& keys, const Context10& ctx,
+                                       DataFrame& out);
+
 }  // namespace lsim::lorawan

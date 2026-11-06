@@ -1,5 +1,36 @@
 {
   "$defs": {
+    "ChannelDefModel": {
+      "additionalProperties": false,
+      "description": "Canal défini du terminal (RP002 EU863-870) : index 0..79, débits supportés dr_min..dr_max.",
+      "properties": {
+        "dr_max": {
+          "default": 7,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Dr Max",
+          "type": "integer"
+        },
+        "dr_min": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Dr Min",
+          "type": "integer"
+        },
+        "index": {
+          "maximum": 79,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "title": "ChannelDefModel",
+      "type": "object"
+    },
     "DiskPlacement": {
       "additionalProperties": false,
       "properties": {
@@ -165,6 +196,42 @@
           "default": null,
           "title": "Profile"
         },
+        "rf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RfModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensitivityModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tx_power_dbm": {
+          "anyOf": [
+            {
+              "maximum": 27.0,
+              "minimum": -10.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Power Dbm"
+        },
         "x_m": {
           "default": 0.0,
           "title": "X M",
@@ -201,6 +268,16 @@
           ],
           "default": null,
           "title": "Count"
+        },
+        "device_class": {
+          "default": "A",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Device Class",
+          "type": "string"
         },
         "duty_cycle": {
           "default": 1.0,
@@ -264,10 +341,28 @@
           "default": null,
           "title": "Region"
         },
+        "rf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RfModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rx1_dr_offset": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Rx1 Dr Offset",
+          "type": "integer"
+        },
         "spreading_factor": {
           "default": 7,
           "maximum": 12,
-          "minimum": 7,
+          "minimum": 5,
           "title": "Spreading Factor",
           "type": "integer"
         },
@@ -306,8 +401,24 @@
     },
     "MacModel": {
       "additionalProperties": false,
-      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 : `link_check_every` et `device_status_every` donnent, en nombre d'uplinks, la période\nd'émission de LinkCheckReq et de DevStatusReq en FOpts. Le moteur ne les applique pas encore :\nle bloc est validé, figure dans l'empreinte SHA-256, et n'a pas d'effet sur les résultats.",
+      "description": "Commandes MAC demandées par les dispositifs (optionnel ; 0 = désactivé).\n\nPhase 1 (passerelle unique), rangs 1-based des émissions du dispositif :\n- `link_check_every` : LinkCheckReq (1 octet) dans l'uplink de rang multiple de N ; reçue, elle\n  est acquittée par un LinkCheckAns dans un downlink (dédié s'il n'y en a pas déjà un) ;\n- `device_status_every` : DevStatusReq dans le downlink répondant à un uplink reçu de rang\n  multiple de N. Le dispositif répond par DevStatusAns (3 octets) dans son uplink suivant, si\n  la requête lui parvient. Cette réponse est réservée conservativement dans cet uplink\n  suivant : le temps d'antenne le compte, même si la requête n'est pas reçue.\nLes octets réservés allongent le temps d'antenne des émissions concernées (moteur natif) ; les\noctets émis effectivement n'apparaissent dans la trace qu'une fois confirmés.\nRefusé avec plusieurs passerelles ou un mesh.\n\nMarge de LinkCheckAns (indicative, pas la marge SNR normative) :\n    M = clamp(floor(RSSI_UL - S_ref(SF, 125 kHz) - marge_installation), 0, 254)\noù S_ref est la sensibilité SX1276 utilisée par le simulateur pour décider de la perte : M\nmesure la marge au-dessus du seuil de réception, en dB. `link_margin_installation_db` est une\nmarge d'installation soustraite (0 par défaut), comme dans l'ADR.",
       "properties": {
+        "device_channels": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ChannelDefModel"
+              },
+              "maxItems": 80,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Channels"
+        },
         "device_status_every": {
           "default": 0,
           "maximum": 1000,
@@ -315,12 +426,61 @@
           "title": "Device Status Every",
           "type": "integer"
         },
+        "device_time_every": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Device Time Every",
+          "type": "integer"
+        },
+        "duty_cycle_exponent": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duty Cycle Exponent"
+        },
+        "link_adr": {
+          "default": false,
+          "title": "Link Adr",
+          "type": "boolean"
+        },
         "link_check_every": {
           "default": 0,
           "maximum": 1000,
           "minimum": 0,
           "title": "Link Check Every",
           "type": "integer"
+        },
+        "link_margin_installation_db": {
+          "default": 0,
+          "maximum": 60,
+          "minimum": 0,
+          "title": "Link Margin Installation Db",
+          "type": "integer"
+        },
+        "server_channel_plan": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 80,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Server Channel Plan"
         }
       },
       "title": "MacModel",
@@ -539,6 +699,263 @@
       "title": "PropagationModel",
       "type": "object"
     },
+    "RetransmissionsModel": {
+      "additionalProperties": false,
+      "description": "Retransmissions des uplinks confirmés (bloc `retransmissions:` du scénario).\n\nAbsent : aucune réémission, comportement historique, hash inchangé. Présent : le scénario force\nles uplinks confirmés et réémet tant que l'ACK n'est pas reçu.\n\n`retries: 0` est accepté et n'ajoute aucune transmission : c'est le moteur actuel.",
+      "properties": {
+        "ack_delay_ms": {
+          "default": 0,
+          "maximum": 60000,
+          "minimum": 0,
+          "title": "Ack Delay Ms",
+          "type": "integer"
+        },
+        "ack_repetitions": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Ack Repetitions",
+          "type": "integer"
+        },
+        "downlink_payload": {
+          "default": false,
+          "title": "Downlink Payload",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "energy_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Profile"
+        },
+        "enforce_duty_cycle": {
+          "default": true,
+          "title": "Enforce Duty Cycle",
+          "type": "boolean"
+        },
+        "fcnt_down_start": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Fcnt Down Start",
+          "type": "integer"
+        },
+        "fcnt_up_start": {
+          "default": 0,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Fcnt Up Start",
+          "type": "integer"
+        },
+        "join_accept_replays": {
+          "default": 0,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Join Accept Replays",
+          "type": "integer"
+        },
+        "join_accept_rx2_fallback": {
+          "default": true,
+          "title": "Join Accept Rx2 Fallback",
+          "type": "boolean"
+        },
+        "join_requests_s": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "title": "Join Requests S",
+          "type": "array"
+        },
+        "join_retries": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Join Retries",
+          "type": "integer"
+        },
+        "retransmit_delay_ms": {
+          "default": 3000,
+          "maximum": 60000,
+          "minimum": 2000,
+          "title": "Retransmit Delay Ms",
+          "type": "integer"
+        },
+        "retries": {
+          "default": 3,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "session_joins_s": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "title": "Session Joins S",
+          "type": "array"
+        }
+      },
+      "title": "RetransmissionsModel",
+      "type": "object"
+    },
+    "RfModel": {
+      "additionalProperties": false,
+      "description": "Frontal RF v4 d'un groupe ou d'une passerelle (ABI v4).\n\nLes deux champs sont **indépendants** : un champ absent n'est pas un champ nul, c'est une\ndonnée non fournie. Le bloc doit en déclarer au moins un.\n\n- terminal : la chaîne `gain - perte` s'applique au montant et au descendant (antenne\n  réciproque), comptée une fois ;\n- passerelle : le gain présent **remplace** `gateway.antenna_gain_dbi`, la perte de câble\n  s'ajoute (sémantique de `apply_gateway_rf` dans `core/src/c_api_ext.cpp`).",
+      "properties": {
+        "antenna_gain_dbi": {
+          "anyOf": [
+            {
+              "maximum": 40.0,
+              "minimum": -40.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Antenna Gain Dbi"
+        },
+        "cable_loss_db": {
+          "anyOf": [
+            {
+              "maximum": 40.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cable Loss Db"
+        }
+      },
+      "title": "RfModel",
+      "type": "object"
+    },
+    "SensitivityModel": {
+      "additionalProperties": false,
+      "description": "Sensibilité absolue de la passerelle (`sensibilite-par-sf-v2`), jamais déduite du relatif.\n\nSoit `profile` (nom du catalogue `lsim.gateway_sensitivity.CATALOG`), soit `points` explicites\navec `source` et `conditions`. Une paire SF/bande absente est refusée à la validation.",
+      "properties": {
+        "conditions": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conditions"
+        },
+        "model": {
+          "const": "sensibilite-par-sf-v2",
+          "title": "Model",
+          "type": "string"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SensitivityPoint"
+              },
+              "maxItems": 24,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Points"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SensitivityModel",
+      "type": "object"
+    },
+    "SensitivityPoint": {
+      "additionalProperties": false,
+      "description": "Un seuil absolu publié (dBm) pour une bande et un SF.",
+      "properties": {
+        "bandwidth_hz": {
+          "default": 125000,
+          "enum": [
+            125000,
+            250000,
+            500000
+          ],
+          "title": "Bandwidth Hz",
+          "type": "integer"
+        },
+        "dbm": {
+          "maximum": -60.0,
+          "minimum": -160.0,
+          "title": "Dbm",
+          "type": "number"
+        },
+        "sf": {
+          "maximum": 12,
+          "minimum": 5,
+          "title": "Sf",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sf",
+        "dbm"
+      ],
+      "title": "SensitivityPoint",
+      "type": "object"
+    },
     "TerrainModel": {
       "additionalProperties": false,
       "properties": {
@@ -594,6 +1011,9 @@
         "mesh": false,
         "name": null,
         "profile": null,
+        "rf": null,
+        "sensitivity": null,
+        "tx_power_dbm": null,
         "x_m": 0.0,
         "y_m": 0.0
       }
@@ -661,6 +1081,17 @@
         "shadowing_seed": null,
         "shadowing_sigma_db": 0.0
       }
+    },
+    "retransmissions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RetransmissionsModel"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_version": {
       "const": 1,

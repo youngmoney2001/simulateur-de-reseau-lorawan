@@ -259,6 +259,86 @@ class _CGateway(ctypes.Structure):
     ]
 
 
+class _CGatewayV2(ctypes.Structure):
+    """`lsim_gateway_v2` : passerelle + sensibilité absolue (modèle `sensibilite-par-sf-v2`)."""
+
+    _fields_ = [
+        ("base", _CGateway),
+        ("sensitivity_model", ctypes.c_uint32),
+        ("present", ctypes.c_uint32),
+        ("sensitivity_dbm", (ctypes.c_double * 8) * 3),
+    ]
+
+
+class _CDeviceRf(ctypes.Structure):
+    """`lsim_device_rf` (v4) : frontal d'un terminal. present = bit 0 gain, bit 1 perte."""
+
+    _fields_ = [
+        ("present", ctypes.c_uint32),
+        ("antenna_gain_dbi", ctypes.c_double),
+        ("cable_loss_db", ctypes.c_double),
+    ]
+
+
+class _CGatewayRf(ctypes.Structure):
+    """`lsim_gateway_rf` (v4) : frontal d'une passerelle."""
+
+    _fields_ = [
+        ("present", ctypes.c_uint32),
+        ("antenna_gain_dbi", ctypes.c_double),
+        ("cable_loss_db", ctypes.c_double),
+    ]
+
+
+class _CPlanDevice(ctypes.Structure):
+    """`lsim_plan_device` : radio d'un dispositif (C).
+
+    Defini ici plutot que dans `downlink_plan` : `_CMultiDlArgs` en a besoin et ce module-ci
+    est le plus bas niveau — `downlink_plan` l'importe, l'inverse creerait un cycle.
+    """
+
+    _fields_ = [("freq_hz", ctypes.c_int64), ("dr", ctypes.c_int32), ("rx1_hz", ctypes.c_int64),
+                ("tx_power_dbm", ctypes.c_double), ("rx1_sf", ctypes.c_uint8),
+                ("rx1_bw_hz", ctypes.c_uint32)]
+
+
+class _CPlanDeviceRx2(ctypes.Structure):
+    """`lsim_plan_device_rx2` : fenetre RX2 d'un dispositif."""
+
+    _fields_ = [("rx2_hz", ctypes.c_int64), ("rx2_sf", ctypes.c_uint32),
+                ("rx2_bw_hz", ctypes.c_uint32), ("reserved", ctypes.c_uint64 * 2)]
+
+
+class _CClosedLoopV4Args(ctypes.Structure):
+    """`lsim_closed_loop_v4_args` : enveloppe v3 + frontaux."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("v3", ctypes.c_void_p),
+        ("device_rf", ctypes.POINTER(_CDeviceRf)),
+        ("device_rf_count", ctypes.c_size_t),
+        ("gateway_rf", ctypes.POINTER(_CGatewayRf)),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
+class _CClosedLoopV5Args(ctypes.Structure):
+    """`lsim_closed_loop_v5_args` : imbrique v4 (elle-même sur v3) + RX1DROffset (I5-c).
+
+    L'imbrication permet de fournir en même temps les frontaux RF de v4 et les offsets de v5.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("v4", ctypes.c_void_p),
+        ("rx1_dr_offset", ctypes.POINTER(ctypes.c_uint8)),
+        ("rx1_dr_offset_count", ctypes.c_size_t),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
 class _CPropagation(ctypes.Structure):
     _fields_ = [
         ("frequency_hz", ctypes.c_double),
@@ -322,6 +402,14 @@ class _CInterval(ctypes.Structure):
     _fields_ = [
         ("start_ns", ctypes.c_int64),
         ("end_ns", ctypes.c_int64),
+    ]
+
+
+class _CMacReservation(ctypes.Structure):
+    _fields_ = [
+        ("device_index", ctypes.c_uint32),
+        ("rank", ctypes.c_uint32),
+        ("extra_bytes", ctypes.c_uint32),
     ]
 
 
@@ -487,6 +575,48 @@ _U8P = ctypes.POINTER(ctypes.c_uint8)
 
 LIB = _load_library()
 
+class _CMultiDlArgs(ctypes.Structure):
+    """`lsim_multi_dl_args` : enveloppe du chemin multi-passerelles (I5-a).
+
+    Les champs `radios` et `rx2` portent le débit réel des fenêtres RX1/RX2. Nuls, le moteur
+    retrouve l'hypothèse historique (RX1 au SF montant à 125 kHz). Aucune affirmation
+    régionale ici : l'enveloppe transporte le débit, elle ne décide pas lequel impose
+    chaque région.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("devices", ctypes.POINTER(_CEndDevice)),
+        ("device_count", ctypes.c_size_t),
+        ("gateways", ctypes.POINTER(_CGateway)),
+        ("gateway_count", ctypes.c_size_t),
+        ("prop", ctypes.POINTER(_CPropagation)),
+        ("rule", ctypes.POINTER(_CDownlinkRule)),
+        ("env", ctypes.POINTER(_CEnvironment)),
+        ("radios", ctypes.POINTER(_CPlanDevice)),
+        ("radio_count", ctypes.c_size_t),
+        ("rx2", ctypes.POINTER(_CPlanDeviceRx2)),
+        ("rx2_count", ctypes.c_size_t),
+        ("device_rf", ctypes.POINTER(_CDeviceRf)),
+        ("device_rf_count", ctypes.c_size_t),
+        ("gateway_rf", ctypes.POINTER(_CGatewayRf)),
+        ("gateway_rf_count", ctypes.c_size_t),
+        ("dl_ready_ns", ctypes.POINTER(ctypes.c_int64)),
+        ("ready_count", ctypes.c_size_t),
+        ("per_device", ctypes.POINTER(_CDeviceStats)),
+        ("totals", ctypes.POINTER(_CNetworkStats)),
+        ("per_gateway", ctypes.POINTER(_CGatewayRxStats)),
+        ("records", ctypes.POINTER(_CMultiTxRecord)),
+        ("record_capacity", ctypes.c_size_t),
+        ("record_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("downlinks", ctypes.POINTER(_CDownlinkRecord)),
+        ("downlink_capacity", ctypes.c_size_t),
+        ("downlink_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
 LIB.lsim_receiver_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_receiver_sensitivity_dbm.argtypes = [ctypes.c_uint8, ctypes.c_uint32, _DBL]
 LIB.lsim_energy_profile_count.restype = ctypes.c_uint32
@@ -565,6 +695,23 @@ LIB.lsim_simulate_uplinks_trace.argtypes = [
     ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
     ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CInterval), ctypes.c_size_t]
+# Version 2 : calendrier de réservations MAC (octets comptés dans le temps d'antenne).
+LIB.lsim_simulate_uplinks_trace_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_trace_gw2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_gw2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t]
 LIB.lsim_simulate_uplinks_multi.restype = ctypes.c_int32
 LIB.lsim_simulate_uplinks_multi.argtypes = [
     ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
@@ -580,6 +727,39 @@ LIB.lsim_simulate_uplinks_multi_dl.argtypes = [
     ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_trace_v3.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_v3.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf)]
+LIB.lsim_simulate_uplinks_trace_gw2_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_trace_gw2_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGatewayV2),
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CSimStats),
+    ctypes.POINTER(_CTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CInterval), ctypes.c_size_t,
+    ctypes.POINTER(_CMacReservation), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf)]
+LIB.lsim_simulate_uplinks_multi_dl_v2.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl_v2.argtypes = [
+    ctypes.POINTER(_CEndDevice), ctypes.c_size_t, ctypes.POINTER(_CGateway), ctypes.c_size_t,
+    ctypes.POINTER(_CPropagation), ctypes.POINTER(_CDownlinkRule), ctypes.POINTER(_CEnvironment),
+    ctypes.POINTER(_CDeviceStats), ctypes.POINTER(_CNetworkStats), ctypes.POINTER(_CGatewayRxStats),
+    ctypes.POINTER(_CMultiTxRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t,
+    ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_multi_dl_env.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl_env.argtypes = [ctypes.POINTER(_CMultiDlArgs)]
+LIB.lsim_simulate_closed_loop_v4.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v4.argtypes = [ctypes.POINTER(_CClosedLoopV4Args)]
+LIB.lsim_simulate_closed_loop_v5.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v5.argtypes = [ctypes.POINTER(_CClosedLoopV5Args)]
 LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
 LIB.lsim_env_path_loss_matrix.argtypes = [
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,

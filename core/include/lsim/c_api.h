@@ -167,6 +167,20 @@ LSIM_API int32_t lsim_derive_session_keys_11(const uint8_t nwk_key[16],
                                              const uint8_t dev_nonce[2],
                                              lsim_session_keys_11* out);
 
+/* Clés de session LoRaWAN 1.0.x (profil 1.0.4 par défaut, TS001-1.0.x). */
+typedef struct lsim_session_keys_10 {
+    uint8_t nwk_s_key[16];
+    uint8_t app_s_key[16];
+} lsim_session_keys_10;
+
+/* Dérivation des clés de session 1.0.x. app_nonce 3 octets, net_id 3, dev_nonce 2,
+ * tous en ordre de transmission (LSB first). */
+LSIM_API int32_t lsim_derive_session_keys_10(const uint8_t app_key[16],
+                                             const uint8_t app_nonce[3],
+                                             const uint8_t net_id[3],
+                                             const uint8_t dev_nonce[2],
+                                             lsim_session_keys_10* out);
+
 /* ------------------------------------------------------- Trame sécurisée */
 
 /* Trame uplink à plat. FOpts (LoRaWAN 1.1) : chiffrés/déchiffrés avec NwkSEncKey. */
@@ -226,6 +240,17 @@ LSIM_API int32_t lsim_open_uplink(const uint8_t* in, size_t len,
                                   const lsim_session_keys_11* keys,
                                   const lsim_uplink_context* ctx,
                                   lsim_uplink_frame* out);
+
+/* Profil 1.0.x : scelle / ouvre une trame uplink (FOpts en clair, MIC avec NwkSKey,
+ * FPort 0 chiffré avec NwkSKey). Seul ctx->fcnt32 est utilisé. */
+LSIM_API int32_t lsim_seal_uplink_10(const lsim_uplink_frame* frame,
+                                     const lsim_session_keys_10* keys,
+                                     const lsim_uplink_context* ctx,
+                                     uint8_t* out, size_t cap, size_t* out_written);
+LSIM_API int32_t lsim_open_uplink_10(const uint8_t* in, size_t len,
+                                     const lsim_session_keys_10* keys,
+                                     const lsim_uplink_context* ctx,
+                                     lsim_uplink_frame* out);
 
 /* ------------------------------------------------------ Jointure OTAA 1.1 */
 
@@ -308,6 +333,23 @@ typedef struct lsim_gateway {
     double antenna_gain_dbi;
     double rx_sensitivity_offset_db; /* décalage du seuil montant (dB), |.| <= 20 ; 0 = sans profil */
 } lsim_gateway;
+
+/* Passerelle v2 : sensibilité absolue (modèle `sensibilite-par-sf-v2`).
+ * sensitivity_model : LSIM_SENSITIVITY_MODEL_NONE (0) = base seule (comme v1) ;
+ *                     LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2 (1) = seuils absolus en dBm.
+ * present : bit (bande * 8 + sf - 5) à 1 si la paire est documentée ; bande 0/1/2 = 125/250/500 kHz,
+ *           sf 5..12. Une paire absente est refusée (aucun repli).
+ * Avec le modèle 1, base.rx_sensitivity_offset_db doit valoir 0 (pas de conversion implicite).
+ * Multi-passerelle : le modèle 1 est refusé. */
+#define LSIM_SENSITIVITY_MODEL_NONE 0u
+#define LSIM_SENSITIVITY_MODEL_ABSOLUTE_PER_SF_V2 1u
+
+typedef struct lsim_gateway_v2 {
+    lsim_gateway base;
+    uint32_t sensitivity_model;
+    uint32_t present;
+    double sensitivity_dbm[3][8];
+} lsim_gateway_v2;
 
 typedef struct lsim_propagation {
     double frequency_hz;
@@ -412,6 +454,30 @@ LSIM_API int32_t lsim_simulate_uplinks_trace(const lsim_end_device* devices, siz
                                              size_t record_capacity, size_t* record_count,
                                              const lsim_interval* gateway_busy,
                                              size_t gateway_busy_count);
+
+/* Calendrier MAC (version 2 de la trace) : octets MAC réservés dans des émissions, comptés dans
+ * le temps d'antenne. Réservation conservatrice : une émission réservée ne porte pas forcément
+ * ces octets. Un doublon (même dispositif, même rang), un rang hors de 1..messages, extra_bytes
+ * hors de 1..15 ou une charge dépassant 255 octets sont refusés. Sans réservation, identique à
+ * lsim_simulate_uplinks_trace. */
+typedef struct lsim_mac_reservation {
+    uint32_t device_index;       /* index dans devices */
+    uint32_t rank;               /* rang 1-based de l'émission du dispositif */
+    uint32_t extra_bytes;        /* 1..15 */
+} lsim_mac_reservation;
+
+LSIM_API int32_t lsim_simulate_uplinks_trace_v2(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count);
 
 /* ------------------------------------------- Plusieurs passerelles (uplinks)
  * Chaque passerelle reçoit les mêmes émissions ; le serveur déduplique (une livraison par
@@ -980,6 +1046,902 @@ LSIM_API int32_t lsim_mesh_forward_routed_log(const lsim_mesh_radio* radio, size
                                               lsim_mesh_delivery* out, lsim_mesh_summary* summary,
                                               lsim_mesh_hop* hops, size_t hop_capacity,
                                               size_t* hop_count);
+
+/* ------------------------------------------- Planification des descentes (v1, S0)
+ * Passerelle unique, sans jointure ni commande MAC. Même logique que la trace Python
+ * (`lsim.trace_events`) pour ce cas. Entrées : émissions montantes (ordre de trace) et paramètres
+ * radio par dispositif. Sorties : événements (ordre temporel stable) et occupation passerelle.
+ * Codes d'issue : voir lsim/downlink_plan.hpp (Outcome, EventKind, HopDir). */
+#define LSIM_STATUS_PLAN_BASE 950
+
+typedef struct lsim_plan_uplink {
+    uint32_t device_index;
+    int64_t start_ns;
+    int64_t end_ns;
+    uint8_t spreading_factor;
+    uint8_t outcome;             /* 0 sensibilité, 1 collision, 2 reçue, 3 passerelle occupée */
+    double rssi_dbm;
+} lsim_plan_uplink;
+
+typedef struct lsim_plan_device {
+    int64_t freq_hz;
+    int32_t dr;                  /* -1 : aucun débit de plan */
+    int64_t rx1_hz;
+    double tx_power_dbm;
+    uint8_t rx1_sf;
+    uint32_t rx1_bw_hz;          /* 125000, 250000 ou 500000 */
+} lsim_plan_device;
+
+typedef struct lsim_plan_options {
+    uint8_t confirmed_uplinks;
+    uint32_t downlink_every;
+    uint32_t downlink_payload_bytes;   /* 0..242 */
+    double gateway_tx_power_dbm;
+    double device_antenna_gain_dbi;
+    double device_rx_offset_db;
+} lsim_plan_options;
+
+typedef struct lsim_plan_hop {
+    uint8_t dir;                 /* 0 dispositif->passerelle, 1 passerelle->réseau, 2 passerelle->dispositif */
+    uint8_t outcome;             /* code Outcome */
+    uint8_t has_rssi;
+    int64_t t_ns;
+    int64_t freq_hz;
+    int32_t dr;
+    double rssi_dbm;
+} lsim_plan_hop;
+
+typedef struct lsim_plan_event {
+    int64_t t_ns;
+    uint32_t device_index;
+    uint8_t kind;                /* 0 uplink, 1 ack, 2 downlink, 3 rx_window_missed */
+    uint8_t outcome;
+    uint8_t hop_count;           /* 0..2 */
+    lsim_plan_hop hops[2];
+} lsim_plan_event;
+
+/* Planifie les descentes. Les tableaux de sortie ont une capacité ; si elle est insuffisante,
+ * *event_count / *busy_count donnent la taille requise et le statut est
+ * LSIM_STATUS_PLAN_BASE + 4 (TraceBufferTooSmall). */
+LSIM_API int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_count,
+                                        const lsim_plan_device* devices, size_t device_count,
+                                        const lsim_plan_options* options,
+                                        lsim_plan_event* events, size_t event_capacity,
+                                        size_t* event_count,
+                                        lsim_interval* busy, size_t busy_capacity,
+                                        size_t* busy_count);
+
+/* -------------------------------------------------------------------------- D3.15, jalon I0
+ * Enveloppe versionnée de la planification des descentes.
+ *
+ * `lsim_plan_downlinks_v1` reste inchangée. L'enveloppe ci-dessous reprend ses entrées et y
+ * ajoute les paramètres de la seconde fenêtre de réception, par dispositif. Un pointeur ne dit
+ * pas la longueur de son tableau : `rx2_count` annonce le nombre d'entrées de `rx2`, vérifié
+ * **avant toute lecture**. Sans lui, le cœur lirait `device_count` entrées quelle que soit la
+ * taille réellement fournie par l'appelant.
+ *
+ * Le repli RX2 est **opt-in** : `rx2_sf = 0` signifie « aucune descente RX2 ». Au jalon I0, RX2
+ * est transporté et validé, puis **écarté** : aucun repli n'est produit, ni placement ni temps
+ * d'antenne ne changent. L'implémentation du repli est reportée à un jalon ultérieur.
+ *
+ * Contrat complet et dispositions mesurées : `docs/DOWNLINK_PLAN_ABI_V2.md`.
+ */
+#define LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION 1
+
+typedef struct lsim_plan_device_rx2 {
+    int64_t rx2_hz;     /* fréquence RX2 ; 0 : non renseignée ; sinon > 0            */
+    uint32_t rx2_sf;    /* 0 : aucun repli (opt-in) ; sinon 7..12                    */
+    uint32_t rx2_bw_hz; /* 0 : reprend `rx1_bw_hz` ; sinon 125000, 250000 ou 500000  */
+    uint64_t reserved[2];
+} lsim_plan_device_rx2;
+
+typedef struct lsim_plan_downlinks_v2_args {
+    uint32_t struct_size;  /* sizeof(lsim_plan_downlinks_v2_args), obligatoire          */
+    uint32_t abi_version;  /* LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION, obligatoire           */
+    const lsim_plan_uplink* uplinks;
+    size_t uplink_count;
+    const lsim_plan_device* devices;
+    size_t device_count;
+    const lsim_plan_options* options; /* obligatoire                                    */
+    const lsim_plan_device_rx2* rx2;  /* NULL : comportement de la v1                   */
+    lsim_plan_event* events;
+    size_t event_capacity;
+    size_t* event_count; /* obligatoire                                                 */
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count; /* obligatoire                                                  */
+    size_t rx2_count;   /* nombre d'entrées de `rx2` ; 0 si `rx2` est NULL              */
+    uint64_t reserved[2];
+} lsim_plan_downlinks_v2_args;
+
+LSIM_API int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args);
+
+/* -------------------------------------------------------------------------- I6-c, jalon I6-c
+ * Enveloppe versionnée de la planification des descentes, avec limites de charge par fenêtre.
+ *
+ * `lsim_plan_downlinks_v1` et `_v2` restent inchangées. L'enveloppe ci-dessous y ajoute une
+ * table de limites : pour chaque dispositif, `N` du débit **réellement utilisé** par chaque
+ * fenêtre — celui du DR de RX1, puis celui du DR de RX2. Jamais celui de l'uplink.
+ *
+ * Contrat (§25.5, arbitrage bbb5) :
+ *   - `limits` **non NULL**. Un pointeur nul est **rejeté** (statut InvalidInput), il ne
+ *     dégrade pas silencieusement vers la v2 : l'absence de contrainte s'exprime en appelant
+ *     `lsim_plan_downlinks_v2`. Jamais de repli silencieux (bbb3).
+ *   - `limits_count` annonce le nombre d'entrées, vérifié **avant toute lecture**.
+ *   - Aucune sentinelle : les deux champs sont des N effectifs dans `[0, 242]`. Une valeur hors
+ *     bornes est rejetée ; elle ne signifie pas « pas de contrainte ».
+ *
+ * La contrainte ne porte que sur les **descentes applicatives** (charge utile
+ * `options->downlink_payload_bytes`). Les ACK et les Join-Accept ne sont jamais refusés pour
+ * capacité. Le chemin de planification ne porte pas de FOpts : la grandeur comparée est la
+ * charge utile seule, et non `charge + |FOpts|` comme sur le chemin trace.
+ *
+ * R-N2 : une fenêtre inéligible n'est jamais demandée — elle ne réserve rien et n'occupe pas
+ * l'émetteur. R-N3 : l'inéligibilité de RX1 ne clôt pas l'examen, RX2 reste demandable.
+ *
+ * Contrat complet : `docs/I6_C_PARITE_N.md`.
+ */
+#define LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION 1
+
+typedef struct lsim_plan_device_limits {
+    int32_t rx1_max_payload; /* N du DR de RX1 ; 0..242, validé à la frontière  */
+    int32_t rx2_max_payload; /* N du DR de RX2 ; 0..242, validé à la frontière  */
+    uint64_t reserved[2];
+} lsim_plan_device_limits;
+
+typedef struct lsim_plan_downlinks_v3_args {
+    uint32_t struct_size;  /* sizeof(lsim_plan_downlinks_v3_args), obligatoire          */
+    uint32_t abi_version;  /* LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION, obligatoire           */
+    const lsim_plan_uplink* uplinks;
+    size_t uplink_count;
+    const lsim_plan_device* devices;
+    size_t device_count;
+    const lsim_plan_options* options;            /* obligatoire                         */
+    const lsim_plan_device_rx2* rx2;             /* NULL : comportement de la v1        */
+    size_t rx2_count;                            /* entrées de `rx2` ; 0 si NULL        */
+    const lsim_plan_device_limits* limits;       /* obligatoire, NON NULL               */
+    size_t limits_count;                         /* entrées de `limits`                 */
+    lsim_plan_event* events;
+    size_t event_capacity;
+    size_t* event_count; /* obligatoire                                                 */
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count; /* obligatoire                                                  */
+    uint64_t reserved[2];
+} lsim_plan_downlinks_v3_args;
+
+LSIM_API int32_t lsim_plan_downlinks_v3(const lsim_plan_downlinks_v3_args* args);
+
+/* ------------------------------------------- Boucle fermée : commandes MAC LinkADR et DutyCycle (S2)
+ * Passerelle unique, sans jointure ni autre commande MAC. Voir lsim/engine.hpp (LoopOptions).
+ * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (toujours lues). Sorties : uplinks (ordre des débuts),
+ * descentes créées (ordre de création) et occupation passerelle (ordre croissant). Capacités :
+ * au moins le nombre total d'émissions pour uplinks ; au moins le nombre d'uplinks pour les
+ * descentes et l'occupation. Statut 0, code moteur (LSIM_STATUS_SIM_BASE + n), code planification
+ * (LSIM_STATUS_PLAN_BASE + n) pour des options ou radios invalides, ou LSIM_STATUS_PLAN_BASE + 4
+ * si une capacité est insuffisante. */
+typedef struct lsim_loop_region {
+    uint8_t dr_sf[16];               /* SF du débit i ; 0 = indisponible */
+    uint8_t max_dr;
+    uint8_t max_tx_power_index;      /* dernier index valide (0..max contigus, au-delà réservés) */
+    int32_t power_step_tenth_db;     /* 1..100 : pas entre index (dixièmes de dB) */
+    double max_eirp_dbm;             /* PIRE de l'index 0 du plan ; +inf si non définie */
+    double duty_limit[16];           /* limite réglementaire par index, ]0, 1] pour les index valides */
+} lsim_loop_region;
+
+typedef struct lsim_loop_options {
+    lsim_plan_options protocol;      /* acquittements, descentes de données, puissances passerelle */
+    uint8_t adr;                     /* LinkADRReq */
+    int32_t installation_margin_tenth_db; /* -300..300 */
+    uint8_t duty_cycle;              /* DutyCycleReq, une fois, au premier uplink reçu */
+    uint8_t duty_cycle_exponent;     /* 0..15 : rapport cyclique 1 / 2^k */
+} lsim_loop_options;
+
+/* Calendrier MAC d'une émission (v2) : au plus une entrée par émission. flags : bit 0
+ * LinkCheckAns, bit 1 DeviceTimeAns, bit 2 DevStatusReq, dans la descente de cet uplink. */
+typedef struct lsim_loop_mac {
+    uint32_t device_index;
+    uint32_t rank;                   /* 1-based */
+    uint8_t extra_bytes;             /* 0..15 : octets MAC réservés dans l'uplink */
+    uint8_t flags;
+} lsim_loop_mac;
+
+/* Compteurs de la file MAC (v2). Invariant : enqueued = dispatched + expired + pending_at_end. */
+typedef struct lsim_loop_mac_counters {
+    uint64_t enqueued;
+    uint64_t dispatched;             /* placées dans une descente planifiée */
+    uint64_t delivered;              /* parmi elles, descentes reçues par le dispositif */
+    uint64_t dispatch_lost;          /* parmi elles, descentes non reçues */
+    uint64_t deferred;               /* reports : une commande non tenue dans les FOpts d'un uplink */
+    uint64_t expired;
+    uint64_t pending_at_end;
+} lsim_loop_mac_counters;
+
+typedef struct lsim_loop_uplink {
+    uint32_t device_index;
+    int64_t start_ns;
+    int64_t end_ns;
+    uint8_t spreading_factor;
+    int8_t dr;                       /* -1 : pas de table régionale */
+    uint8_t power_index;
+    double rssi_dbm;
+    uint8_t outcome;                 /* code TxOutcome du moteur */
+    uint8_t answer_mask;             /* bit 0 LinkADRAns, bit 1 DutyCycleAns, bit 2 DevStatusAns (portées) */
+    uint8_t answer_ok;               /* bit 0 débit acquitté, bit 1 puissance acquittée */
+} lsim_loop_uplink;
+
+typedef struct lsim_loop_downlink {
+    uint32_t uplink_index;           /* indice dans uplinks */
+    uint32_t device_index;
+    uint8_t kind;                    /* 1 ACK, 2 donnée, 3 MAC seul */
+    uint8_t commands;                /* bit 0 LinkADRReq, bit 1 DutyCycleReq, bit 2 LinkCheckAns, bit 3 DeviceTimeAns, bit 4 DevStatusReq */
+    int64_t t_open_ns;
+    int64_t start_ns;                /* -1 : pas de créneau passerelle dans la RX1 */
+    int64_t air_ns;
+    uint8_t device_missed;           /* le dispositif émet pendant la RX1 */
+    uint8_t delivered;               /* reçue : commandes appliquées */
+    uint8_t req_dr;                  /* LinkADRReq : débit */
+    uint8_t req_power_index;         /* LinkADRReq : index de puissance */
+} lsim_loop_downlink;
+
+LSIM_API int32_t lsim_simulate_closed_loop_v1(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count);
+
+/* Boucle fermée v2 : v1 plus le calendrier MAC (`mac`, `mac_count` : 0 et NULL acceptés).
+ * Mêmes sorties et statuts que v1. */
+LSIM_API int32_t lsim_simulate_closed_loop_v2(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              const lsim_loop_mac* mac, size_t mac_count,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count,
+                                              lsim_loop_mac_counters* mac_counters);
+
+/* ------------------------------------------- Boucle fermée causale (v1, S1)
+ * Passerelle unique, sans commande MAC ni jointure. Les descentes sont planifiées au fil de
+ * l'eau (fin de chaque trame reçue) : une seule exécution, sans point fixe. radios : device_count
+ * entrées (même ordre que devices). Sorties : trace (ordre temporel) et occupation passerelle
+ * planifiée. Statut 0, ou code d'erreur du moteur / du planificateur. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v1(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count);
+
+/* Variante passerelle v2 (sensibilité absolue) du chemin causal : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway_v2* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count);
+
+/* Variante passerelle v2 (sensibilité absolue) : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_trace_gw2(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway_v2* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count);
+
+/* Variante passerelle v2 (sensibilité absolue) : mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_closed_loop_gw2(const lsim_end_device* devices, size_t device_count,
+                                              const lsim_plan_device* radios,
+                                              const lsim_loop_region* regions,
+                                              const lsim_gateway_v2* gateway,
+                                              const lsim_propagation* prop,
+                                              const lsim_environment* env,
+                                              const lsim_loop_options* options,
+                                              const lsim_loop_mac* mac, size_t mac_count,
+                                              lsim_device_stats* per_device,
+                                              lsim_sim_stats* totals,
+                                              lsim_loop_uplink* uplinks, size_t uplink_capacity,
+                                              size_t* uplink_count,
+                                              lsim_loop_downlink* downlinks,
+                                              size_t downlink_capacity, size_t* downlink_count,
+                                              lsim_interval* busy, size_t busy_capacity,
+                                              size_t* busy_count,
+                                              lsim_loop_mac_counters* mac_counters);
+
+/* ------------------------------------------- Boucle fermée v3 (étape 6.2, ABI additive)
+ * Configuration explicite des canaux EU868 (RP002-1.0.5) et trace v3. v1, v2 et gw2 inchangées.
+ * Tailles LP64 : lsim_channel_device_v3 128, lsim_channel_terminal_v3 112, lsim_loop_trace_v3 40,
+ * lsim_closed_loop_v3_args 272 (vérifiées par static_assert dans tests/test_abi_v3_prep.cpp). */
+
+/* Codes de statut (base 1000). Les codes historiques (dont MESH/CLASSB 800) sont inchangés. */
+#define LSIM_STATUS_CHANNEL_BASE 1000
+#define LSIM_STATUS_CHANNEL_ARGS_SIZE (LSIM_STATUS_CHANNEL_BASE + 1)
+#define LSIM_STATUS_CHANNEL_ABI_VERSION (LSIM_STATUS_CHANNEL_BASE + 2)
+#define LSIM_STATUS_CHANNEL_ELEMENT_SIZE (LSIM_STATUS_CHANNEL_BASE + 3)
+#define LSIM_STATUS_CHANNEL_PLAN (LSIM_STATUS_CHANNEL_BASE + 4)
+#define LSIM_STATUS_CHANNEL_MODE (LSIM_STATUS_CHANNEL_BASE + 5)
+#define LSIM_STATUS_CHANNEL_DEVICE_INDEX (LSIM_STATUS_CHANNEL_BASE + 6)
+#define LSIM_STATUS_CHANNEL_PRESENT_FLAG (LSIM_STATUS_CHANNEL_BASE + 7)
+#define LSIM_STATUS_CHANNEL_FIELDS_WITHOUT_PRESENT (LSIM_STATUS_CHANNEL_BASE + 8)
+#define LSIM_STATUS_CHANNEL_RESERVED_NONZERO (LSIM_STATUS_CHANNEL_BASE + 9)
+#define LSIM_STATUS_CHANNEL_INDEX_UNSUPPORTED (LSIM_STATUS_CHANNEL_BASE + 10)
+#define LSIM_STATUS_CHANNEL_DR_MASK_INVALID (LSIM_STATUS_CHANNEL_BASE + 11)
+#define LSIM_STATUS_CHANNEL_ENABLED_UNDEFINED (LSIM_STATUS_CHANNEL_BASE + 12)
+#define LSIM_STATUS_CHANNEL_ENABLED_EMPTY (LSIM_STATUS_CHANNEL_BASE + 13)
+#define LSIM_STATUS_CHANNEL_SERVER_VIEW_EMPTY (LSIM_STATUS_CHANNEL_BASE + 14)
+#define LSIM_STATUS_CHANNEL_TRACE_MODE (LSIM_STATUS_CHANNEL_BASE + 15)
+#define LSIM_STATUS_CHANNEL_TRACE_BUFFER_TOO_SMALL (LSIM_STATUS_CHANNEL_BASE + 16)
+#define LSIM_STATUS_CHANNEL_TERMINAL_BUFFER_TOO_SMALL (LSIM_STATUS_CHANNEL_BASE + 17)
+#define LSIM_STATUS_CHANNEL_BUFFERS_ALIASED (LSIM_STATUS_CHANNEL_BASE + 18)
+#define LSIM_STATUS_CHANNEL_NULL_POINTER (LSIM_STATUS_CHANNEL_BASE + 19)
+#define LSIM_STATUS_CHANNEL_RANGE_OVERFLOW (LSIM_STATUS_CHANNEL_BASE + 20)
+#define LSIM_STATUS_CHANNEL_MISALIGNED (LSIM_STATUS_CHANNEL_BASE + 21)
+
+/* Modes de configuration. */
+#define LSIM_CHANNEL_PLAN_NONE 0u
+#define LSIM_CHANNEL_PLAN_EU868_RP002_1_0_5 1u
+#define LSIM_CHANNEL_PRESENT_NO 0u
+#define LSIM_CHANNEL_PRESENT_YES 1u
+#define LSIM_CHANNEL_SUPPORTED_MAX 16u   /* canaux réellement supportés par le moteur (0..15) */
+#define LSIM_CHANNEL_ENGINE_MAX 80u      /* emplacements de l'ABI (0..79, 16..79 refusés) */
+
+/* Sentinelles de la trace v3. */
+#define LSIM_TRACE_NO_INDEX 0xFFFFFFFFu
+#define LSIM_TRACE_STATUS_NONE 0xFFu
+#define LSIM_TRACE_FIELD_IGNORE 15u
+
+/* Valeurs de lsim_loop_trace_v3 : reprises des énumérations du moteur (engine.hpp, loop_adr.hpp). */
+#define LSIM_TRACE_KIND_UPLINK 0u
+#define LSIM_TRACE_KIND_LINK_ADR_ANS 1u
+#define LSIM_TRACE_KIND_EXCLUSION 2u
+#define LSIM_TRACE_KIND_ADR_DECISION 3u
+#define LSIM_TRACE_KIND_LINK_ADR_REQ 4u
+#define LSIM_TRACE_KIND_DOWNLINK 5u
+#define LSIM_TRACE_KIND_APPLY 6u
+
+#define LSIM_TRACE_ORIGIN_NORMATIVE 0u
+#define LSIM_TRACE_ORIGIN_SIMULATOR_POLICY 1u
+#define LSIM_TRACE_ORIGIN_RADIO 2u
+
+#define LSIM_TRACE_ACTION_CREATED 0u
+#define LSIM_TRACE_ACTION_RENEWED 1u
+#define LSIM_TRACE_ACTION_EXPIRED 2u
+
+#define LSIM_TRACE_TARGET_DATA_RATE 0u
+#define LSIM_TRACE_TARGET_POWER 1u
+#define LSIM_TRACE_TARGET_CHANNEL 2u
+#define LSIM_TRACE_TARGET_MASK 3u
+
+#define LSIM_TRACE_LOSS_NONE 0u
+#define LSIM_TRACE_LOSS_DEVICE_TRANSMITTING 1u
+#define LSIM_TRACE_LOSS_NO_GATEWAY_SLOT 2u
+#define LSIM_TRACE_LOSS_BELOW_SENSITIVITY 3u
+
+#define LSIM_TRACE_CHANNEL_REASON_OK 0u
+#define LSIM_TRACE_CHANNEL_REASON_RFU_CNTL 1u
+#define LSIM_TRACE_CHANNEL_REASON_UNDEFINED_CHANNEL 2u
+#define LSIM_TRACE_CHANNEL_REASON_ALL_DISABLED 3u
+#define LSIM_TRACE_CHANNEL_REASON_INCOMPATIBLE_WITH_DATA_RATE 4u
+#define LSIM_TRACE_CHANNEL_REASON_RFU_BITS 5u
+
+#define LSIM_TRACE_DR_REASON_OK 0u
+#define LSIM_TRACE_DR_REASON_IGNORED 1u
+#define LSIM_TRACE_DR_REASON_UNKNOWN_DR 2u
+#define LSIM_TRACE_DR_REASON_NOT_SUPPORTED_BY_CHANNELS 3u
+
+#define LSIM_TRACE_POWER_REASON_OK 0u
+#define LSIM_TRACE_POWER_REASON_IGNORED 1u
+#define LSIM_TRACE_POWER_REASON_RESERVED 2u
+
+/* Configuration d'un dispositif (entrée). present = 0 : champs de configuration à zéro, valeurs
+ * par défaut moteur. */
+typedef struct lsim_channel_device_v3 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t device_index;
+    uint32_t present;
+    uint8_t dr_mask[80];
+    uint8_t enabled[10];
+    uint8_t server_defined[10];
+    uint8_t reserved[12];
+} lsim_channel_device_v3;
+
+/* État canal final d'un terminal (sortie). */
+typedef struct lsim_channel_terminal_v3 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t device_index;
+    uint8_t dr;
+    uint8_t power_index;
+    uint16_t reserved0;
+    uint8_t dr_mask[80];
+    uint8_t enabled[10];
+    uint8_t reserved1[6];
+} lsim_channel_terminal_v3;
+
+/* Événement de trace v3 (sortie). Ordre : temps croissant, ordre causal à temps égal. */
+typedef struct lsim_loop_trace_v3 {
+    int64_t t_ns;
+    uint32_t device;
+    uint32_t uplink;
+    uint32_t downlink;
+    uint8_t kind;
+    uint8_t origin;
+    uint8_t action;
+    uint8_t target;
+    uint8_t loss;
+    uint8_t status;
+    uint8_t dr;
+    uint8_t power_index;
+    uint16_t channel_mask;
+    uint16_t value;
+    uint8_t flag;
+    uint8_t reason_channel;
+    uint8_t reason_dr;
+    uint8_t reason_power;
+    uint32_t reserved;
+} lsim_loop_trace_v3;
+
+/* Arguments de lsim_simulate_closed_loop_v3. Tous les pointeurs de sortie et compteurs requis
+ * sont validés avant toute écriture (voir la documentation de l'étape 6.2.2). */
+typedef struct lsim_closed_loop_v3_args {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t channel_plan;
+    uint32_t trace_enabled;
+    uint32_t trace_element_size;
+    uint32_t terminal_element_size;
+    uint32_t reserved0;
+    uint32_t reserved1;
+
+    const lsim_end_device* devices;
+    size_t device_count;
+
+    const lsim_plan_device* radios;
+    const lsim_loop_region* regions;
+    const lsim_gateway_v2* gateway;
+    const lsim_propagation* prop;
+    const lsim_environment* env;
+    const lsim_loop_options* options;
+
+    const lsim_loop_mac* mac;
+    size_t mac_count;
+
+    const lsim_channel_device_v3* channels;
+    size_t channel_count;
+
+    lsim_device_stats* per_device;
+    lsim_sim_stats* totals;
+
+    lsim_loop_uplink* uplinks;
+    size_t uplink_capacity;
+    size_t* uplink_count;
+
+    lsim_loop_downlink* downlinks;
+    size_t downlink_capacity;
+    size_t* downlink_count;
+
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count;
+
+    lsim_loop_mac_counters* mac_counters;
+
+    lsim_loop_trace_v3* trace;
+    size_t trace_capacity;
+    size_t* trace_count;
+
+    lsim_channel_terminal_v3* terminals;
+    size_t terminal_capacity;
+    size_t* terminal_count;
+} lsim_closed_loop_v3_args;
+
+
+/* =====================================================================================
+ * Frontal RF v4 (R2b) : gain d'antenne et perte de câble, par terminal et par passerelle.
+ *
+ * Additif et versionné : aucun symbole existant n'est modifié. Les quatre points d'entrée
+ * v4 n'appliquent un frontal que lorsque la table correspondante est fournie ; sans table,
+ * les résultats et les empreintes de la base sont inchangés au bit près.
+ *
+ * Sémantique : l'antenne est réciproque. La chaîne d'un terminal vaut (G - L) et s'applique
+ * au montant comme au descendant, sans double comptage :
+ *     RSSI_ul = (P_tx + G_d - L_d) + (G_g - L_g) - PL - shadowing
+ *     RSSI_dl = P_gw + (G_g - L_g) - PL + (G_d - L_d) + device_rx_offset_db
+ * ===================================================================================== */
+
+#define LSIM_RF_HAS_ANTENNA_GAIN 1u  /* bit 0 : antenna_gain_dbi est lu */
+#define LSIM_RF_HAS_CABLE_LOSS   2u  /* bit 1 : cable_loss_db est lu */
+
+/* Frontal d'un terminal. present = 0 : frontal neutre (chaîne 0 dB).
+ * Les champs absents ne sont jamais lus : un gain absent ne vaut pas 0 par convention, il
+ * n'existe pas. Bornes : |G| <= 40 dBi, 0 <= L <= 40 dB ; valeurs non finies refusées. */
+typedef struct lsim_device_rf {
+    uint32_t present;
+    double   antenna_gain_dbi;
+    double   cable_loss_db;
+} lsim_device_rf;
+
+/* Frontal d'une passerelle. Les mêmes bits s'appliquent. Quand une entrée est fournie pour
+ * une passerelle, son gain présent REMPLACE `lsim_gateway.antenna_gain_dbi` ; la perte de
+ * câble s'ajoute à la chaîne. Aucune valeur n'est cumulée avec le champ scalaire. */
+typedef struct lsim_gateway_rf {
+    uint32_t present;
+    double   antenna_gain_dbi;
+    double   cable_loss_db;
+} lsim_gateway_rf;
+
+/* Boucle fermée v3 : configuration explicite des canaux et trace v3. Statut 0 en cas de succès.
+ * Définie dans core/src/c_api_closed_loop_v3.cpp (étape 6.3), exportée par core/exports.map
+ * (symbole lsim_*), et appelée par python/lsim/closed_loop_v3.py. */
+LSIM_API int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* args);
+
+/* ------------------------------------------------------------------ Points d'entrée v4
+
+   Règle de table : un compteur RF vaut 0 (aucune table, comportement historique) ou
+   exactement le nombre d'éléments de la simulation (device_count / gateway_count). Toute
+   autre valeur est refusée avec le statut d'entrée invalide : aucun élément ne reçoit
+   silencieusement un frontal vide. Les fonctions à passerelle unique prennent un pointeur
+   nullable (0 ou 1 frontal). */
+
+/* Trace par transmission avec frontaux par terminal et par passerelle.
+   Mêmes sorties, mêmes statuts et même contrat de tampon que `lsim_simulate_uplinks_trace_v2`. */
+/* Variante avec frontaux (v4) du chemin causal : mêmes sorties et statuts que causal_v1.
+ * `device_rf` compte `device_count` entrées (ou NULL avec `device_rf_count` nul) ;
+ * `gateway_rf` est facultatif. Sans frontal, le résultat est identique à causal_v1. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v2(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count,
+                                                 const lsim_device_rf* device_rf,
+                                                 size_t device_rf_count,
+                                                 const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue) avec frontaux du chemin causal. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v2(const lsim_end_device* devices,
+                                                     size_t device_count,
+                                                     const lsim_gateway_v2* gateway,
+                                                     const lsim_propagation* prop,
+                                                     const lsim_environment* env,
+                                                     lsim_device_stats* per_device,
+                                                     lsim_sim_stats* totals,
+                                                     lsim_tx_record* records,
+                                                     size_t record_capacity, size_t* record_count,
+                                                     const lsim_plan_device* radios,
+                                                     const lsim_plan_options* options,
+                                                     lsim_interval* busy_out, size_t busy_capacity,
+                                                     size_t* busy_count,
+                                                     const lsim_device_rf* device_rf,
+                                                     size_t device_rf_count,
+                                                     const lsim_gateway_rf* gateway_rf);
+
+/* ------------------------------------------- Chemin causal, table RX2 et frontaux (v3, I3)
+ *
+ * Mêmes sorties, mêmes statuts et même contrat de tampon que `lsim_simulate_uplinks_causal_v1`.
+ *
+ * `rx2` : paramètres de la fenêtre de secours, `rx2_count` entrées (`rx2 == NULL` avec
+ * `rx2_count == 0` ⇒ comportement de causal_v1). **Passer la table, c'est demander le repli** :
+ * le moteur réserve alors l'émetteur pour les fenêtres RX2 des descentes dont la RX1 n'a pas
+ * abouti, très exactement comme `plan_downlinks` alimenté par l'enveloppe v2. Une entrée dont
+ * `rx2_sf == 0` ou `rx2_hz == 0` n'a simplement rien à replier.
+ *
+ * `device_rf` / `gateway_rf` : frontaux, comme causal_v2 (NULL ⇒ comportement sans frontal).
+ * v3 réunit les deux extensions dans une seule entrée : sans table RX2 **et** sans frontal, le
+ * résultat est identique à causal_v1, à l'octet près.
+ *
+ * Sans cette entrée, la table RX2 n'atteignait jamais le chemin causal alors que la
+ * planification par lot en disposait : les deux producteurs divergeaient dès le premier repli. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_v3(const lsim_end_device* devices,
+                                                 size_t device_count,
+                                                 const lsim_gateway* gateway,
+                                                 const lsim_propagation* prop,
+                                                 const lsim_environment* env,
+                                                 lsim_device_stats* per_device,
+                                                 lsim_sim_stats* totals, lsim_tx_record* records,
+                                                 size_t record_capacity, size_t* record_count,
+                                                 const lsim_plan_device* radios,
+                                                 const lsim_plan_options* options,
+                                                 lsim_interval* busy_out, size_t busy_capacity,
+                                                 size_t* busy_count,
+                                                 const lsim_plan_device_rx2* rx2,
+                                                 size_t rx2_count,
+                                                 const lsim_device_rf* device_rf,
+                                                 size_t device_rf_count,
+                                                 const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue), mêmes extensions que causal_v3. */
+LSIM_API int32_t lsim_simulate_uplinks_causal_gw2_v3(const lsim_end_device* devices,
+                                                     size_t device_count,
+                                                     const lsim_gateway_v2* gateway,
+                                                     const lsim_propagation* prop,
+                                                     const lsim_environment* env,
+                                                     lsim_device_stats* per_device,
+                                                     lsim_sim_stats* totals,
+                                                     lsim_tx_record* records,
+                                                     size_t record_capacity, size_t* record_count,
+                                                     const lsim_plan_device* radios,
+                                                     const lsim_plan_options* options,
+                                                     lsim_interval* busy_out, size_t busy_capacity,
+                                                     size_t* busy_count,
+                                                     const lsim_plan_device_rx2* rx2,
+                                                     size_t rx2_count,
+                                                     const lsim_device_rf* device_rf,
+                                                     size_t device_rf_count,
+                                                     const lsim_gateway_rf* gateway_rf);
+
+/* ------------------------------------------- Enveloppe causale unique (I4)
+ *
+ * Le chemin causal s'était fragmenté en six entrées : {passerelle v1, passerelle v2} x
+ * {sans frontal, avec frontaux} x {sans RX2, avec RX2}. Chaque appelant devait choisir la bonne
+ * combinaison, et chaque extension en aurait ajouté deux nouvelles.
+ *
+ * Cette entrée unique porte le choix dans la structure : la variante devient un champ, plus un
+ * nom de symbole. Les six entrées plates demeurent exportées et inchangées — c'est un contrat,
+ * pas une tolérance : des appelants externes les utilisent.
+ *
+ * Règles propres à l'enveloppe (au-delà de la validation de `causal_v1_impl`, qui s'applique
+ * telle quelle) :
+ *   - `gateway` et `gateway_v2` sont exclusifs : exactement un des deux, jamais aucun ni les deux.
+ *   - Pointeur et compte sont solidaires pour `rx2` et `device_rf` : une table est fournie
+ *     entièrement ou pas du tout. Un compte orphelin ferait lire une longueur qui n'est pas celle
+ *     du tableau pointé (lecture hors bornes silencieuse, cf. DOWNLINK_PLAN_ABI_V2.md §2.3).
+ *   - La longueur annoncée est celle attendue (`device_count`), jamais une autre.
+ *
+ * Refus de validation de l'enveloppe : LSIM_STATUS_PLAN_BASE + 1. Un refus de validation est
+ * décidé avant tout déréférencement : aucune table n'est lue si l'appel est refusé.
+ *
+ * Typage : chaque table porte son propre pointeur typé, jamais `void*`. Une confusion de table
+ * est une erreur de compilation ou de liaison, pas une corruption silencieuse. */
+#define LSIM_CAUSAL_ABI_VERSION 1u
+
+typedef struct lsim_causal_args {
+    uint32_t struct_size;   /* sizeof(lsim_causal_args) */
+    uint32_t abi_version;   /* LSIM_CAUSAL_ABI_VERSION */
+
+    const lsim_end_device* devices;   /* requis si device_count > 0 */
+    size_t device_count;
+
+    const lsim_gateway* gateway;      /* exclusif avec gateway_v2 */
+    const lsim_gateway_v2* gateway_v2;/* exclusif avec gateway */
+
+    const lsim_propagation* prop;     /* requis */
+    const lsim_environment* env;      /* NULL = pas d'environnement */
+
+    const lsim_plan_device* radios;   /* requis si device_count > 0 */
+    const lsim_plan_options* options; /* requis */
+
+    lsim_device_stats* per_device;    /* requis si device_count > 0 */
+    lsim_sim_stats* totals;           /* requis */
+
+    lsim_tx_record* records;          /* requis si record_capacity > 0 */
+    size_t record_capacity;
+    size_t* record_count;             /* requis */
+
+    lsim_interval* busy_out;          /* requis si busy_capacity > 0 */
+    size_t busy_capacity;
+    size_t* busy_count;               /* requis */
+
+    const lsim_plan_device_rx2* rx2;  /* NULL ou device_count entrées */
+    size_t rx2_count;
+
+    const lsim_device_rf* device_rf;  /* NULL ou device_count entrées */
+    size_t device_rf_count;
+
+    const lsim_gateway_rf* gateway_rf;/* NULL ou 1 entrée (passerelle unique) */
+
+    uint64_t reserved[2];
+} lsim_causal_args;
+
+LSIM_API int32_t lsim_simulate_uplinks_causal(const lsim_causal_args* args);
+
+LSIM_API int32_t lsim_simulate_uplinks_trace_v3(const lsim_end_device* devices,
+                                                size_t device_count,
+                                                const lsim_gateway* gateway,
+                                                const lsim_propagation* prop,
+                                                const lsim_environment* env,
+                                                lsim_device_stats* per_device,
+                                                lsim_sim_stats* totals, lsim_tx_record* records,
+                                                size_t record_capacity, size_t* record_count,
+                                                const lsim_interval* gateway_busy,
+                                                size_t gateway_busy_count,
+                                                const lsim_mac_reservation* reservations,
+                                                size_t reservation_count,
+                                                const lsim_device_rf* device_rf,
+                                                size_t device_rf_count,
+                                                const lsim_gateway_rf* gateway_rf);
+
+/* Variante passerelle v2 (sensibilité absolue) avec frontaux. Mêmes sorties et statuts. */
+LSIM_API int32_t lsim_simulate_uplinks_trace_gw2_v2(const lsim_end_device* devices,
+                                                    size_t device_count,
+                                                    const lsim_gateway_v2* gateway,
+                                                    const lsim_propagation* prop,
+                                                    const lsim_environment* env,
+                                                    lsim_device_stats* per_device,
+                                                    lsim_sim_stats* totals,
+                                                    lsim_tx_record* records,
+                                                    size_t record_capacity, size_t* record_count,
+                                                    const lsim_interval* gateway_busy,
+                                                    size_t gateway_busy_count,
+                                                    const lsim_mac_reservation* reservations,
+                                                    size_t reservation_count,
+                                                    const lsim_device_rf* device_rf,
+                                                    size_t device_rf_count,
+                                                    const lsim_gateway_rf* gateway_rf);
+
+/* Downlinks multi-passerelles avec frontaux par terminal et par passerelle.
+   Mêmes sorties, mêmes statuts et même contrat que `lsim_simulate_uplinks_multi_dl`.
+   Lorsqu'une table terminale est fournie, `rule->device_antenna_gain_dbi` n'est PAS ajouté :
+   la chaîne du frontal fait foi, pour que le gain ne soit jamais compté deux fois. */
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* devices,
+                                                   size_t device_count,
+                                                   const lsim_gateway* gateways,
+                                                   size_t gateway_count,
+                                                   const lsim_propagation* prop,
+                                                   const lsim_downlink_rule* rule,
+                                                   const lsim_environment* env,
+                                                   lsim_device_stats* per_device,
+                                                   lsim_network_stats* totals,
+                                                   lsim_gateway_rx_stats* per_gateway,
+                                                   lsim_multi_tx_record* records,
+                                                   size_t record_capacity, size_t* record_count,
+                                                   lsim_downlink_record* downlinks,
+                                                   size_t downlink_capacity,
+                                                   size_t* downlink_count,
+                                                   const int64_t* dl_ready_ns, size_t ready_count,
+                                                   const lsim_device_rf* device_rf,
+                                                   size_t device_rf_count,
+                                                   const lsim_gateway_rf* gateway_rf,
+                                                   size_t gateway_rf_count);
+
+/* --------------------------------------------------------------------- I5-a, jalon I5-a
+ * Enveloppe des passerelles multiples avec descentes : débit réel des fenêtres.
+ *
+ * Le chemin multi s'était fragmenté en deux entrées, _multi_dl et _multi_dl_v2, produits du
+ * cartésien des tables optionnelles (frontaux). Y ajouter les radios et la fenêtre RX2 en aurait
+ * fait quatre. Même réponse qu'en I4 (enveloppe causale) : une enveloppe unique, à pointeurs
+ * typés exclusifs — une confusion de table ne compile pas.
+ *
+ * Contrat (docs/I5_A_RX1_AIRTIME.md) :
+ *   - `radios` / `rx2` : NULL conserve le comportement historique **à l'identique** (RX1 au SF
+ *     montant à 125 kHz, RX2 à 125 kHz). Non NULL, ils comptent chacun `device_count` entrées,
+ *     vérifié **avant toute lecture**, et le temps d'antenne comme la sensibilité de réception
+ *     descendante sont alors calculés au SF et à la bande de la fenêtre émettrice.
+ *   - Une table `rx2` fournie impose `rule->rx2_sf == 0` : une même grandeur exprimée à deux
+ *     endroits est une ambiguïté, pas une redondance tolérable (bbb3). Précédent :
+ *     `lsim_gateway_v2` exige déjà un scalaire historique neutre sous le modèle absolu.
+ *   - `rx2_bw_hz == 0` reprend la bande de RX1 : cela exige donc la table `radios`.
+ *   - `reserved` doit être nul (O1) : un appelant qui le renseigne parle une ABI future ;
+ *     l'ignorer serait un repli silencieux (bbb3).
+ *
+ * Aucune affirmation régionale ici : l'enveloppe transporte le débit des fenêtres, elle ne
+ * décide pas lequel impose chaque région.
+ */
+#define LSIM_MULTI_DL_ABI_VERSION 1u
+
+typedef struct lsim_multi_dl_args {
+    uint32_t struct_size;   /* sizeof(lsim_multi_dl_args), obligatoire              */
+    uint32_t abi_version;   /* LSIM_MULTI_DL_ABI_VERSION, obligatoire               */
+    const lsim_end_device* devices;   /* obligatoire si device_count > 0            */
+    size_t device_count;
+    const lsim_gateway* gateways;     /* obligatoire, 1..64                         */
+    size_t gateway_count;
+    const lsim_propagation* prop;     /* obligatoire                                */
+    const lsim_downlink_rule* rule;   /* obligatoire                                */
+    const lsim_environment* env;      /* NULL admis                                 */
+    /* Tables optionnelles du débit des fenêtres (I5-a). NULL : comportement historique. */
+    const lsim_plan_device* radios;
+    size_t radio_count;
+    const lsim_plan_device_rx2* rx2;
+    size_t rx2_count;
+    /* Frontaux (v4). NULL admis. */
+    const lsim_device_rf* device_rf;
+    size_t device_rf_count;
+    const lsim_gateway_rf* gateway_rf;
+    size_t gateway_rf_count;
+    const int64_t* dl_ready_ns;       /* NULL admis                                 */
+    size_t ready_count;
+    /* Sorties. */
+    lsim_device_stats* per_device;    /* obligatoire si device_count > 0            */
+    lsim_network_stats* totals;       /* obligatoire                                */
+    lsim_gateway_rx_stats* per_gateway; /* obligatoire                              */
+    lsim_multi_tx_record* records;
+    size_t record_capacity;
+    size_t* record_count;             /* obligatoire                                */
+    lsim_downlink_record* downlinks;
+    size_t downlink_capacity;
+    size_t* downlink_count;           /* obligatoire                                */
+    uint64_t reserved[2];             /* doit être nul                              */
+} lsim_multi_dl_args;
+
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl_env(const lsim_multi_dl_args* args);
+
+/* Arguments de la boucle fermée v4 : les arguments v3 sont enveloppés, jamais recopiés.
+   Validation v3 inchangée, puis frontal appliqué avant le moteur. */
+#define LSIM_CLOSED_LOOP_V4_ABI_VERSION 4u
+
+typedef struct lsim_closed_loop_v4_args {
+    uint32_t struct_size;      /* sizeof(lsim_closed_loop_v4_args) */
+    uint32_t abi_version;      /* LSIM_CLOSED_LOOP_V4_ABI_VERSION */
+    const lsim_closed_loop_v3_args* v3;  /* arguments v3, requis */
+    const lsim_device_rf* device_rf;     /* 0 ou device_count entrées */
+    size_t   device_rf_count;
+    const lsim_gateway_rf* gateway_rf;   /* NULL ou 1 entrée (passerelle unique de v3) */
+    uint64_t reserved[2];
+} lsim_closed_loop_v4_args;
+
+/* Boucle fermée v4 : identique à v3, avec frontaux par terminal et par passerelle. */
+LSIM_API int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args);
+
+/* Arguments de la boucle fermée v5 : v5 **imbrique** v4, qui imbrique lui-même v3. Aucune
+   structure n'est recopiée : chaque enveloppe ne fait que pointer vers la précédente. Cette
+   imbrication, plutôt qu'une enveloppe v5 directe sur v3, permet de fournir en même temps les
+   frontaux RF de v4 et les offsets de v5, sans combinaison impossible.
+
+   I5-c : RX1DROffset par dispositif, `rx1_dr_offset_count` entrées. `NULL` (ou count nul)
+   = 0 partout, c'est-à-dire le réglage du serveur et le comportement historique.
+   Entrée dédiée plutôt qu'un champ de `lsim_loop_region` : cette dernière est une structure
+   d'ABI C dont la taille est figée à 160 octets (garde-fou `core/tests/abi_layout.cpp`).
+
+   Valeurs admises : 0 .. `regions[i].max_dr`. Toute valeur supérieure est refusée
+   explicitement (InvalidInput), jamais saturée silencieusement. */
+#define LSIM_CLOSED_LOOP_V5_ABI_VERSION 5u
+
+typedef struct lsim_closed_loop_v5_args {
+    uint32_t struct_size;                 /* sizeof(lsim_closed_loop_v5_args) */
+    uint32_t abi_version;                 /* LSIM_CLOSED_LOOP_V5_ABI_VERSION */
+    const lsim_closed_loop_v4_args* v4;   /* enveloppe v4, requise (frontaux optionnels) */
+    const uint8_t* rx1_dr_offset;         /* NULL ou device_count entrées */
+    size_t   rx1_dr_offset_count;
+    uint64_t reserved[2];                 /* doit être nul */
+} lsim_closed_loop_v5_args;
+
+/* Boucle fermée v5 : identique à v4, avec RX1DROffset par dispositif. */
+LSIM_API int32_t lsim_simulate_closed_loop_v5(const lsim_closed_loop_v5_args* args);
 
 #ifdef __cplusplus
 }

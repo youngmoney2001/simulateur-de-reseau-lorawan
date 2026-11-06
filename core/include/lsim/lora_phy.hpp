@@ -69,6 +69,18 @@ LSIM_API std::int64_t symbol_duration_ns(std::uint8_t spreading_factor, Bandwidt
 LSIM_API Status receiver_sensitivity_dbm(std::uint8_t spreading_factor,
                                          Bandwidth bw, double& out_dbm);
 
+// Profil de récepteur. Chaque profil est une référence distincte : ne pas les mélanger.
+enum class ReceiverProfile : std::uint32_t {
+    Sx1276Reference = 0,  // table ci-dessus (défaut, historique) : SF7..SF12
+    Sx1303Gateway = 1,    // SX1303 datasheet, 125 kHz, SF5..SF12 (PER 10 %, 12 octets, SX1250)
+};
+
+// Sensibilité selon le profil. Sx1303Gateway : 125 kHz seulement (SF5 à SF12) ; les autres
+// largeurs renvoient UncalibratedSensitivity. Sx1276Reference est identique à la version
+// sans profil. Le profil Sx1303Gateway n'est pas utilisable pour un dispositif (pas de valeur).
+LSIM_API Status receiver_sensitivity_dbm(std::uint8_t spreading_factor, Bandwidth bw,
+                                         ReceiverProfile profile, double& out_dbm);
+
 // Vérifie la cohérence d'une configuration radio.
 LSIM_API Status validate(const RadioConfig& cfg, std::uint32_t payload_bytes);
 

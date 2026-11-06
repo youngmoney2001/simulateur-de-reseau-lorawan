@@ -33,7 +33,11 @@ std::int64_t symbol_duration_ns(std::uint8_t spreading_factor, Bandwidth bw) {
 }
 
 Status validate(const RadioConfig& cfg, std::uint32_t payload_bytes) {
-    if (cfg.spreading_factor < 7 || cfg.spreading_factor > 12) {
+    // SF5 (DR13) : en-tête explicite supposé (le datasheet SX1303 ne le précise pas). SF6 n'existe
+    // qu'en en-tête implicite (datasheet SX1276, p. 15) : refusé tant que son modèle n'existe pas.
+    const bool sf_ok = (cfg.spreading_factor >= 7 && cfg.spreading_factor <= 12) ||
+                       (cfg.spreading_factor == 5 && cfg.explicit_header);
+    if (!sf_ok) {
         return Status::InvalidSpreadingFactor;
     }
     if (!is_valid_bw(cfg.bandwidth)) {

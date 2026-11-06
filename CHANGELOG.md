@@ -2,6 +2,808 @@
 
 ## 0.1.0 (non publiée)
 
+### U0.5 — Convergence du point fixe : budget de réémissions cumulé
+
+Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre
+configurations denses qui oscillaient au lieu de converger**. Périmètre : la convergence
+seulement ; ni `DECALE`, ni A6, ni les règles MAC, ni l'ABI, ni le budget réglementaire
+descendant ne sont touchés.
+
+**Le défaut.** Le budget de réémissions portait sur le **rang courant** de l'essai
+(`attempt.attempt >= budget`). Or `_prune_acknowledged` est appelée à l'intérieur de la
+boucle de point fixe : elle supprime, à chaque itération, les réémissions qu'un ACK reçu
+avant leur départ rend impossibles. Supprimer un essai postérieur fait **redescendre** le
+dernier essai de la trame vers un rang antérieur, ce qui **rouvre le budget**. Comme
+l'ensemble des ACK reçus oscille avec l'occupation — l'inconnue même du point fixe — le
+budget était rouvert indéfiniment. Mesuré sur le cas étalon : **75 rembobinages sur
+18 passes**, et aucune borne sur le nombre total d'émissions d'une trame.
+
+Ce défaut est **antérieur à U0.4-bis** : il était masqué par la sortie prématurée que
+U0.4-bis a supprimée. Deux des quatre configurations convergeaient en **une seule passe**,
+sans jamais avoir rejoué la trace sous l'occupation qu'elles venaient de produire.
+
+**La correction.** Le budget est désormais compté **cumulativement** (`emis`), et ne décroît
+jamais : une trame est émise au plus `1 + retries` fois, comme le veut la politique de
+réémission. L'élagage reste dans la boucle — le déplacer après la boucle, variante mesurée
+et écartée, laisserait des réémissions fantômes occuper la radio et bloquer des
+transmissions réelles.
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Trois des quatre configurations denses convergent désormais, au lieu de lever une erreur.
+Sur les 400 configurations de l'audit, **8** voient leur résultat modifié
+(86, 117, 125, 189, 240, 288, 319, 365), d'au plus 4 transmissions et 4 trames livrées.
+Agrégats : 14 transmissions en moins, 2 montantes reçues en moins, 11 pertes d'occupation
+passerelle en moins, 6 trames livrées en moins. Aucune violation du demi-duplex n'apparaît :
+le test de balayage reste à zéro sur les 400.
+
+**⚠ Diagnostic erroné, rectifié en U0.5-bis.** Ce jalon laissait une configuration
+(11 terminaux, période 15 s, `retries=3`) lever une erreur, décrite ici comme « un cycle de
+période 3 … qu'aucune correction numérique ne résout ». **Cette analyse était fausse**, et
+l'est restée faute d'avoir cherché plus loin que la garde qui la produisait. L'observation
+de départ était juste — seules 9 trames sur 62 atteignent le budget, trajectoire identique
+avec ou sans budget cumulé — mais la conclusion ne l'était pas : la configuration **converge**
+en 22 passes vers un point fixe cohérent (192 intervalles imposés = produits, aucune
+violation). La « période 3 » était un artefact : la garde comparait le **calendrier seul**,
+et le calendrier de 109 tentatives revient aux passes 3 et 7 **sous des occupations
+différentes** (195 puis 228 intervalles). Aucun état complet ne se répétait. Voir U0.5-bis.
+Taux d'oscillation sur 1 500 configurations denses : 0,33 % avant, **0,20 %** après.
+
+**Homonymie levée.** Il existait deux constantes `MAX_ITERATIONS` indépendantes — 128 dans
+`retransmissions` (point fixe des réémissions), 64 dans `trace_events` (deux boucles :
+jointures, et montantes ↔ descentes). Aucun import croisé, points fixes non imbriqués.
+Elles s'appellent désormais `MAX_ITERATIONS_REEMISSIONS` et `MAX_ITERATIONS_TRACE`.
+*Rupture pour d'éventuels importateurs directs* : ni l'une ni l'autre ne figure dans
+`lsim.__all__`.
+
+**Comparaison canonique partagée.** `trace_events` comparait les occupations par égalité de
+listes brutes, ce qui n'était correct que parce que `GatewayArbiter.occupation` se trouve
+être triée chronologiquement — une propriété d'implémentation, qu'aucun test ne verrouillait.
+La comparaison et la signature de détection de cycle passent par la forme canonique, comme
+dans `retransmissions`. Un test fige désormais l'ordre de l'arbitre.
+
+**Filet physique extrait et testé.** Le filet qui lève plutôt que de rendre une trace
+impossible est **inatteignable depuis la boucle** : celle-ci ne sort que lorsque l'occupation
+produite égale l'occupation imposée, et la trace a été jouée sous cette même occupation.
+Mesuré : 0 déclenchement sur les 400 configurations. Il est donc extrait en
+`_verifier_coherence_occupation` et testé directement — la mutation qui le neutralisait
+n'était détectée par aucune suite boîte noire.
+
+**Non traité ici** : le colmatage préventif des trois sites créant un arbitre isolé
+(`ack_mac.py:356`, `join.py:557`, `join.py:566`) — aucun n'est atteint par
+`simulate_confirmed_uplinks`, ses appelants de production passant toujours un arbitre ;
+l'oscillation structurelle décrite plus haut, qui relève d'une décision de modèle.
+
+### U0.5-bis — Détection d'état répété sur la paire (calendrier, occupation)
+
+Huitième jalon de la refonte U0. Il corrige un **faux diagnostic** porté par U0.5 et la
+garde qui l'avait produit. Périmètre strict : la détection des états répétés. Ni `DECALE`,
+ni A6, ni les règles MAC, ni l'ABI, ni le budget réglementaire descendant ne sont touchés ;
+le budget cumulé de réémissions et l'élagage dans la boucle sont **conservés**.
+
+**Le défaut.** La garde de détection des états répétés comparait le **calendrier seul** :
+
+```python
+signature = tuple((a.device, a.session, a.frame, a.attempt, a.start_ns) for a in schedule)
+```
+
+Or l'état du système est la **paire** (calendrier, occupation imposée). Un même calendrier
+peut revenir sous une occupation différente : ce n'est pas un cycle, seulement la répétition
+d'une projection incomplète de l'état.
+
+**Conséquence mesurée.** L'essai 334 — 11 terminaux, période 15 s, `retries=3` — était
+déclaré oscillant de période 3 et rejeté. En réalité :
+
+- le calendrier de 109 tentatives revient aux passes 3 et 7, sous des occupations imposées
+  de **195** puis **228** intervalles ;
+- **aucun état complet ne se répète** sur les 22 passes de la trajectoire ;
+- l'occupation converge par oscillation amortie : 156 → 204 → 174 → 192 → 174 → 213 → 168 →
+  195 → 180 → 189 → 180 → 198 → 186 → **192** ;
+- le point fixe est atteint à la 22ᵉ passe : 192 intervalles imposés = produits, 64 montantes
+  reçues, **0 violation** du demi-duplex, résultat identique sur trois exécutions.
+
+La garde interrompait donc une convergence en cours, et U0.5 en avait fait une « limite
+connue » au lieu d'y voir son propre défaut.
+
+**Pourquoi le budget cumulé ne pouvait pas y suffire.** Au moment du faux positif, seules
+**9 trames sur 62** atteignent le budget, et ce compte est **constant** d'un état à l'autre
+(9/9/9). Les trames qui saturent le budget ne sont pas celles qui alternent : 16 trames
+oscillent entre les rangs 0 et 1, en deux groupes en antiphase (terminaux 0, 2, 9, 10 contre
+terminal 3 ; terminaux 4 et 8 sur une autre phase). Borner le cumul plafonne la taille du
+calendrier, il ne stabilise pas l'alternance des ACK — ce qui explique que U0.5 ait résolu
+les essais 11, 61 et 318, mais pas celui-ci.
+
+**La correction.** La signature porte désormais sur l'état complet, occupation sous forme
+canonique :
+
+```python
+signature = (tuple((a.device, a.session, a.frame, a.attempt, a.start_ns)
+                   for a in schedule), _canonique(occupation_imposee))
+```
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Une configuration passe de « erreur explicite » à « résultat rendu » : l'essai 334 fournit
+désormais 111 transmissions, 64 montantes reçues, 59 trames livrées et 41 pertes
+d'occupation passerelle. Ce n'est pas une non-régression : c'est une configuration que le
+simulateur **refusait à tort**. Sur le balayage de référence à 400 configurations, **0
+modification** — compteurs identiques au bit près, nombre total de passes identique (1698).
+Sur 1 500 scénarios denses : **0 oscillation** (contre 3), soit 0,00 % contre 0,20 %.
+
+**Limite empirique de la borne d'itérations — à ne pas lire comme une garantie.** Depuis que
+la détection porte sur la paire (calendrier, occupation), la borne **théorique** d'atteinte
+du plafond est beaucoup plus grande : l'espace d'états est fini — le budget cumulé borne le
+calendrier, l'occupation en découle — mais vaste. Mesuré : **74 passes au plus** sur 1 500
+scénarios denses, 23 sur les 400 de référence, **aucune configuration au plafond**. La marge
+n'est que de **1,7 ×** et n'a **pas** été éprouvée au-delà de 16 terminaux. Le plafond de 128
+reste un filet empirique, non une borne démontrée : il **lève** explicitement
+(`pas de point fixe des réémissions après … itérations`) et ne rend jamais silencieusement
+un résultat faux. Les gardes d'oscillation du calendrier et de l'occupation, ainsi que le
+filet de cohérence physique, demeurent actifs.
+
+**Non traité ici** : le colmatage préventif des trois sites créant un arbitre isolé
+(`ack_mac.py:356`, `join.py:557`, `join.py:566`) — aucun n'est atteint par
+`simulate_confirmed_uplinks` ; toute autre refonte de la convergence.
+
+### U0.4-bis — Convergence de l'occupation radio sur le chemin MAC
+
+Sixième jalon de la refonte U0. Il corrige un contournement du demi-duplex **révélé par
+l'audit** des chemins ACK, Join-Accept et réémissions, et non par une erreur de placement.
+
+**Le défaut.** Le point fixe des réémissions (`_simulate_confirmed`) sortait dès qu'aucune
+réémission nouvelle n'était nécessaire, sans vérifier que l'occupation produite était celle
+qui avait servi à calculer la trace. Le plan pouvait donc contenir une descente chevauchant
+une montante comptée comme reçue : **un émetteur demi-duplex émettant pendant qu'il reçoit**.
+Mesuré avant correction : 95 configurations sur 400, 708 intervalles fautifs.
+
+**La correction.** La sortie exige désormais la stabilité du calendrier **et** de l'occupation.
+S'y ajoutent une comparaison canonique (triée, dédupliquée), une garde d'oscillation de
+l'occupation, un budget porté de 32 à 128 itérations (75 mesurées au plus sur 500 scénarios
+denses), et un filet qui **lève** plutôt que de rendre une trace physiquement impossible.
+L'arbitre n'est pas amorcé avec l'occupation précédente : il la redérive depuis un émetteur
+libre, faute de quoi la même émission serait comptée deux fois.
+
+**Corrections physiques — résultats qui changent, et pourquoi ils devaient changer.**
+Sur les 400 configurations de l'audit, 103 voient leur résultat modifié, **toutes** sur le
+chemin MAC ; le chemin causal est strictement inchangé. Agrégats sur les 365 configurations
+MAC : 708 violations supprimées, 586 pertes d'occupation passerelle supplémentaires, 102
+montantes reçues en moins, 488 réémissions en plus, 7 trames livrées en moins. Ces écarts ne
+sont pas des régressions : les configurations concernées renvoyaient une trace que le matériel
+ne pourrait pas produire. Les configurations déjà cohérentes — dont tous les scénarios
+historiques à 5 terminaux testés — sont inchangées.
+
+**Non-convergence assumée.** Sur 500 scénarios denses, 4 configurations oscillent
+(occupation mesurée : 84, 50, 96, 64, 94, 72, 72, 76, 70, 84… sans jamais se stabiliser) et
+lèvent désormais une erreur explicite. Ces 4 renvoyaient auparavant un résultat comptant
+22, 148, 37 et 24 violations : le code refuse maintenant de les rendre.
+
+**Non traité ici** : `DECALE` et A6 inchangés, aucune règle MAC modifiée, ABI intacte, budget
+réglementaire descendant toujours désactivé, chemin multi-passerelles non migré.
+
+### U0.4 — Occupation radio : source unique et cohérence du demi-duplex
+
+Cinquième jalon de la refonte U0. Le moteur causal n'entretient plus de copie locale de
+l'occupation : le demi-duplex interroge l'ordonnanceur radio **qui a décidé le placement**.
+
+**Ce qui change.** Le chemin causal maintenait un `std::vector<Interval> planned`, alimenté par les
+valeurs de retour de `DownlinkScheduler::on_received()`. Le placement décidait sur l'état de
+l'ordonnanceur, le demi-duplex lisait la copie : deux états pour une même réalité, et aucun
+contrôle de leur égalité. `DownlinkScheduler` expose désormais `occupancy()` — l'occupation de
+l'ordonnanceur radio, sans liste parallèle — et `transmitting()`, le **même** test que le
+placement. `busy_out` en est **dérivé**, et non reconstitué au fil des appels.
+
+**Ce qui ne change pas.** Comportement bit à bit identique : empreintes gelées
+`d2cb0fac…` / `ed126d7f…` invariantes, les neuf scènes de la sonde d'occupation gardent leurs
+comptes, durées et empreintes, et l'égalité moteur/planificateur reste acquise sur les neuf.
+
+**Garanties épinglées par les tests.** Une émission acceptée réserve exactement
+`[ouverture, ouverture + temps d'antenne)` ; une émission refusée n'en réserve aucune ; deux
+émissions disjointes sont toutes deux possibles ; une occupation s'achevant exactement à
+l'instant de disponibilité suivant ne provoque pas de faux conflit ; ACK, Join-Accept et
+réémission passent par un émetteur unique et ne peuvent pas émettre par-dessus une émission
+déjà acceptée.
+
+**Non traité ici** (limites du mandat) : migration du multi-passerelles, budget réglementaire
+descendant, retrait de `GatewayArbiter` — ses responsabilités ne sont pas toutes identifiées.
+
+### U0.3 — Placement temporel A6 : un ordonnanceur radio commun
+
+Quatrième jalon de la refonte U0. Le `RadioScheduler` devient la référence commune de placement
+des descentes, dans le **chemin causal** comme dans le **planificateur**.
+
+**Règle (arbitrage A6, TS001-1.0.4 §3.3.5).** Une descente part **exactement** à l'ouverture de
+RX1 ou de RX2, ou n'est pas émise. Aucun décalage intra-fenêtre : si l'émetteur émet encore à
+l'ouverture, la fenêtre est manquée **sans occupation fictive**.
+
+- `RadioScheduler::place_at` : nouvelle entrée pour le planificateur, qui examine une fenêtre à
+  la fois et garde l'ordonnancement (l'ordre d'examen, le report de la RX2 à sa propre
+  ouverture). La **règle** reste entièrement dans le composant radio.
+- `DownlinkScheduler::placer` (chemin causal) et `_schedule_gateway` (planificateur par lot)
+  délèguent tous deux à `place_at` : plus aucune logique concurrente, plus de
+  `any_busy` / `busy_until` dupliqués. L'occupation publiée est reprise telle quelle de
+  l'ordonnanceur.
+- `lsim.arbitre.GatewayArbiter` : nouvelle règle `EXACTE` (A6), activée pour la descente de
+  données. Les Join-Accept, ACK MAC et réémissions restent sur `DECALE` — chemins disjoints et
+  documentés, migration hors jalon.
+- `lsim::radio::Interval` et `SimTime` sont désormais définis par `radio_scheduler.hpp`, sans
+  dépendance : `engine.hpp` et `downlink_plan.hpp` les réutilisent (dispositions identiques,
+  aucune conversion).
+
+**Conséquences assumées.** Le repli RX2, implémenté mais qui ne se déclenchait jamais, devient
+effectif. Les scènes de contention perdent des descentes que l'ancienne règle émettait **après**
+l'ouverture de la fenêtre. Les scènes sans descente et sans contention sont strictement
+inchangées : empreintes gelées `d2cb0fac…` / `ed126d7f…` invariantes, vecteurs de déterminisme
+`65ce329f…` bit à bit identiques, performance 1,00 × la référence.
+
+Détail complet, tableau des différences et preuves : `docs/PLACEMENT_TEMPOREL_A6.md`.
+
+### D3.15 / I3 — Repli RX2 : exposition, sensibilité de la fenêtre émise, cohérence des moteurs
+
+Troisième jalon, découpé en quatre incréments. Il traite les deux défauts classés Haute et le
+préalable que leur correction a révélé.
+
+#### C3 — Placement différé de la RX2 (préalable)
+
+`DownlinkScheduler::on_received` plaçait la fenêtre de secours **immédiatement**, alors que
+`plan_downlinks` la met dans un tas à son propre instant d'ouverture. Dès que deux montantes
+finissent à moins d'une seconde d'écart, les deux moteurs divergaient — et le contrôle
+d'égalité de `trace_events` (`occupation passerelle incohérente`) est bloquant. Activer le repli
+par défaut sans corriger cela aurait cassé les scénarios réels.
+
+- `on_received` renvoie désormais `std::vector<Interval>` et ne place que ce qui est certain de
+  ne plus pouvoir être devancé : frontière = ouverture de la RX1 de la montante courante.
+- `drain()` purge ce qui reste en attente à la fin de la trace, faute de quoi la dernière RX2
+  différée n'était jamais émise.
+
+#### C4 — Sensibilité évaluée dans la fenêtre réellement émise
+
+Une descente repliée en RX2 était seuillée avec la sensibilité de **RX1**. Au SF12BW125 le
+récepteur entend 13 dB plus bas qu'au SF7BW125 : la descente était déclarée perdue alors que le
+dispositif l'entendait. **Les deux moteurs commettaient l'erreur à l'identique, la parité ne la
+voyait pas.** Corrigé dans `downlink_plan.cpp` et dans `trace_events.py`, et épinglé dans chacun
+séparément.
+
+#### C1/C2 — La table RX2 atteint enfin les appelants
+
+Les profils régionaux exposent RX2 depuis toujours, et `device_radios` remplit déjà
+`DeviceRadio.rx2_*`. Le chaînon manquant était dans l'appelant :
+
+- aucune entrée causale n'acceptait la table ⇒ le moteur causal n'avait aucune fenêtre de
+  secours, alors que le planificateur par lot en avait une. Nouvelles entrées
+  `lsim_simulate_uplinks_causal_v3` / `..._gw2_v3`, qui réunissent la table RX2 **et** les
+  frontaux (sans aucune des deux extensions, l'entrée v1 reste appelée : base inchangée) ;
+- `trace_events` et `retransmissions` appelaient `plan_native` (v1). Ils appellent désormais
+  `plan_native_v2` avec la table, et la passent aussi à `simulate_causal` ;
+- `ProtocolOptions.rx2_fallback` passe à **`True`** par défaut, comme le repli du Join-Accept.
+
+**Sans région déclarée, `rx2_hz == 0` et le repli reste inerte** : les scénarios historiques et
+les empreintes gelées sont intacts (aucun scénario de référence ne déclare de région).
+
+#### C6/C7 — Multi-régions et coût
+
+Sept profils exercés (EU868, US915, AS923, AU915, IN865, KR920, RU864) ; un garde-fou exige
+qu'au moins un soit en SF10, un en BW500 et un en SF12BW125. Le coût du repli est mesuré : au
+SF12BW125, la même trame occupe l'émetteur environ 20× plus longtemps qu'au SF7BW125.
+
+### D3.15 / I1 — Repli RX2 dans le planificateur natif
+
+Le cœur C++ implémente le repli vers la seconde fenêtre de réception, ce qui **supprime la
+divergence** documentée en I2 (écart D1 de l'audit). Python et C++ produisent désormais les mêmes
+décisions sur un scénario qui exerce réellement le repli.
+
+- **Opt-in.** `lsim::plan::PlanOptions::rx2_fallback`. Ce n'est **pas** un champ de
+  `lsim_plan_options` : la structure ABI reste inchangée. Côté C, fournir une table RX2 à
+  `lsim_plan_downlinks_v2` active le repli ; la v1 et la v2 sans table ne le font jamais.
+- **Même condition qu'en Python** : le repli n'opère que si `rx2_sf != 0` **et** `rx2_hz != 0`.
+- **File chronologique.** La boucle de placement devient un **tas** : la fenêtre de secours naît de
+  l'échec de la RX1 et porte sa propre ouverture (`t_open + 1 s`), qui peut être postérieure à
+  celle d'autres descentes. La traiter au même endroit que la RX1 placerait la descente trop tôt.
+  C'est l'alignement sur le tas de `GatewayArbiter` (`ready_ns`, puis ticket croissant), qui
+  départage à ouverture égale en faveur de la RX1. Sans table RX2, l'ancien tri stable est
+  conservé : résultat identique à l'octet près.
+- **Paramètres effectifs** : ouverture à `RECEIVE_DELAY2` (2 s après la fin de la montante),
+  fenêtre de 1 s, fréquence `rx2_hz`, temps d'antenne calculé au SF et à la largeur de RX2
+  (largeur nulle ⇒ reprise de `rx1_bw_hz`). L'occupation réservée est la durée réelle.
+- **Une seule émission par descente** : la RX2 n'est enfichée que sur l'échec de la RX1, et la
+  réaction ne redemande rien. Aucun doublon.
+- **Événements** : le saut descendant porte la fréquence de la fenêtre réellement émise, et
+  l'indicateur « dispositif en émission » est évalué sur cette fenêtre (RX2 s'ouvre une seconde
+  plus tard : une montante courte ne la masque pas forcément).
+- **Planificateur incrémental** : `DownlinkScheduler::on_received` applique la même règle.
+
+**Limitation de fidélité, commune aux deux moteurs, non masquée** : la sensibilité du récepteur
+utilisée pour décider si la descente est reçue reste celle du débit **RX1**, même pour une
+descente émise en RX2. Une trame RX2 au SF12 est en réalité reçue avec la sensibilité SF12, bien
+meilleure. Corriger cela change les résultats des deux côtés ; c'est un travail de fidélité radio,
+pas de parité.
+
+**Vérifications** : C++ 685 905/685 905 (dont 31 nouvelles) ; suite Python complète et parité
+(114) rejouées ; ABI **inchangée** (55 / 477, i386) ; **98 symboles, +0 / −0** par rapport à I2 ;
+empreintes `d2cb0fac…` et `ed126d7f…` inchangées. Le `xfail(strict=True)` d'I2 est devenu une
+parité stricte, et un nouveau test vérifie que la v2 avec table **diffère** de la v1 (le repli
+natif est réel, pas déclaratif).
+
+### D3.15 / I0 — Enveloppe ABI versionnée du planificateur de descentes
+
+Premier jalon de la refonte descendante. **Capacitaire :** l'extension transporte et valide les
+paramètres de la seconde fenêtre de réception (RX2) **sans modifier ni le placement ni le temps
+d'antenne**. Le repli RX2 reste **opt-in** et son implémentation est reportée à un jalon ultérieur.
+
+- **`lsim_plan_downlinks_v2`** (nouveau symbole) : enveloppe `lsim_plan_downlinks_v2_args`
+  versionnée (`struct_size`, `abi_version`), qui reprend les entrées de la v1 et ajoute
+  `lsim_plan_device_rx2` — `rx2_hz`, `rx2_sf`, `rx2_bw_hz` — plus `rx2_count`. Les champs
+  `reserved` permettent une extension ultérieure sans rupture.
+- **`lsim_plan_downlinks_v1` inchangée.** Sa déclaration publique est identique au caractère près ;
+  son corps est déplacé tel quel dans une fonction commune, appelée avec `rx2 = nullptr`. Les
+  anciens appels conservent exactement leur comportement — vérifié par la parité bit à bit
+  (C++ et Python), les 114 tests de `test_downlink_plan_parity.py` et les empreintes gelées.
+- **`sizeof(lsim_plan_device)` inchangé** (40 o en x86-64, 36 o en i386). La structure n'est pas
+  étendue en place : elle n'a aucun octet libre.
+- **Sûreté de la frontière C.** `args` nul, `struct_size` erroné, `abi_version` inconnue, pointeurs
+  obligatoires nuls et comptages incohérents sont refusés sans accéder à la mémoire. `rx2_count`
+  existe précisément parce qu'un pointeur seul ne dit pas sa longueur : sans lui, le cœur aurait lu
+  `device_count` entrées quelle que soit la taille réelle du tableau.
+- **C++ (`lsim::plan`)** : `DeviceRx2` ; surcharge `plan_downlinks(..., rx2, ...)` ; surcharge du
+  constructeur de `DownlinkScheduler` et surcharge `on_received(device, end_ns, rx2)` (arbitrage
+  C2). Les signatures d'origine sont conservées et délèguent avec « aucun RX2 ».
+- **Validation RX2** : `rx2_sf` nul = aucun repli ; sinon 7..12. `rx2_bw_hz` nul = reprend
+  `rx1_bw_hz` ; sinon 125, 250 ou 500 kHz. `rx2_hz` nul = non renseigné ; valeur négative refusée.
+- **Python** : `plan_native_v2` et `DeviceRx2` dans `lsim.downlink_plan`. `plan_native` est
+  désormais un appel de `plan_native_v2` sans RX2.
+- **`docs/DOWNLINK_PLAN_ABI_V2.md`** : contrat de l'enveloppe.
+
+**Vérifications** : C++ 685 874/685 874 (dont 592 nouvelles), Python 2 103 tests (dont 31
+nouveaux), harnais ABI 55 structures / 477 grandeurs en x86-64 et compilation i386, 98 symboles
+`lsim_*` (**+1**, aucun retiré), empreintes `d2cb0fac…` et `ed126d7f…` inchangées.
+
+**Non couvert, reporté** : le repli RX2 lui-même (changera le placement) ; l'exposition de la
+fréquence RX2 par module régional (arbitrage S1) — aucun appelant ne peut donc aujourd'hui
+renseigner `rx2_hz` correctement.
+
+### D3.15 / I2 — Repli RX2 dans l'oracle Python
+
+Le repli vers la seconde fenêtre de réception est implémenté dans la planification descendante
+Python (`trace_events._schedule_gateway`). RX1 reste prioritaire : RX2 n'est demandée que par la
+réaction d'une RX1 **non émise**, jamais à côté ni en double.
+
+- **Opt-in.** `ProtocolOptions.rx2_fallback`, `False` par défaut : à `False`, la file de
+  l'émetteur ne contient que des demandes RX1, exactement comme avant I2.
+- **Conditionné à une fenêtre réellement renseignée.** Le repli n'opère que si `rx2_sf != 0`
+  (il y a une fenêtre) **et** `rx2_hz != 0` (il y a une fréquence). Sans fréquence régionale —
+  cas de tous les scénarios sans `region:` — le repli est **inerte par construction**, ce qui
+  préserve les empreintes gelées.
+- **Paramètres effectifs.** Une descente repliée porte la fréquence, le SF et la bande passante
+  de RX2, donc un temps d'antenne **différent** : au SF12 BW125 (défaut EU868, RP002-1.0.5), la
+  même trame occupe l'émetteur une vingtaine de fois plus longtemps qu'au SF7. C'est cette durée
+  qui est réservée, pas celle de RX1.
+- **Validation ajoutée**, bornes identiques à `valid_rx2()` du cœur : `rx2_sf` dans 7..12 (0 =
+  aucun repli), `rx2_bw_hz` dans {125k, 250k, 500k} (0 = reprend `rx1_bw_hz`), `rx2_hz` non
+  négatif. Hors opt-in, rien n'est validé ni lu.
+- **Aucun doublon** : une seule émission acceptée par descente ; la réaction RX2 ne redemande
+  rien.
+
+**Divergence identifiée, non masquée.** Le planificateur natif n'implémente **aucun** repli RX2
+(écart D1 de l'audit). La parité Python/natif est donc exigée et vérifiée sur RX1, sur le repli
+désactivé et sur l'absence de fréquence régionale — où les deux moteurs se rejoignent — mais
+**pas** sur un repli effectif, qui n'a pas d'équivalent natif. Ce cas est épinglé par un
+`xfail(strict=True)` et par un test qui démontre positivement l'écart
+(`test_le_coeur_ne_replie_pas_et_le_dit`). Tant que le cœur ne replie pas, toute comparaison
+« parité avec repli » serait fausse.
+
+**Conséquence mesurée, assumée** : en saturation, le repli **réduit** le nombre de descentes qui
+aboutissent. Une RX2 au SF12 bloque l'émetteur plusieurs secondes, et empêche des RX1 suivantes
+de se placer. Ce n'est pas un défaut de placement : c'est le coût radio réel du débit de repli
+EU868. Le test `test_le_repli_coute_l_emetteur_et_peut_reduire_le_total` épingle cet effet.
+
+**Vérifications** : 25 nouveaux tests (`python/tests/test_downlink_plan_rx2.py`) ; suite Python
+complète rejouée ; C++, ABI (55 / 477, i386) et symboles (98, +1) inchangés ; empreintes
+`d2cb0fac…` et `ed126d7f…` inchangées — le champ `rx2_fallback` est délibérément exclu du `repr`
+de `ProtocolOptions`, dont la chaîne sert de clé au dépôt figé : l'y faire apparaître aurait
+changé l'empreinte sans changer un seul événement.
+
+### D3.13 — Arbitrage radio partagé : un émetteur, un budget, une seule source de vérité
+- **`python/lsim/arbitre.py` (nouveau)** : `GatewayArbiter` et `DutyCycleLedger` remplacent trois
+  occupations passerelle indépendantes — `busy_until` local de `trace_events._schedule_gateway`,
+  `busy_until` local de `ack_mac.plan_acks`, et **aucune** pour `join._evaluer`. Une seule ressource,
+  une seule règle, une seule trace d'occupation.
+- **Règles d'arbitrage** : (1) un seul émetteur ; (2) file monotone `début = max(instant_prêt,
+  occupé_jusqu'à)` — la règle historique du cœur, au bit près ; (3) ordre chronologique évalué en
+  **file d'événements**, une demande née du placement d'une autre (RX2 après RX1) entrant à son propre
+  instant ; (4) **aucune priorité inventée** : LoRaWAN ne définit pas d'ordre entre un Join-Accept et
+  l'ACK d'un autre terminal, `ArbitrationPolicy.priority` est vide et l'ordre est celui du dépôt ;
+  (5) une émission hors fenêtre **n'a pas lieu** (`window_missed`, aucune occupation), sauf
+  `allow_late` explicite — c'est l'ACK tardif, qui occupe sans être écouté.
+- **Le Join-Accept occupe l'émetteur et lui est opposé.** Mesuré, `retransmissions_ack_tardif`,
+  trames de 51 octets en SF12, `join_requests_s: [10]`, `retries: 2`, `ack_delay_ms: 12000` :
+
+  | copies d'ACK | avant D3.13 | après D3.13 |
+  |---|---|---|
+  | 1 | RX1 `delivered`, session 1 | RX1 `delivered`, session 1 |
+  | 2 | RX1 `delivered`, session 1 | RX1 `gateway_busy`, **RX2 `delivered`**, session 1 |
+  | 3 | RX1 `delivered`, session 1 | RX1 `gateway_busy`, RX2 `gateway_busy`, **session 0** |
+
+  Dans l'autre sens, `ack_delay_ms: 12800` place un ACK à 15,288 s pendant l'émission du Join-Accept
+  (15,206 → 15,453 s) : l'ACK part à 15,453 s, alors qu'il partait à 15,288 s avant. L'occupation
+  passerelle contient désormais les Join-Accept, et elle est réinjectée au moteur au tour suivant :
+  une trame montante qui chevauche une descente est perdue.
+- **RX2 peut être retardée par l'émission de RX1.** Mesuré en SF12, où un Join-Accept de 33 octets
+  occupe l'émetteur 1,81 s : RX2 passe de 63,483 s à 64,293 s (fin de l'émission de RX1), tout en
+  restant dans sa fenêtre. La correction D3.12 est intacte — RX2 reste un **secours**, jamais une
+  seconde copie — mais elle s'ajoute à la file au lieu d'être posée à un instant fixe.
+- **Le Join-Request consomme le rapport cyclique du terminal** (`DutyCycleLedger`, budget
+  `airtime cumulé + airtime <= rapport × instant`, la règle déjà utilisée pour les réémissions).
+  Une tentative refusée n'entre **pas** dans le moteur : aucune collision provoquée, aucun temps
+  d'antenne consommé, aucun compteur `sent`. Mesuré avec `duty_cycle: 0.001`, `join_retries: 2` :
+  2 refus, 0 Join-Accept émis, 0 session, et une trace qui porte `join_request / suppressed` au lieu
+  de `join_request / received`. `enforce_duty_cycle: false` rend le budget inopérant.
+- **Nouveaux compteurs** : `RetransmissionResult.joins_blocked_by_duty_cycle`,
+  `.join_accepts_emitted` ; `JoinResult.blocked_by_duty_cycle` ; `AcceptEmission.emitted` ;
+  `JoinAttempt.emitted`. Issue `gateway_busy` sur une émission de Join-Accept dont la fenêtre est
+  couverte — c'est un fait de réseau tracé, pas une transmission.
+- **Chemin d'exécution** : dès qu'une jointure radio est déclarée, les descentes passent par le
+  planificateur Python (`lsim.ack_mac`, `AckTiming()` nominal) au lieu de celui du cœur : c'est le
+  seul moyen de faire partager un émetteur unique sans modifier l'ABI. **Sans jointure radio, rien ne
+  change** : le cœur garde la main et la parité avec l'oracle Python reste exigée
+  (`test_downlink_plan_parity.py`, 124 tests).
+- **Tests** : `python/tests/test_arbitre_radio.py`, **25 tests** (portés à 34 par la validation
+  finale) — concurrence reproductible
+  (Join-Accept et ACK au même instant, ACK en émission quand RX1 s'ouvre, RX1 impossible puis RX2
+  possible, RX1 réussie sans RX2, descentes concurrentes, deux jointures qui se chevauchent,
+  émission bloquée non tracée comme réussie, session seulement après réception effective), plus un
+  scénario de bout en bout combinant jointure, ACK et downlink de données sur une passerelle.
+- **Mesures inchangées, vérifiées** : scénarios de référence des retransmissions **8/24 → 7/24 → 5/24**
+  (24/43/83 transmises, 11/15/20 reçues, 8/7/5 livrées, 0/1/8 doublons, 6/16/31 collisions,
+  occupation 0,296 / 0,440 / 0,543) ; chemin historique `join=True` avec `downlink_every` ; aucune
+  clé de scénario nouvelle, donc **les 30 schémas `schemas/api/v1` sont identiques**.
+- **Invariants** : cœur C++ et **ABI intacts** (97 symboles `lsim_*`, aucune source C++ touchée),
+  empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées, **685 282 / 685 282** vérifications C++,
+  suite Python **1 977 tests** (1 952 + 25) — portée à 1 997 par la validation finale.
+- **Limites** : rapport cyclique **descendant** non modélisé ; un seul émetteur par passerelle (pas de
+  cartes radio multiples) ; durée d'ouverture des fenêtres (1 s) = hypothèse du simulateur ; la
+  programmation causale du jeu de tentatives est **itérative et bornée** (8 tours, erreur explicite
+  sur état répété). `docs/MAC_CONSOLIDATION.md` §10.
+
+#### D3.13 — Validation finale : causalité du jeu de tentatives, fenêtres, rapport cyclique, chemins
+
+La sonde anticipée qui figeait le jeu de tentatives **avant** le placement partagé est remplacée par
+une **programmation causale** : une tentative n'est retirée du calendrier que si une jointure a été
+**observée**, jamais sur une prévision.
+
+- **`python/lsim/join.py`** : nouveau paramètre `succes_connu` de `simulate_joins`. Sur le chemin de
+  l'arbitre partagé, la boucle de sonde disparaît : les tentatives postérieures à une jointure
+  observée sont retirées, et **celles-là seulement**. Au premier tour rien n'est observé, donc toutes
+  les tentatives sont jouées. `JoinResult.succes` expose les succès observés. Le chemin **sans**
+  arbitre partagé garde sa boucle, qui y est causale puisque l'évaluateur y est le placement définitif.
+- **`python/lsim/retransmissions.py`** : `simulate_confirmed_uplinks` itère sur `succes` jusqu'au point
+  fixe (8 tours au plus). Un état qui se répète à l'identique lève `RuntimeError` plutôt que de rendre
+  un résultat approximatif. En pratique : deux à trois tours.
+- **Scénario de causalité, avant / après.** `join_retries: 2`, tentative à 10 s, seconde à 20 s ;
+  `ack_repetitions: 3`, `ack_delay_ms: 12000`, SF12 — les ACK couvrent RX1 **et** RX2 :
+
+  | | Tentatives | RX1 / RX2 de la 1re | Session | Join-Accept émis |
+  |---|---|---|---|---|
+  | avant (sonde) | 1 (10 s) | `gateway_busy` / `gateway_busy` | **0** | 0 |
+  | après (causal) | **2** (10 s, 20 s) | `gateway_busy` / `gateway_busy`, puis `delivered` à 26,48 s | **1** | 1 |
+
+  Avant, le terminal **ne joignait jamais** alors que rien ne l'en empêchait. Sans concurrence, une
+  seule tentative est jouée : aucune tentative n'est émise après une jointure réussie.
+- **Fenêtres : les sept cas exigés sont couverts et testés** — ACK occupant RX1 puis RX2 ; Join-Accept
+  occupant l'émetteur quand un ACK est demandé ; plusieurs demandes au même instant ; demande retardée
+  dépassant sa fenêtre ; **émission commençant dans la fenêtre et la dépassant** ; demande supprimée ne
+  réservant pas l'émetteur ; **rejeu non confondu avec un nouvel Join-Accept**. La règle de départ est
+  documentée dans `lsim.arbitre` : `début = max(instant_prêt, ouverture, occupé_jusqu'à)`, occupation
+  de `début` à `début + temps d'antenne`, **sans garde ni temps de retournement**. Le verdict porte sur
+  le **début** : une descente commencée dans la fenêtre est émise entière et occupe au-delà.
+- **Rapport cyclique : le budget Join-Request est conservé**, jamais étendu. Vérifié : il s'applique à
+  **toutes** les tentatives réelles du terminal (`join_retries: 3` ⇒ 3 refus, pas 1) ; une tentative
+  refusée n'est **pas** enregistrée comme une émission (ni occupation, ni temps d'antenne, ni compteur
+  `sent`, événement `suppressed`) ; isolation entre terminaux mesurée sur deux groupes (`0.001` et
+  `1.0`) ; unités et fenêtre documentées — nanosecondes, budget **cumulatif depuis l'origine**, et non
+  une fenêtre glissante. **Aucune limite réglementaire descendante n'est inventée** : contrainte non
+  modélisée, signalée.
+- **Chemins C++ et Python.** La bascule est `_native_plan_applies` : `not options.join and mac is None`.
+  La raison est structurelle : `plan_native(records, radios, options)` ne reçoit que des enregistrements
+  et **n'itère pas** (une seule exécution du moteur, contrôle d'égalité), alors qu'une demande de
+  Join-Accept dépend du calendrier des tentatives de données **et** naît pendant la résolution (RX2,
+  rejeu). Faire tenir cela dans `lsim_plan_downlinks_v1` changerait l'ABI gelée. Vérifié sans équivoque :
+  sans concurrence pour l'émetteur, l'arbitre partagé reproduit le chemin isolé **à la nanoseconde**,
+  sur les **500 tentatives** du scénario de référence. **97 symboles `lsim_*`, empreinte
+  `0e546fa6391866d9…` : ABI et symboles exportés inchangés.**
+- **Mesures de référence inchangées, remesurées après la correction** : 8/24 → 7/24 → 5/24
+  (24/43/83 transmises, 11/15/20 reçues, 8/7/5 livrées, 0/1/8 doublons, 6/16/31 collisions,
+  occupation 0,296 / 0,440 / 0,543) ; RX2 retardée par RX1 (62,483 → 64,293 s) ; ACK repoussé par le
+  Join-Accept (15,206 → 15,453 s) ; chemin historique `join=True` avec `downlink_every` (3 familles de
+  descentes, aucun chevauchement).
+- **Tests** : `test_join_causalite.py` (**6**, le scénario exigé et les quatre propriétés),
+  `test_arbitre_radio.py` (**34**, dont les sept cas de fenêtres et cinq de rapport cyclique),
+  `test_chemins_cpp_python.py` (**5**, branche empruntée, justification, concordance). Suite Python :
+  **1 997 tests** (1 977 + 20), 1 ignoré, aucun échec. **685 282 / 685 282** vérifications C++.
+  Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées.
+
+
+### Jointure OTAA dans le moteur radio : Join-Request uplink, Join-Accept en RX1/RX2
+- **`python/lsim/join.py`** : le Join-Request passe par le moteur causal comme une transmission de
+  23 octets (temps de vol, collisions, sensibilité, couverture) ; le Join-Accept est une descente de
+  33 octets émise en **RX1** (`JOIN_ACCEPT_DELAY1`, 5 s).
+- **RX2 est une fenêtre de secours, pas une copie.** RX2 (`JOIN_ACCEPT_DELAY2`, 6 s) n'est émise que
+  si RX1 n'a pas abouti ; si RX1 est reçue, aucune émission RX2 n'a lieu
+  (`join_accept_rx2_fallback: false` la supprime entièrement). Le rejeu d'un Join-Accept est un
+  mécanisme distinct (`join_accept_replays`) : le même message est réémis après acceptation, reçu
+  puis refusé, et ne rouvre aucune session.
+- **Une session n'est ouverte que si l'échange aboutit** : Join-Accept reçu dans une fenêtre,
+  terminal à l'écoute, `JoinNonce` supérieur au dernier accepté. Un Join-Request perdu, une
+  collision, RX1 et RX2 perdues ne remettent **aucun** compteur à zéro.
+- **Scénario** : `join_requests_s` (instants des Join-Request), `join_retries` (1 à 3, 10 s entre
+  deux essais), `join_accept_rx2_fallback`, `join_accept_replays` (0 à 2). Absents du hash à leur
+  valeur par défaut ; exclusifs avec le modèle déclaré `session_joins_s`.
+- **Trace** : `join_request` à l'instant réel avec l'issue du moteur ; un `join_accept` **par
+  émission réellement faite** — un seul si RX1 aboutit, deux si RX2 sert de secours, plus un
+  événement `suppressed` par rejeu reçu.
+- **Mesures** : à 100 m, RX1 reçue et session ouverte (`FCntUp` 0 → 0) ; à 20 km, requête perdue,
+  aucune session (`FCntUp` 0 puis 1) ; à 9 km avec récepteur dégradé, RX1 et RX2 perdues ; trame de
+  51 octets en SF12 couvrant RX1, RX2 reçue à 63,48 s ; deux terminaux au même point, collision ;
+  deux tentatives sur deux terminaux, une session par terminal ; rejeu, une seule session.
+- **Limites** : aucune cryptographie (ni clé, ni `MIC`, ni chiffrement), Join-Accept non opposé à
+  l'occupation de la passerelle, Join-Request non compté dans le rapport cyclique, pas de rejoint 1.1.
+  `docs/MAC_CONSOLIDATION.md` §9.
+
+### Cycle de vie des sessions : jointures déclarées, compteurs remis à zéro, trames périmées
+- **`python/lsim/sessions.py`** : `SessionTimeline` ordonne les `Join-Accept` acceptés. Un `Join-Accept`
+  rejoué (nonce non croissant, instant non postérieur) lève `JoinRejected` **sans** rien remettre à
+  zéro ; une session ouverte porte un rang (1, 2, …) et une date.
+- **Le scénario déclare les jointures** : `retransmissions.session_joins_s` (instants en secondes,
+  strictement croissants, 16 au plus). Vide, il est absent du hash : les scénarios existants gardent
+  leur empreinte. Lorsqu'il est déclaré, il produit des événements `join_request` /
+  `join_accept` dans la trace, au vocabulaire déjà défini par le contrat — aucune valeur nouvelle.
+- **Les compteurs repartent de zéro** : `FCntUp` et les deux séries descendantes sont numérotés par
+  `(terminal, session)`. Mesuré sur trois trames et `session_joins_s: [0, 40]` :
+  `(session 1, trame 0, FCntUp 0, FCntDown 0)`, `(session 2, trame 0, 0, 0)`, `(session 2, trame 1, 1, 1)`.
+- **Les trames de l'ancienne session ne sont plus réémises** : la tentative prévue après la jointure
+  est supprimée et comptée dans `RetransmissionResult.rejected_stale_session`. Mesuré sur le cas
+  « ACK tardif » à deux messages, `retries: 2` : 6 transmissions sans jointure, **5** avec
+  `session_joins_s: [5]`, deux tentatives périmées, 5 ACK au lieu de 6.
+- **Tests** : `python/tests/test_mac_sessions.py` (9 tests), dont un qui vérifie que le hash ne change
+  pas quand `session_joins_s` est vide et qu'il change dès qu'une jointure est déclarée.
+- **Limites** : ni cryptographie ni `JoinNonce` réel (le nonce est un rang) ; le `Join-Request` n'est
+  pas modélisé dans le moteur radio ; pas de rejoint 1.1. `docs/MAC_CONSOLIDATION.md` §8.
+
+### Validation opérationnelle des compteurs : `AFCntDown`, sessions, interactions
+- **`NFCntDown` et `AFCntDown` exercées de bout en bout.** `downlink_payload: true` fait porter une
+  charge utile à la descente : elle consomme `AFCntDown` et son événement de trace est `data_ack`,
+  au lieu d'`ack_only` et `NFCntDown`. Mêmes transmissions, même livraison, seule la série change
+  (mesuré sur le scénario à deux trames : `FCntDown` `[0, 1]` dans les deux modes).
+- **Sessions.** `plan_acks(sessions=...)` et `DeviceCounters.renew_session()` : deux sessions d'un
+  même terminal ont des séries indépendantes ; le compteur 0 de la session 1 n'est **pas** un rejeu
+  de celui de la session 0. Le terminal (identité) et la session (compteurs) sont distincts.
+- **Interactions vérifiées** : ACK tardif en mode applicatif (`6 LATE`, 0 reçu), copies
+  (`2 data_ack` + 2 `suppressed`), réémissions inchangées (6 transmissions, 4 réémissions), série
+  épuisée (un seul ACK numéroté, `ack_not_sent` compte les trames sans ACK), et cohérence
+  trace ↔ compteurs ↔ `gateway_tx` dans les deux séries.
+- **Limites maintenues** : aucun scénario ne déclenche de `Join-Accept` (la session est fournie par
+  l'appelant), `GAP` reste couvert par un test construit, et les scénarios livrés gardent leur
+  empreinte (`downlink_payload` absent du hash à sa valeur par défaut).
+- **Tests** : `python/tests/test_mac_counters_operational.py` (12 tests).
+
+### Compteurs de trame complets : rejeu, désynchronisation, débordement
+- **`python/lsim/fcnt.py`** : primitives testées seules — `CounterSeries` (reconstruction du champ
+  16 bits dans la série 32 bits, rejeu, borne d'écart, épuisement à 2^32) et `DownlinkCounters`
+  (`NFCntDown` / `AFCntDown` indépendantes, même départ de session).
+- **Le terminal lit un champ de 16 bits.** `plan_acks` ne compare plus deux compteurs 32 bits : il
+  reconstruit (`CounterSeries.reconstruct`) puis contrôle. `DUPLICATE` (champ identique — rejeu,
+  copie) et `GAP` (> 16 384 — désynchronisation) deviennent des **verdicts de compteur**, exposés par
+  `AckOutcome.counter` ; la classe `GAP` s'ajoute à la taxonomie, `AckCounts.gap` et
+  `RetransmissionResult.ack_gap` la comptent, et l'invariant devient
+  `standard + late + lost + duplicate + gap == acks_planned`.
+- **`fcnt_down_start`** (0 à 2^32-1) fixe le premier compteur descendant de chaque terminal ; absent
+  du hash à sa valeur par défaut, comme `fcnt_up_start`.
+- **Correction de clé.** Les compteurs étaient clés par *transmission* dans le chemin des
+  réémissions : deux trames d'un même terminal recevaient le même `FCntDown`, la seconde étant
+  acceptée parce que sa série était neuve. `plan_acks(devices=...)` reçoit désormais le terminal
+  physique ; les séries et l'écoute continue sont par terminal. Mesures des scénarios livrés
+  inchangées (6 `LATE` ; 2 `STANDARD` + 2 `DUPLICATE` ; classe C : 2 `STANDARD`), mais `FCntDown`
+  passe de `[0, 0]` à `[0, 1]` sur le cas « deux copies ».
+- **Schémas d'API** : `fcnt_down_start` est ajouté au modèle de scénario (`schemas/api/v1`, trois
+  fichiers, sept lignes chacun). Changement **additif** : aucune valeur de `EventKind` ni de
+  `HopOutcome` ne bouge.
+- **Statut normatif, écrit dans le code et la doc** : la reconstruction 16 → 32 bits et le rejeu
+  strictement croissant sont des règles de la spécification ; la borne de 16 384 est la valeur
+  historique `MAX_FCNT_GAP` des versions ≤ 1.0.3, **retirée de LoRaWAN 1.0.4 et suivants** (RP002),
+  appliquée ici comme politique de rejeu explicite. Limites : `GAP` n'est produit par **aucun**
+  scénario livré (la copie d'un ACK est un `DUPLICATE`), `AFCntDown` n'est pas exercé de bout en
+  bout (un ACK ne porte pas de charge utile), et la remise à zéro par une nouvelle jointure reste
+  hors modèle.
+- **Tests** : `python/tests/test_fcnt_counters.py` (11 tests) — rejeu, borne exacte 16 384/16 385,
+  débordement, bascule du champ 16 bits, séries NF/AF, `fcnt_down_start`, série épuisée, copie
+  reconnue comme rejeu et non comme saut, réémission, neutralité du hash. Validation : **1 914**
+  tests Python, **685 282/685 282** C++, empreintes `d2cb0fac…` / `ed126d7f…` inchangées.
+
+### ACK de la couche MAC dans la trace
+- **Un `ProtocolEvent` par ACK réellement émis.** `_mac_ack_events`
+  (`python/lsim/retransmissions.py`) convertit les `AckEmission` du plan MAC en événements `ack` :
+  instants, nombre de copies et verdicts viennent du **même plan** que `gateway_tx` et que les
+  compteurs, au lieu des événements du planificateur du cœur. Les ACK tardif, dupliqué et non
+  décodable cessent d'être invisibles dans la trace.
+- **Aucune valeur nouvelle dans le contrat d'API.** Correspondance :
+  `STANDARD → ack_only`, `LATE → not_listened`, `LOST` (fenêtre manquée) `→ device_transmitting`,
+  `LOST` (non décodable) `→ lost_sensitivity`, `DUPLICATE → suppressed` (`suppressed` est déjà le
+  verdict des doublons de maillage). `EventKind`, `HopOutcome` et `schemas/api/v1` sont inchangés :
+  régénérer les schémas ne produit **aucun** diff. Un test refuse toute issue hors contrat.
+- **Chemins du cœur intacts.** Sans `ack_delay_ms` ni `ack_repetitions` actifs, les événements
+  restent ceux de `plan_native` : témoin à `ack_delay_ms: 0` → 2 trames, 2 événements `ack_only`,
+  aucun doublon. Mesures sur les scénarios de référence : tardif 2 500 ms → 6 émissions,
+  **6 événements `not_listened`** ; deux copies → 4 émissions, **2 `ack_only` + 2 `suppressed`** ;
+  classe C → 2 émissions, **2 `ack_only`**. Dans les trois cas, chaque `t_ns` d'événement est un
+  début d'intervalle de `gateway_tx` et `len(ack events) == acks_planned`.
+- **Tests** : `python/tests/test_mac_trace_events.py` (7 tests) — correspondance émission ↔
+  événement, tri et `seq`, trois scénarios de référence, cas construit `device_transmitting`,
+  vocabulaire du contrat, non-régression du chemin du cœur. Validation de l'incrément :
+  1 903 tests Python, 685 282/685 282 tests C++, empreintes `d2cb0fac…` / `ed126d7f…` inchangées.
+
+### Consolidation MAC : compteurs de trame, taxonomie de l'ACK, classes d'écoute
+- **Identité de trame réelle.** `FCntUp` identifie la trame et non la tentative : toutes les
+  réémissions la partagent. `fcnt_up_start` (0 à 2^32-1) fixe le premier compteur d'un terminal,
+  pour qu'il ne soit pas un rang de tableau. `FCntDown` est une série **par terminal** ; un ACK émis
+  consomme un numéro, ses copies le conservent. `AckFrame` porte désormais les deux
+  (`is_explicit` vrai) : l'appariement dispose de l'identité, même si le chemin du cœur continue de
+  s'apparier par fenêtre. Sémantique alignée sur `lsim.session` (`begin_uplink`, `receive_downlink`).
+- **Contrôle de rejeu.** Un ACK n'est accepté que si son `FCntDown` dépasse le dernier accepté par
+  ce terminal : la copie d'un ACK est un `DUPLICATE` rejeté par le compteur, plus par une règle
+  propre à la couche.
+- **Taxonomie explicite** (`AckSort`) : chaque émission reçoit exactement une classe —
+  `STANDARD`, `LATE`, `LOST`, `DUPLICATE` — et `AckPlan.counts` /
+  `RetransmissionResult.ack_standard|ack_late|ack_lost|ack_duplicate|ack_not_sent` les agrègent.
+  Un test vérifie `standard + late + lost + duplicate == acks_planned` sur les trois configurations
+  de référence (2 500 ms, témoin, deux copies).
+- **Classes d'écoute sans mélange.** `device_class` du groupe (`A` par défaut, `B`, `C`). A et B
+  ouvrent RX1/RX2 ; l'ACK étant une descente de classe A, B s'y comporte comme A et ses *ping slots*
+  restent hors périmètre. C écoute en continu. Mesure, même scénario `ack_delay_ms: 2500` :
+
+  | Classe | Transmissions | ACK émis | `standard` | `late` | Livrées |
+  |---|---|---|---|---|---|
+  | A | 6 | 6 | 0 | 6 | 0/2 |
+  | B | 6 | 6 | 0 | 6 | 0/2 |
+  | C | 2 | 2 | 2 | 0 | 2/2 |
+
+  Les émissions initiales sont identiques dans les trois cas (mêmes instants) : seule la réception de
+  l'ACK change, la radio montante n'est pas touchée.
+- **Cohérence des traces** : les intervalles d'ACK émis par la couche MAC sont imposés au moteur
+  (pertes montantes réelles) et présents dans `gateway_tx` — vérifié : six ACK tardifs ⇒ six
+  intervalles. **Limite énoncée** : ces ACK ne sont pas encore des `ProtocolEvent` de type `ack`.
+- **Inventaire des commandes MAC validé** : `python/tests/test_mac_commands_inventory.py` couvre les
+  **31** commandes du codec (encodage, décodage dans le bon sens, CID attendu, égalité des champs) et
+  échoue si une commande est ajoutée sans ligne. `docs/MAC_CONSOLIDATION.md` distingue celles qui
+  sont appliquées (LinkADR, DutyCycle, LinkCheck, DevStatus, DeviceTime, Rekey) de celles qui restent
+  des codecs sans effet simulé.
+- **Hash stable** : `fcnt_up_start: 0` et `device_class: A` sont retirés du hachage à leur valeur par
+  défaut. Vérifié : `retransmissions_ack_tardif` garde `cee60ffc…`, les autres exemples aussi.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; **1 896 tests** Python (dont 13 pour la
+  consolidation MAC et 4 pour l'inventaire des commandes) et **685 282** vérifications C++.
+
+### Couche MAC de l'ACK : tardif et dupliqué, produits de bout en bout
+- `lsim.ack_mac` (Python) rend possibles les deux seules situations que le planificateur du cœur ne
+  sait pas produire : `DownlinkScheduler::on_received` renvoie `nullopt` hors RX1 et n'émet qu'un
+  ACK par trame reçue. La couche ne touche **ni au cœur C++ ni à l'ABI** : elle replanifie l'instant
+  d'émission de l'ACK, réutilise `_downlink_airtime_ns` et `receiver_sensitivity_dbm` du cœur, et
+  décide si l'émission tombe dans une fenêtre écoutée (RX1, RX2, sinon `LATE`).
+- Deux réglages **facultatifs** du bloc `retransmissions:` : `ack_delay_ms` (0 à 60 000) et
+  `ack_repetitions` (1 à 3). À leurs valeurs par défaut, **rien ne change** : le chemin causal du
+  cœur est emprunté tel quel, et un test de parité vérifie que la couche MAC reproduit exactement le
+  planificateur natif. Hors bornes : `ValidationError`.
+- **Hash stable** : les deux champs à leur valeur par défaut sont retirés du hachage, comme les
+  champs ajoutés du bloc `mac`. Vérifié fichier par fichier contre le commit précédent :
+  `retransmissions_nominal` `312a19b1…`, `retransmissions_ack_perdu` `27ce1bd0…`,
+  `retransmissions_collision` `83d531e5…`, `retransmissions_doublons` `e0521e93…` — identiques. Un
+  test fige `312a19b1…` pour que la stabilité ne dépende pas d'une relecture.
+- Mesures `build_trace`, mêmes graines :
+
+  | scénario | réglage | transmissions | ACK émis | ACK reçus | livrées | doublons ignorés |
+  |---|---|---|---|---|---|---|
+  | `ack_tardif` | `ack_delay_ms: 2500` | 6 | 6 | **0** | 0/2 | 0 |
+  | `ack_tardif` | témoin `ack_delay_ms: 0` | 2 | 2 | 2 | 2/2 | 0 |
+  | `ack_duplique` | `ack_repetitions: 2` | 2 | **4** | 2 | 2/2 | **2** |
+
+  L'émission commence à `fin + 1 s + delay_ms`. Frontières balayées de 0 à 2 500 ms (pas de 50) :
+  `delay_ms` 0 à 999 tombent dans RX1, 1000 à 1999 dans RX2 (reçus), 2000 et au-delà après RX2 —
+  ACK émis, airtime consommée, jamais entendu. Une passerelle occupée repousse l'émission
+  (`max(ouverture + delay, fin d'occupation)`) et peut faire basculer un ACK de RX1 vers RX2 ou hors
+  fenêtre.
+- **Isolation de la dégradation du récepteur** (réserve d'évaluation) : trois tests. Le premier
+  compare les empreintes `(device_index, start_ns, end_ns, rssi, outcome)` des uplinks à 0, 5, 10 et
+  20 dB de marge — une seule empreinte distincte exigée : la liaison montante est **inchangée** au
+  bit près ; le deuxième montre que la réception de l'ACK, elle, bascule ; le troisième vérifie que
+  le premier passage (`retries: 0`) est identique, donc que le budget montant n'est pas touché.
+- Documentation corrigée là où elle affirmait le contraire : `docs/USAGE.md` disait « aucun scénario
+  ne les provoque » pour l'ACK tardif et l'ACK dupliqué ; le bloc `retransmissions:` y gagne les deux
+  clés, les tableaux de fenêtres mesurées et les deux exemples exécutables.
+- Limites énoncées, non masquées : `LATE` est rangé avec les pertes de sensibilité dans
+  `DownlinkDelivery` (pas de verdict « hors fenêtre » dans l'énumération existante) ; `ack_repetitions`
+  est une hypothèse de réseau, LoRaWAN 1.0.4 ne répète pas l'ACK en classe A ; aucun `FCntUp` /
+  `FCntDown` réel n'est décrémenté ; la couche est Python, hors du cœur C++.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; suites complètes **1 879 tests** Python
+  (dont 26 pour les scénarios de retransmission) et **685 282** vérifications C++.
+
+### Retransmissions pilotées par le scénario, et modèle ACK explicite
+- Nouveau bloc `retransmissions:` **facultatif** dans le YAML (`retries` 0 à 7,
+  `retransmit_delay_ms` >= 2000, `enforce_duty_cycle`, `energy_profile`, `enabled`). Absent :
+  comportement historique et hash inchangé. `retries: 0` n'ajoute aucune transmission.
+  Paramètre hors bornes ou clé inconnue : `ValidationError`.
+- `build_trace` et `run_scenario` empruntent ce chemin : une entrée de trace **par transmission**,
+  indices des terminaux du scénario, et `trace.retransmissions` (essais, ACK, doublons, refus).
+- Le modèle ACK est découpé en trois notions distinctes — livraison de la descente
+  (`DownlinkDelivery`), réception de l'ACK (`AckReception`), acquittement logique — au lieu de
+  confondre « descente planifiée » et « trame ACK reçue ». `AckFrame` prépare une représentation
+  MAC complète sans toucher à l'ABI.
+- Quatre scénarios exécutables sous `docs/exemples/retransmissions_*.yaml` couvrent : aucun échec,
+  collision puis récupération, refus par rapport cyclique, et ACK perdus avec **doublons réseau
+  réels** (8 pour 20 réceptions).
+- Mesures comparatives, mêmes graines, scénario `ack_perdu` (récepteur +10 dB) :
+
+  | réémissions | transmises | reçues | ACK reçus | livrées | doublons | collisions | occupation | énergie |
+  |---|---|---|---|---|---|---|---|---|
+  | 0 | 24 | 11 | 8 | 8/24 | 0 | 6 | 0,296 | 2,232 J |
+  | 1 | 43 | 15 | 7 | 7/24 | 1 | 16 | 0,440 | 4,000 J |
+  | 3 | 83 | 20 | 5 | 5/24 | 8 | 31 | 0,543 | 7,720 J |
+
+  **Plus de réémissions ne veut pas dire plus de livraisons** : ici la livraison baisse (8 → 5)
+  parce que le trafic ajouté provoque des collisions. Aucun nombre de tentatives n'est un optimum
+  universel.
+- Fait mesuré, à ne pas masquer : avec un récepteur nominal, le planificateur causal livre l'ACK
+  de **toute** trame reçue (15 réceptions, 15 ACK, 0 doublon). La perte d'ACK exige une hypothèse de
+  récepteur dégradé ; elle n'est pas représentable par le seul scénario.
+- Empreintes gelées `d2cb0fac…` / `ed126d7f…` inchangées ; suites complètes **1 869 tests** Python
+  et **685 282** vérifications C++.
+
+### Point fixe uplinks ↔ descentes : borne portée à 64 itérations, cycles signalés (F1)
+- `MAX_ITERATIONS` passe de **12 à 64**. Mesure sur les 120 configurations de référence de D3.2 (40 graines × 3 jeux, `quartier_sf9.yaml` à 2 000 dispositifs) : le point fixe est atteint en **9 à 21 itérations** ; les **69** configurations qui échouaient en `RuntimeError` en demandaient **13 à 21**. Les **51** configurations déjà convergentes ne changent pas d'un octet : même nombre d'itérations, empreinte du résultat complet (`records`, `gateway_tx`, totaux, compteurs par dispositif) identique.
+- Un état qui se répète à l'identique est signalé immédiatement (`cycle de période N`) au lieu d'épuiser la borne : une répétition exacte ne peut pas converger. Le message d'échec indique le nombre d'itérations effectuées. `build_protocol_events` (jointures seules) suit le même critère.
+- Aucun résultat approximatif : la trace n'est renvoyée que si l'égalité exacte de l'état est vérifiée ; la borne ne sert qu'à borner le travail.
+- Effet de bord mesuré : les scénarios denses 11 et 38 de `test_downlink_plan_parity.py`, réputés sans point fixe, convergent désormais (la trace causale et le point fixe Python coïncident) ; la garde `except RuntimeError` du test reste en place.
+- Tests : `test_fixed_point_converges_beyond_twelve_iterations` (1 300 dispositifs, graine 5, point fixe à la 16e itération — échouait avant la correction) et `test_fixed_point_cycle_is_reported_immediately` (cycle de période 2 détecté au 3e tour).
+
+### Frontal RF v4 : gain et perte par terminal et par passerelle (ABI additive)
+- Quatre points d'entrée ajoutés sans modifier les 91 existants : `lsim_simulate_uplinks_trace_v3`, `lsim_simulate_uplinks_trace_gw2_v2`, `lsim_simulate_uplinks_multi_dl_v2`, `lsim_simulate_closed_loop_v4` (95 symboles exportés).
+- `lsim_device_rf` / `lsim_gateway_rf` : `present` à bits indépendants (`LSIM_RF_HAS_ANTENNA_GAIN`, `LSIM_RF_HAS_CABLE_LOSS`). Un champ absent n'est pas lu ; un bit inconnu, une valeur hors bornes (`|G| <= 40 dBi`, `0 <= L <= 40 dB`) ou une table partielle sont refusés (statut 301).
+- Sémantique réciproque : `RSSI_ul = (P_tx + G_d − L_d) + (G_g − L_g) − PL − shadowing` ; la descente réutilise le montant, les termes de la chaîne terminale s'annulent, donc le gain est compté une seule fois. Quand une table terminale est fournie, `rule.device_antenna_gain_dbi` n'est plus ajouté (aucun cumul).
+- `lsim_closed_loop_v4_args` enveloppe les arguments v3 : validation et écriture inchangées.
+- Pont Python : `python/lsim/rf.py` (`DeviceRf`, `GatewayRf`, `None` = champ absent), routage unique et testé par espions ; dès qu'un frontal est fourni, l'ancien point d'entrée n'est plus appelé.
+- **Sans frontal fourni, résultat identique au bit près** : empreintes `d2cb0fac6c2d9950` / `ed126d7ff5aac3b0` inchangées, 1802 → 1839 tests Python (dont 30 pour le frontal), C++ 685165 → 685249 vérifications.
+
+### Caractérisation RF R1 (tests seulement, aucun changement de comportement)
+- `python/tests/test_rf_characterization_r1.py` : 24 tests qui figent le comportement radio **réel** de la base, mesuré et non supposé. Six sujets : gain de la passerelle (+3 dBi = +3 dB, additif de 0 à 6 dBi, sans effet sur l'airtime ; RSSI = P_tx + G_passerelle − PL(d) à 1e-9) ; absence de gain d'antenne du terminal dans le modèle (seul `tx_power_dbm` agit) et non-contamination du gain de descente sur la liaison montante (RSSI montant identique au bit près pour 0 / 10 / 20 dBi, alors que l'issue de descente bascule) ; descente par réciprocité, avec bascule de réception à 12 km / SF12 quand le gain terminal passe de 0 à 10 dBi ; sensibilité RAK7249 (catalogue −139 dBm, aucun point publié, seuils relatifs SX1276 appliqués : écarts 16 / 13 / 10 / 7 / 6 / 3 dB du SF7 au SF12) ; collisions de même SF, frontière de capture exacte et inclusive à 6 dB, chevauchement partiel (140 ms chevauche, 150 ms non pour un airtime SF9 de 144 384 000 ns) ; contrôles (SF différents et transmissions disjointes ne collisionnent pas).
+- Limites documentées dans les tests, non corrigées ici : la fréquence est portée par la propagation et non par la trame (aucun modèle de canaux distincts au niveau radio) ; l'issue de descente utilise un encodage inversé de celui de la montée (0 = reçu), figé par l'ABI.
+- Empreintes gelées, résultats C++ et symboles exportés **inchangés** : `d2cb0fac6c2d9950` / `ed126d7ff5aac3b0`, 685165 / 685165, 91 symboles.
+
+### Modèle de canaux LinkADR : exclusions par canal, trace interne v3 (boucle fermée, EU868)
+- Refus de canal : exclusion par canal des seuls suspects (`demandés \ confirmés`), 100 uplinks admissibles (convention du simulateur, ni TS001 ni RP002). Le débit et la puissance acceptés restent appliqués.
+- Refus à suspects vides (aucun suspect, masque demandé entièrement confirmé ou vide) : exclusion du masque exact (politique du simulateur, non TS001), sans répétition pendant 100 uplinks, renouvelée si le même masque est refusé, expirée sans commande. Repli sur le dernier masque confirmé.
+- Refus de débit et de masque simultanés (D5) : seul le débit est exclu ; le canal indéfini n'est exclu qu'au refus suivant à débit accepté.
+- **Changement de comportement** : dans le scénario 011 (masque refusé, débit et puissance acceptés), le masque entier n'est plus exclu. Voir `docs/CHANNEL_MASK_MODEL.md`.
+- Compteurs indépendants par débit, puissance et canal ; renouvellement signalé ; expiration sans commande.
+- Trace interne v3 (`LoopChannelIo::trace_v3`, opt-in, C++ seulement) : bits LinkADRAns et contenu acquitté, exclusions créées / renouvelées / expirées, décisions ADR, motifs D5, descentes avec issue radio et cause de perte, chaque événement avec son origine (`Normative`, `Radio` ou `SimulatorPolicy`). Sans effet sur les radios. Non exposée à Python : elle attend l'ABI v3.
+- Empreintes historiques (dump, trace ADR) inchangées.
+
+### Réémission des commandes LinkADR (TS001-1.0.4 §5, décision utilisateur)
+- Réémission : une commande LinkADRReq sans LinkADRAns est renvoyée à chaque uplink reçu, sans plafond normatif ni temporisation. La norme ne fixe ni nombre maximal de réémissions ni backoff exponentiel pour cette règle (section 7 : seulement les uplinks confirmés qui attendent un acquittement, intervalle aléatoire).
+- Chemin en direct (`lsim serve`) : le plafond de 8 essais devient facultatif (`MAC_MAX_ATTEMPTS = None` par défaut ; une valeur fixe est une politique d'implémentation). Un LinkADRAns négatif (au moins un bit à 0, TS001 §5.2) ferme la demande, journalisé avec ses trois bits, et la même configuration n'est pas renvoyée. Refus journalisé, non persisté.
+- Boucle fermée : aucun plafond. Une réponse négative exclut la valeur refusée de la décision ADR suivante au lieu de bloquer définitivement l'ADR. Ce chemin n'est pas atteignable tel quel : le serveur et le dispositif partagent le même plan régional, donc aucun refus n'est produit ; non testé de bout en bout.
+- Tests : `test_linkadr_wiring.py` (réémission au-delà de 8 essais, refus sur chaque bit) ; `test_closed_loop.cpp` `test_linkadr_reissued_on_each_uplink_without_answer` (mutation vers un plafond à 60 uplinks détectée).
+
+### Boucle fermée : LinkADRReq et DutyCycleReq (passerelle unique)
+- Bloc `mac:` : `link_adr` (LinkADRReq, décision ADR côté serveur) et `duty_cycle_exponent` (DutyCycleReq, 1/2^k). Actifs seulement si demandés ; sans ces champs, scénarios, résultats et empreintes inchangés. Schémas régénérés.
+- `build_trace` et `run_scenario` passent par la boucle fermée (une seule exécution native, descentes créées par le moteur) dès que l'un de ces champs est actif. Événements `mac_request` (LinkADRReq, DutyCycleReq) et `mac_answer` (LinkADRAns, DutyCycleAns).
+- **Puissance** : index 0 = puissance configurée plafonnée par la PIRE du plan ; pas du plan par index ; index réservés refusés. Table TXPower : EU868 uniquement (RP002-1.0.3, PIRE +16 dBm, pas 2 dB, index 0 à 7). Un plan sans table refuse LinkADR.
+- **Duty cycle** : limite réglementaire par index (sous-bande à la PIRE de l'index, combinée au duty cycle du groupe) ; DutyCycleReq ne fait que la réduire. Repos après une émission = airtime de l'émission terminée × (1/D − 1).
+- **Refusé explicitement** : jointure, passerelles multiples, mesh.
+- **Réservations MAC dans la boucle fermée** : LinkCheckReq, DeviceTimeReq et DevStatusAns réservent leurs octets dans le temps d'antenne ; LinkCheckAns, DeviceTimeAns et DevStatusReq sont portés par la descente de l'uplink concerné. DevStatusAns est confirmée à la réception de l'uplink suivant. Nouvelle API `lsim_simulate_closed_loop_v2` (la v1 est conservée). Sans ADR ni DutyCycle, la boucle fermée reproduit le chemin historique (test de parité).
+- **Fenêtres RX (TS001 §3.3)** : le dispositif n'émet plus avant la fin de RX2 de son uplink précédent (fin + 3 s), décision C1 ; la boucle fermée ouvre RX2 (fin + 2 s, SF12, 1 s) si la passerelle ne peut pas émettre en RX1 (RP002-1.0.3). Fréquence RX2 non modélisée ; RP002-1.0.5 non vérifiée. Sans bloc `mac:`, empreintes inchangées.
+- **Départ de descente (A6)** : la passerelle démarre une descente exactement à l'ouverture de la fenêtre ; une fenêtre encore occupée n'est pas décalée (repli RX2, puis perte). Sous la charge mixte à 5 dB, plus aucune expiration de réponse n'est observée (ADR et DutyCycle ne sont plus en attente simultanément) ; l'expiration est couverte par les tests de file déterministes et `test_mac_queue_fairness_bounded_wait`. Effet mesuré (C++, mêmes paramètres que la charge mixte de référence, 8 dispositifs, 40 messages, 5 dB) : commandes mises en file 519 → 402, réponses reportées/expirées 30 → 0, réceptions d'uplinks 173 → 134, descentes en RX2 (SF12) 0 → 26 (même configuration). Sous 120 messages à 5 dB, réceptions 472 → 298 : la descente ne peut plus être décalée, donc RX1 bloquée devient perte ; c'est le comportement normatif, pas une régression. Règle d'occupation en boucle fermée : intervalles exacts (une descente n'est planifiée que si elle ne chevauche aucune descente déjà planifiée) au lieu du maximum des fins (`busy_until`), qui refusait à tort des fenêtres libres ; test `test_exact_overlap_accepts_window_before_later_emission` (vérifié par mutation : il échoue avec l'ancienne règle). Effet mesuré (sonde C++ hors dépôt, mêmes graines et paramètres, avant → après) : 40 messages, 5 dB : descentes RX1 108 → 111, RX2 26 → 23, non planifiées 11 → 8 ; réceptions, file et occupation de sensibilité inchangées ; 120 messages, 5 dB : tous compteurs identiques ; 120 messages, 15 dB : commandes mises en file 1155 → 1146, réceptions 385 → 382, pertes de sensibilité 303 → 319. Les descentes récupérées ne sont pas reçues par le dispositif (descentes reçues inchangées), d'où l'absence d'effet sur la file à 40 messages.
+- **Backoff ADR côté dispositif (F14, TS001 §4.3.1.1)** : en boucle fermée avec ADR, ADRACKCnt compte les uplinks depuis la dernière descente reçue ; ADRACKReq dès 64 ; sans descente pendant 96 uplinks, puissance par défaut puis débit −1 cran tous les 32 uplinks. Un uplink avec ADRACKReq déclenche une descente de classe A (sans commande si besoin). Le cran de débit suit RP002-1.0.5 Table 12 (EU868) : DR1–DR7 → DR−1, DR8 → 0, DR9 → 8, DR10 → 0, DR11 → 10, DR12 → 5, DR13 → 12 ; si le débit cible n'est pas disponible, le débit reste inchangé. Pour DR1–DR7 la table est identique à DR−1, donc aucun résultat atteignable ne change ; DR8 et plus ne sont pas atteints en boucle fermée (`max_dr` ≤ 7), la ligne n'est donc pas testée de bout en bout. Sans ADR, aucun changement ; empreintes historiques vérifiées inchangées.
+- **DR13 (SF5/125 kHz), profil passerelle SX1303 (C++)** : `receiver_sensitivity_dbm(sf, bw, ReceiverProfile::Sx1303Gateway, s)` renvoie −121 dBm pour SF5 (datasheet SX1303, p. 14 : PER 10 %, 12 octets, front-end SX1250 ; valeur indicative, non normative LoRaWAN). Le profil SX1276 par défaut est inchangé et n'a pas de SF5. Airtime SF5 accepté en en-tête explicite (hypothèse) ; SF6 toujours refusé. Le moteur refuse un uplink SF5 (profil par défaut) et une descente SF5 (sensibilité dispositif NV). Non branché aux scénarios Python ni à l'ABI.
+- **Modèle de sensibilité absolue `sensibilite-par-sf-v2`** : seuils passerelle absolus en dBm, indexés par bande (125/250/500 kHz) et SF (5 à 12). Sans décalage relatif ni conversion, et sans repli sur la référence SX1276 pour une paire absente. Valeurs SF5 à SF12 à 125 kHz du datasheet SX1303 (p. 14-15 : PER 10 %, paquets de 12 octets, front-end SX1250, indicatives, non normatives). Multi-passerelle refusée. Descente SF5 vers un dispositif refusée (sensibilité terminal NV). SF5 accepté en uplink (en-tête explicite supposé), SF6 toujours refusé. ABI : `lsim_gateway_v2` (modèle 0 = v1 ; modèle 1 = absolu), points d'entrée `lsim_simulate_uplinks_trace_gw2` et `lsim_simulate_closed_loop_gw2`. ABI v1 inchangée. Branché au pont Python (`lsim/gateway_sensitivity.py`, `_CGatewayV2`), au schéma de scénario (`gateway.sensitivity` : `profile` du catalogue `sx1303-datasheet`, ou `points` explicites avec `source` et `conditions`) Chemins : `run_scenario` sans MAC et `simulate_uplinks_trace` passent par la trace ABI v2 ; `build_trace` (descentes causales) passe par `lsim_simulate_uplinks_causal_gw2`, mais refuse explicitement une descente vers SF5 (sensibilité du dispositif NV) ; la boucle fermée passe par `lsim_simulate_closed_loop_gw2`. Multi-passerelles et `coverage_radii` refusent le modèle ; `geo` suit le seuil absolu. Un groupe SF5 exige le modèle, la région EU868, une paire SF5 documentée, et refuse le bloc `mac:` (sensibilité terminal NV). Le catalogue ne contient pas de RAK5146 : aucune valeur n'a été ajoutée sans source de mesure. Empreinte : le bloc `sensitivity` entre dans le hash seulement s'il est présent. Schémas régénérés. Tests : `python/tests/test_gateway_sensitivity.py`.
+- **File MAC** : les FOpts ne dépassent jamais 15 octets. LinkADR et DutyCycle passent en premier ; LinkCheckAns, DeviceTimeAns et DevStatusReq attendent dans une file FIFO et sont reportées (puis expirent après 3 reports) si elles ne tiennent pas. Compteurs `enqueued`, `dispatched`, `dispatch_lost`, `deferred`, `expired`, `pending_at_end` (API C v2 et `TraceRun.mac_queue`).
+- **Conformité TS001 §5 (réponses MAC)** : LinkCheckAns et DeviceTimeAns ne sont plus reportées. Une réponse qui ne tient pas dans la descente de son uplink expire aussitôt (la norme les limite aux fenêtres RX qui suivent la requête). Changement de résultats pour les scénarios avec MAC qui saturent la descente. Matrice de conformité : `docs/CONFORMANCE_MATRIX.md`.
+- **Validation de la file** : cycle de vie explicite (`LoopResult::mac_items` : en attente, placée, livrée, perdue, expirée), compteur `delivered` (API C v2 `lsim_loop_mac_counters`, `MacQueueCounters.delivered`), invariants testés (C++ et Python). Équité : hypothèse de famine testée et infirmée ; la garantie retenue est la borne d'attente (`mac_max_deferrals`). L'ABI v1 n'expose plus de compteurs de file (`mac_queue` vaut `None`).
+- **Octets MAC** : `TraceRun.mac_bytes` sépare octets réservés, octets émis et réponses DevStatus confirmées. Les résultats de simulation ne changent pas.
+- Tests : `core/tests/test_closed_loop.cpp`, `python/tests/test_mac_loop.py`. Documentation : `docs/CLOSED_LOOP_PLAN.md`.
+
 ### Commandes MAC : phase 1, étape 1
 - Bloc `mac:` du scénario (`link_check_every`, `device_status_every`, bornes 0 à 1000 ; 0 = désactivé). Inclus dans l'empreinte SHA-256 ; absent = empreinte inchangée. Schémas `scenario_input`, `run_create` et `validate_request` régénérés.
 - **Sans effet sur le calcul pour l'instant** : le moteur n'émet pas encore les commandes. Plan complet : `docs/MAC_PLAN.md`.

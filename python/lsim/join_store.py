@@ -32,7 +32,7 @@ import struct
 import sqlite3
 import stat
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
@@ -60,7 +60,10 @@ CREATE TABLE IF NOT EXISTS device_addresses (
 CREATE TABLE IF NOT EXISTS sessions (
     dev_addr INTEGER PRIMARY KEY,
     dev_eui BLOB NOT NULL UNIQUE,
-    sealed BLOB NOT NULL            -- clés et compteurs, chiffrés (lsim.sealed)
+    sealed BLOB NOT NULL,           -- clés et compteurs, chiffrés (lsim.sealed)
+    -- RX1DROffset négocié (RXParamSetupReq). Hors du blob scellé : il n'est pas secret
+    -- (il circule en clair dans la trame MAC), et cela évite de toucher au format chiffré.
+    rx1_dr_offset INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS pending_sessions (
     dev_eui BLOB PRIMARY KEY,
@@ -100,6 +103,7 @@ class SessionRecord:
     nfcnt_down: int
     afcnt_down: int
     pending_conf: Optional[int]   # compteur 32 bits du downlink confirmé non acquitté
+    rx1_dr_offset: int = 0        # RX1DROffset négocié (RXParamSetupReq) ; 0 = réglage du serveur
 
 
 @dataclass(frozen=True)
@@ -110,9 +114,11 @@ class QueueItem:
     payload: bytes = field(repr=False)
 
 
-# Commande MAC à acquitter : renvoyée dans les FOpts de chaque downlink tant que le dispositif
-# ne la confirme pas (LinkADRAns), au plus MAC_MAX_ATTEMPTS fois.
-MAC_MAX_ATTEMPTS = 8
+# Commande MAC à acquitter : renvoyée dans les FOpts du prochain downlink tant que le dispositif
+# ne la confirme pas (LinkADRAns positif). TS001-1.0.4 §5 : l'émetteur décide de renvoyer quand il
+# reçoit une nouvelle trame sans la réponse attendue ; il n'y a ni nombre maximal de réémissions
+# ni délai exponentiel. Ce plafond est une politique d'implémentation facultative : None = aucun.
+MAC_MAX_ATTEMPTS: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -254,12 +260,16 @@ class Transaction:
     def _session(self, where: str, value) -> Optional[SessionRecord]:
         sealer = self._need_sealer()
         row = self._conn.execute(
-            "SELECT dev_addr, dev_eui, sealed FROM sessions " + where, (value,)).fetchone()
+            "SELECT dev_addr, dev_eui, sealed, rx1_dr_offset FROM sessions " + where,
+            (value,)).fetchone()
         if row is None:
             return None
         dev_addr, dev_eui, blob = row[0], bytes(row[1]), bytes(row[2])
+        # Colonne absente sur une base non encore migrée : le réglage du serveur s'applique.
+        offset = int(row[3]) if len(row) > 3 and row[3] is not None else 0
         plain = sealer.open(blob, self._session_aad(dev_addr, dev_eui))
-        return _decode_session(dev_addr, dev_eui, plain)
+        rec = _decode_session(dev_addr, dev_eui, plain)
+        return replace(rec, rx1_dr_offset=offset)
 
     def save_counters(self, dev_addr: int, fcnt_up: int, nfcnt_down: int, afcnt_down: int,
                       pending_conf: Optional[int]) -> None:
@@ -272,6 +282,17 @@ class Transaction:
         self._conn.execute("UPDATE sessions SET sealed = ? WHERE dev_addr = ?",
                            (sealer.seal(plain, self._session_aad(dev_addr, rec.dev_eui)),
                             dev_addr))
+
+    def set_rx1_dr_offset(self, dev_addr: int, rx1_dr_offset: int) -> None:
+        """Enregistre le RX1DROffset négocié par le dispositif.
+
+        Séparé de `save_counters` : l'offset ne fait pas partie du blob scellé, et le lier
+        aux compteurs obligerait à réécrire les clés à chaque négociation.
+        """
+        if not 0 <= rx1_dr_offset <= 7:
+            raise ValueError(f"RX1DROffset hors de la plage du champ MAC (0..7) : {rx1_dr_offset}")
+        self._conn.execute("UPDATE sessions SET rx1_dr_offset = ? WHERE dev_addr = ?",
+                           (int(rx1_dr_offset), dev_addr))
 
     # File de downlinks (charges chiffrées, liées à DevEUI, FPort et ConfirmedFlag)
 
@@ -383,6 +404,12 @@ class DurableJoinStore:
                 raise ValueError(
                     "base au format de développement (sessions en clair) : supprimer le fichier "
                     "et relancer la jointure ; le format chiffré est requis")
+            # Migration I5-c : base ouverte avant l'introduction de RX1DROffset. La valeur
+            # par défaut est 0, qui est aussi le réglage du serveur : la migration ne change
+            # donc rien au comportement, elle rend la colonne simplement utilisable.
+            if "rx1_dr_offset" not in cols:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN rx1_dr_offset INTEGER NOT NULL DEFAULT 0")
         finally:
             conn.close()
 

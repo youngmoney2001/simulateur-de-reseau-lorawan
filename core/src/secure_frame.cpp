@@ -251,4 +251,117 @@ SecureStatus open_downlink(const std::uint8_t* in, std::size_t len, const Sessio
     return SecureStatus::Ok;
 }
 
+// ---------------------------------------------------------------------------
+// Profil 1.0.x
+// ---------------------------------------------------------------------------
+namespace {
+
+const crypto::Key128& payload_key_10(const SessionKeys10& keys, std::uint8_t fport) {
+    return fport == 0 ? keys.nwk_s_key : keys.app_s_key;
+}
+
+// Scellement commun uplink/downlink 1.0.x.
+SecureStatus seal_10(const DataFrame& frame, const SessionKeys10& keys, crypto::Direction dir,
+                     std::uint32_t fcnt32, std::uint8_t* out, std::size_t cap,
+                     std::size_t& out_written) {
+    out_written = 0;
+    DataFrame work = frame;
+    work.mic = {0, 0, 0, 0};
+
+    if (work.has_fport && work.frm_payload_len > 0) {
+        const crypto::CryptoStatus st = crypto::crypt_frm_payload(
+            payload_key_10(keys, work.fport), dir, work.dev_addr, fcnt32, work.frm_payload.data(),
+            work.frm_payload_len);
+        if (st != crypto::CryptoStatus::Ok) {
+            mbedtls_platform_zeroize(work.frm_payload.data(), work.frm_payload.size());
+            return SecureStatus::CryptoFailure;
+        }
+    }
+
+    std::size_t n = 0;
+    const FrameStatus enc = encode(work, out, cap, n);
+    if (enc != FrameStatus::Ok) {
+        mbedtls_platform_zeroize(work.frm_payload.data(), work.frm_payload.size());
+        return from_frame(enc);
+    }
+
+    // MIC 1.0.x sur MHDR | FHDR | FPort | FRMPayload (FOpts inclus, en clair).
+    const std::size_t msg_len = n - kMicSize;
+    std::array<std::uint8_t, 4> mic{};
+    const crypto::CryptoStatus st =
+        crypto::compute_data_mic(keys.nwk_s_key, dir, work.dev_addr, fcnt32, out, msg_len, mic);
+    mbedtls_platform_zeroize(work.frm_payload.data(), work.frm_payload.size());
+    if (st != crypto::CryptoStatus::Ok) {
+        return SecureStatus::CryptoFailure;
+    }
+    for (std::size_t i = 0; i < 4; ++i) {
+        out[msg_len + i] = mic[i];
+    }
+    out_written = n;
+    return SecureStatus::Ok;
+}
+
+// Ouverture commune 1.0.x : décodage, cohérence FCnt, MIC, puis déchiffrement.
+SecureStatus open_10(const std::uint8_t* in, std::size_t len, const SessionKeys10& keys,
+                     crypto::Direction dir, std::uint32_t fcnt32, DataFrame& out) {
+    const FrameStatus dec = decode(in, len, out);
+    if (dec != FrameStatus::Ok) {
+        return from_frame(dec);
+    }
+    if (out.fcnt != static_cast<std::uint16_t>(fcnt32 & 0xFFFFu)) {
+        return SecureStatus::FCntMismatch;
+    }
+    if (len < kMinDataFrame) {
+        return SecureStatus::Frame;
+    }
+
+    // 1) MIC vérifié AVANT tout déchiffrement.
+    const std::size_t msg_len = len - kMicSize;
+    std::array<std::uint8_t, 4> expected{};
+    const crypto::CryptoStatus st =
+        crypto::compute_data_mic(keys.nwk_s_key, dir, out.dev_addr, fcnt32, in, msg_len, expected);
+    if (st != crypto::CryptoStatus::Ok) {
+        return SecureStatus::CryptoFailure;
+    }
+    if (!lsim::constant_time_equal(expected.data(), out.mic.data(), 4)) {
+        mbedtls_platform_zeroize(out.frm_payload.data(), out.frm_payload.size());
+        out.frm_payload_len = 0;
+        return SecureStatus::MicMismatch;
+    }
+
+    // 2) Déchiffrement seulement si le MIC est authentique. FOpts déjà en clair.
+    if (out.has_fport && out.frm_payload_len > 0) {
+        const crypto::CryptoStatus dst = crypto::crypt_frm_payload(
+            payload_key_10(keys, out.fport), dir, out.dev_addr, fcnt32, out.frm_payload.data(),
+            out.frm_payload_len);
+        if (dst != crypto::CryptoStatus::Ok) {
+            return SecureStatus::CryptoFailure;
+        }
+    }
+    return SecureStatus::Ok;
+}
+
+}  // namespace
+
+SecureStatus seal_uplink_10(const DataFrame& frame, const SessionKeys10& keys, const Context10& ctx,
+                            std::uint8_t* out, std::size_t cap, std::size_t& out_written) {
+    return seal_10(frame, keys, crypto::Direction::Uplink, ctx.fcnt32, out, cap, out_written);
+}
+
+SecureStatus open_uplink_10(const std::uint8_t* in, std::size_t len, const SessionKeys10& keys,
+                            const Context10& ctx, DataFrame& out) {
+    return open_10(in, len, keys, crypto::Direction::Uplink, ctx.fcnt32, out);
+}
+
+SecureStatus seal_downlink_10(const DataFrame& frame, const SessionKeys10& keys,
+                              const Context10& ctx, std::uint8_t* out, std::size_t cap,
+                              std::size_t& out_written) {
+    return seal_10(frame, keys, crypto::Direction::Downlink, ctx.fcnt32, out, cap, out_written);
+}
+
+SecureStatus open_downlink_10(const std::uint8_t* in, std::size_t len, const SessionKeys10& keys,
+                              const Context10& ctx, DataFrame& out) {
+    return open_10(in, len, keys, crypto::Direction::Downlink, ctx.fcnt32, out);
+}
+
 }  // namespace lsim::lorawan

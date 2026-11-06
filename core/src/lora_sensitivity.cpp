@@ -35,7 +35,37 @@ constexpr double kSensitivity500[] = {
     -130.0,  // SF12
 };
 
+// Source : Semtech SX1303 datasheet (SX1303_W_APP, V1.2), page 14-15, tableau des sensibilités
+// LoRa. Mesures : PER = 10 %, paquets de 12 octets, conditions nominales de température et de
+// tension, front-end SX1250 avec LNA de 18 dB et facteur de bruit de 1,5 dB. Valeurs indicatives
+// d'un design de référence : ce ne sont pas des valeurs normatives LoRaWAN. SF5..SF12 à 125 kHz.
+constexpr double kSx1303Sensitivity125[] = {
+    -121.0,   // SF5
+    -123.5,   // SF6
+    -127.0,   // SF7
+    -129.0,   // SF8
+    -132.5,   // SF9
+    -135.5,   // SF10
+    -138.0,   // SF11
+    -141.0,   // SF12
+};
+
 }  // namespace
+
+Status receiver_sensitivity_dbm(std::uint8_t spreading_factor, Bandwidth bw, ReceiverProfile profile,
+                                double& out_dbm) {
+    if (profile == ReceiverProfile::Sx1276Reference) {
+        return receiver_sensitivity_dbm(spreading_factor, bw, out_dbm);
+    }
+    if (spreading_factor < 5 || spreading_factor > 12) {
+        return Status::InvalidSpreadingFactor;
+    }
+    if (bw != Bandwidth::Bw125kHz) {
+        return Status::UncalibratedSensitivity;
+    }
+    out_dbm = kSx1303Sensitivity125[spreading_factor - 5];
+    return Status::Ok;
+}
 
 Status receiver_sensitivity_dbm(std::uint8_t spreading_factor, Bandwidth bw, double& out_dbm) {
     if (spreading_factor < 7 || spreading_factor > 12) {

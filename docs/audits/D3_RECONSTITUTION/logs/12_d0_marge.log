@@ -1,0 +1,13 @@
+=== 1. le modèle : PL(d) à n = 2,7 ===
+  n=2.7  d=  1000 m : d0=1 ->  112.221395 dB | d0=10 ->  105.221395 dB | écart -7.000000 dB
+  n=2.7  d=  3000 m : d0=1 ->  125.103669 dB | d0=10 ->  118.103669 dB | écart -7.000000 dB
+  n=2.0  d=  1000 m : d0=1 ->   91.221395 dB | d0=10 ->   91.221395 dB | écart +0.000000 dB
+  n=2.0  d=  3000 m : d0=1 ->  100.763820 dB | d0=10 ->  100.763820 dB | écart +0.000000 dB
+
+=== 2. l'exemple : marge réelle des trames avant la sensibilité ===
+  quartier_sf9.yaml : 5000 trames émises
+    marge min / médiane / max : +20.047 / +23.849 / +65.832 dB
+    trames à moins de 7 dB du seuil : 0  (une bascule de 7 dB en déplacerait au plus 0)
+  quartier_relief_sf9.yaml : 5000 trames émises
+    marge min / médiane / max : -35.712 / +22.374 / +65.832 dB
+    trames à moins de 7 dB du seuil : 490  (une bascule de 7 dB en déplacerait au plus 490)

@@ -10,20 +10,27 @@
 //   * toutes les entrées sont validées avant calcul.
 #pragma once
 
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "lsim/downlink.hpp"
+#include "lsim/downlink_plan.hpp"
 #include "lsim/environment.hpp"
 #include "lsim/lora_phy.hpp"
+#include "lsim/loop_adr.hpp"
+#include "lsim/radio_scheduler.hpp"
 
 namespace lsim::sim {
 
 namespace downlink = lorawan::downlink;
 
-using SimTime = std::int64_t;  // nanosecondes
+// Le moteur réutilise les types du composant radio : mêmes dispositions, aucun conversion.
+using SimTime = lsim::radio::SimTime;  // nanosecondes
 
 struct Event {
     SimTime time = 0;
@@ -72,6 +79,39 @@ struct DownlinkPlan {
     std::uint32_t clock_drift_ppm = 0;      // classe B : 0..1000
 };
 
+// Frontal RF d'un terminal (v4) : gain d'antenne et perte de câble, chacun indépendamment
+// présent. L'antenne est réciproque : la chaîne `G - L` s'applique au montant comme au descendant.
+// `present()` faux = frontal neutre, comportement identique à la base.
+struct RadioFrontend {
+    bool has_antenna_gain = false;
+    double antenna_gain_dbi = 0.0;  // |.| <= kMaxAntennaGainDbi si présent
+    bool has_cable_loss = false;
+    double cable_loss_db = 0.0;     // 0..kMaxCableLossDb si présent
+
+    bool present() const { return has_antenna_gain || has_cable_loss; }
+    // Chaîne d'émission/réception : gain moins perte. Les champs absents valent 0.
+    double chain_db() const {
+        return (has_antenna_gain ? antenna_gain_dbi : 0.0) - (has_cable_loss ? cable_loss_db : 0.0);
+    }
+};
+
+// Bornes du frontal : au-delà, l'entrée est refusée (pas de normalisation silencieuse).
+inline constexpr double kMaxAntennaGainDbi = 40.0;
+inline constexpr double kMaxCableLossDb = 40.0;
+
+// Vrai si le frontal est valide. Les champs absents ne sont pas lus.
+inline bool radio_frontend_valid(const RadioFrontend& rf) {
+    if (rf.has_antenna_gain) {
+        const double g = rf.antenna_gain_dbi;
+        if (!std::isfinite(g) || g < -kMaxAntennaGainDbi || g > kMaxAntennaGainDbi) return false;
+    }
+    if (rf.has_cable_loss) {
+        const double l = rf.cable_loss_db;
+        if (!std::isfinite(l) || l < 0.0 || l > kMaxCableLossDb) return false;
+    }
+    return true;
+}
+
 // Dispositif terminal émettant périodiquement des trames confirmées-non.
 struct EndDeviceSpec {
     Position position;
@@ -85,10 +125,33 @@ struct EndDeviceSpec {
     // trame, le dispositif attend airtime * (1 - d) / d avant la suivante.
     double duty_cycle = 1.0;
     DownlinkPlan downlink;
+    // Frontal d'émission/réception (v4), en fin de structure : les initialisations agrégées
+    // positionnelles existantes gardent leur sens. Neutre par défaut.
+    RadioFrontend rf;
 };
 
 // Borne de l'horizon de simulation : au-delà, les dates ne sont plus fiables.
 inline constexpr double kMaxHorizonNs = 4.0e18;
+
+// Octets MAC réservés dans une émission : calendrier de rangs (passerelle unique). L'émission de
+// rang `rank` (1-based) du dispositif `device` est calculée avec payload_bytes + extra_bytes.
+// Réservation conservatrice : une émission réservée ne porte pas forcément ces octets (ex.
+// DevStatusAns, qui n'existe que si la requête est reçue).
+struct MacReservation {
+    std::uint32_t device = 0;
+    std::uint32_t rank = 1;
+    std::uint32_t extra_bytes = 0;  // 1..15 (FOpts)
+};
+
+// Sensibilité absolue de passerelle (modèle `sensibilite-par-sf-v2`) : seuils publiés, en dBm.
+// Indices : bande 0 = 125 kHz, 1 = 250 kHz, 2 = 500 kHz ; SF 5..12 à l'indice sf - 5.
+// `present` : bit (bande * 8 + sf - 5) à 1 si la paire est documentée. Une paire absente est
+// refusée (aucune déduction). Modèle absolu : pas de décalage, pas de conversion implicite.
+struct GatewayAbsoluteSensitivity {
+    bool enabled = false;
+    std::uint32_t present = 0;
+    double dbm[3][8] = {};
+};
 
 struct GatewaySpec {
     Position position;
@@ -96,6 +159,13 @@ struct GatewaySpec {
     // Décalage du seuil de réception montant de cette passerelle (dB) : seuil = sensibilité de
     // l'équipement + décalage. Négatif = passerelle plus sensible. 0 = modèle sans profil.
     double rx_sensitivity_offset_db = 0.0;
+    // Sensibilité absolue (remplace la référence SX1276 et le décalage quand `enabled`).
+    GatewayAbsoluteSensitivity absolute;
+    // Perte de câble du frontal passerelle (v4), en fin de structure pour préserver les
+    // initialisations agrégées positionnelles. 0 = comportement de la base.
+    bool has_cable_loss = false;
+    double cable_loss_db = 0.0;
+    double chain_db() const { return antenna_gain_dbi - (has_cable_loss ? cable_loss_db : 0.0); }
 };
 
 struct PropagationSpec {
@@ -181,10 +251,7 @@ enum class TxOutcome : std::uint8_t {
 };
 
 // Intervalle [start, end) pendant lequel la passerelle émet (demi-duplex : elle ne reçoit pas).
-struct Interval {
-    SimTime start = 0;
-    SimTime end = 0;
-};
+using Interval = lsim::radio::Interval;
 
 // Une transmission de la trace, dans l'ordre temporel (début, puis ordre de file).
 // Les temps sont ceux du moteur : même horloge pour toute la trace et les événements.
@@ -197,18 +264,359 @@ struct TxRecord {
     TxOutcome outcome = TxOutcome::LostSensitivity;
 };
 
+// Descentes planifiées pendant la simulation (S1, boucle fermée causale) : passerelle unique.
+// Chaque trame montante reçue est planifiée à sa fin (`plan::DownlinkScheduler`), de sorte que
+// l'occupation passerelle utilisée pour décider des pertes est connue au moment de la décision.
+// Exclusif avec `gateway_busy`. `radios` : un paramètre radio par dispositif (même ordre).
+struct CausalDownlinks {
+    std::vector<plan::DeviceRadio> radios;
+    plan::PlanOptions options;
+    std::vector<plan::Interval>* busy_out = nullptr;  // reçoit les émissions passerelle planifiées
+    // Paramètres de la fenêtre de secours (I3). `nullptr` : aucun repli, comportement d'avant I3.
+    // Les porter jusqu'ici est la condition pour que l'occupation du chemin causal reste égale à
+    // celle de `plan_downlinks` — le contrôle d'égalité du côté appelant est bloquant.
+    const std::vector<plan::DeviceRx2>* rx2 = nullptr;
+};
+
+// ------------------------------------------------------- Boucle fermée (S2)
+//
+// Passerelle unique, sans jointure, sans mesh ni autre commande MAC. Le serveur envoie
+// LinkADRReq (débit et puissance, décision ADR sur les 20 dernières trames reçues) et
+// DutyCycleReq (rapport cyclique 1/2^k). Une seule exécution, émissions en ordre temporel :
+//   * une commande reçue (fin de RX1 + réception de la descente) s'applique aux émissions qui
+//     commencent après cet instant ; le dispositif répond dans son uplink suivant ;
+//   * la réponse n'est confirmée côté serveur que si cet uplink est reçu ;
+//   * une commande est perdue si le dispositif émet pendant RX1 (classe A), ou si la passerelle
+//     n'a pas de créneau dans la RX1 ; elle est retentée au prochain uplink reçu.
+// Sans commande active, les résultats sont ceux de `simulate_uplinks` avec `causal`.
+
+// Paramètres régionaux d'un dispositif. Lus dans tous les cas (puissance et limite réglementaire).
+//  * dr_sf[i] : SF du débit i, 0 = indisponible ; max_dr : dernier débit utilisable ;
+//  * max_tx_power_index : dernier index de puissance valide (les index 0..max sont contigus, les
+//    suivants sont réservés par le plan et refusés par LinkADR) ;
+//  * max_eirp_dbm : PIRE de l'index 0 du plan (plafond) ; +inf si le plan ne le définit pas ;
+//  * power_step_tenth_db : pas entre index (dixièmes de dB) ; la puissance de l'index i est
+//    min(tx_power_dbm, max_eirp_dbm) - i * pas ;
+//  * duty_limit[i] : limite réglementaire du duty cycle à l'index i, dans ]0, 1] (sous-bande la plus
+//    restrictive à la PIRE de cet index, et duty cycle du dispositif). DutyCycleReq ne fait que la
+//    réduire.
+struct LoopRegion {
+    std::array<std::uint8_t, 16> dr_sf{};
+    std::uint8_t max_dr = 0;
+    std::uint8_t max_tx_power_index = 0;
+    std::int32_t power_step_tenth_db = 20;
+    double max_eirp_dbm = std::numeric_limits<double>::infinity();
+    std::array<double, 16> duty_limit{};
+};
+
+// Calendrier MAC d'une émission (dispositif, rang 1-based), issu du calendrier réservé.
+// `extra_bytes` : octets MAC réservés dans l'uplink (LinkCheckReq, DeviceTimeReq, DevStatusAns),
+// ajoutés à la charge utile pour l'airtime. `flags` : kLoopMac* ci-dessous.
+inline constexpr std::uint8_t kLoopMacLinkCheck = 1;   // LinkCheckAns dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacDeviceTime = 2;  // DeviceTimeAns dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacDevStatus = 4;   // DevStatusReq dans la descente de cet uplink
+inline constexpr std::uint8_t kLoopMacAll = 7;
+inline constexpr std::uint8_t kLoopMacMaxDeferrals = 3;  // défaut de LoopOptions::mac_max_deferrals
+inline constexpr std::uint32_t kLoopFoptsMax = 15;       // taille maximale des FOpts
+
+struct LoopMacSlot {
+    std::uint32_t device = 0;
+    std::uint32_t rank = 1;                   // 1-based
+    std::uint8_t extra_bytes = 0;             // 0..15
+    std::uint8_t flags = 0;                   // kLoopMac*
+};
+
+struct LoopOptions {
+    plan::PlanOptions protocol;               // acquittements, descentes de données, puissances
+    bool adr = false;                         // LinkADRReq ; active aussi le backoff dispositif F14 (ADRACKReq, TS001 §4.3.1.1)
+    std::int32_t installation_margin_tenth_db = 0;  // marge d'installation de l'ADR (dixièmes de dB)
+    bool duty_cycle = false;                  // DutyCycleReq, une fois, au premier uplink reçu
+    std::uint8_t duty_cycle_exponent = 0;     // 0..15 : rapport cyclique 1 / 2^k
+    // Réservations MAC (LinkCheck, DeviceTime, DevStatus) : au plus une entrée par émission.
+    const LoopMacSlot* mac = nullptr;
+    std::size_t mac_count = 0;
+    // File MAC : nombre de reports (uplinks reçus où la commande ne tient pas dans les FOpts)
+    // au-delà duquel la commande expire.
+    std::uint8_t mac_max_deferrals = kLoopMacMaxDeferrals;
+};
+
+// États d'une commande ponctuelle de la file. Transitions :
+//   Queued (mise en file à un uplink reçu) -> Dispatched (placée dans la descente planifiée)
+//   Dispatched -> Delivered (la descente est reçue par le dispositif) | Lost (non reçue : pas de
+//   créneau passerelle dans RX1, émission du dispositif pendant RX1, ou RSSI insuffisant)
+//   Queued -> Expired (après `mac_max_deferrals` + 1 reports ; une réponse, LinkCheckAns ou
+//   DeviceTimeAns, expire au premier report : TS001 §5) ; Queued à la fin : pending_at_end.
+// Une commande n'est placée dans une descente qu'une fois : aucune retransmission.
+enum class LoopMacState : std::uint8_t { Queued = 0, Dispatched = 1, Delivered = 2, Lost = 3, Expired = 4 };
+
+struct LoopMacItem {
+    std::uint32_t device = 0;
+    std::uint8_t cmd = 0;            // kLoopCmdLinkCheck, kLoopCmdDeviceTime ou kLoopCmdDevStatus
+    std::uint32_t uplink = 0;        // uplink dont la réception a créé la commande (indice dans uplinks)
+    std::uint8_t deferrals = 0;      // reports subis
+    LoopMacState state = LoopMacState::Queued;
+    std::int64_t downlink = -1;      // descente qui la porte (indice dans downlinks), -1 si aucune
+};
+
+// Compteurs de la file MAC. Invariants (vérifiés par les tests) :
+//   enqueued = dispatched + expired + pending_at_end ;
+//   dispatched = delivered + dispatch_lost ;
+//   deferred = somme des reports de toutes les commandes (dispatched, expirées, en attente).
+// `dispatched` : commandes placées dans une descente PLANIFIÉE (pas forcément émise ni reçue) ;
+// `delivered` : parmi elles, celles dont la descente est reçue par le dispositif ;
+// `dispatch_lost` : parmi elles, celles dont la descente n'est pas reçue. Une commande perdue
+// n'est pas reportée : la réponse ou la requête ponctuelle n'est pas retransmise.
+struct LoopMacQueueStats {
+    std::uint64_t enqueued = 0;
+    std::uint64_t dispatched = 0;
+    std::uint64_t delivered = 0;
+    std::uint64_t dispatch_lost = 0;
+    std::uint64_t deferred = 0;      // reports (une commande reportée à chaque uplink où elle ne tient pas)
+    std::uint64_t expired = 0;
+    std::uint64_t pending_at_end = 0;
+};
+
+// Uplink : une entrée par émission, dans l'ordre temporel des débuts.
+struct LoopUplink {
+    std::uint32_t device = 0;
+    SimTime start_ns = 0;
+    SimTime end_ns = 0;
+    std::uint8_t spreading_factor = 7;
+    std::int8_t dr = -1;                      // -1 : pas de table régionale
+    std::uint8_t power_index = 0;
+    double rssi_dbm = 0.0;
+    TxOutcome outcome = TxOutcome::LostSensitivity;
+    std::uint8_t answer_mask = 0;             // bit 0 : LinkADRAns, bit 1 : DutyCycleAns, bit 2 : DevStatusAns (portées)
+    std::uint8_t answer_ok = 0;               // bit 0 : débit acquitté, bit 1 : puissance acquittée
+};
+
+inline constexpr std::uint8_t kLoopCmdLinkAdr = 1;   // bit de `LoopDownlink::commands`
+inline constexpr std::uint8_t kLoopCmdDutyCycle = 2;
+inline constexpr std::uint8_t kLoopCmdLinkCheck = 4;   // LinkCheckAns (FOpts, 3 octets)
+inline constexpr std::uint8_t kLoopCmdDeviceTime = 8;  // DeviceTimeAns (FOpts, 6 octets)
+inline constexpr std::uint8_t kLoopCmdDevStatus = 16;  // DevStatusReq (FOpts, 1 octet)
+
+// Descente créée (ACK, donnée ou MAC seul) pour un uplink reçu.
+// Indice absent (jalon U0.2 : également la valeur d'absence de `frame_id`).
+inline constexpr std::uint32_t kLoopNoIndex = 0xFFFFFFFFU;
+
+struct LoopDownlink {
+    std::uint32_t uplink = 0;                 // indice dans LoopResult::uplinks
+    std::uint32_t device = 0;
+    std::uint8_t kind = 3;                    // 1 ACK, 2 donnée, 3 MAC seul
+    std::uint8_t commands = 0;                // kLoopCmd* (FOpts et réponses MAC)
+    std::uint8_t queued = 0;                  // commandes de la file portées (pour `dispatch_lost`)
+    // Identifiant de trame (jalon U0.2) : attribué une fois à la demande de descente, monotone
+    // dans l'ordre des demandes, jamais réattribué ni renuméroté. Il identifie la trame, là où
+    // `uplink` identifie son déclencheur et où l'indice dans `LoopResult::downlinks` n'est qu'une
+    // position. Placé dans le bourrage : la taille et tous les décalages existants sont inchangés.
+    std::uint32_t frame_id = kLoopNoIndex;
+    SimTime t_open = 0;
+    SimTime start_ns = -1;                    // -1 : pas de créneau passerelle dans la RX1
+    SimTime air_ns = 0;
+    bool device_missed = false;               // le dispositif émet pendant la RX1
+    bool delivered = false;                   // reçue par le dispositif (commandes appliquées)
+    std::uint8_t req_dr = 0;                  // LinkADRReq : débit demandé
+    std::uint8_t req_power_index = 0;         // LinkADRReq : index de puissance demandé
+};
+
+struct LoopResult {
+    std::vector<LoopUplink> uplinks;
+    std::vector<LoopDownlink> downlinks;
+    std::vector<Interval> gateway_busy;       // émissions passerelle planifiées (ordre croissant)
+    LoopMacQueueStats mac;                    // file MAC (commandes ponctuelles)
+    std::vector<LoopMacItem> mac_items;       // journal de la file : une entrée par commande mise en file
+};
+
+// `radios` : un paramètre radio par dispositif (le SF RX1 suit le SF montant courant).
+// `regions` : un jeu de paramètres par dispositif (toujours lu). Le repos du duty cycle se calcule
+// à partir de l'airtime de l'émission terminée (convention S2, voir le plan de boucle fermée).
+SimStatus simulate_closed_loop(const EndDeviceSpec* devices, std::size_t device_count,
+                               const plan::DeviceRadio* radios, const LoopRegion* regions,
+                               const GatewaySpec& gateway, const PropagationSpec& prop,
+                               const env::Environment* environment, const LoopOptions& options,
+                               DeviceStats* per_device, SimulationStats& totals, LoopResult& out);
+
+// Modèle canaux de la boucle fermée (C++ interne, hors ABI C : `LoopDownlink`, `LoopUplink` et
+// `LoopOptions` restent inchangés). Pour chaque dispositif :
+//   * `device` : capacités réelles du terminal (canaux définis, débits par canal, canaux actifs) ;
+//   * `server_view` : canaux que le serveur croit définis et configure (ChMaskCntl 0, bloc 0).
+// La vue serveur doit être non vide et ne contenir que les canaux 0..15.
+struct LoopChannelConfig {
+    LoopChannelState device;
+    LoopChannelSet server_view;
+    // Test de robustesse uniquement (hors politique serveur) : LinkADRReq imposée à chaque descente
+    // LinkADR de ce dispositif. Sert à atteindre 101, 110 et 000, que l'ADR ne produit jamais.
+    std::optional<LoopLinkAdrRequest> forced_request;
+    // Test de robustesse uniquement : LinkADRReq imposées aux descentes LinkADR successives
+    // (k-ième descente LinkADR = entrée k). Au-delà, la politique du serveur reprend. Prioritaire
+    // sur `forced_request`.
+    std::vector<LoopLinkAdrRequest> forced_sequence;
+};
+
+// Entrées optionnelles et sorties du modèle canaux. `config` nullptr : configuration EU868 par défaut
+// (canaux 0..2, DR0..DR5 pour le terminal comme pour le serveur ; le résultat est alors celui de
+// `simulate_closed_loop`).
+// Trace interne v3 (étape 5) : événements de la boucle fermée avec canaux. Interne au C++ ; la
+// frontière Python ne l'expose pas avant l'ABI v3 (étape 6). Chaque événement porte son origine :
+//  - Normative : comportement du terminal défini par TS001 (bits LinkADRAns, application) ;
+//  - SimulatorPolicy : choix du serveur ou du simulateur (ADR, exclusions, repli, valeurs demandées) ;
+//  - Radio : résultat physique (réception). Non utilisé à ce stade, réservé.
+enum class LoopTraceKind : std::uint8_t {
+    Uplink,        // uplink admissible reçu (Radio)
+    LinkAdrAns,    // LinkADRAns portée par cet uplink : bits dans `status`, contenu acquitté (Normative)
+    Exclusion,     // exclusion créée, renouvelée ou expirée (SimulatorPolicy)
+    AdrDecision,   // décision ADR (SimulatorPolicy ; flag = une demande est en attente)
+    LinkAdrReq,    // contenu LinkADRReq planifié dans une descente (SimulatorPolicy)
+    Downlink,      // issue radio d'une descente : reçue ou perdue, cause dans `loss` (Radio)
+    Apply,         // application par le terminal d'une LinkADRReq reçue (Normative)
+};
+
+enum class LoopTraceOrigin : std::uint8_t {
+    Normative,        // comportement du terminal défini par TS001 / RP002
+    SimulatorPolicy,  // choix du serveur ou du simulateur, non normatif
+    Radio,            // résultat de propagation, collision, occupation de passerelle
+};
+
+// Cause d'une descente non reçue (LoopTraceEvent::loss) ; 0 si reçue.
+enum class LoopDownlinkLoss : std::uint8_t {
+    None = 0,
+    DeviceTransmitting = 1,   // le dispositif émet pendant la RX1
+    NoGatewaySlot = 2,        // pas de créneau passerelle dans la RX1
+    BelowSensitivity = 3,     // niveau reçu sous la sensibilité du terminal
+};
+
+
+enum class LoopTraceAction : std::uint8_t { Created, Renewed, Expired };
+
+struct LoopTraceEvent {
+    std::int64_t t_ns = 0;
+    std::uint32_t device = 0;
+    std::uint32_t uplink = 0;          // uplink concerné ; pour une descente, uplink déclencheur
+    std::uint32_t downlink = kLoopNoIndex;  // LinkAdrReq, Downlink, Apply : indice de descente
+    std::uint8_t loss = 0;             // Downlink : LoopDownlinkLoss
+    LoopTraceKind kind = LoopTraceKind::Uplink;
+    LoopTraceOrigin origin = LoopTraceOrigin::Normative;
+    LoopTraceAction action = LoopTraceAction::Created;  // Exclusion uniquement
+    LoopExclusionTarget target = LoopExclusionTarget::DataRate;  // Exclusion uniquement
+    std::uint8_t status = 0xFF;        // LinkAdrAns/Apply : bits ACK (0xFF = sans objet)
+    std::uint8_t dr = 0;               // débit demandé / appliqué
+    std::uint8_t power_index = 0;
+    std::uint16_t channel_mask = 0;    // bloc 0 du masque demandé / appliqué
+    std::uint16_t value = 0;           // Exclusion : débit, index de puissance ou canal exclu
+    bool flag = false;                 // Uplink : reçu ; AdrDecision : en attente ; Apply : tous ACK
+    std::uint8_t reason_channel = 0;   // Apply : motif (LoopLinkAdrReason) par partie
+    std::uint8_t reason_dr = 0;
+    std::uint8_t reason_power = 0;
+    // Identifiant de trame (jalon U0.2) : recopie de `LoopDownlink::frame_id` pour les
+    // événements qui se rapportent à une trame descendante, `kLoopNoIndex` sinon. Il permet de
+    // corréler les événements d'une même trame à travers un tri ultérieur de la trace, ce que
+    // l'indice `downlink` ne garantit pas dès que la trace est réordonnée par un consommateur.
+    // Placé dans le bourrage : la taille et tous les décalages existants sont inchangés.
+    std::uint32_t frame_id = kLoopNoIndex;
+    bool operator==(const LoopTraceEvent& o) const {
+        return t_ns == o.t_ns && device == o.device && uplink == o.uplink && downlink == o.downlink &&
+               loss == o.loss && kind == o.kind &&
+               origin == o.origin && action == o.action && target == o.target && status == o.status &&
+               dr == o.dr && power_index == o.power_index && channel_mask == o.channel_mask &&
+               value == o.value && flag == o.flag && reason_channel == o.reason_channel &&
+               reason_dr == o.reason_dr && reason_power == o.reason_power;
+    }
+};
+
+// Rang des événements de trace à instant égal (jalon U0.2).
+//
+// La trace est ordonnée par `(t_ns, rang)`, puis par ordre d'insertion. Le rang rend l'ordre
+// **explicite** : il ne dépend plus de la place des appels d'émission dans le code, et il
+// survive à l'ajout ultérieur de nouvelles classes d'événements (contrat U0.3+).
+//
+// La table suit **l'ordre de traitement du moteur**, pas un ordre d'affichage commode : elle est
+// donc cohérente avec les rangs de la file d'événements (`kLoopRankCheck` < `kLoopRankStart` <
+// `kLoopRankEnd`). Un `Check` est traité avant un `End` de même instant ; les événements qu'il
+// émet (`Downlink`, `Apply`) précèdent donc ceux émis par `on_received` depuis `End`.
+//
+// Justification détaillée et limites : `docs/DETERMINISME.md` §2.
+inline constexpr std::uint8_t kTraceRankDownlink = 0;  // issue radio : traitée en premier (Check)
+inline constexpr std::uint8_t kTraceRankApply = 1;     // application terminal, même Check
+inline constexpr std::uint8_t kTraceRankExpired = 2;   // exclusion expirée : nettoyage d'état
+inline constexpr std::uint8_t kTraceRankUplink = 3;    // montante reçue
+inline constexpr std::uint8_t kTraceRankAnswer = 4;    // réponse portée par la montante
+inline constexpr std::uint8_t kTraceRankExclusion = 5; // conséquence d'une réponse négative
+inline constexpr std::uint8_t kTraceRankDecision = 6;  // décision ADR du serveur
+inline constexpr std::uint8_t kTraceRankRequest = 7;   // requête planifiée dans la descente
+
+// Rang d'un événement de trace à instant égal.
+inline std::uint8_t loop_trace_rank(const LoopTraceEvent& e) {
+    switch (e.kind) {
+        case LoopTraceKind::Uplink:      return kTraceRankUplink;
+        case LoopTraceKind::LinkAdrAns:  return kTraceRankAnswer;
+        case LoopTraceKind::Exclusion:
+            return e.action == LoopTraceAction::Expired ? kTraceRankExpired : kTraceRankExclusion;
+        case LoopTraceKind::AdrDecision: return kTraceRankDecision;
+        case LoopTraceKind::LinkAdrReq:  return kTraceRankRequest;
+        case LoopTraceKind::Downlink:    return kTraceRankDownlink;
+        case LoopTraceKind::Apply:       return kTraceRankApply;
+    }
+    return kTraceRankDownlink;  // inatteignable : l'énumération est close
+}
+
+// Ordre des événements de trace : `(t_ns, rang)`.
+//
+// Extrait en fonction nommée pour être testable isolément : le rang prime sur l'ordre
+// d'insertion, ce qu'aucune scène de simulation ne peut mettre en évidence aujourd'hui (les deux
+// coïncident par construction, la table ayant été dérivée de l'ordre de traitement). Le tri qui
+// l'utilise reste **stable** : à rang égal, l'ordre de création est conservé.
+inline bool loop_trace_before(const LoopTraceEvent& x, const LoopTraceEvent& y) {
+    if (x.t_ns != y.t_ns) return x.t_ns < y.t_ns;
+    return loop_trace_rank(x) < loop_trace_rank(y);
+}
+
+struct LoopChannelIo {
+    const LoopChannelConfig* config = nullptr;  // `config_count` entrées, `device_count` attendu
+    // Entrée : vrai pour produire la trace interne v3 (désactivée par défaut, sans effet radio).
+    bool trace_v3 = false;
+    // Entrée (I5-c) : RX1DROffset par dispositif, `rx1_dr_offset_count` entrées.
+    // `nullptr` (ou count nul) = 0 partout, c'est-à-dire le réglage du serveur et le
+    // comportement historique. Entrée dédiée plutôt qu'un champ de `LoopRegion` : celle-ci
+    // est une structure d'ABI C dont la taille est figée, celle-ci ne l'est pas.
+    const std::uint8_t* rx1_dr_offset = nullptr;
+    std::size_t rx1_dr_offset_count = 0;
+    // Sortie : trace v3 triée par temps (ordre d'insertion à temps égal) ; vide si désactivée.
+    std::vector<LoopTraceEvent> trace;
+    std::size_t config_count = 0;
+    // Sorties (remplies si le simulateur réussit) :
+    std::vector<LoopTerminalRadio> terminals;             // état final du terminal, par dispositif
+    std::vector<std::uint8_t> uplink_status;              // LinkADRAns par uplink (0xFF : aucun)
+    std::vector<LoopLinkAdrRequest> downlink_requests;    // LinkADRReq portée par chaque descente
+    // Diagnostic exact de chaque descente LinkADR reçue (motifs et attribution D5) ; vide pour les
+    // descentes non reçues ou sans LinkADR.
+    std::vector<LoopLinkAdrDiagnosis> downlink_diagnoses;
+};
+
+// Boucle fermée avec modèle canaux. Même comportement que `simulate_closed_loop` pour la
+// configuration par défaut.
+SimStatus simulate_closed_loop_channels(const EndDeviceSpec* devices, std::size_t device_count,
+                                        const plan::DeviceRadio* radios, const LoopRegion* regions,
+                                        const GatewaySpec& gateway, const PropagationSpec& prop,
+                                        const env::Environment* environment, const LoopOptions& options,
+                                        DeviceStats* per_device, SimulationStats& totals, LoopResult& out,
+                                        LoopChannelIo& io);
+
 // Simule les liaisons montantes vers une passerelle. `per_device` doit contenir
 // `device_count` entrées ; les compteurs y sont remis à zéro puis remplis.
 // `environment` optionnel : relief et obstacles (nullptr = terrain plat sans obstacle).
 // `trace` optionnel : reçoit une entrée par transmission, dans l'ordre temporel (vidé puis rempli).
 // `gateway_busy` optionnel : périodes d'émission de la passerelle (intervalles [start, end)).
 // Une trame reçue qui chevauche une de ces périodes est perdue (LostGatewayBusy).
+// `causal` optionnel : descentes planifiées au fil de l'eau (S1), à la place de `gateway_busy`.
 LSIM_API SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_count,
                                     const GatewaySpec& gateway, const PropagationSpec& prop,
                                     DeviceStats* per_device, SimulationStats& totals,
                                     const env::Environment* environment = nullptr,
                                     std::vector<TxRecord>* trace = nullptr,
-                                    const std::vector<Interval>* gateway_busy = nullptr);
+                                    const std::vector<Interval>* gateway_busy = nullptr,
+                                    const std::vector<MacReservation>* reservations = nullptr,
+                                    const CausalDownlinks* causal = nullptr);
 
 // ------------------------------------------------------------- Plusieurs passerelles
 //
@@ -310,7 +718,7 @@ struct MultiDownlink {
     std::uint32_t gateway = 0;
     bool data = false;          // false : ACK seul ; true : charge
     bool join = false;          // true : join-accept (charge de 17 octets)
-    SimTime t_open_ns = 0;      // ouverture de RX1 chez le dispositif (RX2 : +1 s)
+    SimTime t_open_ns = 0;      // ouverture de la fenêtre chez le dispositif : RX1 = fin + 1 s ; RX2 = fin + 2 s (boucle fermée). Départ strict à t_open (A6, TS001 §3.3.5) : aucun décalage intra-fenêtre
     SimTime start_ns = -1;
     SimTime end_ns = -1;
     DownlinkOutcome outcome = DownlinkOutcome::GatewayBusy;
@@ -330,5 +738,30 @@ LSIM_API SimStatus simulate_uplinks_multi_downlinks(
     const env::Environment* environment = nullptr, std::vector<MultiTx>* trace = nullptr,
     std::vector<MultiDownlink>* downlinks = nullptr,
     const SimTime* dl_ready_ns = nullptr);
+
+// ------------------------------------------------- I5-a : débit réel des fenêtres
+//
+// Surcharge avec les paramètres radio des fenêtres. `radios` et `rx2` sont **tous deux nuls ou
+// tous deux non nuls** : sans eux, le moteur retrouve l'hypothèse historique — RX1 au SF montant
+// à 125 kHz, RX2 à 125 kHz — et les résultats sont identiques à l'identique à ceux de la forme
+// ci-dessus. Les fournir, c'est **demander** la fidélité : le temps d'antenne et la sensibilité
+// de réception descendante sont alors calculés au SF et à la bande de la fenêtre réellement
+// émettrice, jamais à ceux de l'uplink ni à une constante.
+//
+// Contrat :
+//   - une table `rx2` fournie impose `rule.rx2_sf == 0` : une même grandeur exprimée à deux
+//     endroits est une ambiguïté, pas une redondance tolérable (précédent `lsim_gateway_v2`) ;
+//   - `rx1_sf` et `rx2_sf` dans 7..12 (`rx2_sf == 0` : pas de fenêtre de secours) ;
+//   - bandes dans {125 000, 250 000, 500 000} ; `rx2_bw_hz == 0` reprend celle de RX1 ;
+//   - toute valeur hors bornes est refusée, sans lecture au-delà de la table.
+//
+// Voir `docs/I5_A_RX1_AIRTIME.md`.
+LSIM_API SimStatus simulate_uplinks_multi_downlinks(
+    const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
+    std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
+    const plan::DeviceRadio* radios, const plan::DeviceRx2* rx2, DeviceStats* per_device,
+    NetworkStats& totals, GatewayRxStats* per_gateway,
+    const env::Environment* environment = nullptr, std::vector<MultiTx>* trace = nullptr,
+    std::vector<MultiDownlink>* downlinks = nullptr, const SimTime* dl_ready_ns = nullptr);
 
 }  // namespace lsim::sim

@@ -52,7 +52,9 @@ def _check_name(name: str) -> str:
 
 def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[int],
                              sent: Sequence[int],
-                             profile: str = DEFAULT_ENERGY_PROFILE) -> tuple[DeviceEnergy, ...]:
+                             profile: str = DEFAULT_ENERGY_PROFILE,
+                             ul_airtime_ns: Optional[Sequence[int]] = None,
+                             ) -> tuple[DeviceEnergy, ...]:
     """Énergie par message avec l'airtime des downlinks reçus (issu de la trace).
 
     `sent[i]` : uplinks émis par le dispositif i ; `dl_airtime_ns[i]` : airtime total des downlinks
@@ -62,12 +64,18 @@ def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[
     """
     if not (len(devices) == len(dl_airtime_ns) == len(sent)):
         raise ValueError("devices, dl_airtime_ns et sent doivent avoir la même longueur")
+    if ul_airtime_ns is not None and len(ul_airtime_ns) != len(devices):
+        raise ValueError("ul_airtime_ns doit avoir la même longueur que devices")
     pid = ENERGY_PROFILES[_check_name(profile)]
     out = []
     for i, d in enumerate(devices):
-        airtime = time_on_air_ns(
-            RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
-            d.payload_bytes)
+        if ul_airtime_ns is not None and sent[i]:
+            # Temps d'antenne montant compté par le moteur (octets MAC réservés compris).
+            airtime = ul_airtime_ns[i] // sent[i]
+        else:
+            airtime = time_on_air_ns(
+                RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
+                d.payload_bytes)
         per_message = dl_airtime_ns[i] // sent[i] if sent[i] else 0
         try:
             r = device_energy_class_a(
