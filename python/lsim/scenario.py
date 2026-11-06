@@ -311,6 +311,12 @@ class GroupModel(_Strict):
     device_class: Literal["A", "B", "C"] = "A"
     # Frontal RF v4 commun aux terminaux du groupe (None = neutre).
     rf: Optional[RfModel] = None
+    # RX1DROffset des terminaux du groupe (RP002-1.0.4). 0 = réglage du serveur, valeur
+    # historique : sans ce champ, le comportement est inchangé.
+    # Borné ici à 7, largeur du champ MAC (DLsettings bits 6:4). La borne **régionale**, plus
+    # stricte — US915 n'admet que 0..3 — est vérifiée à l'usage, contre le plan, car elle
+    # dépend de `region` qui peut être absent.
+    rx1_dr_offset: int = Field(0, ge=0, le=7)
 
     @property
     def effective_duty_cycle(self) -> float:
@@ -332,6 +338,25 @@ class GroupModel(_Strict):
         if index not in sub_band_channels(self.sub_band):
             raise ValueError(
                 f"{self.region} : canal {self.channel_freq_hz} Hz hors de la sous-bande {self.sub_band}")
+        return self
+
+    @model_validator(mode="after")
+    def _rx1_dr_offset_dans_les_bornes_regionales(self) -> "GroupModel":
+        """La borne régionale de RX1DROffset est plus stricte que celle du champ MAC.
+
+        US915 n'admet que 0..3 alors que le champ DLsettings en code 0..7. Refusé ici, à la
+        lecture du scénario, plutôt qu'à la simulation : une valeur hors bornes est une
+        erreur de configuration, pas une scène lente — et la refuser au plus tôt évite de
+        produire une chronologie qui ne correspond à rien.
+        """
+        if self.region is None or self.rx1_dr_offset == 0:
+            return self
+        from lsim.plan import get_plan
+        plan = get_plan(self.region)
+        if self.rx1_dr_offset > plan.rx1_dr_offset_max:
+            raise ValueError(
+                f"groupe {self.name!r} : RX1DROffset {self.rx1_dr_offset} hors bornes pour "
+                f"{self.region} (0..{plan.rx1_dr_offset_max}, RP002-1.0.4)")
         return self
 
     @model_validator(mode="after")
@@ -686,6 +711,10 @@ class Scenario:
                 group.pop("channel_freq_hz", None)
             if group.get("device_class") == "A":
                 group.pop("device_class", None)
+            # RX1DROffset à 0 = réglage du serveur, donc absent du hash : un scénario écrit
+            # avant l'introduction du champ garde exactement la même empreinte.
+            if group.get("rx1_dr_offset") == 0:
+                group.pop("rx1_dr_offset", None)
         # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
         for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
             for ob in env_dump.get("obstacles", []):

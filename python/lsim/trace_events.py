@@ -295,7 +295,9 @@ def _dev(i: int) -> str:
 _DATR = re.compile(r"^SF(\d+)BW(\d+)$")
 
 
-def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> DeviceRadio:
+def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float,
+           rx1_dr_offset: int = 0) -> DeviceRadio:
+    """`rx1_dr_offset` : RX1DROffset du terminal (0 = réglage du serveur, valeur historique)."""
     if plan is None:
         return DeviceRadio(freq_hz=freq_hz, dr=None, rx1_hz=freq_hz, tx_power_dbm=tx_power_dbm,
                            rx1_sf=sf, rx1_bw_hz=125_000)
@@ -311,7 +313,7 @@ def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> 
     rx1_hz, rx1_sf, rx1_bw_hz = freq_hz, sf, 125_000
     try:
         ch = plan.channel_index(freq_hz / 1_000_000)
-        rx1_mhz, rx1_datr = plan.rx1(dr, ch)
+        rx1_mhz, rx1_datr = plan.rx1(dr, ch, rx1_dr_offset)
         rx1_hz = round(rx1_mhz * 1_000_000)
         m = _DATR.match(rx1_datr)
         if m is not None:
@@ -380,7 +382,8 @@ def device_radios(scenario: Scenario) -> tuple[DeviceRadio, ...]:
                 plan = get_plan(g.region)
             except ValueError:
                 plan = None
-        radios.append(_radio(plan, g.channel_freq_hz, g.spreading_factor, g.tx_power_dbm))
+        radios.append(_radio(plan, g.channel_freq_hz, g.spreading_factor, g.tx_power_dbm,
+                             g.rx1_dr_offset))
     return tuple(radios)
 
 

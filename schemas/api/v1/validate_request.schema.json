@@ -488,6 +488,13 @@
           ],
           "default": null
         },
+        "rx1_dr_offset": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Rx1 Dr Offset",
+          "type": "integer"
+        },
         "spreading_factor": {
           "default": 7,
           "maximum": 12,

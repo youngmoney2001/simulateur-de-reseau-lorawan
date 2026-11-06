@@ -186,3 +186,77 @@ def test_la_limite_de_file_suit_l_offset():
     assert plan.queue_payload_max_for(1) == 129
     assert plan.queue_payload_max_for(2) == 53
     assert plan.queue_payload_max_for(3) == 53
+
+
+# ---------------------------------------------------------------------------
+# T-C-6 — réglage de déploiement : l'offset du groupe atteint la radio du terminal
+# ---------------------------------------------------------------------------
+
+def _scenario(region: str, rx1_dr_offset=None, sf: int = 9):
+    """Scénario minimal d'un groupe de 4 terminaux, avec ou sans RX1DROffset."""
+    from lsim.plan import get_plan
+    from lsim.scenario import Scenario, ScenarioModel
+    from lsim.trace_events import ProtocolOptions, build_trace  # noqa: F401
+
+    ch = get_plan(region).uplink_channels_hz()[0]
+    group = {
+        "name": "g0", "count": 4, "region": region, "channel_freq_hz": ch,
+        "placement": {"type": "disk", "radius_m": 1500.0},
+        "spreading_factor": sf, "payload_bytes": 20, "tx_power_dbm": 14.0,
+        "period_s": 900, "messages": 3, "start_spread_s": 900,
+    }
+    if rx1_dr_offset is not None:
+        group["rx1_dr_offset"] = rx1_dr_offset
+    return Scenario(ScenarioModel.model_validate({
+        "schema_version": 1, "name": "m", "seed": 1,
+        "gateway": {"x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+        "groups": [group],
+    }))
+
+
+@pytest.mark.parametrize("offset,sf_attendu", [(0, 9), (1, 10), (2, 11), (3, 12), (4, 12), (5, 12)])
+def test_eu868_l_offset_du_groupe_change_le_sf_de_rx1(offset, sf_attendu):
+    """Bout en bout : EU868 SF9 (DR3), `RX1_DR = clamp(3 - offset, 0, 7)`.
+
+    offsets 3, 4 et 5 donnent tous DR0 (SF12) : la saturation du clamp est volontaire et
+    conforme, ce n'est pas un écrasement de borne.
+    """
+    radio = _radio_of("EU868", offset)
+    assert radio.rx1_sf == sf_attendu
+    assert radio.rx1_bw_hz == 125_000
+
+
+@pytest.mark.parametrize("offset,sf_attendu", [(0, 9), (1, 10), (2, 11), (3, 12)])
+def test_us915_l_offset_du_groupe_change_le_sf_et_garde_la_bande(offset, sf_attendu):
+    """US915 : la bande descendante (500 kHz) ne bouge pas, seul le SF suit l'offset."""
+    radio = _radio_of("US915", offset)
+    assert radio.rx1_sf == sf_attendu
+    assert radio.rx1_bw_hz == 500_000
+
+
+def _radio_of(region: str, offset):
+    from lsim.trace_events import device_radios
+    return device_radios(_scenario(region, offset))[0]
+
+
+def test_sans_offset_le_comportement_est_inchange():
+    """Contrôle positif : sans le champ, on retrouve exactement l'ancien comportement."""
+    from lsim.trace_events import device_radios
+    assert device_radios(_scenario("EU868"))[0].rx1_sf == 9
+    assert device_radios(_scenario("EU868", 0))[0].rx1_sf == 9
+
+
+def test_offset_hors_bornes_regionales_refuse_a_la_lecture_du_scenario():
+    """US915 n'admet que 0..3 ; le refus a lieu à la lecture, pas à la simulation."""
+    import pydantic
+    with pytest.raises(pydantic.ValidationError, match="RX1DROffset 4"):
+        _scenario("US915", 4)
+    # Contrôle positif : 3 est accepté.
+    assert _scenario("US915", 3) is not None
+
+
+def test_le_hash_du_scenario_exclut_l_offset_par_defaut():
+    """Un scénario écrit avant l'introduction du champ garde la même empreinte."""
+    assert _scenario("EU868").sha256 == _scenario("EU868", 0).sha256
+    # Un offset non nul, lui, change l'empreinte : c'est une configuration différente.
+    assert _scenario("EU868").sha256 != _scenario("EU868", 2).sha256
