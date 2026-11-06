@@ -310,3 +310,74 @@ calculée sur son SF initial).
 
 C'est un chantier distinct, avec un risque d'interaction ADR déjà documenté. Il est laissé
 ouvert volontairement plutôt qu'improvisé.
+
+---
+
+## 11. Plan — honorer RX1DROffset dans le chemin boucle fermée du cœur
+
+### 11.1 Ce qu'il faut produire
+
+`RX1_DR = clamp(DR montant **courant** − offset, 0, max_dr)`, puis `SF = dr_sf[RX1_DR]`.
+
+Le DR courant n'est pas le DR initial : l'ADR le déplace en cours de simulation. C'est
+précisément pourquoi le remplacement brut de `ta.sf` par la table a échoué en I5-b.
+
+### 11.2 Ce que le cœur a déjà, mesuré
+
+| Donnée | Où | Validité |
+|---|---|---|
+| DR courant du terminal | `LoopDevice::dr` (`engine.cpp:1472`), `dev[d]` | **uniquement si `options.adr`** (`engine.cpp:1640`) ; sinon `-1` |
+| DR → SF régional | `LoopRegion::dr_sf[16]`, `max_dr` (`engine.hpp:304-305`) | toujours |
+| Indice dispositif | `d` (`engine.cpp:1795`), en portée au site à corriger | toujours |
+| `RX1DROffset` | **nulle part dans le cœur** | — |
+
+Deux régimes à traiter, car `dr` n'est pas toujours renseigné :
+- **ADR actif** (`dr >= 0`) : le DR suit l'ADR, il faut lui appliquer l'offset.
+- **ADR inactif** (`dr == -1`) : le SF ne bouge jamais ; la table `radios[d]`, déjà calculée
+  côté Python **avec** l'offset, fait foi telle quelle.
+
+### 11.3 Le point bloquant : l'offset n'a pas d'entrée dans le cœur
+
+`LoopRegion` (`c_api.h:1223`) ne porte que `dr_sf`, `max_dr`, `max_tx_power_index`,
+`power_step_tenth_db`, `max_eirp_dbm`, `duty_limit`. **Aucun champ réservé.**
+
+Or il ne peut pas être déduit : la table `radios[d].rx1_sf` encode `f(DR initial, offset)` et
+`ta.sf` encode `DR courant` ; leur écart ne donne l'offset que si l'ADR n'a rien déplacé, ce
+qui est faux par hypothèse quand l'ADR est actif. Le reconstituer serait une inférence
+fragile, contraire à **bbb3**.
+
+**Il faut donc le passer explicitement — une extension d'ABI.**
+
+### 11.4 Ce que l'extension implique
+
+L'ABI est versionnée (`abi_version`, `LSIM_CLOSED_LOOP_V4_ABI_VERSION = 4u`,
+`c_api.h:1905`), et le précédent **O1** demande une extension *versionnée explicitement
+activée*. Suivre ce motif :
+
+1. `c_api.h` — ajouter `rx1_dr_offset` à `lsim_loop_region` ; documenter la valeur par défaut
+   (0 = réglage du serveur).
+2. `engine.hpp` — ajouter le champ à `LoopRegion`.
+3. `engine.cpp` —
+   - validation : refus si `rx1_dr_offset > max_dr` (échec explicite, jamais de saturation) ;
+   - au site `engine.cpp:2029`, remplacer `rad.rx1_sf = ta.sf;` par le calcul §11.2 ;
+   - traiter de même le second site `engine.cpp:2272` (branche RX1 de la sensibilité).
+4. Ponts C (`c_api_ext.cpp`, `closed_loop_v3_validate.cpp`) et parité Python ctypes (**zz4**).
+5. `abi_layout.cpp` — vérification de taille/alignement.
+
+### 11.5 Risque identifié
+
+Le suivi de l'ADR est le point sensible : en I5-b, y toucher a cassé un test Python
+(`confirmed_ds_answers` 266 au lieu de 268) parce qu'un dispositif passé à SF7 recevait une
+descente calculée sur son SF initial. Le test de non-régression doit donc porter
+spécifiquement sur un scénario **avec ADR** et un SF déplacé, pas seulement sur l'offset 0.
+
+### 11.6 Tests
+
+- **T-C-7** — non-régression ADR : rejouer le scénario d'I5-b (EU868 + `link_adr`) et vérifier
+  que `confirmed_ds_answers` reste à 268. C'est le test qui aurait attrapé la régression
+  d'I5-b.
+- **T-C-8** — offset effectif avec ADR : un dispositif déplacé par l'ADR doit voir sa descente
+  RX1 calculée sur `DR courant − offset`, pas sur l'un seul des deux.
+- **T-C-9** — ADR inactif : la table fait foi, comportement inchangé à l'offset 0.
+- **T-C-10** — refus : `rx1_dr_offset > max_dr` ⇒ `InvalidInput`, avec contrôle positif.
+- **T-C-11** — mutation : altérer l'application de l'offset doit faire échouer T-C-8.
