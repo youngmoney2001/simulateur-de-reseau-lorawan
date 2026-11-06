@@ -1067,6 +1067,158 @@ void test_refused_apply_does_not_change_terminal_dr() {
     CHECK_TRUE(o.terminals[0].dr <= 1);
 }
 
+// ------------------------------------------------------- v5 : RX1DROffset par dispositif (I5-c)
+//
+// L'enveloppe v5 ajoute un RX1DROffset par dispositif aux arguments v3. Elle suit exactement la
+// forme de v4 : validation de l'enveloppe d'abord, puis validation v3 inchangée, puis moteur.
+
+// Un seul dispositif en SF7, donc DR5 (`eu_region()` : dr_sf[i] = 12 − i). ADR active : c'est le
+// seul régime où le DR courant du terminal est connu, donc celui où l'offset peut s'appliquer.
+// Sans ADR le SF ne bouge jamais et la table de radios, déjà calculée avec l'offset, fait foi.
+// Les dispositifs de `make_scenario` sont SF12 (DR0) : l'offset n'y aurait aucun effet visible.
+Scenario sf7_scenario() {
+    Scenario s = make_scenario(1, 1, true, 1);
+    s.devices[0].spreading_factor = 7;
+    s.radios[0].dr = 5;
+    s.radios[0].rx1_sf = 7;
+    return s;
+}
+
+// L'enveloppe v5 pointe vers des arguments v3 qui doivent rester vivants pendant l'appel : on les
+// garde donc dans le même objet, construit sur la pile de l'appelant.
+struct V5Holder {
+    lsim_closed_loop_v3_args v3{};
+    lsim_closed_loop_v4_args v4{};
+    lsim_closed_loop_v5_args v5{};
+};
+
+// v5 imbrique v4, qui imbrique v3 : les trois doivent rester vivants pendant l'appel.
+void build_v5(V5Holder& h, Scenario& s, Out& o, const std::vector<std::uint8_t>& offsets) {
+    h.v3 = args_of(s, o, false);
+    h.v4.struct_size = sizeof(lsim_closed_loop_v4_args);
+    h.v4.abi_version = LSIM_CLOSED_LOOP_V4_ABI_VERSION;
+    h.v4.v3 = &h.v3;
+    h.v4.device_rf = nullptr;
+    h.v4.device_rf_count = 0;
+    h.v4.gateway_rf = nullptr;
+    h.v5.struct_size = sizeof(lsim_closed_loop_v5_args);
+    h.v5.abi_version = LSIM_CLOSED_LOOP_V5_ABI_VERSION;
+    h.v5.v4 = &h.v4;
+    h.v5.rx1_dr_offset = offsets.empty() ? nullptr : offsets.data();
+    h.v5.rx1_dr_offset_count = offsets.size();
+}
+
+std::int32_t run_v5(Scenario& s, Out& o, const std::vector<std::uint8_t>& offsets) {
+    V5Holder h;
+    build_v5(h, s, o, offsets);
+    return lsim_simulate_closed_loop_v5(&h.v5);
+}
+
+// T-V5-1 : entrée nulle = v3. C'est la propriété qui rend l'enveloppe non régressive : la casser
+// signifierait que l'entrée est devenue obligatoire ou que le moteur a changé de comportement.
+void test_v5_null_offsets_equal_v3() {
+    Scenario s1 = sf7_scenario();
+    Out o1 = make_out(s1, false);
+    Scenario s2 = sf7_scenario();
+    Out o2 = make_out(s2, false);
+    CHECK_EQ(run_v3(s1, o1, false), 0);
+    CHECK_EQ(run_v5(s2, o2, {}), 0);
+    CHECK_EQ(o1.dl_n, o2.dl_n);
+    CHECK_EQ(o1.up_n, o2.up_n);
+    CHECK_EQ(o1.dls[0].air_ns, o2.dls[0].air_ns);
+    CHECK_EQ(static_cast<int>(o1.dls[0].delivered), static_cast<int>(o2.dls[0].delivered));
+}
+
+// T-V5-2 : l'offset est effectif de bout en bout, de l'ABI C jusqu'au moteur. Le dispositif émet
+// en SF7, donc DR5 ; l'offset 3 le fait descendre à clamp(5−3, 0, 5) = DR2 = SF10. Chaque pas de
+// SF double l'airtime, soit un facteur ~8 sur trois pas : on vérifie au moins un facteur 5.
+// Contrôle positif obligatoire (dixième garde-fou) : sans offset la descente a bien lieu et dure
+// le temps du SF7 ; un moteur qui ignorerait l'offset échouerait la dernière assertion.
+void test_v5_rx1_dr_offset_is_effective() {
+    Scenario s0 = sf7_scenario();
+    Out o0 = make_out(s0, false);
+    Scenario s3 = sf7_scenario();
+    Out o3 = make_out(s3, false);
+    CHECK_EQ(run_v5(s0, o0, {0}), 0);
+    CHECK_EQ(run_v5(s3, o3, {3}), 0);
+    CHECK_EQ(o0.dl_n, std::size_t{1});
+    CHECK_EQ(o3.dl_n, std::size_t{1});
+    CHECK_TRUE(o0.dls[0].air_ns > 0);                      // contrôle positif
+    CHECK_TRUE(o3.dls[0].air_ns > 5 * o0.dls[0].air_ns);   // SF10 contre SF7
+}
+
+// T-V5-3 : validation de l'enveloppe, avec contrôle positif en tête. Chaque refus est explicite
+// (arbitrage bbb3) : jamais de saturation silencieuse, jamais d'entrée acceptée puis ignorée.
+void test_v5_argument_errors() {
+    Scenario s = sf7_scenario();
+    Out o = make_out(s, false);
+    const std::vector<std::uint8_t> offs = {0};
+    V5Holder h;
+    build_v5(h, s, o, offs);
+    CHECK_EQ(lsim_simulate_closed_loop_v5(&h.v5), 0);  // contrôle positif
+
+    CHECK_EQ(lsim_simulate_closed_loop_v5(nullptr),
+             static_cast<std::int32_t>(lsim::lora::Status::NullOutput));
+    {
+        V5Holder a = h;
+        a.v5.struct_size = 0;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    {
+        V5Holder a = h;
+        a.v5.struct_size = sizeof(lsim_closed_loop_v5_args) - 1;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    {
+        V5Holder a = h;
+        a.v5.abi_version = LSIM_CLOSED_LOOP_V5_ABI_VERSION + 1;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    {
+        V5Holder a = h;
+        a.v5.v4 = nullptr;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    {
+        V5Holder a = h;
+        a.v5.reserved[0] = 1;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    {
+        V5Holder a = h;
+        a.v5.reserved[1] = 1;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    // Compte non nul sans tableau.
+    {
+        V5Holder a = h;
+        a.v5.rx1_dr_offset = nullptr;
+        a.v5.rx1_dr_offset_count = 1;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+    // Compte différent du nombre de dispositifs : refusé avant toute lecture du tableau.
+    {
+        V5Holder a = h;
+        a.v5.rx1_dr_offset_count = 2;
+        CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), kSimInvalidInput);
+    }
+}
+
+// T-V5-4 : la borne par région est vérifiée par le moteur, seul endroit qui connaît `max_dr`.
+// `eu_region()` a max_dr = 5, donc 5 est admis (contrôle positif) et 6 refusé.
+void test_v5_offset_out_of_range_is_refused() {
+    Scenario s = sf7_scenario();
+    Out o = make_out(s, false);
+    const std::vector<std::uint8_t> ok = {5};
+    const std::vector<std::uint8_t> bad = {6};
+    V5Holder a;
+    build_v5(a, s, o, ok);
+    V5Holder b;
+    build_v5(b, s, o, bad);
+    CHECK_EQ(lsim_simulate_closed_loop_v5(&a.v5), 0);
+    CHECK_EQ(lsim_simulate_closed_loop_v5(&b.v5), kSimInvalidInput);
+}
+
 }  // namespace
 
 void run_closed_loop_v3_api_tests() {
@@ -1088,4 +1240,8 @@ void run_closed_loop_v3_api_tests() {
     test_trace_order_stable_at_equal_timestamps();
     test_historical_parity_with_trace_enabled();
     test_refused_apply_does_not_change_terminal_dr();
+    test_v5_null_offsets_equal_v3();
+    test_v5_rx1_dr_offset_is_effective();
+    test_v5_argument_errors();
+    test_v5_offset_out_of_range_is_refused();
 }

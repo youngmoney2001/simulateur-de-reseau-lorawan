@@ -631,6 +631,14 @@ namespace expected {
     inline constexpr size_t off_lsim_closed_loop_v4_args__device_rf_count = 16;
     inline constexpr size_t off_lsim_closed_loop_v4_args__gateway_rf = 20;
     inline constexpr size_t off_lsim_closed_loop_v4_args__reserved = 24;
+    // lsim_closed_loop_v5_args
+    inline constexpr size_t size_lsim_closed_loop_v5_args = 36;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__struct_size = 0;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__abi_version = 4;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__v4 = 8;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__rx1_dr_offset = 12;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__rx1_dr_offset_count = 16;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__reserved = 20;
     // lsim_multi_dl_args
     inline constexpr size_t size_lsim_multi_dl_args = 128;
     inline constexpr size_t off_lsim_multi_dl_args__struct_size = 0;
@@ -1248,6 +1256,14 @@ namespace expected {
     inline constexpr size_t off_lsim_closed_loop_v4_args__device_rf_count = 24;
     inline constexpr size_t off_lsim_closed_loop_v4_args__gateway_rf = 32;
     inline constexpr size_t off_lsim_closed_loop_v4_args__reserved = 40;
+    // lsim_closed_loop_v5_args
+    inline constexpr size_t size_lsim_closed_loop_v5_args = 48;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__struct_size = 0;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__abi_version = 4;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__v4 = 8;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__rx1_dr_offset = 16;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__rx1_dr_offset_count = 24;
+    inline constexpr size_t off_lsim_closed_loop_v5_args__reserved = 32;
     // lsim_multi_dl_args
     inline constexpr size_t size_lsim_multi_dl_args = 232;
     inline constexpr size_t off_lsim_multi_dl_args__struct_size = 0;
@@ -1817,6 +1833,13 @@ static_assert(offsetof(lsim_closed_loop_v4_args, device_rf_count) == expected::o
 static_assert(offsetof(lsim_closed_loop_v4_args, gateway_rf) == expected::off_lsim_closed_loop_v4_args__gateway_rf, "lsim_closed_loop_v4_args::gateway_rf");
 static_assert(sizeof(lsim_multi_dl_args) == expected::size_lsim_multi_dl_args, "lsim_multi_dl_args : taille");
 static_assert(offsetof(lsim_closed_loop_v4_args, reserved) == expected::off_lsim_closed_loop_v4_args__reserved, "lsim_closed_loop_v4_args::reserved");
+static_assert(sizeof(lsim_closed_loop_v5_args) == expected::size_lsim_closed_loop_v5_args, "lsim_closed_loop_v5_args : taille");
+static_assert(offsetof(lsim_closed_loop_v5_args, struct_size) == expected::off_lsim_closed_loop_v5_args__struct_size, "lsim_closed_loop_v5_args::struct_size");
+static_assert(offsetof(lsim_closed_loop_v5_args, abi_version) == expected::off_lsim_closed_loop_v5_args__abi_version, "lsim_closed_loop_v5_args::abi_version");
+static_assert(offsetof(lsim_closed_loop_v5_args, v4) == expected::off_lsim_closed_loop_v5_args__v4, "lsim_closed_loop_v5_args::v4");
+static_assert(offsetof(lsim_closed_loop_v5_args, rx1_dr_offset) == expected::off_lsim_closed_loop_v5_args__rx1_dr_offset, "lsim_closed_loop_v5_args::rx1_dr_offset");
+static_assert(offsetof(lsim_closed_loop_v5_args, rx1_dr_offset_count) == expected::off_lsim_closed_loop_v5_args__rx1_dr_offset_count, "lsim_closed_loop_v5_args::rx1_dr_offset_count");
+static_assert(offsetof(lsim_closed_loop_v5_args, reserved) == expected::off_lsim_closed_loop_v5_args__reserved, "lsim_closed_loop_v5_args::reserved");
 static_assert(offsetof(lsim_multi_dl_args, struct_size) == expected::off_lsim_multi_dl_args__struct_size, "lsim_multi_dl_args::struct_size");
 static_assert(offsetof(lsim_multi_dl_args, abi_version) == expected::off_lsim_multi_dl_args__abi_version, "lsim_multi_dl_args::abi_version");
 static_assert(offsetof(lsim_multi_dl_args, devices) == expected::off_lsim_multi_dl_args__devices, "lsim_multi_dl_args::devices");

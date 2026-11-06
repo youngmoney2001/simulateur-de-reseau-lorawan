@@ -99,7 +99,8 @@ int32_t to_frontend(std::uint32_t present, double gain_dbi, double loss_db,
 }
 
 int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a, const lsim_device_rf* device_rf,
-                           std::size_t device_rf_count, const lsim_gateway_rf* gateway_rf) {
+                           std::size_t device_rf_count, const lsim_gateway_rf* gateway_rf,
+                           const std::uint8_t* rx1_dr_offset, std::size_t rx1_dr_offset_count) {
     const std::size_t n = a.device_count;
 
     std::uint64_t planned = 0;
@@ -230,6 +231,11 @@ int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a, const lsim_device_
     std::vector<lsim::sim::LoopChannelConfig> configs;
     lsim::sim::LoopChannelIo io;
     io.trace_v3 = a.trace_enabled == 1;
+    // I5-c : RX1DROffset par dispositif. Entrée optionnelle : NULL ou count nul = 0 partout.
+    if (rx1_dr_offset != nullptr && rx1_dr_offset_count != 0) {
+        io.rx1_dr_offset = rx1_dr_offset;
+        io.rx1_dr_offset_count = rx1_dr_offset_count;
+    }
     if (!lsim::sim::abi_v3::is_historical_channel_mode(a)) {
         configs = lsim::sim::abi_v3::build_channel_configs(a);
         io.config = configs.data();
@@ -264,15 +270,15 @@ int32_t lsim_simulate_closed_loop_v3(const lsim_closed_loop_v3_args* args) {
     const int32_t valid = lsim::sim::abi_v3::validate_closed_loop_v3_args(args);
     if (valid != 0) return valid;
     try {
-        return run_closed_loop_v3(*args, nullptr, 0, nullptr);
+        return run_closed_loop_v3(*args, nullptr, 0, nullptr, nullptr, 0);
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }
 }
 
-// Boucle fermée v4 : enveloppe v3 + frontaux. La validation v3 s'applique d'abord, puis les
-// tables RF sont contrôlées (0 ou complètes) avant d'atteindre le moteur.
-int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args) {
+// Validation de l'enveloppe v4, partagée par l'entrée v4 et par l'enveloppe v5 qui l'imbrique.
+// La validation v3 s'applique d'abord, puis les tables RF sont contrôlées (0 ou complètes).
+int32_t validate_closed_loop_v4_args(const lsim_closed_loop_v4_args* args) {
     if (args == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
     if (args->struct_size != sizeof(lsim_closed_loop_v4_args) ||
         args->abi_version != LSIM_CLOSED_LOOP_V4_ABI_VERSION || args->v3 == nullptr) {
@@ -284,11 +290,49 @@ int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args) {
     if (args->device_rf_count != 0 && args->device_rf_count != args->v3->device_count) {
         return rf_invalid();
     }
-    const int32_t valid = lsim::sim::abi_v3::validate_closed_loop_v3_args(args->v3);
-    if (valid != 0) return valid;
+    return lsim::sim::abi_v3::validate_closed_loop_v3_args(args->v3);
+}
+
+// Boucle fermée v4 : enveloppe v3 + frontaux.
+int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args) {
+    const int32_t valid4 = validate_closed_loop_v4_args(args);
+    if (valid4 != 0) return valid4;
     try {
         return run_closed_loop_v3(*args->v3, args->device_rf, args->device_rf_count,
-                                  args->gateway_rf);
+                                  args->gateway_rf, nullptr, 0);
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+
+// Boucle fermée v5 : enveloppe v4 + RX1DROffset par dispositif. Même forme que v4 : validation
+// de l'enveloppe d'abord, puis validation imbriquée (v4, donc v3), puis moteur. Les bornes par
+// région sont vérifiées par le moteur, seul endroit qui connaît `max_dr`.
+int32_t lsim_simulate_closed_loop_v5(const lsim_closed_loop_v5_args* args) {
+    if (args == nullptr) return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    if (args->struct_size != sizeof(lsim_closed_loop_v5_args) ||
+        args->abi_version != LSIM_CLOSED_LOOP_V5_ABI_VERSION || args->v4 == nullptr) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    for (std::size_t k = 0; k < 2; ++k) {
+        if (args->reserved[k] != 0) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+        }
+    }
+    if (args->rx1_dr_offset_count != 0 && args->rx1_dr_offset == nullptr) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    const int32_t valid4 = validate_closed_loop_v4_args(args->v4);
+    if (valid4 != 0) return valid4;
+    if (args->rx1_dr_offset_count != 0 &&
+        args->rx1_dr_offset_count != args->v4->v3->device_count) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    try {
+        return run_closed_loop_v3(*args->v4->v3, args->v4->device_rf, args->v4->device_rf_count,
+                                  args->v4->gateway_rf, args->rx1_dr_offset,
+                                  args->rx1_dr_offset_count);
     } catch (...) {
         return LSIM_STATUS_INTERNAL;
     }

@@ -323,6 +323,22 @@ class _CClosedLoopV4Args(ctypes.Structure):
     ]
 
 
+class _CClosedLoopV5Args(ctypes.Structure):
+    """`lsim_closed_loop_v5_args` : imbrique v4 (elle-même sur v3) + RX1DROffset (I5-c).
+
+    L'imbrication permet de fournir en même temps les frontaux RF de v4 et les offsets de v5.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("v4", ctypes.c_void_p),
+        ("rx1_dr_offset", ctypes.POINTER(ctypes.c_uint8)),
+        ("rx1_dr_offset_count", ctypes.c_size_t),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
 class _CPropagation(ctypes.Structure):
     _fields_ = [
         ("frequency_hz", ctypes.c_double),
@@ -742,6 +758,8 @@ LIB.lsim_simulate_uplinks_multi_dl_env.restype = ctypes.c_int32
 LIB.lsim_simulate_uplinks_multi_dl_env.argtypes = [ctypes.POINTER(_CMultiDlArgs)]
 LIB.lsim_simulate_closed_loop_v4.restype = ctypes.c_int32
 LIB.lsim_simulate_closed_loop_v4.argtypes = [ctypes.POINTER(_CClosedLoopV4Args)]
+LIB.lsim_simulate_closed_loop_v5.restype = ctypes.c_int32
+LIB.lsim_simulate_closed_loop_v5.argtypes = [ctypes.POINTER(_CClosedLoopV5Args)]
 LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32
 LIB.lsim_env_path_loss_matrix.argtypes = [
     ctypes.POINTER(_CPropagation), ctypes.POINTER(_CEnvironment), ctypes.c_size_t,

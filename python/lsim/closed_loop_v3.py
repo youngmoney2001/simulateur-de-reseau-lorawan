@@ -22,6 +22,7 @@ from typing import Mapping, Optional, Sequence
 from lsim._native import (
     LIB,
     _CClosedLoopV4Args,
+    _CClosedLoopV5Args,
     _CDeviceRf,
     _CDeviceStats,
     _CEndDevice,
@@ -50,7 +51,13 @@ from lsim.closed_loop import (
 )
 from lsim.downlink_plan import _CPlanDevice, _CPlanOptions
 from lsim.lora import StatusError
-from lsim.simulator import MAX_END_DEVICES, Counters, GatewayLoad, _c_end_devices
+from lsim.simulator import (
+    MAX_END_DEVICES,
+    Counters,
+    GatewayLoad,
+    _c_end_devices,
+    _c_environment,
+)
 
 # Constantes publiques (c_api.h, bloc v3).
 CHANNEL_PLAN_NONE = 0
@@ -238,6 +245,22 @@ class ClosedLoopV3Outcome:
     trace: tuple[TraceEventV3, ...] = field(default_factory=tuple)
 
 
+def _offsets_table(values, device_count):
+    """Table C de RX1DROffset : None (ou vide) = entrée nulle, sinon une entrée par dispositif."""
+    if values is None:
+        return None, 0
+    offsets = tuple(values)
+    if not offsets:
+        return None, 0
+    if len(offsets) != device_count:
+        raise ValueError("rx1_dr_offset : une entrée par dispositif (ou None)")
+    for o in offsets:
+        if isinstance(o, bool) or not isinstance(o, int) or o < 0:
+            raise ValueError("rx1_dr_offset : entiers positifs ou nuls")
+    table = (ctypes.c_uint8 * len(offsets))(*offsets)
+    return ctypes.cast(table, ctypes.POINTER(ctypes.c_uint8)), len(offsets)
+
+
 def _ptr(array, ctype):
     """Pointeur sur un tableau ctypes (None si absent) : affectation explicite aux champs POINTER."""
     return None if array is None else ctypes.cast(array, ctypes.POINTER(ctype))
@@ -317,6 +340,8 @@ def simulate_closed_loop_v3(
     trace_capacity: Optional[int] = None,
     device_rf: Optional[Sequence[DeviceRf]] = None,
     gateway_rf: Optional[GatewayRf] = None,
+    rx1_dr_offset: Optional[Sequence[int]] = None,
+    environment=None,
 ) -> ClosedLoopV3Outcome:
     """Boucle fermée v3 en une seule exécution native.
 
@@ -325,6 +350,15 @@ def simulate_closed_loop_v3(
     `capacity` : uplinks, descentes et occupations (défaut : deux fois le nombre d'émissions) ;
     `trace_capacity` (défaut : 64 événements par émission et 1024). Une capacité insuffisante lève
     `StatusError` avec le code natif.
+
+    `rx1_dr_offset` : un RX1DROffset (I5-c) par dispositif, ou None pour n'en fournir aucun. Les
+    fournir achemine l'appel par l'enveloppe v5, qui imbrique v4 donc v3 : résultats identiques à
+    v3 lorsque tous les offsets sont nuls. Toute valeur supérieure au `max_dr` régional est
+    refusée par le moteur (StatusError), jamais saturée silencieusement.
+
+    `environment` : relief et obstacles, ou None pour un terrain plat sans obstacle. Le champ
+    `env` de la structure v3 existait déjà ; il valait toujours None, si bien que le relief était
+    perdu. Il est exposé ici pour que le chemin scénario puisse basculer de v2 à v3 sans régression.
     """
     n = len(devices)
     if n > MAX_END_DEVICES:
@@ -427,7 +461,14 @@ def simulate_closed_loop_v3(
     args.regions = _ptr(c_regions if n else None, _CLoopRegion)
     args.gateway = ctypes.pointer(c_gw)
     args.prop = ctypes.pointer(c_prop)
-    args.env = None
+    # Relief et obstacles : `c_env` doit rester vivant pendant l'appel, d'où `keep`.
+    c_env = None
+    keep: list = []
+    if environment is not None:
+        c_env, keep = _c_environment(environment)
+        args.env = ctypes.cast(ctypes.pointer(c_env), ctypes.c_void_p)
+    else:
+        args.env = None
     args.options = ctypes.pointer(c_opt)
     args.mac = _ptr(c_mac if mac else None, _CLoopMac)
     args.mac_count = len(mac)
@@ -458,7 +499,11 @@ def simulate_closed_loop_v3(
     c_dev_rf, n_dev_rf = (device_table(tuple(device_rf), _CDeviceRf)
                           if device_rf is not None else (None, 0))
     c_gw_rf = gateway_entry(gateway_rf)
-    if c_dev_rf is not None or c_gw_rf is not None:
+    c_offsets, n_offsets = _offsets_table(rx1_dr_offset, n)
+    if n_offsets == 0 and c_dev_rf is None and c_gw_rf is None:
+        status = LIB.lsim_simulate_closed_loop_v3(ctypes.pointer(args))
+    else:
+        # v5 imbrique v4, qui imbrique v3 : `v4` doit rester vivant pendant l'appel v5.
         v4 = _CClosedLoopV4Args()
         v4.struct_size = ctypes.sizeof(_CClosedLoopV4Args)
         v4.abi_version = 4
@@ -466,9 +511,16 @@ def simulate_closed_loop_v3(
         v4.device_rf = c_dev_rf
         v4.device_rf_count = n_dev_rf
         v4.gateway_rf = ctypes.pointer(c_gw_rf) if c_gw_rf is not None else None
-        status = LIB.lsim_simulate_closed_loop_v4(ctypes.pointer(v4))
-    else:
-        status = LIB.lsim_simulate_closed_loop_v3(ctypes.pointer(args))
+        if n_offsets == 0:
+            status = LIB.lsim_simulate_closed_loop_v4(ctypes.pointer(v4))
+        else:
+            v5 = _CClosedLoopV5Args()
+            v5.struct_size = ctypes.sizeof(_CClosedLoopV5Args)
+            v5.abi_version = 5
+            v5.v4 = ctypes.cast(ctypes.pointer(v4), ctypes.c_void_p)
+            v5.rx1_dr_offset = c_offsets
+            v5.rx1_dr_offset_count = n_offsets
+            status = LIB.lsim_simulate_closed_loop_v5(ctypes.pointer(v5))
     if status != 0:
         raise StatusError(status)
 

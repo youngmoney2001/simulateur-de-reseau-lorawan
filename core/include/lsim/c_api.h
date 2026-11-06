@@ -1917,6 +1917,32 @@ typedef struct lsim_closed_loop_v4_args {
 /* Boucle fermée v4 : identique à v3, avec frontaux par terminal et par passerelle. */
 LSIM_API int32_t lsim_simulate_closed_loop_v4(const lsim_closed_loop_v4_args* args);
 
+/* Arguments de la boucle fermée v5 : v5 **imbrique** v4, qui imbrique lui-même v3. Aucune
+   structure n'est recopiée : chaque enveloppe ne fait que pointer vers la précédente. Cette
+   imbrication, plutôt qu'une enveloppe v5 directe sur v3, permet de fournir en même temps les
+   frontaux RF de v4 et les offsets de v5, sans combinaison impossible.
+
+   I5-c : RX1DROffset par dispositif, `rx1_dr_offset_count` entrées. `NULL` (ou count nul)
+   = 0 partout, c'est-à-dire le réglage du serveur et le comportement historique.
+   Entrée dédiée plutôt qu'un champ de `lsim_loop_region` : cette dernière est une structure
+   d'ABI C dont la taille est figée à 160 octets (garde-fou `core/tests/abi_layout.cpp`).
+
+   Valeurs admises : 0 .. `regions[i].max_dr`. Toute valeur supérieure est refusée
+   explicitement (InvalidInput), jamais saturée silencieusement. */
+#define LSIM_CLOSED_LOOP_V5_ABI_VERSION 5u
+
+typedef struct lsim_closed_loop_v5_args {
+    uint32_t struct_size;                 /* sizeof(lsim_closed_loop_v5_args) */
+    uint32_t abi_version;                 /* LSIM_CLOSED_LOOP_V5_ABI_VERSION */
+    const lsim_closed_loop_v4_args* v4;   /* enveloppe v4, requise (frontaux optionnels) */
+    const uint8_t* rx1_dr_offset;         /* NULL ou device_count entrées */
+    size_t   rx1_dr_offset_count;
+    uint64_t reserved[2];                 /* doit être nul */
+} lsim_closed_loop_v5_args;
+
+/* Boucle fermée v5 : identique à v4, avec RX1DROffset par dispositif. */
+LSIM_API int32_t lsim_simulate_closed_loop_v5(const lsim_closed_loop_v5_args* args);
+
 #ifdef __cplusplus
 }
 #endif
