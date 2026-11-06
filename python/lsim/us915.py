@@ -1,15 +1,15 @@
-"""Plan US902-928 (US915), LoRaWAN Regional Parameters RP002.
+"""Plan US902-928 (US915), LoRaWAN Regional Parameters RP002-1.0.4.
 
 Canaux montants (indices utilisés comme TxCh du MIC 1.1) :
 - 0 à 63 : LoRa 125 kHz, 902,3 + 0,2 × i MHz, DR0 à DR3 ;
 - 64 à 71 : LoRa 500 kHz, 903,0 + 1,6 × (i − 64) MHz, DR4.
 Canaux descendants : 923,3 + 0,6 × k MHz (k = 0 à 7), LoRa 500 kHz, DR8 à DR13.
 
-Débits montants (TTN US902-928, RP002) : DR0 SF10/125, DR1 SF9/125, DR2 SF8/125, DR3 SF7/125,
+Débits montants (TTN US902-928, RP002-1.0.4) : DR0 SF10/125, DR1 SF9/125, DR2 SF8/125, DR3 SF7/125,
 DR4 SF8/500. Débits descendants DR8 à DR13 = SF12 à SF7 / 500 kHz.
 
-RX1 (RP002, tableau RX1DROffset et « RX1 Channel Number = Transmit Channel Number modulo 8 ») :
-fréquence 923,3 + 0,6 × (canal mod 8) MHz ; débit RX1 avec RX1DROffset 0 : DR0→DR10, DR1→DR11,
+RX1 (RP002-1.0.4, tableau RX1DROffset et « RX1 Channel Number = Transmit Channel Number modulo 8 ») :
+fréquence 923,3 + 0,6 × (canal mod 8) MHz ; débit RX1 avec RX1DROffset 0 (valeur par défaut) : DR0→DR10, DR1→DR11,
 DR2→DR12, DR3→DR13, DR4→DR13. RX2 par défaut : 923,3 MHz / DR8 (DLSettings).
 
 Charges N (sans FOpts, compatibles répéteur, TTN US902-928) : DR0 11, DR1 53, DR2 125, DR3 222,
@@ -19,6 +19,15 @@ RX1 atteignables (DR10 à DR13) : 222 octets.
 Sous-bandes et règle LinkADRReq (ChMaskCntl) : `lsim.channel_mask`, émission par `lsim.serve`.
 LR-FHSS (DR5, DR6) non géré : refusé à la réception (décision, voir docs/USAGE.md 5quater).
 Le dispositif rejoint sur les 72 canaux par défaut sans CFList : c'est la règle de ce serveur.
+Provenance
+----------
+Référence vérifiée ....... RP002-1.0.4 (débits, mapping RX1, bornes d'offset)
+Source ................... deux transcriptions indépendantes et concordantes :
+                           LoRaMac-node v4.7.1 (Lora-net) et lorawan-stack v3.37.0 (TTI)
+Vérificateur ............. tools/verifier_rx1_rp002.py (0 écart sur les 7 régions)
+Réserve .................. les tables régionales de RP002-1.0.5 n'ont PAS été lues
+                           directement ; voir docs/I5_C_RX1_DROFFSET.md §1
+
 """
 
 from lsim.plan import Plan, register

@@ -8,7 +8,7 @@ Canaux descendants : 923,3 + 0,6 × k MHz (k = 0 à 7), LoRa 500 kHz, DR8 à DR1
 Débits montants : DR0 SF12/125, DR1 SF11/125, DR2 SF10/125, DR3 SF9/125, DR4 SF8/125,
 DR5 SF7/125, DR6 SF8/500. Débits descendants : DR8 SF12/500 … DR13 SF7/500.
 
-RX1 (RP002-1.0.5, §3.8.7 « AU915-928 Receive Windows », RX1DROffset 0) : DR0→DR8, DR1→DR9,
+RX1 (RP002-1.0.5, §3.8.7 « AU915-928 Receive Windows », RX1DROffset 0 par défaut) : DR0→DR8, DR1→DR9,
 DR2→DR10, DR3→DR11, DR4→DR12, DR5→DR13, DR6→DR13 ; fréquence 923,3 + 0,6 × (canal mod 8) MHz.
 À offset 0 la descente conserve le facteur d'étalement de la montante en le transportant sur
 500 kHz. RX2 par défaut : 923,3 MHz / DR8 (DLSettings).
@@ -26,7 +26,9 @@ Conformité régionale
 Référence normative ...... RP002-1.0.5 (LoRa Alliance, octobre 2025)
 Table du mappage RX1 ..... §3.8.7 « AU915-928 Receive Windows » (page 62)
                            — NON LUE DIRECTEMENT : voir L1
-Source de la table RX1 ... v1.0.3revA Table 40 (DR0–DR4) + v1.1rA Table 39 (DR5–DR6)
+Source de la table RX1 ... deux transcriptions indépendantes et concordantes :
+                           LoRaMac-node v4.7.1 `DatarateOffsetsAU915[7][6]` et
+                           lorawan-stack v3.37.0 `au915928DownlinkDRTable`
 Plage d'offsets .......... [0:5] — RP002-1.0.5 Table 4 (lue)
 Table des charges N ...... RP002-1.0.5 table 44 — NON LUE DIRECTEMENT : voir L1
 Corroborations charges ... v1.0 (2016) T.31, v1.0.2 (2017) T.37, v1.1rB (2017) T.38-39
@@ -36,7 +38,9 @@ Vérificateur ............. agent Arena, lot I6-b1
 Statut de vérification
 ----------------------
 Colonne offset 0 ......... NORMATIF CONFIRMÉ
-Offsets 1 à 5 ............ NORMATIF CONFIRMÉ (corroborations antérieures à 1.0.5 ; L1)
+Offsets 1 à 5 ............ CONFIRMÉ (les deux transcriptions ci-dessus concordent sur
+                           les 6 colonnes, pas seulement sur l'offset 0 ; L1 tient toujours
+                           sur 1.0.5, dont la table n'a pas été lue)
 Plage [0:5] .............. NORMATIF CONFIRMÉ (RP002-1.0.5 Table 4, lue)
 Charges N, DR8 et DR9 .... NORMATIF CONFIRMÉ (corroborations interversions ; L1 sur 1.0.5)
 Charges N, DR10 à DR13 ... HYPOTHÈSE NON VÉRIFIÉE — écart de 20 octets, hors lot I6-b1
