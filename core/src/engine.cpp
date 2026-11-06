@@ -963,12 +963,17 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
 
 namespace {
 
-// Airtime d'un downlink au débit RX1 (= SF de l'uplink, BW 125 kHz), CR 4/5, en-tête explicite,
-// sans CRC (LoRaWAN).
-SimStatus downlink_airtime(std::uint8_t sf, std::uint32_t payload_bytes, SimTime& out) {
+// Airtime d'un downlink au débit de la **fenêtre qui l'émet** : son SF et sa bande réels,
+// CR 4/5, en-tête explicite, sans CRC (LoRaWAN).
+//
+// I5-a : la bande est un paramètre. Elle était codée en dur à 125 kHz, ce qui faussait la durée
+// réservée sur l'émetteur d'un facteur 0,04x à 96x selon le DR RX1 réellement imposé
+// (docs/I5_A_RX1_AIRTIME.md §2.4).
+SimStatus downlink_airtime(std::uint8_t sf, lora::Bandwidth bw, std::uint32_t payload_bytes,
+                           SimTime& out) {
     lora::RadioConfig rc;
     rc.spreading_factor = sf;
-    rc.bandwidth = lora::Bandwidth::Bw125kHz;
+    rc.bandwidth = bw;
     rc.coding_rate = 1;
     rc.crc_on = false;
     rc.explicit_header = true;
@@ -1024,6 +1029,22 @@ SimStatus simulate_uplinks_multi_downlinks(
     DeviceStats* per_device, NetworkStats& totals, GatewayRxStats* per_gateway,
     const env::Environment* environment, std::vector<MultiTx>* trace,
     std::vector<MultiDownlink>* downlinks, const SimTime* dl_ready_ns) {
+    // Sans table de radios ni table RX2 : l'hypothèse historique (RX1 = SF montant à 125 kHz,
+    // RX2 à 125 kHz) est conservée **à l'identique**. Passer les tables, c'est demander la
+    // fidélité ; c'est le seul moyen de l'obtenir, et il est explicite (I5-a).
+    return simulate_uplinks_multi_downlinks(devices, device_count, gateways, gateway_count, prop,
+                                            rule, nullptr, nullptr, per_device, totals,
+                                            per_gateway, environment, trace, downlinks,
+                                            dl_ready_ns);
+}
+
+SimStatus simulate_uplinks_multi_downlinks(
+    const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
+    std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
+    const plan::DeviceRadio* radios, const plan::DeviceRx2* rx2, DeviceStats* per_device,
+    NetworkStats& totals, GatewayRxStats* per_gateway, const env::Environment* environment,
+    std::vector<MultiTx>* trace, std::vector<MultiDownlink>* downlinks,
+    const SimTime* dl_ready_ns) {
     totals = NetworkStats{};
     if (trace != nullptr) trace->clear();
     if (downlinks != nullptr) downlinks->clear();
@@ -1038,6 +1059,47 @@ SimStatus simulate_uplinks_multi_downlinks(
     if (rule.payload_bytes > 242 || !finite(rule.gateway_tx_power_dbm) ||
         !finite(rule.device_antenna_gain_dbi) || !finite(rule.device_rx_offset_db)) {
         return SimStatus::InvalidInput;
+    }
+    // I5-a : une même grandeur exprimée à deux endroits est une ambiguïté, pas une redondance
+    // tolérable. Une table `rx2` fournie impose `rule.rx2_sf == 0` (arbitrage docs/I5_A_RX1_AIRTIME.md
+    // §4.3) ; précédent : `lsim_gateway_v2` exige déjà un scalaire historique neutre.
+    //
+    // Conséquence à ne pas manquer : dès qu'une table est fournie, c'est **elle** qui dit si la
+    // fenêtre de secours existe (`rx2_sf != 0`), pas la règle — dont le scalaire est alors
+    // neutralisé. L'existence du repli et son débit ont donc une source unique.
+    if (rx2 != nullptr && rule.rx2_sf != 0) return SimStatus::InvalidInput;
+    if (device_count > 0) {
+        // Les deux tables sont **indépendantes** : corriger RX1 n'impose pas de fournir RX2, ni
+        // l'inverse. Chacune n'améliore que sa fenêtre ; l'autre garde l'hypothèse historique,
+        // qui est le comportement documenté de l'entrée sans table — pas un repli silencieux.
+        //
+        // Une exception, mécanique : `rx2_bw_hz == 0` signifie « reprend la bande de RX1 ». Sans
+        // table de radios, il n'y a pas de bande RX1 à reprendre : la valeur est alors
+        // irresoluble, donc refusée.
+        for (std::size_t i = 0; i < device_count; ++i) {
+            if (radios != nullptr) {
+                const plan::DeviceRadio& r = radios[i];
+                if (r.rx1_sf < 7 || r.rx1_sf > 12) return SimStatus::InvalidInput;
+                if (r.rx1_bw_hz != 125'000 && r.rx1_bw_hz != 250'000 && r.rx1_bw_hz != 500'000) {
+                    return SimStatus::InvalidInput;
+                }
+            }
+            if (rx2 != nullptr) {
+                const plan::DeviceRx2& w = rx2[i];
+                // `rx2_bw_hz == 0` reprend la bande de RX1 ; sinon 125k, 250k ou 500k.
+                // `rx2_sf == 0` : pas de fenêtre de secours pour ce dispositif.
+                if (w.rx2_sf != 0 && (w.rx2_sf < 7 || w.rx2_sf > 12)) {
+                    return SimStatus::InvalidInput;
+                }
+                if (w.rx2_bw_hz != 0 && w.rx2_bw_hz != 125'000 && w.rx2_bw_hz != 250'000 &&
+                    w.rx2_bw_hz != 500'000) {
+                    return SimStatus::InvalidInput;
+                }
+                if (w.rx2_bw_hz == 0 && w.rx2_sf != 0 && radios == nullptr) {
+                    return SimStatus::InvalidInput;
+                }
+            }
+        }
     }
     for (std::size_t g = 0; g < gateway_count; ++g) {
         const SimStatus gs = validate_inputs(gateways[g], prop);
@@ -1154,14 +1216,22 @@ SimStatus simulate_uplinks_multi_downlinks(
     // Première place libre à partir de t_open : un join-accept (ouverture tardive) ne retarde
     // pas un downlink de données dont l'ouverture est plus tôt.
     // Repli RX2 : si la passerelle ne peut émettre dans la fenêtre RX1, la descente tente RX2
-    // (ouverte 1 s après RX1, fenêtre de 1 s, SF `rule.rx2_sf`, même passerelle). Une émission
+    // (ouverte 1 s après RX1, fenêtre de 1 s, SF et bande de la table RX2 si elle est fournie,
+    // sinon `rule.rx2_sf` à 125 kHz ; même passerelle). Une émission
     // du dispositif pendant RX2 est une perte finale. Fréquence RX2 non modélisée.
-    auto place = [&](MultiDownlink& dl, std::size_t a, std::uint32_t payload,
-                     double rssi_up) -> SimStatus {
+    auto place = [&, radios, rx2](MultiDownlink& dl, std::size_t a, std::uint32_t payload,
+                                  double rssi_up) -> SimStatus {
         const Tx& ta = txs[a];
+        // I5-a : le débit de la fenêtre, jamais celui de l'uplink. Sans table de radios, on
+        // retrouve exactement l'hypothèse historique (RX1 = SF montant à 125 kHz) — la seule
+        // ligne de la table de sensibilité où elle est exacte.
+        std::uint8_t sf_used = radios != nullptr ? radios[ta.device].rx1_sf : ta.sf;
+        lora::Bandwidth bw_used = static_cast<lora::Bandwidth>(
+            radios != nullptr ? radios[ta.device].rx1_bw_hz : 125'000u);
         SimTime air = 0;
-        if (downlink_airtime(ta.sf, payload, air) != SimStatus::Ok) return SimStatus::InvalidInput;
-        std::uint8_t sf_used = ta.sf;
+        if (downlink_airtime(sf_used, bw_used, payload, air) != SimStatus::Ok) {
+            return SimStatus::InvalidInput;
+        }
         // Départ au plus tôt : arrivée de la descente à la passerelle (retour mesh). Absent : t_open.
         const SimTime ready = dl_ready_ns != nullptr ? dl_ready_ns[ta.msg] : -1;
         if (ready == kDownlinkNever) {
@@ -1177,12 +1247,22 @@ SimStatus simulate_uplinks_multi_downlinks(
         if (start - dl.t_open_ns >= kRx1WindowNs) {
             // La passerelle ne peut émettre dans RX1 : repli sur RX2, sinon perte.
             const SimTime open2 = dl.t_open_ns + kRx1WindowNs;
-            if (rule.rx2_sf == 0) {
+            // I5-a : avec une table, l'existence même de la fenêtre de secours se lit **dans la
+            // table** (`rx2_sf == 0` : pas de fenêtre pour ce dispositif), et non dans la règle —
+            // dont le scalaire doit valoir 0 dès qu'une table est fournie. Sans table, la règle
+            // garde son rôle historique.
+            const bool repli_demande = rx2 != nullptr ? rx2[ta.device].rx2_sf != 0
+                                                      : rule.rx2_sf != 0;
+            if (!repli_demande) {
                 dl.outcome = DownlinkOutcome::GatewayBusy;
                 return SimStatus::Ok;
             }
+            // I5-a : mêmes principes en RX2 — SF et bande de la table, ou hypothèse historique.
+            const std::uint8_t sf2 = rx2 != nullptr ? rx2[ta.device].rx2_sf : rule.rx2_sf;
+            const lora::Bandwidth bw2 = static_cast<lora::Bandwidth>(
+                rx2 != nullptr ? rx2[ta.device].rx2_bw_hz : 125'000u);
             SimTime air2 = 0;
-            if (downlink_airtime(rule.rx2_sf, payload, air2) != SimStatus::Ok) {
+            if (downlink_airtime(sf2, bw2, payload, air2) != SimStatus::Ok) {
                 return SimStatus::InvalidInput;
             }
             if (next_start[a] >= 0 && next_start[a] < open2 + kRx1WindowNs) {
@@ -1195,7 +1275,8 @@ SimStatus simulate_uplinks_multi_downlinks(
                 return SimStatus::Ok;
             }
             air = air2;
-            sf_used = rule.rx2_sf;
+            sf_used = sf2;
+            bw_used = bw2;
             dl.rx_window = 2;
         }
         dl.start_ns = start;
@@ -1206,7 +1287,12 @@ SimStatus simulate_uplinks_multi_downlinks(
         // puissance conduite puis ré-ajoutée à la réception, donc comptée une seule fois.
         // Frontal neutre : comportement historique, gain scalaire de la règle appliqué.
         double s = 0.0;
-        if (lora::receiver_sensitivity_dbm(sf_used, lora::Bandwidth::Bw125kHz, s) != lora::Status::Ok) {
+        // I5-a : la sensibilité de réception descendante suit la bande de la fenêtre émise, et
+        // non 125 kHz. Le seuil de 500 kHz est plus haut de 6 à 7 dB que celui de 125 kHz
+        // (mesuré : SF12 -136 dBm contre -130 dBm) ; employer celui de 125 kHz rendait la
+        // réception **trop permissive** : des descentes qui auraient dû être perdues étaient
+        // comptées comme reçues.
+        if (lora::receiver_sensitivity_dbm(sf_used, bw_used, s) != lora::Status::Ok) {
             return SimStatus::InvalidInput;
         }
         const RadioFrontend& dl_rf = devices[ta.device].rf;

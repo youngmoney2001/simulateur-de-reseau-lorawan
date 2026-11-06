@@ -55,8 +55,10 @@ bande. Le corriger change le taux de livraison, pas seulement l'occupation.
 ### 2.4 Gravité (mesurée — voir `I5_AUDIT_MULTI.md` §3.2)
 
 Facteur d'erreur du temps d'antenne réservé : **0,04x à 96x** selon le DR RX1 réellement imposé.
-Exact **uniquement** sur la diagonale « RX1 = SF montant à 125 kHz ». La sensibilité (site 3) suit
-la même loi : un seuil calculé à 125 kHz est trop pessimiste en 500 kHz d'environ 6 dB.
+Exact **uniquement** sur la diagonale « RX1 = SF montant à 125 kHz ». La sensibilité (site 3) suit la même
+loi : le seuil de 500 kHz est **plus haut** de 6 à 7 dB que celui de 125 kHz (mesuré : SF12
+−136 dBm à 125 kHz contre −130 dBm à 500 kHz), employer celui de 125 kHz rend donc la réception
+**trop permissive** — elle accepte des descentes qui devraient être perdues.
 
 ---
 

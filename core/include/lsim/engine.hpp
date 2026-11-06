@@ -733,4 +733,29 @@ LSIM_API SimStatus simulate_uplinks_multi_downlinks(
     std::vector<MultiDownlink>* downlinks = nullptr,
     const SimTime* dl_ready_ns = nullptr);
 
+// ------------------------------------------------- I5-a : débit réel des fenêtres
+//
+// Surcharge avec les paramètres radio des fenêtres. `radios` et `rx2` sont **tous deux nuls ou
+// tous deux non nuls** : sans eux, le moteur retrouve l'hypothèse historique — RX1 au SF montant
+// à 125 kHz, RX2 à 125 kHz — et les résultats sont identiques à l'identique à ceux de la forme
+// ci-dessus. Les fournir, c'est **demander** la fidélité : le temps d'antenne et la sensibilité
+// de réception descendante sont alors calculés au SF et à la bande de la fenêtre réellement
+// émettrice, jamais à ceux de l'uplink ni à une constante.
+//
+// Contrat :
+//   - une table `rx2` fournie impose `rule.rx2_sf == 0` : une même grandeur exprimée à deux
+//     endroits est une ambiguïté, pas une redondance tolérable (précédent `lsim_gateway_v2`) ;
+//   - `rx1_sf` et `rx2_sf` dans 7..12 (`rx2_sf == 0` : pas de fenêtre de secours) ;
+//   - bandes dans {125 000, 250 000, 500 000} ; `rx2_bw_hz == 0` reprend celle de RX1 ;
+//   - toute valeur hors bornes est refusée, sans lecture au-delà de la table.
+//
+// Voir `docs/I5_A_RX1_AIRTIME.md`.
+LSIM_API SimStatus simulate_uplinks_multi_downlinks(
+    const EndDeviceSpec* devices, std::size_t device_count, const GatewaySpec* gateways,
+    std::size_t gateway_count, const PropagationSpec& prop, const MultiDownlinkRule& rule,
+    const plan::DeviceRadio* radios, const plan::DeviceRx2* rx2, DeviceStats* per_device,
+    NetworkStats& totals, GatewayRxStats* per_gateway,
+    const env::Environment* environment = nullptr, std::vector<MultiTx>* trace = nullptr,
+    std::vector<MultiDownlink>* downlinks = nullptr, const SimTime* dl_ready_ns = nullptr);
+
 }  // namespace lsim::sim

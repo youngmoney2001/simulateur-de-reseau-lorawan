@@ -102,6 +102,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_radio_scheduler.cpp
         core/tests/test_occupation_radio.cpp
         core/tests/test_determinisme.cpp
+        core/tests/test_multi_dl_rx1.cpp
         core/tests/test_loop_adr.cpp
         core/tests/test_c_api.cpp
         core/tests/test_join.cpp

@@ -36,6 +36,7 @@ void run_rf_frontend_tests();
 void run_radio_scheduler_tests();
 void run_occupation_radio_tests();
 void run_determinisme_tests();
+void run_multi_dl_rx1_tests();
 
 int main() {
     run_lora_phy_tests();
@@ -51,6 +52,7 @@ int main() {
     run_radio_scheduler_tests();
     run_occupation_radio_tests();
     run_determinisme_tests();
+    run_multi_dl_rx1_tests();
     run_link_budget_tests();
     run_lorawan_frame_tests();
     run_crypto_tests();
