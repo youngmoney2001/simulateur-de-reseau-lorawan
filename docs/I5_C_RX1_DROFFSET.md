@@ -620,3 +620,33 @@ Trois voies, qui ne sont pas de pure forme :
 
 À trancher. Le régime concerné est celui où l'ADR est actif **et** l'offset non nul — à ce jour,
 aucun exemple du dépôt ne combine les deux.
+### 14.4 Voie (iii) retenue et refermée (commit `bfcf34b`)
+
+La voie (iii) a été retenue, mais **pas telle qu'elle était écrite** : elle laissait l'offset
+**ignoré silencieusement** sous LinkADR, ce que l'arbitrage bbb3 interdit. Un résultat faux vaut
+moins qu'un refus.
+
+**Refus explicite** dans `check_closed_loop` (`python/lsim/mac_loop.py`), à côté des deux refus déjà
+existants (jointure, passerelles multiples) : LinkADR combiné à un groupe dont l'offset est non nul
+lève une `ValueError` qui nomme les trois issues — utiliser DutyCycleReq, désactiver LinkADR, ou
+laisser l'offset à 0.
+
+**Quatre tests** verrouillent les deux régimes dans `python/tests/test_rx1_dr_offset.py` :
+
+| Test | Objet |
+|---|---|
+| **T-S-1** | sans ADR, airtimes **exacts** (144,4 / 288,8 / 577,5 / 1155,1 ms), pas un simple « ça change » |
+| **T-S-1 bis** | relation strictement croissante : interdit un décrochage partiel |
+| **T-S-2** | LinkADR + offset non nul (1..5) ⇒ refus explicite |
+| **T-S-3** | contrôle positif : LinkADR sans offset reste accepté |
+
+L'observable est `TraceRun.gateway_tx`, les intervalles d'émission de la passerelle : avec un seul
+terminal sans contention, leur longueur est **exactement** l'airtime de la descente RX1. C'est un
+observable public — pas d'espionnage, pas de faux-test. Validés par mutation : neutraliser la
+transmission de l'offset dans `_radio` fait échouer 12 tests.
+
+**Bilan** : Python 15 failed / 2562 passed — les 15 échecs sont la référence établie, liste
+inchangée, avec 12 tests réussis de plus. C++ et ctest non touchés.
+
+La voie (ii) (inversion de dépendance) reste ouverte si le régime ADR devait être couvert un jour ;
+elle seule permettrait de transmettre l'offset sans enfreindre l'invariant d'isolation.
