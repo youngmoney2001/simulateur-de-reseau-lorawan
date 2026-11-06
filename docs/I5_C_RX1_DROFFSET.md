@@ -83,26 +83,38 @@ Forme du mapping, telle qu'implantée par les deux sources :
 
 ---
 
-## 4. Aggravation : `RXParamSetupReq` est accepté, puis ignoré
+## 4. Le serveur n'émet jamais `RXParamSetupReq` — rectification
 
-Ce point change la nature du défaut. Le champ `rx1_dr_offset` existe déjà partout :
+> **Ce chapitre remplace une affirmation erronée.** Une version précédente décrivait
+> `RXParamSetupReq` comme une commande qu'un terminal négocierait et que le serveur
+> acquitterait sans l'appliquer. **C'est faux, et l'erreur est de direction.**
 
-- `core/include/lsim/mac_commands.hpp:109` — `std::uint8_t rx1_dr_offset = 0;   // 0..7`
-- `core/src/mac_commands.cpp:130` — **encodage** : `(rx1_dr_offset << 4) | rx2_data_rate`
-- `core/src/mac_commands.cpp:371` — **décodage**, avec validation (`> 7` refusé)
-- `core/src/mac_commands.cpp:140` — **acquittement** : `RXParamSetupAns`
-- `python/lsim/mac.py:185-201` — validation côté serveur (0..7)
+`RXParamSetupReq` (CID 0x05) est une commande **descendante** : c'est le serveur qui la
+construit pour régler le terminal, et le terminal répond par `RXParamSetupAns` (montante).
+Les sources du dépôt sont sans ambiguïté :
 
-Mais `plan.rx1()` prend **deux** arguments `(tx_dr, tx_ch)` et n'a aucun moyen de recevoir
-l'offset. Aucun appelant ne le transmet (`uplink.py:163`, `gwmp_server.py:62`,
-`trace_events.py:314`).
+- `core/include/lsim/mac_commands.hpp:105` — « RXParamSetupReq **(down)** »
+- `core/include/lsim/mac_commands.hpp:266-267` — `decode(...Req) // down`,
+  `decode(...Ans) // up`
+- `core/include/lsim/c_api.h:655-656` — `REQ /* down */`, `ANS /* up */`
 
-**Conséquence.** Un terminal qui négocie `RXParamSetupReq(RX1DROffset = 3)` reçoit un
-`RXParamSetupAns` qui **acquitte** le réglage (bit correspondant à 1), puis se voit adresser
-des descentes calculées à l'offset 0. Le serveur affirme avoir appliqué un paramètre qu'il
-n'applique pas. C'est plus grave qu'une fonctionnalité absente : c'est une réponse
-protocolaire inexacte, de la même famille que les replis silencieux qu'interdit l'arbitrage
-**bbb3** (« échec explicite, jamais de repli silencieux »).
+Or **le serveur n'émet jamais cette commande**. Vérifié : aucune occurrence de
+`RxParamSetupReq` hors du codec (`mac.py`, `_native.py`, `mac_commands.cpp`,
+`c_api_mac.cpp`), et la seule commande MAC effectivement émise est `LinkADRReq`
+(CID 0x03, `uplink.py:57`).
+
+**Conséquence, corrigée.** Il n'existe aucun chemin par lequel un terminal pourrait se voir
+appliquer un RX1DROffset non nul — non pas parce qu'un réglage serait ignoré, mais parce
+que **rien ne le produit jamais**. Le codec est complet et validé (encodage
+`mac_commands.cpp:130`, décodage `:371`, acquittement `:140`, validation `mac.py:190`) ; ce
+qui manque n'est pas l'application d'une valeur reçue, c'est **l'émission de la commande**.
+
+Ce n'est donc pas une réponse protocolaire inexacte au sens de **bbb3**. C'est une
+fonctionnalité absente, et la distance à parcourir est plus grande qu'estimé : il ne suffit
+pas de propager une valeur, il faut décider qui la fixe.
+
+**Conséquence sur le périmètre.** L'option « complet » retenue en §9 reposait sur la
+prémisse, désormais infirmée, qu'un offset négocié existait à propager. Voir §9.1.
 
 ---
 
@@ -232,9 +244,20 @@ conditionne l'ampleur du changement (§9).
 
 ## 9. Questions ouvertes
 
-1. **Propagation (§7.3)** : faut-il porter l'offset dans l'état MAC par dispositif (donc
-   jusqu'au cœur C++), ou seulement l'exposer au niveau serveur Python ? La première option
-   rend l'acquittement exact ; la seconde est bien plus courte mais laisse §4 ouvert.
+1. **Qui fixe l'offset ? (§4, rectifié)** — question rouverte, la prémisse initiale étant
+   infirmée. Le serveur n'émettant jamais `RXParamSetupReq`, rien ne produit de valeur non
+   nulle. Trois voies, d'ampleur très différente :
+   - **(a) Réglage de déploiement** — l'offset devient un paramètre de scénario, par
+     dispositif ou par groupe. Court, rend l'offset réellement simulable, mais le terminal
+     n'est pas notifié par la voie MAC normale.
+   - **(b) Émission de `RXParamSetupReq`** — le serveur origine la commande, suit
+     `RxParamSetupAns` et applique l'offset une fois acquitté. Conforme à la norme, mais
+     c'est une fonctionnalité MAC entière (origine, suivi d'acquittement, persistance).
+   - **(c) Rien de plus** — la table à deux dimensions reste disponible (§6) sans qu'aucun
+     chemin ne produise d'offset non nul, documenté comme tel.
+
+   L'état de session pour porter l'offset est en place (`join_store.py` : colonne
+   `rx1_dr_offset`, migration, `set_rx1_dr_offset`) ; il reste à choisir ce qui l'alimente.
 2. **`DownLinkDwellTime` (AS923)** : le relever passe le `DR_min` de 0 à 2. Le modèle-t-on,
    ou documente-t-on seulement ?
 3. **Référence de version** : les valeurs étant désormais vérifiées conformes à 1.0.4/1.0.5,
