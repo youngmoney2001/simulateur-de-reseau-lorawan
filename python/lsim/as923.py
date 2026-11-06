@@ -19,7 +19,7 @@ mapping RX1 ; les limites par pays (ARIB pour le Japon, voir `lsim.regions`) ; l
 supplémentaires par CFList.
 """
 
-from lsim.plan import Plan, register
+from lsim.plan import Plan, register, rx1_clamp_table
 
 _CHANNELS_HZ = (923_200_000, 923_400_000)
 
@@ -34,7 +34,7 @@ AS923 = register(Plan(
         0: "SF12BW125", 1: "SF11BW125", 2: "SF10BW125", 3: "SF9BW125",
         4: "SF8BW125", 5: "SF7BW125", 6: "SF7BW250",
     },
-    rx1_dr={dr: dr for dr in range(7)},                  # RX1DROffset 0 : même débit
+    rx1_dr_table=rx1_clamp_table(tuple(range(7)), dr_max=7, offsets=6),
     rx1_channel_hz=lambda tx_ch: _CHANNELS_HZ[tx_ch],    # RX1 : même canal
     max_frm_payload={0: 51, 1: 51, 2: 51, 3: 115, 4: 222, 5: 222, 6: 222},
     dl_settings=0x80 | 2,                                # OptNeg, RX2 DR2

@@ -8,8 +8,10 @@ Les deux concordent exactement sur US915 et AU915 (seules régions tabulées).
 Sortie : une ligne par région, CONFORME ou un écart explicite.
 """
 from __future__ import annotations
+import pathlib
 import re, sys
-sys.path.insert(0, "/home/user/work/python")
+# Chemin du dépôt, déduit de la position du script (pas de chemin absolu codé en dur).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "python"))
 from lsim.plan import get_plan
 
 # RP002-1.0.4 : DR -> (SF, BW kHz). None = modulation non LoRa (FSK / LR-FHSS), hors périmètre.
@@ -60,7 +62,7 @@ for name in ("EU868", "US915", "AU915", "AS923", "IN865", "KR920", "RU864"):
         dn_ok.append(f"{dr}->{got[0]}/{got[1]}")
 
     # 2. mapping RX1
-    rx1 = p._rx1_dr
+    rx1 = {dr: p.rx1_dr_for(dr, 0) for dr in sorted(p._rx1_dr_table)}
     for dr in sorted(rx1):
         attendu = RX1_OFF0[name](dr)
         if rx1[dr] != attendu:

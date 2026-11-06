@@ -5,8 +5,10 @@ une descente au mauvais débit. Mesure : le SF de RX1, et le rapport de temps d'
 (airtime) entre la valeur exigée et la valeur produite.
 """
 from __future__ import annotations
+import pathlib
 import sys, re
-sys.path.insert(0, "/home/user/work/python")
+# Chemin du dépôt, déduit de la position du script (pas de chemin absolu codé en dur).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "python"))
 from lsim.plan import get_plan
 
 # (SF, BW kHz) par DR et par région — RP002-1.0.4 (cf. verifier_rx1_rp002.py)
@@ -42,7 +44,7 @@ for name in DRL:
     lignes = []
     for dr in sorted(p._uplink_datr.values()):
         if dr not in tbl: continue
-        prod_dr = p._rx1_dr[dr]                       # ce que le serveur utilise (offset 0)
+        prod_dr = p.rx1_dr_for(dr, 0)                       # ce que le serveur utilise (offset 0)
         m = re.fullmatch(r"SF(\d+)BW(\d+)", p._dr_table[prod_dr]); sf_p, bw_p = int(m.group(1)), int(m.group(2))
         for o in range(1, n + 1):
             ex_dr = OFF[name](dr, o)

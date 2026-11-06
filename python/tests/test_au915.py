@@ -102,7 +102,32 @@ def test_au_rx1_dr_in_downlink_range():
     for tx_dr in RX1_ATTENDU:
         dr = AU915.dr_of_downlink_datr(AU915.rx1(tx_dr, 0)[1])
         assert 8 <= dr <= 13, f"DR{tx_dr} → DR{dr} hors de la plage descendante"
-    assert set(AU915._rx1_dr.values()) == set(RX1_ATTENDU.values())
+    assert {dr: AU915.rx1_dr_for(dr, 0) for dr in RX1_ATTENDU} == RX1_ATTENDU
+
+
+def test_au_rx1_table_complete_par_offset():
+    """T-C-2 : la table RX1 d'AU915, pour **chaque** offset, pas seulement l'offset 0.
+
+    `DatarateOffsetsAU915[7][6]` : concordante entre LoRaMac-node v4.7.1 (Lora-net) et
+    lorawan-stack v3.37.0 (TTI). Colonnes = RX1DROffset 0..5, lignes = DR montant 0..6.
+    Un test qui ne vérifierait que l'offset 0 laisserait passer une colonne entière fausse.
+    """
+    attendu = {
+        0: (8, 8, 8, 8, 8, 8),
+        1: (9, 8, 8, 8, 8, 8),
+        2: (10, 9, 8, 8, 8, 8),
+        3: (11, 10, 9, 8, 8, 8),
+        4: (12, 11, 10, 9, 8, 8),
+        5: (13, 12, 11, 10, 9, 8),
+        6: (13, 13, 12, 11, 10, 9),
+    }
+    for dr, colonne in attendu.items():
+        for offset, dr_attendu in enumerate(colonne):
+            assert AU915.rx1_dr_for(dr, offset) == dr_attendu, (
+                f"AU915 DR{dr} offset {offset} : DR{AU915.rx1_dr_for(dr, offset)} "
+                f"au lieu de DR{dr_attendu}")
+    # La borne d'offset vit avec les données : 6 colonnes ⇒ offsets 0..5.
+    assert AU915.rx1_dr_offset_max == 5
 
 
 # ---------------------------------------------------------------------------
