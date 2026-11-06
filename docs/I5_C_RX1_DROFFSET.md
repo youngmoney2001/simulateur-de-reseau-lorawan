@@ -264,3 +264,49 @@ conditionne l'ampleur du changement (§9).
    faut-il harmoniser toutes les citations sur RP002-1.0.5, ou conserver la version
    effectivement consultée région par région ?
 4. **LR-FHSS** : documenter comme limite, ou ouvrir un lot distinct ?
+
+---
+
+## 10. Bilan d'exécution (étapes A, B, D) et point restant
+
+### 10.1 Ce qui est livré
+
+| Étape | Contenu | Commit |
+|---|---|---|
+| **A** | Table RX1 à deux dimensions, `rx1(dr, ch, offset=0)` optionnel, refus explicite hors bornes, `queue_payload_max_for(o)` | `0e635e0` |
+| **B** | `GroupModel.rx1_dr_offset`, validation régionale à la lecture, câblage jusqu'à la radio du terminal, hash préservé, schémas régénérés | `304ef53` |
+| **D** | Références documentaires harmonisées sur RP002-1.0.4, réserve 1.0.5 explicite | `fe778c1` |
+
+État intermédiaire : `join_store.py` porte `rx1_dr_offset` par session (`bb3c5dd`), prêt pour
+l'émission éventuelle de `RXParamSetupReq`.
+
+### 10.2 Non-régression, vérifiée à chaque étape
+
+Les 15 échecs de référence restent **identiques** (comparaison des listes avant/après :
+`diff` vide) ; les tests passés montent de 2 477 à 2 540. C++ : 690 127/690 127.
+
+### 10.3 Point restant : le chemin boucle fermée du cœur C++ n'honore pas l'offset
+
+Mesuré, pas déduit.
+
+- **Chemin multi** (`engine.cpp:1228-1230`, corrigé en I5-a) :
+  `sf_used = radios[ta.device].rx1_sf`, `bw = radios[ta.device].rx1_bw_hz`.
+  Il lit la table ⇒ **il suit RX1DROffset**. Constaté : `DeviceRadio` vaut SF9/125 kHz à
+  l'offset 0 et SF11/125 kHz à l'offset 2.
+- **Chemin boucle fermée** (`engine.cpp:2029`, `:2272`) : `rad.rx1_sf = ta.sf;`
+  Il **écrase** la valeur de la table par le SF montant ⇒ **il ignore RX1DROffset**.
+  Constaté : une simulation EU868 produit 12 enregistrements et 33 événements aux offsets
+  0, 2 et 4 — identiques, alors que la radio reçue par le moteur diffère.
+
+Ce n'est pas une régression introduite par ce lot : c'est l'état établi en I5-b, où l'on a
+démontré que `ta.sf` est **nécessaire** dans ce chemin, parce qu'il suit l'ADR alors que la
+table `radios[]` est statique.
+
+**Le rendre conforme demande plus qu'une substitution.** Il faudrait calculer
+`RX1_DR = f(DR montant courant, offset)` selon le mappage régional, donc résoudre DR → SF
+via `LoopRegion.dr_sf[]` — en préservant le suivi de l'ADR, sous peine de rejouer exactement
+l'échec rencontré en I5-b (un dispositif passé à SF7 par l'ADR recevant une descente
+calculée sur son SF initial).
+
+C'est un chantier distinct, avec un risque d'interaction ADR déjà documenté. Il est laissé
+ouvert volontairement plutôt qu'improvisé.
