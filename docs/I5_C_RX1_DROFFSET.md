@@ -544,3 +544,79 @@ Deux voies se présentent, qui ne sont pas de pure forme :
   régionale) et 11 tests Python.
 - Validés par mutation : neutraliser la transmission des offsets fait échouer 8 des 11 tests
   Python, et T-V5-2 / T-V5-4 en C++.
+
+---
+
+## 14. Rectification du §13.3 : l'offset atteint déjà le scénario (ADR inactif)
+
+Le §13.3 affirmait : « une simulation de scénario produit les mêmes traces aux offsets 0, 2 et 4 ».
+Cette affirmation, reprise du §12.5 sans remesure, est **inexacte pour l'un des deux régimes**.
+
+### 14.1 Mesure
+
+Scénario EU868, SF9 (donc DR3), trois dispositifs, sans contention. Airtime de la descente RX1 :
+
+| offset | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| **ADR inactif** (DutyCycle) | 144,4 ms | 288,8 | 577,5 | 1155,1 | 1155,1 | 1155,1 |
+| **ADR actif** (LinkADR) | 144,4 ms | 144,4 | 144,4 | 144,4 | 144,4 | 144,4 |
+
+SF correspondant, ADR inactif : 9, 10, 11, 12, 12, 12.
+
+- **ADR inactif : l'offset est honoré**, de bout en bout, sans aucun câblage v3/v5. Chaque pas
+  double l'airtime, et la saturation à partir de l'offset 3 est exacte (DR3 − 3 = DR0, borne).
+  Conséquence directe du §12.1 : sans ADR, le moteur suit la table, que Python calcule avec
+  l'offset depuis l'étape A.
+- **ADR actif : l'offset est perdu.** Le DR courant prime, la table est ignorée, et rien ne
+  transmet l'offset au moteur.
+
+Une première sonde avait conclu à tort que **rien** ne changeait : elle utilisait un scénario sans
+`region:`, or sans plan régional `_radio` ne peut pas appliquer d'offset. La sonde était aveugle,
+pas le code.
+
+### 14.2 Le basculement v2 vers v5 a été tenté, mesuré, puis révoqué
+
+L'aiguillage conditionnel a été implémenté : n'emprunter la v5 que si l'ADR est actif **et** qu'un
+offset est non nul, afin de laisser le contrat v1/v2 intact dans tous les autres cas. Il
+**fonctionne** — l'espion confirme que l'entrée v3/v5 est empruntée aux offsets 1, 2 et 3, et que
+l'airtime suit (288,8 / 577,5 / 991,2 ms).
+
+Mais il introduit **une** régression, la première de celles annoncées au §13.3 :
+
+    test_abi_v3_contract.py::PathIsolationTests::test_v3_python_binding_is_the_single_native_module
+
+Ce test n'interdit pas d'appeler le module autorisé : il interdit à **tout** module autre que
+`closed_loop_v3.py` de seulement **nommer** `closed_loop_v3` (recherche textuelle sur les sources).
+Or `trace_events.py` doit l'importer pour l'appeler. L'invariant est donc absolu, et son intention
+est claire : empêcher l'ABI v3 de fuir dans le reste du code.
+
+Aucune échappatoire envisagée n'est acceptable : construire le nom du module par concaténation pour
+tromper la recherche textuelle, ou affaiblir l'assertion, reviendrait à contourner une règle
+délibérée pour passer un test — contraire au dixième garde-fou.
+
+Le changement a donc été **révoqué**. Dépôt vert : C++ 690174/690174, ctest 1/1, Python 15 échecs /
+2550 réussis, aucun écart avec la référence.
+
+### 14.3 Ce qui reste, précisément
+
+Le reste n'est **pas** un problème d'ABI C : l'enveloppe v5 est complète, validée et testée. C'est
+une question d'architecture Python, et elle ne concerne plus qu'un seul régime.
+
+| Régime | État |
+|---|---|
+| ADR inactif (DutyCycle) | honoré, sans câblage |
+| ADR actif (LinkADR) | perdu sur le chemin scénario ; atteignable seulement par la v5 |
+
+Trois voies, qui ne sont pas de pure forme :
+
+- **(i) Élargir l'invariant** — autoriser `trace_events.py` à référencer `closed_loop_v3`, ou
+  porter l'aiguillage dans un module déjà exempté. Décision d'architecture.
+- **(ii) Inversion de dépendance** — `closed_loop_v3.py` s'enregistre auprès de `closed_loop.py`,
+  qui expose alors un paramètre `rx1_dr_offset` sans jamais nommer v3. Propre, mais il faut
+  garantir l'import du module enregistreur, faute de quoi la fonctionnalité s'absente
+  silencieusement (contraire à bbb3).
+- **(iii) En rester là** — l'offset est honoré sans ADR, qui est le cas par défaut
+  (`link_adr: false`) ; le régime ADR reste à l'écart et doit être documenté comme tel.
+
+À trancher. Le régime concerné est celui où l'ADR est actif **et** l'offset non nul — à ce jour,
+aucun exemple du dépôt ne combine les deux.
