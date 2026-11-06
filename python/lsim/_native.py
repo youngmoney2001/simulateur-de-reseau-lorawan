@@ -290,6 +290,25 @@ class _CGatewayRf(ctypes.Structure):
     ]
 
 
+class _CPlanDevice(ctypes.Structure):
+    """`lsim_plan_device` : radio d'un dispositif (C).
+
+    Defini ici plutot que dans `downlink_plan` : `_CMultiDlArgs` en a besoin et ce module-ci
+    est le plus bas niveau — `downlink_plan` l'importe, l'inverse creerait un cycle.
+    """
+
+    _fields_ = [("freq_hz", ctypes.c_int64), ("dr", ctypes.c_int32), ("rx1_hz", ctypes.c_int64),
+                ("tx_power_dbm", ctypes.c_double), ("rx1_sf", ctypes.c_uint8),
+                ("rx1_bw_hz", ctypes.c_uint32)]
+
+
+class _CPlanDeviceRx2(ctypes.Structure):
+    """`lsim_plan_device_rx2` : fenetre RX2 d'un dispositif."""
+
+    _fields_ = [("rx2_hz", ctypes.c_int64), ("rx2_sf", ctypes.c_uint32),
+                ("rx2_bw_hz", ctypes.c_uint32), ("reserved", ctypes.c_uint64 * 2)]
+
+
 class _CClosedLoopV4Args(ctypes.Structure):
     """`lsim_closed_loop_v4_args` : enveloppe v3 + frontaux."""
 
@@ -540,6 +559,48 @@ _U8P = ctypes.POINTER(ctypes.c_uint8)
 
 LIB = _load_library()
 
+class _CMultiDlArgs(ctypes.Structure):
+    """`lsim_multi_dl_args` : enveloppe du chemin multi-passerelles (I5-a).
+
+    Les champs `radios` et `rx2` portent le débit réel des fenêtres RX1/RX2. Nuls, le moteur
+    retrouve l'hypothèse historique (RX1 au SF montant à 125 kHz). Aucune affirmation
+    régionale ici : l'enveloppe transporte le débit, elle ne décide pas lequel impose
+    chaque région.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("devices", ctypes.POINTER(_CEndDevice)),
+        ("device_count", ctypes.c_size_t),
+        ("gateways", ctypes.POINTER(_CGateway)),
+        ("gateway_count", ctypes.c_size_t),
+        ("prop", ctypes.POINTER(_CPropagation)),
+        ("rule", ctypes.POINTER(_CDownlinkRule)),
+        ("env", ctypes.POINTER(_CEnvironment)),
+        ("radios", ctypes.POINTER(_CPlanDevice)),
+        ("radio_count", ctypes.c_size_t),
+        ("rx2", ctypes.POINTER(_CPlanDeviceRx2)),
+        ("rx2_count", ctypes.c_size_t),
+        ("device_rf", ctypes.POINTER(_CDeviceRf)),
+        ("device_rf_count", ctypes.c_size_t),
+        ("gateway_rf", ctypes.POINTER(_CGatewayRf)),
+        ("gateway_rf_count", ctypes.c_size_t),
+        ("dl_ready_ns", ctypes.POINTER(ctypes.c_int64)),
+        ("ready_count", ctypes.c_size_t),
+        ("per_device", ctypes.POINTER(_CDeviceStats)),
+        ("totals", ctypes.POINTER(_CNetworkStats)),
+        ("per_gateway", ctypes.POINTER(_CGatewayRxStats)),
+        ("records", ctypes.POINTER(_CMultiTxRecord)),
+        ("record_capacity", ctypes.c_size_t),
+        ("record_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("downlinks", ctypes.POINTER(_CDownlinkRecord)),
+        ("downlink_capacity", ctypes.c_size_t),
+        ("downlink_count", ctypes.POINTER(ctypes.c_size_t)),
+        ("reserved", ctypes.c_uint64 * 2),
+    ]
+
+
 LIB.lsim_receiver_sensitivity_dbm.restype = ctypes.c_int32
 LIB.lsim_receiver_sensitivity_dbm.argtypes = [ctypes.c_uint8, ctypes.c_uint32, _DBL]
 LIB.lsim_energy_profile_count.restype = ctypes.c_uint32
@@ -677,6 +738,8 @@ LIB.lsim_simulate_uplinks_multi_dl_v2.argtypes = [
     ctypes.POINTER(_CDownlinkRecord), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
     ctypes.POINTER(ctypes.c_int64), ctypes.c_size_t,
     ctypes.POINTER(_CDeviceRf), ctypes.c_size_t, ctypes.POINTER(_CGatewayRf), ctypes.c_size_t]
+LIB.lsim_simulate_uplinks_multi_dl_env.restype = ctypes.c_int32
+LIB.lsim_simulate_uplinks_multi_dl_env.argtypes = [ctypes.POINTER(_CMultiDlArgs)]
 LIB.lsim_simulate_closed_loop_v4.restype = ctypes.c_int32
 LIB.lsim_simulate_closed_loop_v4.argtypes = [ctypes.POINTER(_CClosedLoopV4Args)]
 LIB.lsim_env_path_loss_matrix.restype = ctypes.c_int32

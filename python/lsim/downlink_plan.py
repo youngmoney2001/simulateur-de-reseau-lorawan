@@ -22,6 +22,8 @@ from lsim._native import (
     _CGatewayRf,
     _CGatewayV2,
     _CInterval,
+    _CPlanDevice,
+    _CPlanDeviceRx2,
     _CPropagation,
     _CSimStats,
     _CTxRecord,
@@ -55,12 +57,6 @@ class _CPlanUplink(ctypes.Structure):
     _fields_ = [("device_index", ctypes.c_uint32), ("start_ns", ctypes.c_int64),
                 ("end_ns", ctypes.c_int64), ("spreading_factor", ctypes.c_uint8),
                 ("outcome", ctypes.c_uint8), ("rssi_dbm", ctypes.c_double)]
-
-
-class _CPlanDevice(ctypes.Structure):
-    _fields_ = [("freq_hz", ctypes.c_int64), ("dr", ctypes.c_int32), ("rx1_hz", ctypes.c_int64),
-                ("tx_power_dbm", ctypes.c_double), ("rx1_sf", ctypes.c_uint8),
-                ("rx1_bw_hz", ctypes.c_uint32)]
 
 
 class _CPlanOptions(ctypes.Structure):
@@ -114,11 +110,6 @@ class DeviceRx2:
     rx2_hz: int = 0
     rx2_sf: int = 0
     rx2_bw_hz: int = 0
-
-
-class _CPlanDeviceRx2(ctypes.Structure):
-    _fields_ = [("rx2_hz", ctypes.c_int64), ("rx2_sf", ctypes.c_uint32),
-                ("rx2_bw_hz", ctypes.c_uint32), ("reserved", ctypes.c_uint64 * 2)]
 
 
 @dataclass(frozen=True)

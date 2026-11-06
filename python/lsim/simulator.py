@@ -33,7 +33,10 @@ from lsim._native import (
     _CMultiTxRecord,
     _CNetworkStats,
     _CObstacle,
+    _CPlanDevice,
+    _CPlanDeviceRx2,
     _CPropagation,
+    _CMultiDlArgs,
 )
 from lsim.rf import DeviceRf, GatewayRf, device_table, gateway_entry, gateway_table
 from lsim.environment import Environment
@@ -384,6 +387,43 @@ def _rf_tables(device_rf, gateway_rf, device_count: int, gateway_count: int):
     return c_dev, n_dev, c_gw, n_gw
 
 
+def _window_tables(radios, rx2, device_count: int):
+    """Convertit les tables de fenêtres (I5-a) en tables C.
+
+    Les deux vont de pair : le cœur refuse une table fournie sans l'autre. Aucune conversion
+    silencieuse — `dr=None` lève, comme partout ailleurs dans ce module.
+
+    Importations locales : `trace_events` et `downlink_plan` importent tous deux `simulator`,
+    les importer au niveau du module fermerait un cycle.
+    """
+    from lsim.downlink_plan import DeviceRx2  # noqa: F401  (réexporté pour les appelants)
+    from lsim.trace_events import DeviceRadio  # noqa: F401
+
+    if radios is None and rx2 is None:
+        return None, 0, None, 0
+    if radios is None or rx2 is None:
+        raise ValueError("radios et rx2 : les deux tables, ou aucune")
+    r_entries, x_entries = tuple(radios), tuple(rx2)
+    if len(r_entries) != device_count or len(x_entries) != device_count:
+        raise ValueError("radios / rx2 : une entrée par dispositif")
+    c_radios = (_CPlanDevice * device_count)()
+    for i, d in enumerate(r_entries):
+        if d.dr is None:
+            raise ValueError(f"radios[{i}].dr : None interdit sans plan régional")
+        c_radios[i].freq_hz = d.freq_hz
+        c_radios[i].dr = d.dr
+        c_radios[i].rx1_hz = d.rx1_hz
+        c_radios[i].tx_power_dbm = d.tx_power_dbm
+        c_radios[i].rx1_sf = d.rx1_sf
+        c_radios[i].rx1_bw_hz = d.rx1_bw_hz
+    c_rx2 = (_CPlanDeviceRx2 * device_count)()
+    for i, d in enumerate(x_entries):
+        c_rx2[i].rx2_hz = d.rx2_hz
+        c_rx2[i].rx2_sf = d.rx2_sf
+        c_rx2[i].rx2_bw_hz = d.rx2_bw_hz
+    return c_radios, device_count, c_rx2, device_count
+
+
 def _c_end_devices(devices: Sequence[EndDevice]) -> ctypes.Array:
     c_devs = (_CEndDevice * len(devices))()
     for i, d in enumerate(devices):
@@ -707,7 +747,9 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
                              environment: Optional[Environment] = None,
                              dl_ready_ns: Optional[Sequence[int]] = None,
                              device_rf: Optional[Sequence[DeviceRf]] = None,
-                             gateway_rf: Optional[Sequence[GatewayRf]] = None) -> MultiDownlinkResult:
+                             gateway_rf: Optional[Sequence[GatewayRf]] = None,
+                             radios: Optional[Sequence[DeviceRadio]] = None,
+                             rx2: Optional[Sequence[DeviceRx2]] = None) -> MultiDownlinkResult:
     """Passerelles multiples avec downlinks et demi-duplex par passerelle (calcul exact, C++).
 
     Chaque uplink décodé est acquitté ou reçoit une charge par la meilleure passerelle décodeuse.
@@ -719,6 +761,16 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
 
     `device_rf` / `gateway_rf` (v4) : frontaux. Fournis, ils imposent le point d'entrée
     `multi_dl_v2` ; `rule.device_antenna_gain_dbi` est alors ignoré (le gain ne compte qu'une fois).
+
+    `radios` / `rx2` (I5-a) : débit réel des fenêtres RX1 et RX2, un élément par dispositif.
+    Fournis, ils imposent le point d'entrée à enveloppe `multi_dl_env`, et le temps d'antenne
+    comme la sensibilité de réception descendante sont alors calculés au SF et à la bande de la
+    fenêtre émettrice, au lieu de l'hypothèse historique (RX1 au SF montant à 125 kHz).
+    Non fournis, les résultats sont **inchangés**. Les deux tables vont de pair : fournir l'une
+    sans l'autre est une erreur de l'appelant, refusée par le cœur.
+
+    Aucune affirmation régionale : ces tables transportent le débit des fenêtres, elles ne
+    décident pas lequel impose chaque région.
     """
     for _g in gateways:
         refuse_absolute(_g, "simulate_multi_downlinks")
@@ -766,13 +818,50 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     else:
         c_ready = (ctypes.c_int64 * max(total_messages, 1))(*dl_ready_ns)
         ready_ptr, ready_count = c_ready, total_messages
-    multi_fn = multi_dl_native_function(rf=has_rf)
-    common = (c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop), ctypes.byref(c_rule),
-              c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
-              c_records, total_messages, ctypes.byref(c_record_count),
-              c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
-    status = (multi_fn(*common, c_dev_rf, n_dev_rf, c_gw_rf, n_gw_rf) if has_rf
-              else multi_fn(*common))
+    # I5-a : tables du débit des fenêtres. Nulles, on garde l'entrée historique — donc ses
+    # résultats au bit près. Non nulles, on passe par l'enveloppe.
+    c_radios, n_radios, c_rx2, n_rx2 = _window_tables(radios, rx2, n)
+    has_windows = c_radios is not None
+    if has_windows:
+        a = _CMultiDlArgs()
+        a.struct_size = ctypes.sizeof(_CMultiDlArgs)
+        a.abi_version = 1
+        a.devices = c_devs if n else None
+        a.device_count = n
+        a.gateways = c_gws
+        a.gateway_count = g_count
+        a.prop = ctypes.pointer(c_prop)
+        a.rule = ctypes.pointer(c_rule)
+        a.env = c_env_ref
+        a.radios = c_radios
+        a.radio_count = n_radios
+        a.rx2 = c_rx2
+        a.rx2_count = n_rx2
+        a.device_rf = c_dev_rf
+        a.device_rf_count = n_dev_rf
+        a.gateway_rf = c_gw_rf
+        a.gateway_rf_count = n_gw_rf
+        a.dl_ready_ns = ready_ptr
+        a.ready_count = ready_count
+        a.per_device = c_stats if n else None
+        a.totals = ctypes.pointer(c_tot)
+        a.per_gateway = c_gw_stats
+        a.records = c_records
+        a.record_capacity = total_messages
+        a.record_count = ctypes.pointer(c_record_count)
+        a.downlinks = c_dls
+        a.downlink_capacity = total_messages
+        a.downlink_count = ctypes.pointer(c_dl_count)
+        status = LIB.lsim_simulate_uplinks_multi_dl_env(ctypes.byref(a))
+    else:
+        multi_fn = multi_dl_native_function(rf=has_rf)
+        common = (c_devs if n else None, n, c_gws, g_count, ctypes.byref(c_prop),
+                  ctypes.byref(c_rule),
+                  c_env_ref, c_stats if n else None, ctypes.byref(c_tot), c_gw_stats,
+                  c_records, total_messages, ctypes.byref(c_record_count),
+                  c_dls, total_messages, ctypes.byref(c_dl_count), ready_ptr, ready_count)
+        status = (multi_fn(*common, c_dev_rf, n_dev_rf, c_gw_rf, n_gw_rf) if has_rf
+                  else multi_fn(*common))
     del keep
     if status != 0:
         raise StatusError(status)
