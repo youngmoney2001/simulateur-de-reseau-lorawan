@@ -45,7 +45,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
 from lsim.lora import RadioConfig, time_on_air_ns
-from lsim.plan import RECEIVE_DELAY1_US, Plan, get_plan
+from lsim.plan import (RECEIVE_DELAY1_US, Plan, UnsupportedUplinkDataRateError,
+                       get_plan)
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario
 
@@ -256,17 +257,24 @@ def _radio(plan: Optional[Plan], freq_hz: int, sf: int, tx_power_dbm: float) -> 
         return DeviceRadio(freq_hz=freq_hz, dr=None, rx1_hz=freq_hz, tx_power_dbm=tx_power_dbm,
                            rx1_sf=sf, rx1_bw_hz=125_000)
     dr = next((i for i, (s, bw, _) in enumerate(plan.dr_table()) if s == sf and bw == 125), None)
+    if dr is None:
+        # P1 : aucun DR montant pour ce SF. On refuse **avant la simulation** plutôt que de
+        # retomber silencieusement sur le SF brut à 125 kHz, qui ignorerait le mappage
+        # régional et produirait une chronologie ne correspondant à aucune région réelle.
+        # Sans plan (pas de région), il n'y a rien à résoudre : ce cas reste licite.
+        raise UnsupportedUplinkDataRateError(
+            region=plan.name, spreading_factor=sf, bandwidth_hz=125_000,
+            available=sorted({s for s, bw, _ in plan.dr_table() if bw == 125}))
     rx1_hz, rx1_sf, rx1_bw_hz = freq_hz, sf, 125_000
-    if dr is not None:
-        try:
-            ch = plan.channel_index(freq_hz / 1_000_000)
-            rx1_mhz, rx1_datr = plan.rx1(dr, ch)
-            rx1_hz = round(rx1_mhz * 1_000_000)
-            m = _DATR.match(rx1_datr)
-            if m is not None:
-                rx1_sf, rx1_bw_hz = int(m.group(1)), int(m.group(2)) * 1000
-        except ValueError:
-            rx1_hz = freq_hz
+    try:
+        ch = plan.channel_index(freq_hz / 1_000_000)
+        rx1_mhz, rx1_datr = plan.rx1(dr, ch)
+        rx1_hz = round(rx1_mhz * 1_000_000)
+        m = _DATR.match(rx1_datr)
+        if m is not None:
+            rx1_sf, rx1_bw_hz = int(m.group(1)), int(m.group(2)) * 1000
+    except ValueError:
+        rx1_hz = freq_hz
     # RX2 : fréquence et débit du repli régional. Sans plan, ou si le plan ne les expose pas, on
     # garde l'hypothèse du simulateur (SF12 BW125) et une fréquence non renseignée.
     rx2_hz, rx2_sf, rx2_bw_hz = 0, 12, 125_000

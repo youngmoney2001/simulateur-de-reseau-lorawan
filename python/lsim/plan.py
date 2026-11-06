@@ -24,6 +24,35 @@ RECEIVE_DELAY1_US = 1_000_000        # RP002 §2.3 : RECEIVE_DELAY1 = 1 s, toute
 _CHANNEL_TOLERANCE_HZ = 1_000        # la passerelle rapporte la fréquence en Hz précis
 
 
+class UnsupportedUplinkDataRateError(ValueError):
+    """Aucun DR montant du plan régional ne correspond au (SF, bande) demandé.
+
+    Levée **avant la simulation**, à la construction de la radio : il n'y a donc ni
+    chronologie à défaire ni repli à tenter.
+
+    Aucun DR de substitution n'est inventé, et **aucun repli silencieux vers une modulation
+    générique** ne subsiste : c'est précisément le comportement que cette exception remplace.
+    Un terminal réglé sur un SF absent de sa région est une erreur de configuration, pas une
+    scène lente — la simuler reviendrait à produire une chronologie qui ne correspond à rien.
+
+    `available` porte les SF montants réellement offerts par la région, à seule fin de rendre
+    le diagnostic actionnable.
+    """
+
+    def __init__(self, region: str, spreading_factor: int, bandwidth_hz: int,
+                 available: tuple[int, ...]) -> None:
+        self.region = region
+        self.spreading_factor = spreading_factor
+        self.bandwidth_hz = bandwidth_hz
+        self.available = tuple(available)
+        super().__init__(
+            f"{region} : aucun DR montant pour SF{spreading_factor} "
+            f"@{bandwidth_hz // 1000} kHz. "
+            f"SF montants disponibles dans cette région : "
+            f"{', '.join(f'SF{s}' for s in sorted(self.available))}."
+        )
+
+
 class Plan:
     """Plan régional immuable. Toutes les méthodes lèvent ValueError hors plan."""
 
