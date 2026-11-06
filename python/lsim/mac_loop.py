@@ -45,6 +45,16 @@ def check_closed_loop(scenario, options: Any) -> None:
     if scenario.model.gateways is not None or scenario.model.mesh is not None:
         raise ValueError("LinkADR/DutyCycle : passerelle unique uniquement "
                          "(pas de « gateways » ni de mesh)")
+    # I5-c : sans ADR, le moteur suit la table de radios, que Python calcule avec l'offset,
+    # et l'offset est honore. Avec LinkADR, c'est le DR **courant** du terminal qui prime, la
+    # table est ignoree, et le chemin scenario n'a aucun moyen de transmettre l'offset au
+    # moteur (§14.2 : l'invariant d'isolation de la v3 interdit a `trace_events` de l'importer).
+    # L'offset serait donc ignore silencieusement : refus explicite plutot que resultat faux
+    # (arbitrage bbb3).
+    if scenario.model.mac.link_adr and any(g.rx1_dr_offset for g in scenario.model.groups):
+        raise ValueError("RX1DROffset : non supporté avec LinkADR sur le chemin scénario "
+                         "(l'offset serait ignoré). Utiliser DutyCycleReq, ou désactiver "
+                         "LinkADR, ou laisser RX1DROffset à 0.")
 
 
 def mac_slots(schedule: Optional[MacSchedule], devices: Sequence) -> tuple[MacSlot, ...]:

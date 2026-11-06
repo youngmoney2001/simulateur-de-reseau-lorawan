@@ -260,3 +260,91 @@ def test_le_hash_du_scenario_exclut_l_offset_par_defaut():
     assert _scenario("EU868").sha256 == _scenario("EU868", 0).sha256
     # Un offset non nul, lui, change l'empreinte : c'est une configuration différente.
     assert _scenario("EU868").sha256 != _scenario("EU868", 2).sha256
+
+
+# ---------------------------------------------------------------------------
+# T-S-1..T-S-3 — chemin scenario : les deux regimes (§14)
+#
+# Sans ADR, le moteur suit la table de radios, que Python calcule avec l'offset : l'offset
+# atteint la descente. Avec LinkADR, le DR courant du terminal prime, la table est ignoree, et
+# le chemin scenario ne peut pas transmettre l'offset (§14.2) : il est refuse explicitement
+# plutot qu'ignore en silence (arbitrage bbb3).
+#
+# Observable : `TraceRun.gateway_tx`, les intervalles d'emission de la passerelle. Avec un seul
+# terminal sans contention, leur longueur est exactement l'airtime de la descente RX1.
+# ---------------------------------------------------------------------------
+
+def _scenario_mac(rx1_dr_offset, mac, count=1, messages=1):
+    """Scenario EU868 minimal, un groupe, avec un bloc `mac:`."""
+    from lsim.plan import get_plan
+    from lsim.scenario import Scenario, ScenarioModel
+
+    ch = get_plan("EU868").uplink_channels_hz()[0]
+    group = {
+        "name": "g0", "count": count, "region": "EU868", "channel_freq_hz": ch,
+        "placement": {"type": "disk", "radius_m": 100.0},
+        "spreading_factor": 9, "payload_bytes": 20, "tx_power_dbm": 14.0,
+        "period_s": 3600, "messages": messages,
+    }
+    if rx1_dr_offset is not None:
+        group["rx1_dr_offset"] = rx1_dr_offset
+    return Scenario(ScenarioModel.model_validate({
+        "schema_version": 1, "name": "m", "seed": 1,
+        "gateway": {"x_m": 0, "y_m": 0, "antenna_gain_dbi": 2.15},
+        "groups": [group], "mac": mac,
+    }))
+
+
+def _airtime_descente(scenario, options=None):
+    """Longueur de la premiere emission de la passerelle (= airtime de la descente RX1).
+
+    LinkADR seul ne cree aucune descente quand il n y a rien a emettre : il faut des
+    uplinks confirmes pour en obtenir une (voir T-S-3).
+    """
+    from lsim.trace_events import ProtocolOptions, build_trace_closed_loop
+
+    run = build_trace_closed_loop(scenario, options or ProtocolOptions())
+    assert run.gateway_tx, "aucune emission de la passerelle : la descente n a pas eu lieu"
+    debut, fin = run.gateway_tx[0]
+    return fin - debut
+
+
+# Airtimes mesures (ns) : un pas de SF double l'airtime. Controle positif obligatoire
+# (dixieme garde-fou) : le test n'affirme pas « ca change », mais « chaque pas le double ».
+AIRTIMES = {0: 144_384_000, 1: 288_768_000, 2: 577_536_000, 3: 1_155_072_000}
+
+
+@pytest.mark.parametrize("offset", [0, 1, 2, 3])
+def test_adr_inactif_l_offset_allonge_la_descente(offset):
+    """T-S-1 : sans ADR, l'offset atteint la descente - clamp(DR3 - offset, 0, 5)."""
+    assert _airtime_descente(_scenario_mac(offset, {"duty_cycle_exponent": 1})) == AIRTIMES[offset]
+
+
+def test_adr_inactif_la_descente_croit_avec_l_offset():
+    """T-S-1 bis : relation strictement croissante, interdit un decrochage partiel."""
+    precedent = 0
+    for offset in range(4):
+        air = _airtime_descente(_scenario_mac(offset, {"duty_cycle_exponent": 1}))
+        assert air > precedent
+        precedent = air
+
+
+@pytest.mark.parametrize("offset", [1, 2, 3, 4, 5])
+def test_adr_actif_avec_offset_non_nul_est_refuse(offset):
+    """T-S-2 : avec LinkADR l'offset serait ignore en silence - refus explicite (bbb3)."""
+    with pytest.raises(ValueError, match="RX1DROffset"):
+        _airtime_descente(_scenario_mac(offset, {"link_adr": True}))
+
+
+def test_adr_actif_sans_offset_est_accepte():
+    """T-S-3 : controle positif - LinkADR sans offset reste accepte, aucune regression.
+
+    Uplinks confirmes : sans eux, LinkADR n a rien a emettre, il n y a aucune descente a
+    mesurer et le test passerait pour rien.
+    """
+    from lsim.trace_events import ProtocolOptions
+
+    air = _airtime_descente(_scenario_mac(None, {"link_adr": True}),
+                             ProtocolOptions(confirmed_uplinks=True))
+    # L ADR n a pas encore deplore le SF au premier uplink : airtime de SF9.
+    assert air == AIRTIMES[0]
