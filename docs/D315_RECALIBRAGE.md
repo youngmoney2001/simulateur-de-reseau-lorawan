@@ -98,27 +98,39 @@ terminent à moins d'un temps d'antenne *descendant* l'un de l'autre.
   eux. **La contention est structurellement inatteignable dans un scène à SF
   unique.**
 
-### Fait 3 — ni le duty cycle ni la capacité ne peuvent amorcer
+### Fait 3 — la capacité ne peut pas non plus amorcer
 
-Les deux autres causes d'inéligibilité de RX1 sont également hors de portée en
+Reste la seconde cause d'inéligibilité de RX1, le **dépassement de capacité**.
+Elle exigerait `N(RX1) < charge ≤ N(RX2)`, or `N(RX1) = 222 > N(RX2) = 53` en
 US915/AU915 :
 
-| Région | Limite de duty cycle | N(RX1) | N(RX2) |
-|---|---:|---:|---:|
-| EU868 | 0,01 | 51 | 51 |
-| RU864 | 0,001 | 51 | 51 |
-| US915 | **aucune** (`None`) | 222 | 53 |
-| AS923 | aucune | 222 | 51 |
-| AU915 | **aucune** (`None`) | 222 | 53 |
-| IN865 | aucune | 222 | 51 |
-| KR920 | aucune | 222 | 51 |
+| Région | N(RX1) | N(RX2) |
+|---|---:|---:|
+| EU868 | 51 | 51 |
+| RU864 | 51 | 51 |
+| US915 | 222 | 53 |
+| AS923 | 222 | 51 |
+| AU915 | **222** | **53** |
+| IN865 | 222 | 51 |
+| KR920 | 115 | 51 |
 
-- **Duty cycle** : US915 et AU915 n'en ont aucun sur le canal employé. Aucune
-  indisponibilité temporelle ne peut en découler. (EU868 et RU864 en ont un :
-  c'est le mécanisme qui y produit les replis.)
-- **Capacité** : elle exigerait `N(RX1) < charge ≤ N(RX2)`, or
-  `N(RX1) = 222 > N(RX2) = 53`. Toute charge transportable en RX2 l'est *a
-  fortiori* en RX1. Aucun dépassement de capacité ne peut se produire.
+Toute charge transportable en RX2 l'est *a fortiori* en RX1. Aucun dépassement
+de capacité ne peut donc s'y produire, et le repli ne peut être déclenché que
+par l'occupation de l'émetteur — laquelle est inatteignable en scène à SF
+unique (fait 2).
+
+> **Rectificatif (phase C, après mesure).** Une version antérieure de ce
+> document attribuait les replis d'EU868 et de RU864 à leur limite de duty
+> cycle. **C'est faux, et la mesure l'a démenti.** Les limites ci-dessus
+> (`duty_cycle_limit`, 0,01 en EU868, 0,001 en RU864) contraignent les
+> **émissions montantes**, pas la planification descendante : l'arbitre
+> descendant (`GatewayArbiter`) ne reçoit ici aucune règle de duty cycle.
+> Vérifié sur les sept régions : **100 % des replis** sont imputables à une
+> émission antérieure d'un **autre** terminal recouvrant la fenêtre RX1, sans
+> un seul auto-blocage ni un seul cas inexpliqué, et le seul motif rapporté est
+> `window_missed` (famille `temporel`). Le mécanisme est donc **le même dans
+> les sept régions** : de la contention, et rien d'autre. Seul le fait 2
+> explique que deux d'entre elles n'y parviennent pas.
 
 ### La parade retenue
 
@@ -155,11 +167,81 @@ Deux conséquences :
    bi-SF. Un jeu qui prétendrait l'obtenir avec une scène à SF unique serait
    vacant, même s'il passait au vert.
 
-## C.4 — Suite
+## C.4 — Le jeu D3.15-R
 
-Le jeu **D3.15-R** reste à écrire. Conformément à **O4**, il prendra la forme
-d'un **nouveau fichier** : `test_d315_global.py` et son jumeau
+`python/tests/test_d315_recalibre.py` — **91 tests, tous passants**. Conformément
+à **O4**, c'est un **nouveau fichier** : `test_d315_global.py` et son jumeau
 `test_d315_causal_envelope.py` demeurent intacts, dans l'état archivé en
-`docs/archives/d315-avant-recalibrage/2026-11-06/`.
+`docs/archives/d315-avant-recalibrage/2026-11-06/`. Aucun n'a été modifié.
 
-Les réglages retenus sont ceux du tableau de la section C.1.
+### Conclusions reprises, rangées par verdict
+
+| Conclusion historique | Verdict |
+|---|---|
+| Les sept régions exercent le repli | **Confirmée** — elle était vacante, elle est maintenant mesurée |
+| Chaque fenêtre respecte le N de son DR | **Confirmée** — `charge + \|FOpts\| ≤ N(fenêtre)`, aucune violation |
+| Le repli ne peut qu'ajouter du temps d'antenne | **Confirmée** — vraie mais vide à 120 o, mesurée à 40 o |
+| Parité cœur C++ / oracle Python | **Confirmée et étendue** — de 4 régions à 7, sur scènes non vacantes |
+| Airtime et sensibilité suivent la fenêtre émise | **Confirmée** |
+| Scénario sans région : aucun repli | **Confirmée** |
+| Profils RX2 différenciés | **Confirmée** |
+| **À R < 1 le repli n'est jamais perdant** | **Requalifiée — domaine restreint** |
+
+### La conclusion requalifiée : R < 1
+
+Le jeu historique énonçait « mesuré, 3 configurations sur 3 ». Le balayage des
+six SF montants valides sur les sept régions montre que le régime `R < 1` est
+**bien plus étroit** :
+
+- **EU868, KR920, RU864** : RX2 est en SF12/125 et RX1 suit le SF montant, qui
+  vaut au plus 12 ⇒ `R ≥ 1` partout (égalité au SF12).
+- **US915, AU915** : RX1 et RX2 sont tous deux à 500 kHz, et RX2 y est le DR le
+  plus lent (DR8 = SF12/500) ⇒ `R > 1` partout. Les trois configurations
+  historiques à `R < 1` venaient **d'US915 au SF11 — un SF invalide**, précisément
+  celui que P1 refuse.
+- **AS923, IN865** : RX2 est en SF10/125. Un montant en SF11 donne `R = 0,47` —
+  les deux seules configurations exploitables (une par région, au lieu de trois
+  sur sept).
+
+La conclusion reste donc **vraie**, mais sur **2 configurations dans 2 régions**
+au lieu de 3 dans 7. Elle est assortie d'un garde-fou de portée qui échouerait
+si une huitième configuration à `R < 1` apparaissait.
+
+### Les replis sont bien de la contention
+
+Mesure faite sur les sept régions, à charge conforme :
+
+| Région | Replis | Bloqués par une émission **distincte** | Auto-blocage | Inexpliqués |
+|---|---:|---:|---:|---:|
+| EU868 | 120 | 120 | 0 | 0 |
+| US915 | 40 | 40 | 0 | 0 |
+| AS923 | 84 | 84 | 0 | 0 |
+| AU915 | 40 | 40 | 0 | 0 |
+| IN865 | 84 | 84 | 0 | 0 |
+| KR920 | 33 | 33 | 0 | 0 |
+| RU864 | 120 | 120 | 0 | 0 |
+
+Le seul motif rapporté est `window_missed` (famille `temporel`) : aucun repli
+n'est imputable à la capacité. Un témoin négatif complète la preuve — à un seul
+terminal par groupe, la contention disparaît et **le repli disparaît avec elle**
+(`rx2 = 0`, `aucune = 0`), à région et charge identiques.
+
+### Limitation épinglée, non réparée
+
+La scène bi-SF n'est **pas** une preuve de fidélité radio. Elle exploite que
+`_CTxRecord` ne porte aucun champ de fréquence, donc que le cœur C++ place toutes
+les émissions montantes dans un domaine de collision unique. Un test dédié
+épingle cette limitation : il échouera si le chantier radio ajoute la dimension
+de fréquence, ce qui imposera de revoir la portée attribuée aux conclusions
+d'US915 et d'AU915.
+
+### Vérification
+
+- `test_d315_recalibre.py` : **91 passed**, 0 échec, 0 saut.
+- Suite complète : **2409 passed / 15 failed / 1 skipped**, contre
+  2318 / 15 / 1 avant l'ajout — soit exactement +91, **aucun test existant
+  cassé**. Les 15 échecs sont les mêmes qu'avant, tous dans
+  `test_d315_global.py`.
+- `ctest` : **1/1**.
+- Parité Python/C++ vérifiée région par région sur les sept scènes (occupation,
+  sauts descendants, motifs de refus).
