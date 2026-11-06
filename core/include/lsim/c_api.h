@@ -1838,6 +1838,68 @@ LSIM_API int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* device
                                                    const lsim_gateway_rf* gateway_rf,
                                                    size_t gateway_rf_count);
 
+/* --------------------------------------------------------------------- I5-a, jalon I5-a
+ * Enveloppe des passerelles multiples avec descentes : débit réel des fenêtres.
+ *
+ * Le chemin multi s'était fragmenté en deux entrées, _multi_dl et _multi_dl_v2, produits du
+ * cartésien des tables optionnelles (frontaux). Y ajouter les radios et la fenêtre RX2 en aurait
+ * fait quatre. Même réponse qu'en I4 (enveloppe causale) : une enveloppe unique, à pointeurs
+ * typés exclusifs — une confusion de table ne compile pas.
+ *
+ * Contrat (docs/I5_A_RX1_AIRTIME.md) :
+ *   - `radios` / `rx2` : NULL conserve le comportement historique **à l'identique** (RX1 au SF
+ *     montant à 125 kHz, RX2 à 125 kHz). Non NULL, ils comptent chacun `device_count` entrées,
+ *     vérifié **avant toute lecture**, et le temps d'antenne comme la sensibilité de réception
+ *     descendante sont alors calculés au SF et à la bande de la fenêtre émettrice.
+ *   - Une table `rx2` fournie impose `rule->rx2_sf == 0` : une même grandeur exprimée à deux
+ *     endroits est une ambiguïté, pas une redondance tolérable (bbb3). Précédent :
+ *     `lsim_gateway_v2` exige déjà un scalaire historique neutre sous le modèle absolu.
+ *   - `rx2_bw_hz == 0` reprend la bande de RX1 : cela exige donc la table `radios`.
+ *   - `reserved` doit être nul (O1) : un appelant qui le renseigne parle une ABI future ;
+ *     l'ignorer serait un repli silencieux (bbb3).
+ *
+ * Aucune affirmation régionale ici : l'enveloppe transporte le débit des fenêtres, elle ne
+ * décide pas lequel impose chaque région.
+ */
+#define LSIM_MULTI_DL_ABI_VERSION 1u
+
+typedef struct lsim_multi_dl_args {
+    uint32_t struct_size;   /* sizeof(lsim_multi_dl_args), obligatoire              */
+    uint32_t abi_version;   /* LSIM_MULTI_DL_ABI_VERSION, obligatoire               */
+    const lsim_end_device* devices;   /* obligatoire si device_count > 0            */
+    size_t device_count;
+    const lsim_gateway* gateways;     /* obligatoire, 1..64                         */
+    size_t gateway_count;
+    const lsim_propagation* prop;     /* obligatoire                                */
+    const lsim_downlink_rule* rule;   /* obligatoire                                */
+    const lsim_environment* env;      /* NULL admis                                 */
+    /* Tables optionnelles du débit des fenêtres (I5-a). NULL : comportement historique. */
+    const lsim_plan_device* radios;
+    size_t radio_count;
+    const lsim_plan_device_rx2* rx2;
+    size_t rx2_count;
+    /* Frontaux (v4). NULL admis. */
+    const lsim_device_rf* device_rf;
+    size_t device_rf_count;
+    const lsim_gateway_rf* gateway_rf;
+    size_t gateway_rf_count;
+    const int64_t* dl_ready_ns;       /* NULL admis                                 */
+    size_t ready_count;
+    /* Sorties. */
+    lsim_device_stats* per_device;    /* obligatoire si device_count > 0            */
+    lsim_network_stats* totals;       /* obligatoire                                */
+    lsim_gateway_rx_stats* per_gateway; /* obligatoire                              */
+    lsim_multi_tx_record* records;
+    size_t record_capacity;
+    size_t* record_count;             /* obligatoire                                */
+    lsim_downlink_record* downlinks;
+    size_t downlink_capacity;
+    size_t* downlink_count;           /* obligatoire                                */
+    uint64_t reserved[2];             /* doit être nul                              */
+} lsim_multi_dl_args;
+
+LSIM_API int32_t lsim_simulate_uplinks_multi_dl_env(const lsim_multi_dl_args* args);
+
 /* Arguments de la boucle fermée v4 : les arguments v3 sont enveloppés, jamais recopiés.
    Validation v3 inchangée, puis frontal appliqué avant le moteur. */
 #define LSIM_CLOSED_LOOP_V4_ABI_VERSION 4u

@@ -1852,7 +1852,9 @@ int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
                       lsim_downlink_record* downlinks, size_t downlink_capacity,
                       size_t* downlink_count, const int64_t* dl_ready_ns, size_t ready_count,
                       const lsim_device_rf* device_rf, size_t device_rf_count,
-                      const lsim_gateway_rf* gateway_rf, size_t gateway_rf_count) {
+                      const lsim_gateway_rf* gateway_rf, size_t gateway_rf_count,
+                      const lsim_plan_device* radios, size_t radio_count,
+                      const lsim_plan_device_rx2* rx2, size_t rx2_count) {
     if (gateways == nullptr || prop == nullptr || rule == nullptr || totals == nullptr ||
         per_gateway == nullptr || record_count == nullptr || downlink_count == nullptr ||
         (device_count > 0 && (devices == nullptr || per_device == nullptr)) ||
@@ -1903,6 +1905,40 @@ int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
+        // I5-a : tables du débit des fenêtres. Nulles, le moteur retrouve l'hypothèse historique ;
+        // non nulles, elles comptent chacune `device_count` entrées — vérifié avant toute lecture.
+        std::vector<lsim::plan::DeviceRadio> radios_c;
+        std::vector<lsim::plan::DeviceRx2> rx2_c;
+        {
+            const bool l_une_seule = (radios == nullptr) != (rx2 == nullptr);
+            if (l_une_seule) {
+                return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+            }
+            if (radios != nullptr) {
+                if (radio_count != device_count || rx2_count != device_count) {
+                    return LSIM_STATUS_SIM_BASE +
+                           static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+                }
+                if (device_count == 0) {
+                    return LSIM_STATUS_SIM_BASE +
+                           static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+                }
+                radios_c.resize(radio_count);
+                rx2_c.resize(rx2_count);
+                for (size_t i = 0; i < radio_count; ++i) {
+                    radios_c[i].freq_hz = radios[i].freq_hz;
+                    radios_c[i].dr = radios[i].dr;
+                    radios_c[i].rx1_hz = radios[i].rx1_hz;
+                    radios_c[i].tx_power_dbm = radios[i].tx_power_dbm;
+                    radios_c[i].rx1_sf = radios[i].rx1_sf;
+                    radios_c[i].rx1_bw_hz = radios[i].rx1_bw_hz;
+                    rx2_c[i].rx2_hz = rx2[i].rx2_hz;
+                    rx2_c[i].rx2_sf = static_cast<uint8_t>(rx2[i].rx2_sf);
+                    rx2_c[i].rx2_bw_hz = rx2[i].rx2_bw_hz;
+                }
+            }
+        }
+
         lsim::sim::MultiDownlinkRule r;
         r.ack_uplinks = rule->ack_uplinks != 0;
         r.every = rule->every;
@@ -1937,8 +1973,10 @@ int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
         }
         const auto st = lsim::sim::simulate_uplinks_multi_downlinks(
-            specs.data(), device_count, gws.data(), gateway_count, p, r, stats.data(), tot,
-            gstats.data(), env != nullptr ? &e : nullptr, &trace, &dls, dl_ready_ns);
+            specs.data(), device_count, gws.data(), gateway_count, p, r,
+            radios_c.empty() ? nullptr : radios_c.data(),
+            rx2_c.empty() ? nullptr : rx2_c.data(), stats.data(), tot, gstats.data(),
+            env != nullptr ? &e : nullptr, &trace, &dls, dl_ready_ns);
         if (st != lsim::sim::SimStatus::Ok) {
             return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(st);
         }
@@ -2018,7 +2056,28 @@ int32_t lsim_simulate_uplinks_multi_dl(const lsim_end_device* devices, size_t de
     return multi_dl_impl(devices, device_count, gateways, gateway_count, prop, rule, env, per_device,
                          totals, per_gateway, records, record_capacity, record_count, downlinks,
                          downlink_capacity, downlink_count, dl_ready_ns, ready_count, nullptr, 0,
-                         nullptr, 0);
+                         nullptr, 0, nullptr, 0, nullptr, 0);
+}
+
+int32_t lsim_simulate_uplinks_multi_dl_env(const lsim_multi_dl_args* a) {
+    if (a == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    /* O1 : un appelant d'une ABI future doit être refusé, pas servi comme si de rien n'était. */
+    if (a->struct_size != sizeof(lsim_multi_dl_args) || a->abi_version != LSIM_MULTI_DL_ABI_VERSION) {
+        return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+    }
+    for (size_t i = 0; i < 2; ++i) {
+        if (a->reserved[i] != 0) {
+            return LSIM_STATUS_SIM_BASE + static_cast<int32_t>(lsim::sim::SimStatus::InvalidInput);
+        }
+    }
+    return multi_dl_impl(a->devices, a->device_count, a->gateways, a->gateway_count, a->prop,
+                         a->rule, a->env, a->per_device, a->totals, a->per_gateway, a->records,
+                         a->record_capacity, a->record_count, a->downlinks, a->downlink_capacity,
+                         a->downlink_count, a->dl_ready_ns, a->ready_count, a->device_rf,
+                         a->device_rf_count, a->gateway_rf, a->gateway_rf_count, a->radios,
+                         a->radio_count, a->rx2, a->rx2_count);
 }
 
 int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* devices, size_t device_count,
@@ -2038,7 +2097,7 @@ int32_t lsim_simulate_uplinks_multi_dl_v2(const lsim_end_device* devices, size_t
     return multi_dl_impl(devices, device_count, gateways, gateway_count, prop, rule, env, per_device,
                          totals, per_gateway, records, record_capacity, record_count, downlinks,
                          downlink_capacity, downlink_count, dl_ready_ns, ready_count, device_rf,
-                         device_rf_count, gateway_rf, gateway_rf_count);
+                         device_rf_count, gateway_rf, gateway_rf_count, nullptr, 0, nullptr, 0);
 }
 
 extern "C" {
