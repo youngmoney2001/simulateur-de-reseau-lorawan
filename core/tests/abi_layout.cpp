@@ -631,6 +631,37 @@ namespace expected {
     inline constexpr size_t off_lsim_closed_loop_v4_args__device_rf_count = 16;
     inline constexpr size_t off_lsim_closed_loop_v4_args__gateway_rf = 20;
     inline constexpr size_t off_lsim_closed_loop_v4_args__reserved = 24;
+    // lsim_multi_dl_args
+    inline constexpr size_t size_lsim_multi_dl_args = 128;
+    inline constexpr size_t off_lsim_multi_dl_args__struct_size = 0;
+    inline constexpr size_t off_lsim_multi_dl_args__abi_version = 4;
+    inline constexpr size_t off_lsim_multi_dl_args__devices = 8;
+    inline constexpr size_t off_lsim_multi_dl_args__device_count = 12;
+    inline constexpr size_t off_lsim_multi_dl_args__gateways = 16;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_count = 20;
+    inline constexpr size_t off_lsim_multi_dl_args__prop = 24;
+    inline constexpr size_t off_lsim_multi_dl_args__rule = 28;
+    inline constexpr size_t off_lsim_multi_dl_args__env = 32;
+    inline constexpr size_t off_lsim_multi_dl_args__radios = 36;
+    inline constexpr size_t off_lsim_multi_dl_args__radio_count = 40;
+    inline constexpr size_t off_lsim_multi_dl_args__rx2 = 44;
+    inline constexpr size_t off_lsim_multi_dl_args__rx2_count = 48;
+    inline constexpr size_t off_lsim_multi_dl_args__device_rf = 52;
+    inline constexpr size_t off_lsim_multi_dl_args__device_rf_count = 56;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_rf = 60;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_rf_count = 64;
+    inline constexpr size_t off_lsim_multi_dl_args__dl_ready_ns = 68;
+    inline constexpr size_t off_lsim_multi_dl_args__ready_count = 72;
+    inline constexpr size_t off_lsim_multi_dl_args__per_device = 76;
+    inline constexpr size_t off_lsim_multi_dl_args__totals = 80;
+    inline constexpr size_t off_lsim_multi_dl_args__per_gateway = 84;
+    inline constexpr size_t off_lsim_multi_dl_args__records = 88;
+    inline constexpr size_t off_lsim_multi_dl_args__record_capacity = 92;
+    inline constexpr size_t off_lsim_multi_dl_args__record_count = 96;
+    inline constexpr size_t off_lsim_multi_dl_args__downlinks = 100;
+    inline constexpr size_t off_lsim_multi_dl_args__downlink_capacity = 104;
+    inline constexpr size_t off_lsim_multi_dl_args__downlink_count = 108;
+    inline constexpr size_t off_lsim_multi_dl_args__reserved = 112;
 
 #elif defined(__x86_64__)
 // ---------------------------------------------------------------- x86-64 (LP64)
@@ -1217,6 +1248,37 @@ namespace expected {
     inline constexpr size_t off_lsim_closed_loop_v4_args__device_rf_count = 24;
     inline constexpr size_t off_lsim_closed_loop_v4_args__gateway_rf = 32;
     inline constexpr size_t off_lsim_closed_loop_v4_args__reserved = 40;
+    // lsim_multi_dl_args
+    inline constexpr size_t size_lsim_multi_dl_args = 232;
+    inline constexpr size_t off_lsim_multi_dl_args__struct_size = 0;
+    inline constexpr size_t off_lsim_multi_dl_args__abi_version = 4;
+    inline constexpr size_t off_lsim_multi_dl_args__devices = 8;
+    inline constexpr size_t off_lsim_multi_dl_args__device_count = 16;
+    inline constexpr size_t off_lsim_multi_dl_args__gateways = 24;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_count = 32;
+    inline constexpr size_t off_lsim_multi_dl_args__prop = 40;
+    inline constexpr size_t off_lsim_multi_dl_args__rule = 48;
+    inline constexpr size_t off_lsim_multi_dl_args__env = 56;
+    inline constexpr size_t off_lsim_multi_dl_args__radios = 64;
+    inline constexpr size_t off_lsim_multi_dl_args__radio_count = 72;
+    inline constexpr size_t off_lsim_multi_dl_args__rx2 = 80;
+    inline constexpr size_t off_lsim_multi_dl_args__rx2_count = 88;
+    inline constexpr size_t off_lsim_multi_dl_args__device_rf = 96;
+    inline constexpr size_t off_lsim_multi_dl_args__device_rf_count = 104;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_rf = 112;
+    inline constexpr size_t off_lsim_multi_dl_args__gateway_rf_count = 120;
+    inline constexpr size_t off_lsim_multi_dl_args__dl_ready_ns = 128;
+    inline constexpr size_t off_lsim_multi_dl_args__ready_count = 136;
+    inline constexpr size_t off_lsim_multi_dl_args__per_device = 144;
+    inline constexpr size_t off_lsim_multi_dl_args__totals = 152;
+    inline constexpr size_t off_lsim_multi_dl_args__per_gateway = 160;
+    inline constexpr size_t off_lsim_multi_dl_args__records = 168;
+    inline constexpr size_t off_lsim_multi_dl_args__record_capacity = 176;
+    inline constexpr size_t off_lsim_multi_dl_args__record_count = 184;
+    inline constexpr size_t off_lsim_multi_dl_args__downlinks = 192;
+    inline constexpr size_t off_lsim_multi_dl_args__downlink_capacity = 200;
+    inline constexpr size_t off_lsim_multi_dl_args__downlink_count = 208;
+    inline constexpr size_t off_lsim_multi_dl_args__reserved = 216;
 
 #endif
 
@@ -1753,7 +1815,37 @@ static_assert(offsetof(lsim_closed_loop_v4_args, v3) == expected::off_lsim_close
 static_assert(offsetof(lsim_closed_loop_v4_args, device_rf) == expected::off_lsim_closed_loop_v4_args__device_rf, "lsim_closed_loop_v4_args::device_rf");
 static_assert(offsetof(lsim_closed_loop_v4_args, device_rf_count) == expected::off_lsim_closed_loop_v4_args__device_rf_count, "lsim_closed_loop_v4_args::device_rf_count");
 static_assert(offsetof(lsim_closed_loop_v4_args, gateway_rf) == expected::off_lsim_closed_loop_v4_args__gateway_rf, "lsim_closed_loop_v4_args::gateway_rf");
+static_assert(sizeof(lsim_multi_dl_args) == expected::size_lsim_multi_dl_args, "lsim_multi_dl_args : taille");
 static_assert(offsetof(lsim_closed_loop_v4_args, reserved) == expected::off_lsim_closed_loop_v4_args__reserved, "lsim_closed_loop_v4_args::reserved");
+static_assert(offsetof(lsim_multi_dl_args, struct_size) == expected::off_lsim_multi_dl_args__struct_size, "lsim_multi_dl_args::struct_size");
+static_assert(offsetof(lsim_multi_dl_args, abi_version) == expected::off_lsim_multi_dl_args__abi_version, "lsim_multi_dl_args::abi_version");
+static_assert(offsetof(lsim_multi_dl_args, devices) == expected::off_lsim_multi_dl_args__devices, "lsim_multi_dl_args::devices");
+static_assert(offsetof(lsim_multi_dl_args, device_count) == expected::off_lsim_multi_dl_args__device_count, "lsim_multi_dl_args::device_count");
+static_assert(offsetof(lsim_multi_dl_args, gateways) == expected::off_lsim_multi_dl_args__gateways, "lsim_multi_dl_args::gateways");
+static_assert(offsetof(lsim_multi_dl_args, gateway_count) == expected::off_lsim_multi_dl_args__gateway_count, "lsim_multi_dl_args::gateway_count");
+static_assert(offsetof(lsim_multi_dl_args, prop) == expected::off_lsim_multi_dl_args__prop, "lsim_multi_dl_args::prop");
+static_assert(offsetof(lsim_multi_dl_args, rule) == expected::off_lsim_multi_dl_args__rule, "lsim_multi_dl_args::rule");
+static_assert(offsetof(lsim_multi_dl_args, env) == expected::off_lsim_multi_dl_args__env, "lsim_multi_dl_args::env");
+static_assert(offsetof(lsim_multi_dl_args, radios) == expected::off_lsim_multi_dl_args__radios, "lsim_multi_dl_args::radios");
+static_assert(offsetof(lsim_multi_dl_args, radio_count) == expected::off_lsim_multi_dl_args__radio_count, "lsim_multi_dl_args::radio_count");
+static_assert(offsetof(lsim_multi_dl_args, rx2) == expected::off_lsim_multi_dl_args__rx2, "lsim_multi_dl_args::rx2");
+static_assert(offsetof(lsim_multi_dl_args, rx2_count) == expected::off_lsim_multi_dl_args__rx2_count, "lsim_multi_dl_args::rx2_count");
+static_assert(offsetof(lsim_multi_dl_args, device_rf) == expected::off_lsim_multi_dl_args__device_rf, "lsim_multi_dl_args::device_rf");
+static_assert(offsetof(lsim_multi_dl_args, device_rf_count) == expected::off_lsim_multi_dl_args__device_rf_count, "lsim_multi_dl_args::device_rf_count");
+static_assert(offsetof(lsim_multi_dl_args, gateway_rf) == expected::off_lsim_multi_dl_args__gateway_rf, "lsim_multi_dl_args::gateway_rf");
+static_assert(offsetof(lsim_multi_dl_args, gateway_rf_count) == expected::off_lsim_multi_dl_args__gateway_rf_count, "lsim_multi_dl_args::gateway_rf_count");
+static_assert(offsetof(lsim_multi_dl_args, dl_ready_ns) == expected::off_lsim_multi_dl_args__dl_ready_ns, "lsim_multi_dl_args::dl_ready_ns");
+static_assert(offsetof(lsim_multi_dl_args, ready_count) == expected::off_lsim_multi_dl_args__ready_count, "lsim_multi_dl_args::ready_count");
+static_assert(offsetof(lsim_multi_dl_args, per_device) == expected::off_lsim_multi_dl_args__per_device, "lsim_multi_dl_args::per_device");
+static_assert(offsetof(lsim_multi_dl_args, totals) == expected::off_lsim_multi_dl_args__totals, "lsim_multi_dl_args::totals");
+static_assert(offsetof(lsim_multi_dl_args, per_gateway) == expected::off_lsim_multi_dl_args__per_gateway, "lsim_multi_dl_args::per_gateway");
+static_assert(offsetof(lsim_multi_dl_args, records) == expected::off_lsim_multi_dl_args__records, "lsim_multi_dl_args::records");
+static_assert(offsetof(lsim_multi_dl_args, record_capacity) == expected::off_lsim_multi_dl_args__record_capacity, "lsim_multi_dl_args::record_capacity");
+static_assert(offsetof(lsim_multi_dl_args, record_count) == expected::off_lsim_multi_dl_args__record_count, "lsim_multi_dl_args::record_count");
+static_assert(offsetof(lsim_multi_dl_args, downlinks) == expected::off_lsim_multi_dl_args__downlinks, "lsim_multi_dl_args::downlinks");
+static_assert(offsetof(lsim_multi_dl_args, downlink_capacity) == expected::off_lsim_multi_dl_args__downlink_capacity, "lsim_multi_dl_args::downlink_capacity");
+static_assert(offsetof(lsim_multi_dl_args, downlink_count) == expected::off_lsim_multi_dl_args__downlink_count, "lsim_multi_dl_args::downlink_count");
+static_assert(offsetof(lsim_multi_dl_args, reserved) == expected::off_lsim_multi_dl_args__reserved, "lsim_multi_dl_args::reserved");
 
 // Vérification à l'exécution (possible seulement si un binaire de cette ABI peut être lié).
 inline int run() {
