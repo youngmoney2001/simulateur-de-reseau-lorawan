@@ -96,6 +96,8 @@ LIB.lsim_plan_downlinks_v1.argtypes = [
 
 # --------------------------------------------------------------------------- jalon I0 : enveloppe v2
 LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION = 1
+# Doit égaler LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION (c_api.h).
+LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,30 @@ class DeviceRx2:
 class _CPlanDeviceRx2(ctypes.Structure):
     _fields_ = [("rx2_hz", ctypes.c_int64), ("rx2_sf", ctypes.c_uint32),
                 ("rx2_bw_hz", ctypes.c_uint32), ("reserved", ctypes.c_uint64 * 2)]
+
+
+@dataclass(frozen=True)
+class DeviceLimits:
+    """Limites de charge utile par fenêtre (N du DR réellement utilisé), par dispositif.
+
+    Jalon I6-c. `rx1_max_payload` est le N du **DR de RX1**, `rx2_max_payload` celui du **DR de
+    RX2** — jamais celui de l'uplink, et jamais l'un pour l'autre (R-N1).
+
+    Aucune sentinelle : les deux champs sont des N effectifs, dans `[0, 242]`. L'absence de
+    contrainte ne s'exprime pas par une valeur réservée mais en **ne passant pas de table**
+    (`plan_native_v3(..., limits=None)` n'existe pas : sans table, on appelle `plan_native_v2`).
+
+    La contrainte ne porte que sur les **descentes applicatives**. Les ACK et les Join-Accept
+    ne sont jamais refusés pour capacité.
+    """
+
+    rx1_max_payload: int
+    rx2_max_payload: int
+
+
+class _CPlanDeviceLimits(ctypes.Structure):
+    _fields_ = [("rx1_max_payload", ctypes.c_int32), ("rx2_max_payload", ctypes.c_int32),
+                ("reserved", ctypes.c_uint64 * 2)]
 
 
 # Entrées causales v3 (I3) : table RX2 **et** frontaux dans une seule entrée. Les argtypes sont
@@ -196,6 +222,32 @@ class _CPlanDownlinksV2Args(ctypes.Structure):
 
 LIB.lsim_plan_downlinks_v2.restype = ctypes.c_int32
 LIB.lsim_plan_downlinks_v2.argtypes = [ctypes.POINTER(_CPlanDownlinksV2Args)]
+
+
+class _CPlanDownlinksV3Args(ctypes.Structure):
+    """`lsim_plan_downlinks_v3_args` — planification avec limites de charge par fenêtre (I6-c).
+
+    Les champs suivent **exactement** l'ordre de `core/include/lsim/c_api.h`. La table `limits`
+    est **obligatoire** : un pointeur nul est rejeté par le cœur, il ne dégrade pas
+    silencieusement vers la v2 (arbitrages bbb3 et bbb5).
+    """
+
+    _fields_ = [("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
+                ("uplinks", ctypes.POINTER(_CPlanUplink)), ("uplink_count", ctypes.c_size_t),
+                ("devices", ctypes.POINTER(_CPlanDevice)), ("device_count", ctypes.c_size_t),
+                ("options", ctypes.POINTER(_CPlanOptions)),
+                ("rx2", ctypes.POINTER(_CPlanDeviceRx2)), ("rx2_count", ctypes.c_size_t),
+                ("limits", ctypes.POINTER(_CPlanDeviceLimits)),
+                ("limits_count", ctypes.c_size_t),
+                ("events", ctypes.POINTER(_CPlanEvent)), ("event_capacity", ctypes.c_size_t),
+                ("event_count", ctypes.POINTER(ctypes.c_size_t)),
+                ("busy", ctypes.POINTER(_CInterval)), ("busy_capacity", ctypes.c_size_t),
+                ("busy_count", ctypes.POINTER(ctypes.c_size_t)),
+                ("reserved", ctypes.c_uint64 * 2)]
+
+
+LIB.lsim_plan_downlinks_v3.restype = ctypes.c_int32
+LIB.lsim_plan_downlinks_v3.argtypes = [ctypes.POINTER(_CPlanDownlinksV3Args)]
 
 
 LIB.lsim_simulate_uplinks_causal_v1.restype = ctypes.c_int32
@@ -397,7 +449,26 @@ def plan_native_v2(records, radios, options,
     return _plan_native(records, radios, options, rx2, True)
 
 
-def _plan_native(records, radios, options, rx2, use_v2):
+def plan_native_v3(records, radios, options,
+                   rx2: Optional[Sequence["DeviceRx2"]] = None,
+                   limits: Optional[Sequence["DeviceLimits"]] = None,
+                   ) -> tuple[tuple[ProtocolEvent, ...], tuple[tuple[int, int], ...]]:
+    """Même calcul que `plan_native_v2`, avec validation de la charge par fenêtre (I6-c).
+
+    `limits` : une entrée `DeviceLimits` par dispositif. **Obligatoire** — le cœur rejette un
+    pointeur nul au lieu de le dégrader silencieusement vers la v2 (arbitrages bbb3 et bbb5).
+    Sans contrainte à appliquer, appeler `plan_native_v2`.
+
+    Chaque fenêtre est validée contre le N de son propre DR (R-N1). Une fenêtre inéligible
+    n'est jamais demandée : elle ne réserve rien et n'occupe pas l'émetteur (R-N2).
+    L'inéligibilité de RX1 ne clôt pas l'examen, RX2 reste demandable (R-N3).
+    """
+    if limits is None:
+        raise ValueError("limits est obligatoire : sans contrainte, appeler plan_native_v2")
+    return _plan_native(records, radios, options, rx2, True, limits)
+
+
+def _plan_native(records, radios, options, rx2, use_v2, limits=None):
     ups = (_CPlanUplink * max(1, len(records)))()
     for i, r in enumerate(records):
         ups[i].device_index = r.device_index
@@ -425,6 +496,13 @@ def _plan_native(records, radios, options, rx2, use_v2):
             c_rx2[i].rx2_hz = r.rx2_hz
             c_rx2[i].rx2_sf = r.rx2_sf
             c_rx2[i].rx2_bw_hz = r.rx2_bw_hz
+    # I6-c : table des limites. Absente, on reste en v1/v2 — aucune contrainte de N appliquée.
+    c_limits = None
+    if limits is not None:
+        c_limits = (_CPlanDeviceLimits * max(1, len(limits)))()
+        for i, l in enumerate(limits):
+            c_limits[i].rx1_max_payload = l.rx1_max_payload
+            c_limits[i].rx2_max_payload = l.rx2_max_payload
     cap_ev = max(4, 2 * len(records) + 2 * len(records))
     cap_busy = max(4, len(records) + 1)
     for _ in range(2):
@@ -432,7 +510,28 @@ def _plan_native(records, radios, options, rx2, use_v2):
         busy = (_CInterval * cap_busy)()
         n_ev = ctypes.c_size_t(0)
         n_busy = ctypes.c_size_t(0)
-        if use_v2:
+        if limits is not None:
+            args = _CPlanDownlinksV3Args()
+            args.struct_size = ctypes.sizeof(_CPlanDownlinksV3Args)
+            args.abi_version = LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION
+            args.uplinks = ctypes.cast(ups, ctypes.POINTER(_CPlanUplink))
+            args.uplink_count = len(records)
+            args.devices = ctypes.cast(devs, ctypes.POINTER(_CPlanDevice))
+            args.device_count = len(radios)
+            args.options = ctypes.pointer(opt)
+            args.rx2 = (ctypes.cast(c_rx2, ctypes.POINTER(_CPlanDeviceRx2))
+                        if c_rx2 is not None else None)
+            args.rx2_count = 0 if c_rx2 is None else len(rx2)
+            args.limits = ctypes.cast(c_limits, ctypes.POINTER(_CPlanDeviceLimits))
+            args.limits_count = len(limits)
+            args.events = ctypes.cast(evs, ctypes.POINTER(_CPlanEvent))
+            args.event_capacity = cap_ev
+            args.event_count = ctypes.pointer(n_ev)
+            args.busy = ctypes.cast(busy, ctypes.POINTER(_CInterval))
+            args.busy_capacity = cap_busy
+            args.busy_count = ctypes.pointer(n_busy)
+            status = LIB.lsim_plan_downlinks_v3(ctypes.byref(args))
+        elif use_v2:
             # Champs pointeurs : des pointeurs réels, pas des `byref` (CArgObject non assignable).
             args = _CPlanDownlinksV2Args()
             args.struct_size = ctypes.sizeof(_CPlanDownlinksV2Args)

@@ -5,7 +5,7 @@
 //
 // Depuis F7, les tailles et décalages ne sont plus des littéraux LP64 : ils viennent de
 // `abi_layout.cpp`, qui porte DEUX tables explicites (x86-64 et i386) et les vérifie pour les
-// 53 structures de `lsim/c_api.h`. Ce fichier l'inclut pour partager une seule source de vérité
+// 58 structures de `lsim/c_api.h`. Ce fichier l'inclut pour partager une seule source de vérité
 // (la phase F7 n'autorise que ces deux fichiers, d'où l'absence d'en-tête séparé).
 #include <cstddef>
 #include <cstdint>
@@ -13,7 +13,7 @@
 #include <limits>
 #include <type_traits>
 
-#include "abi_layout.cpp"  // deux tables ABI + 453 vérifications de disposition
+#include "abi_layout.cpp"  // deux tables ABI + 526 vérifications de disposition
 #include "check.hpp"
 #include "lsim/c_api.h"
 #include "lsim/engine.hpp"

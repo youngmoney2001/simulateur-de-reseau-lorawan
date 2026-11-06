@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Frontière C de la planification des descentes (lsim_plan_downlinks_v1 et _v2).
+// Frontière C de la planification des descentes (v1, v2 et v3 — I6-c).
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -9,6 +9,7 @@
 
 namespace {
 
+using lsim::plan::DeviceLimits;
 using lsim::plan::DeviceRadio;
 using lsim::plan::DeviceRx2;
 using lsim::plan::Event;
@@ -27,17 +28,19 @@ int32_t map_status(PlanStatus s) {
     return LSIM_STATUS_INTERNAL;
 }
 
-// Corps commun aux deux entrées. `rx2` nul reproduit exactement la v1 ; non nul, il compte
-// `rx2_count` entrées, vérifié **avant toute lecture**.
+// Corps commun aux trois entrées. `rx2` nul reproduit exactement la v1 ; non nul, il compte
+// `rx2_count` entrées, vérifié **avant toute lecture**. `limits` nul : aucune contrainte de N
+// (v1 et v2) ; non nul, il compte `limits_count` entrées, vérifié de même. L'entrée v3 rejette
+// `limits` nul avant d'arriver ici.
 //
 // Jalon I0 : RX2 est transporté et validé, puis écarté par `plan_downlinks` — aucun repli n'est
 // produit, et le résultat est identique à celui de la v1.
 int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
                  const lsim_plan_device* devices, size_t device_count,
                  const lsim_plan_options* options, const lsim_plan_device_rx2* rx2,
-                 size_t rx2_count, lsim_plan_event* events, size_t event_capacity,
-                 size_t* event_count, lsim_interval* busy, size_t busy_capacity,
-                 size_t* busy_count) {
+                 size_t rx2_count, const lsim_plan_device_limits* limits, size_t limits_count,
+                 lsim_plan_event* events, size_t event_capacity, size_t* event_count,
+                 lsim_interval* busy, size_t busy_capacity, size_t* busy_count) {
     if (event_count == nullptr || busy_count == nullptr || options == nullptr) {
         return LSIM_STATUS_PLAN_BASE + 1;
     }
@@ -50,6 +53,12 @@ int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
         return LSIM_STATUS_PLAN_BASE + 1;
     }
     if (rx2 == nullptr && rx2_count != 0) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    // Même règle pour les limites. `limits` nul est accepté **uniquement** sur les chemins v1 et
+    // v2, qui ne connaissent pas cette table ; l'entrée v3 le rejette avant d'arriver ici, sans
+    // jamais le dégrader silencieusement en v2 (arbitrage bbb3).
+    if (limits != nullptr && limits_count != device_count) {
         return LSIM_STATUS_PLAN_BASE + 1;
     }
     try {
@@ -83,6 +92,19 @@ int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
                 rx2s[i].rx2_bw_hz = rx2[i].rx2_bw_hz;
             }
         }
+        std::vector<DeviceLimits> lims;
+        if (limits != nullptr) {
+            lims.resize(limits_count);
+            for (size_t i = 0; i < limits_count; ++i) {
+                // O1 : `reserved` n'est jamais réaffecté. Un appelant qui le renseigne parle une
+                // ABI future ; l'ignorer serait un repli silencieux (bbb3), donc refus explicite.
+                if (limits[i].reserved[0] != 0 || limits[i].reserved[1] != 0) {
+                    return LSIM_STATUS_PLAN_BASE + 1;
+                }
+                lims[i].rx1_max_payload = limits[i].rx1_max_payload;
+                lims[i].rx2_max_payload = limits[i].rx2_max_payload;
+            }
+        }
         PlanOptions po;
         po.confirmed_uplinks = options->confirmed_uplinks != 0;
         po.downlink_every = options->downlink_every;
@@ -96,9 +118,9 @@ int32_t run_plan(const lsim_plan_uplink* uplinks, size_t uplink_count,
 
         std::vector<Event> evs;
         std::vector<Interval> bus;
-        const PlanStatus st = lsim::plan::plan_downlinks(ups, radios, po,
-                                                         rx2 == nullptr ? nullptr : &rx2s, evs,
-                                                         bus);
+        const PlanStatus st = lsim::plan::plan_downlinks(
+            ups, radios, po, rx2 == nullptr ? nullptr : &rx2s,
+            limits == nullptr ? nullptr : &lims, evs, bus);
         if (st != PlanStatus::Ok) return map_status(st);
 
         *event_count = evs.size();
@@ -143,9 +165,9 @@ int32_t lsim_plan_downlinks_v1(const lsim_plan_uplink* uplinks, size_t uplink_co
                                size_t* event_count,
                                lsim_interval* busy, size_t busy_capacity,
                                size_t* busy_count) {
-    // Comportement inchangé : aucune fenêtre RX2.
-    return run_plan(uplinks, uplink_count, devices, device_count, options, nullptr, 0, events,
-                    event_capacity, event_count, busy, busy_capacity, busy_count);
+    // Comportement inchangé : aucune fenêtre RX2, aucune limite de charge.
+    return run_plan(uplinks, uplink_count, devices, device_count, options, nullptr, 0, nullptr, 0,
+                    events, event_capacity, event_count, busy, busy_capacity, busy_count);
 }
 
 int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args) {
@@ -159,7 +181,33 @@ int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args) {
         return LSIM_STATUS_PLAN_BASE + 1;
     }
     return run_plan(args->uplinks, args->uplink_count, args->devices, args->device_count,
-                    args->options, args->rx2, args->rx2_count, args->events,
+                    args->options, args->rx2, args->rx2_count, nullptr, 0, args->events,
                     args->event_capacity, args->event_count, args->busy, args->busy_capacity,
                     args->busy_count);
+}
+
+int32_t lsim_plan_downlinks_v3(const lsim_plan_downlinks_v3_args* args) {
+    if (args == nullptr) return LSIM_STATUS_PLAN_BASE + 1;
+    // Taille et version d'abord : sans elles, les champs suivants ne peuvent pas être lus sans
+    // risque, l'appelant pouvant compiler contre une autre version de l'en-tête.
+    if (args->struct_size != sizeof(lsim_plan_downlinks_v3_args)) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    if (args->abi_version != LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    // O1 : `reserved` n'est jamais réaffecté. Un appelant qui le renseigne parle une ABI future ;
+    // l'ignorer serait un repli silencieux (bbb3), donc refus explicite.
+    if (args->reserved[0] != 0 || args->reserved[1] != 0) {
+        return LSIM_STATUS_PLAN_BASE + 1;
+    }
+    // `limits` est **obligatoire** et non nul. Un pointeur nul est rejeté : il ne dégrade pas
+    // silencieusement vers la v2. Qui veut le comportement sans contrainte appelle la v2 — c'est
+    // le seul moyen de l'obtenir, et il est explicite (arbitrages bbb3 et bbb5).
+    if (args->limits == nullptr) return LSIM_STATUS_PLAN_BASE + 1;
+    if (args->limits_count != args->device_count) return LSIM_STATUS_PLAN_BASE + 1;
+    return run_plan(args->uplinks, args->uplink_count, args->devices, args->device_count,
+                    args->options, args->rx2, args->rx2_count, args->limits, args->limits_count,
+                    args->events, args->event_capacity, args->event_count, args->busy,
+                    args->busy_capacity, args->busy_count);
 }

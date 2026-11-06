@@ -514,6 +514,153 @@ void run_downlink_plan_tests() {
         }
     }
 
+    // 9bis. Enveloppe v3 (I6-c) : mêmes refus que la v2, plus le contrat `limits`. Passer la
+    //    table, c'est **demander** la validation N ; l'absence de contrainte reste l'affaire de
+    //    la v2 (bbb5). Cas conforme d'abord, puis chaque refus, un par un.
+    {
+        const PlanCase c = make_plan_case();
+        const std::size_t cap = 32;
+        std::vector<lsim_plan_event> ev(cap);
+        std::vector<lsim_interval> bu(cap);
+        size_t n = 0, nb = 0;
+
+        const auto base = [&]() {
+            lsim_plan_downlinks_v3_args a{};
+            a.struct_size = sizeof(a);
+            a.abi_version = LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION;
+            a.uplinks = c.ups.data();
+            a.uplink_count = c.ups.size();
+            a.devices = c.devs.data();
+            a.device_count = c.devs.size();
+            a.options = &c.opts;
+            a.rx2 = c.rx2.data();
+            a.rx2_count = c.rx2.size();
+            a.limits = nullptr;      // remplacé par les cas qui suivent
+            a.limits_count = 0;
+            a.events = ev.data();
+            a.event_capacity = cap;
+            a.event_count = &n;
+            a.busy = bu.data();
+            a.busy_capacity = cap;
+            a.busy_count = &nb;
+            return a;
+        };
+
+        // 9bis-0. Cas conforme : une table de trois entrées, tous N à 51 ⇒ la charge de 40 passe.
+        {
+            std::vector<lsim_plan_device_limits> lim(3, lsim_plan_device_limits{51, 51});
+            lsim_plan_downlinks_v3_args a = base();
+            a.limits = lim.data();
+            a.limits_count = lim.size();
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), 0);
+            const size_t nb_conforme = nb;
+
+            // Même scénario, fenêtres toutes inéligibles ⇒ plus aucune occupation émise.
+            std::vector<lsim_plan_device_limits> nuls(3, lsim_plan_device_limits{0, 0});
+            lsim_plan_downlinks_v3_args b = base();
+            b.limits = nuls.data();
+            b.limits_count = nuls.size();
+            n = 0;
+            nb = 0;
+            CHECK_EQ(lsim_plan_downlinks_v3(&b), 0);
+            CHECK_TRUE(nb < nb_conforme);
+        }
+
+        const std::vector<lsim_plan_device_limits> lim(3, lsim_plan_device_limits{51, 51});
+        const auto avec = [&](auto&& muter) {
+            lsim_plan_downlinks_v3_args a = base();
+            a.limits = lim.data();
+            a.limits_count = lim.size();
+            muter(a);
+            return lsim_plan_downlinks_v3(&a);
+        };
+        const std::int32_t refus = LSIM_STATUS_PLAN_BASE + 1;
+
+        // Refus hérités de la v2 : aucun n'est silencieusement accepté.
+        CHECK_EQ(lsim_plan_downlinks_v3(nullptr), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.struct_size = sizeof(a) - 8u; }),
+                 refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) {
+                     a.abi_version = LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION + 1u;
+                 }),
+                 refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.reserved[1] = 1; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.options = nullptr; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.event_count = nullptr; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.busy_count = nullptr; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.uplinks = nullptr; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.devices = nullptr; }), refus);
+
+        // Refus propres au contrat `limits` (bbb5, bbb3) : jamais de repli silencieux.
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.limits = nullptr; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.limits_count = 2; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.limits_count = 99; }), refus);
+        CHECK_EQ(avec([](lsim_plan_downlinks_v3_args& a) { a.limits_count = 0; }), refus);
+        // N hors bornes : 243 et −1, sur RX1 comme sur RX2. Aucune lecture n'a lieu.
+        {
+            std::vector<lsim_plan_device_limits> hors(3, lsim_plan_device_limits{243, 51});
+            lsim_plan_downlinks_v3_args a = base();
+            a.limits = hors.data();
+            a.limits_count = hors.size();
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), refus);
+            for (auto& l : hors) l = lsim_plan_device_limits{-1, 51};
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), refus);
+            for (auto& l : hors) l = lsim_plan_device_limits{51, 243};
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), refus);
+            for (auto& l : hors) l = lsim_plan_device_limits{51, -1};
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), refus);
+        }
+        // `reserved` de l'élément doit être nul : un octet non nul est un appelant d'une ABI
+        // future, pas un appelant toléré.
+        {
+            std::vector<lsim_plan_device_limits> res(3, lsim_plan_device_limits{51, 51});
+            res[0].reserved[0] = 1;
+            lsim_plan_downlinks_v3_args a = base();
+            a.limits = res.data();
+            a.limits_count = res.size();
+            CHECK_EQ(lsim_plan_downlinks_v3(&a), refus);
+        }
+        // Non-régression : sans table, la v3 se comporte comme la v2 (mêmes occupations).
+        {
+            std::vector<lsim_plan_event> ev2(cap), ev3(cap);
+            std::vector<lsim_interval> bu2(cap), bu3(cap);
+            size_t n2 = 0, nb2 = 0, n3 = 0, nb3 = 0;
+            lsim_plan_downlinks_v2_args v2{};
+            v2.struct_size = sizeof(v2);
+            v2.abi_version = LSIM_PLAN_DOWNLINKS_V2_ABI_VERSION;
+            v2.uplinks = c.ups.data();
+            v2.uplink_count = c.ups.size();
+            v2.devices = c.devs.data();
+            v2.device_count = c.devs.size();
+            v2.options = &c.opts;
+            v2.rx2 = c.rx2.data();
+            v2.rx2_count = c.rx2.size();
+            v2.events = ev2.data();
+            v2.event_capacity = cap;
+            v2.event_count = &n2;
+            v2.busy = bu2.data();
+            v2.busy_capacity = cap;
+            v2.busy_count = &nb2;
+            CHECK_EQ(lsim_plan_downlinks_v2(&v2), 0);
+
+            std::vector<lsim_plan_device_limits> large(3, lsim_plan_device_limits{242, 242});
+            lsim_plan_downlinks_v3_args v3 = base();
+            v3.limits = large.data();
+            v3.limits_count = large.size();
+            v3.events = ev3.data();
+            v3.event_count = &n3;
+            v3.busy = bu3.data();
+            v3.busy_count = &nb3;
+            CHECK_EQ(lsim_plan_downlinks_v3(&v3), 0);
+            CHECK_EQ(n3, n2);
+            CHECK_EQ(nb3, nb2);
+            for (size_t k = 0; k < std::min(nb2, nb3); ++k) {
+                CHECK_EQ(bu3[k].start_ns, bu2[k].start_ns);
+                CHECK_EQ(bu3[k].end_ns, bu2[k].end_ns);
+            }
+        }
+    }
+
     // 10. Paramètres RX2 : invalides refusés (InvalidRadio), valeurs « absentes » admises.
     {
         const PlanCase c = make_plan_case();
@@ -1215,5 +1362,126 @@ void run_downlink_plan_tests() {
             CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
             CHECK_EQ(bu[0].end_ns, kS + 10'000'000 + air_donnees);
         }
+
+    // -------------------------------------------------------------------------------
+    // 13. I6-c : limites de charge par fenêtre. R-N1 : chaque fenêtre est validée contre le N
+    //     de son propre DR. R-N2 : une fenêtre inéligible n'est jamais demandée — elle ne
+    //     réserve rien et n'occupe pas l'émetteur. R-N3 : l'inéligibilité de RX1 ne clôt pas
+    //     l'examen, RX2 reste demandable.
+    {
+        const DeviceRadio sf7 = radio_sf7();
+        const std::vector<DeviceRadio> radios{sf7, sf7};
+        // Deux montantes reçues, assez espacées pour qu'aucune ne masque l'autre.
+        const std::vector<UplinkRecord> ups{
+            up(0, 0, 10'000'000, UplinkOutcome::Received),
+            up(1, 5 * kS, 10'000'000, UplinkOutcome::Received)};
+
+        PlanOptions o;
+        o.confirmed_uplinks = true;
+        o.downlink_every = 1;  // descente applicative : soumise à N
+        o.downlink_payload_bytes = 40;
+        o.rx2_fallback = true;
+        const std::vector<DeviceRx2> rx2(2, DeviceRx2{869'525'000, 12, 125'000});
+
+        const auto jouer_limites = [&](const std::vector<DeviceLimits>* lim) {
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, lim, ev, bu), PlanStatus::Ok);
+            return bu;
+        };
+
+        // 13a. Aucune fenêtre éligible (N = 0 < 40) : rien n'est émis, rien n'est réservé.
+        {
+            const std::vector<DeviceLimits> nuls(2, DeviceLimits{0, 0});
+            CHECK_TRUE(jouer_limites(&nuls).empty());
+        }
+        // 13b. RX1 seule éligible : émission en RX1, à l'ouverture exacte de RX1.
+        {
+            const std::vector<DeviceLimits> larges(2, DeviceLimits{51, 0});
+            const auto bu = jouer_limites(&larges);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            if (bu.size() >= 1) {
+                CHECK_EQ(bu[0].start_ns, kS + 10'000'000);  // A6 : ouverture exacte
+            }
+        }
+        // 13c. RX1 inéligible, RX2 éligible (R-N3) : la descente part en RX2, à l'ouverture de
+        //      RX2 et avec la durée RX2 — jamais celle de RX1.
+        {
+            const std::vector<DeviceLimits> report(2, DeviceLimits{39, 51});
+            const auto bu = jouer_limites(&report);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            DeviceRadio r2 = sf7;
+            r2.rx1_sf = 12;
+            std::int64_t air_rx2 = 0;
+            CHECK_EQ(downlink_airtime_ns(r2, 13 + 40, air_rx2), lsim::lora::Status::Ok);
+            if (bu.size() >= 1) {
+                CHECK_EQ(bu[0].start_ns, 2 * kS + 10'000'000);  // RECEIVE_DELAY2
+                CHECK_EQ(bu[0].end_ns - bu[0].start_ns, air_rx2);
+            }
+        }
+        // 13d. Sans table de limites, le comportement est exactement celui d'avant I6-c.
+        {
+            const auto bu = jouer_limites(nullptr);
+            CHECK_EQ(bu.size(), std::size_t{2});
+            if (bu.size() >= 1) {
+                CHECK_EQ(bu[0].start_ns, kS + 10'000'000);
+            }
+        }
+        // 13e. Un ACK n'est jamais refusé pour capacité : N nul partout, l'ACK passe.
+        {
+            PlanOptions ack = o;
+            ack.downlink_every = 0;  // aucun downlink de données
+            const std::vector<DeviceLimits> nuls(2, DeviceLimits{0, 0});
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            CHECK_EQ(plan_downlinks(ups, radios, ack, &rx2, &nuls, ev, bu), PlanStatus::Ok);
+            CHECK_EQ(bu.size(), std::size_t{2});
+        }
+        // 13f. Validations : longueur inexacte et N hors bornes sont refusées, sans lecture.
+        {
+            std::vector<Event> ev;
+            std::vector<Interval> bu;
+            const std::vector<DeviceLimits> court(1, DeviceLimits{51, 51});
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, &court, ev, bu),
+                     PlanStatus::InvalidInput);
+            const std::vector<DeviceLimits> hors{DeviceLimits{243, 51}, DeviceLimits{51, 51}};
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, &hors, ev, bu),
+                     PlanStatus::InvalidInput);
+            const std::vector<DeviceLimits> neg{DeviceLimits{-1, 51}, DeviceLimits{51, 51}};
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, &neg, ev, bu),
+                     PlanStatus::InvalidInput);
+        }
+        // 13g. Parité : le planificateur incrémental applique la même règle, à l'identique.
+        {
+            const std::vector<DeviceLimits> report(2, DeviceLimits{39, 51});
+            std::vector<Event> ev;
+            std::vector<Interval> par_lot;
+            CHECK_EQ(plan_downlinks(ups, radios, o, &rx2, &report, ev, par_lot),
+                     PlanStatus::Ok);
+            DownlinkScheduler incr(radios, o, &rx2, &report);
+            CHECK_EQ(incr.status(), PlanStatus::Ok);
+            std::vector<Interval> causal;
+            for (const UplinkRecord& u : ups) {
+                for (const Interval& i : incr.on_received(u.device, u.end_ns, rx2[u.device])) {
+                    causal.push_back(i);
+                }
+            }
+            for (const Interval& i : incr.drain()) causal.push_back(i);
+            CHECK_EQ(causal.size(), par_lot.size());
+            for (std::size_t k = 0; k < std::min(causal.size(), par_lot.size()); ++k) {
+                CHECK_EQ(causal[k].start_ns, par_lot[k].start_ns);
+                CHECK_EQ(causal[k].end_ns, par_lot[k].end_ns);
+            }
+        }
+        // 13h. Le constructeur du planificateur valide la table : longueur et bornes.
+        {
+            const std::vector<DeviceLimits> court(1, DeviceLimits{51, 51});
+            CHECK_EQ(DownlinkScheduler(radios, o, &rx2, &court).status(),
+                     PlanStatus::InvalidInput);
+            const std::vector<DeviceLimits> hors{DeviceLimits{243, 51}, DeviceLimits{51, 51}};
+            CHECK_EQ(DownlinkScheduler(radios, o, &rx2, &hors).status(),
+                     PlanStatus::InvalidInput);
+        }
+    }
     }
 }

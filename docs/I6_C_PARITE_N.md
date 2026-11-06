@@ -236,3 +236,69 @@ existantes gardent tailles et décalages.
 | FOpts dans le chemin plan | la parité n'est définie qu'à `fopts = b""` (§2.1) |
 | Validation du DR montant dans le chemin trace | lacune préexistante, non traitée |
 | Écart de 20 octets sur DR10-DR13 (touche aussi US915) | lot distinct (§12.10.3) |
+
+## 9. Bilan d'exécution et décisions prises en cours d'implémentation
+
+### 9.1 Deux décisions non tranchées par le plan, arrêtées à l'implémentation
+
+Le plan ne disait rien du champ `reserved` de l'élément `lsim_plan_device_limits` ni de celui de
+l'enveloppe `lsim_plan_downlinks_v3_args`. Les deux sont désormais **validés à zéro** : un
+appelant qui les renseigne parle une ABI future, et l'ignorer serait un repli silencieux
+(arbitrage **bbb3**, arbitrage **O1** — « aucun `reserved` réaffecté »). Refus explicite, statut
+`LSIM_STATUS_PLAN_BASE + 1`.
+
+Précédent invoqué : `LSIM_STATUS_CHANNEL_RESERVED_NONZERO` (ABI `channel` v3), qui applique déjà
+cette règle.
+
+**Portée volontairement limitée** : l'enveloppe **v2** garde son `reserved` non validé. La v2 est
+gelée ; la rendre plus stricte changerait le comportement d'appelants existants, ce qu'aucun
+jalon ne demande. La v3, nouvelle, définit son contrat maintenant.
+
+Conséquence pour un appelant futur : la v3 ne pourra pas étendre `reserved` sans incrémenter
+`LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION`. C'est le but.
+
+### 9.2 Ce qui a été fait, étape par étape
+
+| Étape | Fichier | État |
+|---|---|---|
+| 1 — cœur C++ | `downlink_plan.hpp`, `downlink_plan.cpp` | fait : `DeviceLimits`, `valid_limits`, `fenetre_eligible`, surcharges, `Job::soumis_a_n` |
+| 2 — frontière C | `c_api.h`, `c_api_plan.cpp` | fait : `lsim_plan_device_limits`, enveloppe v3, `lsim_plan_downlinks_v3` |
+| 3 — gel d'ABI | `abi_layout.cpp`, `test_abi_v3_prep.cpp` | fait : 2 tables (i386 84 o / x86-64 144 o), 24 `static_assert`, comptes d'en-tête corrigés (58 structures, 526 vérifications) |
+| 4 — binding Python | `downlink_plan.py` | fait : `DeviceLimits`, `plan_native_v3`, plomberie `_plan_native` |
+| 5 — tests T-C | `test_downlink_plan_v3.py` | fait : **48 tests verts** |
+| 6 — non-régression | suite complète | fait : **2457 passed / 15 failed**, strictement les mêmes 15 qu'avant |
+| 7 — rejeu D3.15-R | `test_d315_global.py` | fait : **41 passed / 15 failed**, liste d'échecs **identique** à celle de HEAD (vérifié en construisant `1f43370` dans un répertoire séparé) |
+
+S'y ajoutent, au niveau C++ (`core/tests/test_downlink_plan.cpp`) : le bloc **13** (planificateur
+incrémental avec limites : R-N1, R-N2, R-N3, parité lot/causal, validations) et le bloc **9bis**
+(refus de l'enveloppe v3 : hérités de la v2, propres à `limits`, `reserved`).
+
+### 9.3 Preuves
+
+| Contrôle | Résultat |
+|---|---|
+| Symboles exportés | 101 → **102**, apparition de `lsim_plan_downlinks_v3`, **0 disparu** |
+| Taille de la bibliothèque | 596 696 → **603 120** o |
+| `ctest` | **1/1** |
+| `lsim_tests` | **690 050** vérifications, 0 échec (HEAD : 689 986 ; +64) |
+| Parité Python ↔ cœur, 7 régions × charges 40/120 | **14/14 identique** sur l'occupation, les sauts descendants et les couples (kind, outcome) |
+| Frontière de N | exacte à **40** : N=39 ⇒ 0 émission (motif `no_window_capacity`), N=40 ⇒ 6 |
+| ACK et capacité | **aucun** ACK jamais refusé pour capacité (R-N2, garde-fou 14) |
+| Non-régression v3 ↔ v2 | v3 == v2 à charge conforme dans les **7** régions |
+
+### 9.4 Test de mutation — le bloc 13 n'est pas vide de sens
+
+Quatre mutations du cœur, quatre détections :
+
+| Mutation | Règle cassée | Détection |
+|---|---|---|
+| toute fenêtre jugée éligible | R-N2 | échec (durée RX1 au lieu de RX2) |
+| RX2 évaluée avec le N de RX1 | R-N1 | échec (0 émission au lieu de 2) |
+| un ACK devient soumis à N | garde-fou 14 | échec (0 émission au lieu de 2) |
+| le planificateur incrémental ignore la table | parité 13g | échec (instants différents) |
+
+### 9.5 Corrections de justesse apportées aux tests
+
+Les accès `bu[0]` des cas 13b, 13c et 13d sont désormais **gardés** par `bu.size() >= 1`. Sans
+cette garde, une régression faisait lire un vecteur vide — comportement indéfini — au lieu
+d'échouer sur l'assertion, ce qui masquait la cause réelle (observé pendant le test de mutation).

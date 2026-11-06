@@ -1156,6 +1156,62 @@ typedef struct lsim_plan_downlinks_v2_args {
 
 LSIM_API int32_t lsim_plan_downlinks_v2(const lsim_plan_downlinks_v2_args* args);
 
+/* -------------------------------------------------------------------------- I6-c, jalon I6-c
+ * Enveloppe versionnée de la planification des descentes, avec limites de charge par fenêtre.
+ *
+ * `lsim_plan_downlinks_v1` et `_v2` restent inchangées. L'enveloppe ci-dessous y ajoute une
+ * table de limites : pour chaque dispositif, `N` du débit **réellement utilisé** par chaque
+ * fenêtre — celui du DR de RX1, puis celui du DR de RX2. Jamais celui de l'uplink.
+ *
+ * Contrat (§25.5, arbitrage bbb5) :
+ *   - `limits` **non NULL**. Un pointeur nul est **rejeté** (statut InvalidInput), il ne
+ *     dégrade pas silencieusement vers la v2 : l'absence de contrainte s'exprime en appelant
+ *     `lsim_plan_downlinks_v2`. Jamais de repli silencieux (bbb3).
+ *   - `limits_count` annonce le nombre d'entrées, vérifié **avant toute lecture**.
+ *   - Aucune sentinelle : les deux champs sont des N effectifs dans `[0, 242]`. Une valeur hors
+ *     bornes est rejetée ; elle ne signifie pas « pas de contrainte ».
+ *
+ * La contrainte ne porte que sur les **descentes applicatives** (charge utile
+ * `options->downlink_payload_bytes`). Les ACK et les Join-Accept ne sont jamais refusés pour
+ * capacité. Le chemin de planification ne porte pas de FOpts : la grandeur comparée est la
+ * charge utile seule, et non `charge + |FOpts|` comme sur le chemin trace.
+ *
+ * R-N2 : une fenêtre inéligible n'est jamais demandée — elle ne réserve rien et n'occupe pas
+ * l'émetteur. R-N3 : l'inéligibilité de RX1 ne clôt pas l'examen, RX2 reste demandable.
+ *
+ * Contrat complet : `docs/I6_C_PARITE_N.md`.
+ */
+#define LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION 1
+
+typedef struct lsim_plan_device_limits {
+    int32_t rx1_max_payload; /* N du DR de RX1 ; 0..242, validé à la frontière  */
+    int32_t rx2_max_payload; /* N du DR de RX2 ; 0..242, validé à la frontière  */
+    uint64_t reserved[2];
+} lsim_plan_device_limits;
+
+typedef struct lsim_plan_downlinks_v3_args {
+    uint32_t struct_size;  /* sizeof(lsim_plan_downlinks_v3_args), obligatoire          */
+    uint32_t abi_version;  /* LSIM_PLAN_DOWNLINKS_V3_ABI_VERSION, obligatoire           */
+    const lsim_plan_uplink* uplinks;
+    size_t uplink_count;
+    const lsim_plan_device* devices;
+    size_t device_count;
+    const lsim_plan_options* options;            /* obligatoire                         */
+    const lsim_plan_device_rx2* rx2;             /* NULL : comportement de la v1        */
+    size_t rx2_count;                            /* entrées de `rx2` ; 0 si NULL        */
+    const lsim_plan_device_limits* limits;       /* obligatoire, NON NULL               */
+    size_t limits_count;                         /* entrées de `limits`                 */
+    lsim_plan_event* events;
+    size_t event_capacity;
+    size_t* event_count; /* obligatoire                                                 */
+    lsim_interval* busy;
+    size_t busy_capacity;
+    size_t* busy_count; /* obligatoire                                                  */
+    uint64_t reserved[2];
+} lsim_plan_downlinks_v3_args;
+
+LSIM_API int32_t lsim_plan_downlinks_v3(const lsim_plan_downlinks_v3_args* args);
+
 /* ------------------------------------------- Boucle fermée : commandes MAC LinkADR et DutyCycle (S2)
  * Passerelle unique, sans jointure ni autre commande MAC. Voir lsim/engine.hpp (LoopOptions).
  * radios : device_count entrées (lsim_plan_device) ; regions : device_count entrées (toujours lues). Sorties : uplinks (ordre des débuts),

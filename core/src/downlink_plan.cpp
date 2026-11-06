@@ -45,6 +45,38 @@ bool valid_rx2(const DeviceRx2& r) {
     return true;
 }
 
+// Validité d'une limite de charge (I6-c). Aucune sentinelle : un N est un entier dans
+// `[0, kMaxDownlinkPayloadBytes]`. « Pas de contrainte » ne s'exprime pas par une valeur
+// réservée mais en ne passant pas de table de limites.
+bool valid_limits(const DeviceLimits& l) {
+    if (l.rx1_max_payload < 0 ||
+        l.rx1_max_payload > static_cast<std::int32_t>(kMaxDownlinkPayloadBytes)) {
+        return false;
+    }
+    if (l.rx2_max_payload < 0 ||
+        l.rx2_max_payload > static_cast<std::int32_t>(kMaxDownlinkPayloadBytes)) {
+        return false;
+    }
+    return true;
+}
+
+// Éligibilité d'une fenêtre (R-N1). La fenêtre peut-elle porter la trame ?
+//
+// Trois cas où la contrainte ne s'applique pas, et où la fenêtre est donc éligible :
+//   - `limits == nullptr` : l'appelant n'a fourni aucune table, comportement d'avant I6-c ;
+//   - `!soumis_a_n` : un ACK ou un Join-Accept, jamais soumis à N ;
+//   - la charge tient dans N.
+//
+// La grandeur comparée est la charge utile seule : le chemin de planification ne porte pas de
+// FOpts, contrairement au chemin trace où `charge + |FOpts|` est comparé à N.
+bool fenetre_eligible(const std::vector<DeviceLimits>* limits, std::uint32_t device,
+                      std::uint32_t charge, bool soumis_a_n, bool en_rx2) {
+    if (limits == nullptr || !soumis_a_n) return true;
+    const DeviceLimits& l = (*limits)[device];
+    const std::int32_t n = en_rx2 ? l.rx2_max_payload : l.rx1_max_payload;
+    return charge <= static_cast<std::uint32_t>(n);
+}
+
 Outcome from_uplink(UplinkOutcome o) {
     switch (o) {
         case UplinkOutcome::Received: return Outcome::Received;
@@ -84,6 +116,10 @@ struct Job {
     std::uint32_t rx2_bw_hz = 0;
     std::int64_t rx2_airtime_ns = 0;
     bool device_missed_rx2 = false;
+    // Conformité de la charge (I6-c). Seules les **descentes applicatives** sont soumises à N :
+    // les ACK et les Join-Accept ont leurs propres contraintes et ne sont jamais refusés pour
+    // capacité. C'est le pendant de `soumis_a_n` dans `_Job` (côté Python).
+    bool soumis_a_n = false;
 
     // Le repli RX2 est-il matériellement possible ? `rx2_sf == 0` : pas de fenêtre de secours.
     // `rx2_hz == 0` : aucune fréquence régionale — on ne peut pas émettre sans fréquence, et la
@@ -138,12 +174,30 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                           const std::vector<DeviceRadio>& radios, const PlanOptions& options,
                           const std::vector<DeviceRx2>* rx2, std::vector<Event>& events,
                           std::vector<Interval>& busy) {
+    // Aucune table de limites : comportement d'avant I6-c, la contrainte de N n'est pas appliquée.
+    return plan_downlinks(uplinks, radios, options, rx2, nullptr, events, busy);
+}
+
+PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
+                          const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                          const std::vector<DeviceRx2>* rx2,
+                          const std::vector<DeviceLimits>* limits, std::vector<Event>& events,
+                          std::vector<Interval>& busy) {
     events.clear();
     busy.clear();
     if (rx2 != nullptr && rx2->size() != radios.size()) return PlanStatus::InvalidInput;
     if (rx2 != nullptr) {
         for (const DeviceRx2& r : *rx2) {
             if (!valid_rx2(r)) return PlanStatus::InvalidRadio;
+        }
+    }
+    // Un pointeur ne dit pas la longueur de son tableau : la frontière C vérifie `limits_count`
+    // avant toute lecture. Ici, la taille est celle du vecteur, mais un appelant C++ peut
+    // transmettre une table plus courte — d'où le contrôle, identique à celui de `rx2`.
+    if (limits != nullptr && limits->size() != radios.size()) return PlanStatus::InvalidInput;
+    if (limits != nullptr) {
+        for (const DeviceLimits& l : *limits) {
+            if (!valid_limits(l)) return PlanStatus::InvalidInput;
         }
     }
     // Jalon I0 : RX2 est transporté et validé, puis **écarté** — aucun repli n'est produit.
@@ -192,6 +246,8 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         } else {
             continue;
         }
+        // Un ACK n'est pas une descente applicative : il n'est jamais refusé pour capacité.
+        job.soumis_a_n = queued;
         job.record = i;
         job.device = r.device;
         job.t_open = r.end_ns + kReceiveDelay1Ns;
@@ -253,6 +309,12 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         });
         for (std::size_t k : order) {
             const Job& job = jobs[k];
+            // R-N2 : une fenêtre inéligible n'est **jamais demandée** — elle ne réserve rien et
+            // n'occupe pas l'émetteur. Ce n'est pas une fenêtre manquée : rien n'est tenté.
+            if (!fenetre_eligible(limits, job.device, options.downlink_payload_bytes,
+                                  job.soumis_a_n, false)) {
+                continue;
+            }
             // A6 : émission à l'ouverture exacte, ou pas d'émission.
             if (!sched.place_at(job.t_open, job.airtime_ns)) continue;
             starts[k] = job.t_open;
@@ -275,7 +337,21 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
         };
         std::priority_queue<Essai, std::vector<Essai>, PlusTot> file;
         for (std::size_t k = 0; k < jobs.size(); ++k) {
-            file.push(Essai{jobs[k].t_open, 0, k});
+            const Job& job = jobs[k];
+            const bool rx1_ok = fenetre_eligible(limits, job.device,
+                                                 options.downlink_payload_bytes,
+                                                 job.soumis_a_n, false);
+            const bool rx2_ok = fenetre_eligible(limits, job.device,
+                                                 options.downlink_payload_bytes,
+                                                 job.soumis_a_n, true);
+            // R-N1/R-N2/R-N3. RX1 inéligible : aucune demande, aucune réservation, aucune
+            // occupation — mais l'examen ne s'arrête pas, RX2 entre directement dans la file à
+            // sa propre ouverture. Si aucune fenêtre ne peut porter la trame, rien n'est déposé.
+            if (rx1_ok) {
+                file.push(Essai{job.t_open, 0, k});
+            } else if (options.rx2_fallback && job.rx2_disponible() && rx2_ok) {
+                file.push(Essai{job.t_open_rx2(), 1, k});
+            }
         }
         while (!file.empty()) {
             const Essai e = file.top();
@@ -284,9 +360,13 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
             if (e.phase == 0) {
                 // A6 : émission à l'ouverture exacte de RX1, ou repli.
                 if (!sched.place_at(job.t_open, job.airtime_ns)) {
-                    // RX1 perdue : seconde fenêtre, une seule fois, avec ses propres paramètres.
-                    // Le repli est opt-in et n'opère que si la fenêtre RX2 est renseignée.
-                    if (options.rx2_fallback && job.rx2_disponible()) {
+                    // RX1 perdue pour occupation : seconde fenêtre, une seule fois, avec ses
+                    // propres paramètres. R-N2 : RX2 inéligible n'est pas davantage demandée —
+                    // elle ne réserve rien. Le repli reste opt-in et n'opère que si la fenêtre
+                    // RX2 est renseignée.
+                    if (options.rx2_fallback && job.rx2_disponible() &&
+                        fenetre_eligible(limits, job.device, options.downlink_payload_bytes,
+                                         job.soumis_a_n, true)) {
                         file.push(Essai{job.t_open_rx2(), 1, e.index});
                     }
                     continue;
@@ -430,6 +510,11 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
 
 DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
                                      const std::vector<DeviceRx2>* rx2)
+    : DownlinkScheduler(radios, options, rx2, nullptr) {}
+
+DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                                     const std::vector<DeviceRx2>* rx2,
+                                     const std::vector<DeviceLimits>* limits)
     : options_(options), accepted_(radios.size(), 0), ack_air_(radios.size(), 0),
       data_air_(radios.size(), 0) {
     if (options.downlink_payload_bytes > kMaxDownlinkPayloadBytes) {
@@ -461,6 +546,21 @@ DownlinkScheduler::DownlinkScheduler(const std::vector<DeviceRadio>& radios, con
             }
         }
         rx2_ = *rx2;
+    }
+    if (limits != nullptr) {
+        // Même règle que `rx2` : une table de longueur différente est une erreur d'appel, pas une
+        // entrée à tronquer. Aucune sentinelle n'est acceptée.
+        if (limits->size() != radios.size()) {
+            status_ = PlanStatus::InvalidInput;
+            return;
+        }
+        for (const DeviceLimits& l : *limits) {
+            if (!valid_limits(l)) {
+                status_ = PlanStatus::InvalidInput;
+                return;
+            }
+        }
+        limits_ = *limits;
     }
     // Durées de trame : calculées à la première utilisation (comme `plan_downlinks`, une erreur
     // n'est signalée que si une descente est réellement planifiée).
@@ -501,6 +601,22 @@ std::vector<Interval> DownlinkScheduler::on_received(std::uint32_t device, std::
     nu.queued = queued;
     nu.ordre = ordre_++;
     nu.rx2 = rx2;
+
+    // R-N1/R-N2/R-N3. RX1 inéligible : aucune demande, aucune réservation, aucune occupation —
+    // mais l'examen ne s'arrête pas, RX2 entre directement dans la file à sa propre ouverture.
+    // Si aucune fenêtre ne peut porter la trame, rien n'est déposé du tout.
+    const std::vector<DeviceLimits>* lim = limits_.empty() ? nullptr : &limits_;
+    const bool rx1_ok =
+        fenetre_eligible(lim, device, options_.downlink_payload_bytes, queued, false);
+    if (!rx1_ok) {
+        const bool rx2_ok =
+            fenetre_eligible(lim, device, options_.downlink_payload_bytes, queued, true);
+        if (!(options_.rx2_fallback && rx2.rx2_sf != 0 && rx2.rx2_hz != 0 && rx2_ok)) {
+            return placer(nu.pret);  // aucune fenêtre candidate : aucun dépôt
+        }
+        nu.pret = nu.pret_rx2;
+        nu.phase = 1;
+    }
     pendantes_.push_back(nu);
 
     // Frontier : une montante ultérieure finit au plus tôt à `end_ns`, donc sa RX1 ouvrira au
@@ -548,7 +664,11 @@ std::vector<Interval> DownlinkScheduler::placer(std::int64_t frontiere) {
             // Fenêtre manquée. En RX1, la seconde fenêtre entre dans la file à son propre
             // instant d'ouverture — pas maintenant : des descentes encore en attente peuvent
             // être plus précoces qu'elle.
-            if (e.phase == 0 && options_.rx2_fallback && e.rx2.rx2_sf != 0 && e.rx2.rx2_hz != 0) {
+            //
+            // R-N2 : une RX2 inéligible n'est pas davantage demandée — elle ne réserve rien.
+            const std::vector<DeviceLimits>* lim = limits_.empty() ? nullptr : &limits_;
+            if (e.phase == 0 && options_.rx2_fallback && e.rx2.rx2_sf != 0 && e.rx2.rx2_hz != 0 &&
+                fenetre_eligible(lim, e.device, options_.downlink_payload_bytes, e.queued, true)) {
                 Essai secours = e;
                 secours.pret = e.pret_rx2;
                 secours.phase = 1;

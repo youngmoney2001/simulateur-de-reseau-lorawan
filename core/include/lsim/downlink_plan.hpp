@@ -82,6 +82,21 @@ struct DeviceRx2 {
     std::uint32_t rx2_bw_hz = 0;  // 0 : reprend `rx1_bw_hz` ; sinon 125k, 250k ou 500k
 };
 
+// Limites de charge utile par fenêtre (I6-c). `N` borne la charge utile (FRMPayload) au débit
+// **réellement utilisé** par la fenêtre : celui du DR de RX1 pour l'une, du DR de RX2 pour
+// l'autre, jamais celui de l'uplink. Miroir de `lsim_plan_device_limits` (frontière C).
+//
+// Contrat : les deux champs sont des N **effectifs**, validés dans `[0, 242]` à la frontière C.
+// Aucune sentinelle — « pas de contrainte » ne s'exprime pas par une valeur magique mais en
+// **ne passant pas de table** (comportement de la surcharge sans `limits`). Voir §24.4.2.
+//
+// R-N2 : une fenêtre inéligible n'est jamais demandée. Elle ne réserve donc rien et n'occupe
+// pas l'émetteur — à distinguer d'une fenêtre demandée puis manquée pour cause d'occupation.
+struct DeviceLimits {
+    std::int32_t rx1_max_payload = 0;  // N du DR de RX1 ; 0..242
+    std::int32_t rx2_max_payload = 0;  // N du DR de RX2 ; 0..242
+};
+
 struct PlanOptions {
     bool confirmed_uplinks = false;
     std::uint32_t downlink_every = 0;
@@ -145,6 +160,23 @@ PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
                           const std::vector<DeviceRx2>* rx2, std::vector<Event>& events,
                           std::vector<Interval>& busy);
 
+// Surcharge avec les limites de charge par fenêtre (jalon I6-c). `limits` nul : comportement de
+// la forme ci-dessus, aucune contrainte de N appliquée. Non nul, il doit compter exactement
+// `radios.size()` entrées, sinon InvalidInput.
+//
+// La contrainte ne porte que sur les **descentes applicatives** (`content` = Data ou DataAck) :
+// les ACK et les Join-Accept ont leurs propres règles et ne sont pas soumis à N. La grandeur
+// comparée est `options.downlink_payload_bytes` — le chemin de planification ne porte pas de
+// FOpts, contrairement au chemin trace.
+//
+// R-N1 : chaque fenêtre est validée contre son propre N. R-N3 : l'inéligibilité de RX1 ne clôt
+// pas l'examen, RX2 reste demandable, et réciproquement.
+PlanStatus plan_downlinks(const std::vector<UplinkRecord>& uplinks,
+                          const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                          const std::vector<DeviceRx2>* rx2,
+                          const std::vector<DeviceLimits>* limits, std::vector<Event>& events,
+                          std::vector<Interval>& busy);
+
 // Durée d'un downlink de `payload_bytes` au débit RX1 du dispositif (CR 4/5, en-tête explicite,
 // sans CRC, préambule 8, optimisation bas débit si Tsym > 16 ms), en ns.
 lora::Status downlink_airtime_ns(const DeviceRadio& radio, std::uint32_t payload_bytes,
@@ -161,6 +193,13 @@ public:
     // ci-dessus. Non nul, il doit compter exactement `radios.size()` entrées, sinon InvalidInput.
     DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
                       const std::vector<DeviceRx2>* rx2);
+
+    // Surcharge avec les limites de charge par fenêtre (jalon I6-c). `limits` nul : comportement
+    // du constructeur ci-dessus. Non nul, il doit compter exactement `radios.size()` entrées,
+    // sinon InvalidInput. Mêmes règles R-N1…R-N4 que la surcharge de `plan_downlinks`.
+    DownlinkScheduler(const std::vector<DeviceRadio>& radios, const PlanOptions& options,
+                      const std::vector<DeviceRx2>* rx2,
+                      const std::vector<DeviceLimits>* limits);
 
     PlanStatus status() const { return status_; }
 
@@ -245,6 +284,7 @@ private:
     PlanOptions options_;
     std::vector<DeviceRadio> radios_;
     std::vector<DeviceRx2> rx2_;
+    std::vector<DeviceLimits> limits_;  // vide : aucune contrainte de N appliquée (avant I6-c)
     std::vector<std::uint32_t> accepted_;
     std::vector<std::int64_t> ack_air_;  // 0 = non calculée
     std::vector<std::int64_t> data_air_;

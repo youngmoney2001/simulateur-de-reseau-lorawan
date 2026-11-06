@@ -424,6 +424,31 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 52;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 56;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 60;
+    // lsim_plan_device_limits (jalon I6-c)
+    inline constexpr size_t size_lsim_plan_device_limits = 24;
+    inline constexpr size_t off_lsim_plan_device_limits__rx1_max_payload = 0;
+    inline constexpr size_t off_lsim_plan_device_limits__rx2_max_payload = 4;
+    inline constexpr size_t off_lsim_plan_device_limits__reserved = 8;
+    // lsim_plan_downlinks_v3_args (jalon I6-c)
+    inline constexpr size_t size_lsim_plan_downlinks_v3_args = 84;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__struct_size = 0;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__abi_version = 4;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__uplinks = 8;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__uplink_count = 12;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__devices = 16;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__device_count = 20;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__options = 24;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__rx2 = 28;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__rx2_count = 32;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__limits = 36;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__limits_count = 40;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__events = 44;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__event_capacity = 48;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__event_count = 52;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy = 56;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy_capacity = 60;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy_count = 64;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__reserved = 68;
     // lsim_causal_args (enveloppe causale, I4)
     inline constexpr size_t size_lsim_causal_args = 108;
     inline constexpr size_t off_lsim_causal_args__struct_size = 0;
@@ -985,6 +1010,31 @@ namespace expected {
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__busy_count = 96;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__rx2_count = 104;
     inline constexpr size_t off_lsim_plan_downlinks_v2_args__reserved = 112;
+    // lsim_plan_device_limits (jalon I6-c)
+    inline constexpr size_t size_lsim_plan_device_limits = 24;
+    inline constexpr size_t off_lsim_plan_device_limits__rx1_max_payload = 0;
+    inline constexpr size_t off_lsim_plan_device_limits__rx2_max_payload = 4;
+    inline constexpr size_t off_lsim_plan_device_limits__reserved = 8;
+    // lsim_plan_downlinks_v3_args (jalon I6-c)
+    inline constexpr size_t size_lsim_plan_downlinks_v3_args = 144;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__struct_size = 0;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__abi_version = 4;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__uplinks = 8;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__uplink_count = 16;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__devices = 24;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__device_count = 32;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__options = 40;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__rx2 = 48;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__rx2_count = 56;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__limits = 64;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__limits_count = 72;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__events = 80;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__event_capacity = 88;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__event_count = 96;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy = 104;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy_capacity = 112;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__busy_count = 120;
+    inline constexpr size_t off_lsim_plan_downlinks_v3_args__reserved = 128;
     // lsim_causal_args (enveloppe causale, I4)
     inline constexpr size_t size_lsim_causal_args = 192;
     inline constexpr size_t off_lsim_causal_args__struct_size = 0;
@@ -1511,6 +1561,31 @@ static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_capacity) == expected::
 static_assert(offsetof(lsim_plan_downlinks_v2_args, busy_count) == expected::off_lsim_plan_downlinks_v2_args__busy_count, "lsim_plan_downlinks_v2_args::busy_count");
 static_assert(offsetof(lsim_plan_downlinks_v2_args, rx2_count) == expected::off_lsim_plan_downlinks_v2_args__rx2_count, "lsim_plan_downlinks_v2_args::rx2_count");
 static_assert(offsetof(lsim_plan_downlinks_v2_args, reserved) == expected::off_lsim_plan_downlinks_v2_args__reserved, "lsim_plan_downlinks_v2_args::reserved");
+
+// I6-c : limites de charge par fenêtre et enveloppe v3.
+static_assert(sizeof(lsim_plan_device_limits) == expected::size_lsim_plan_device_limits, "lsim_plan_device_limits : taille");
+static_assert(offsetof(lsim_plan_device_limits, rx1_max_payload) == expected::off_lsim_plan_device_limits__rx1_max_payload, "lsim_plan_device_limits::rx1_max_payload");
+static_assert(offsetof(lsim_plan_device_limits, rx2_max_payload) == expected::off_lsim_plan_device_limits__rx2_max_payload, "lsim_plan_device_limits::rx2_max_payload");
+static_assert(offsetof(lsim_plan_device_limits, reserved) == expected::off_lsim_plan_device_limits__reserved, "lsim_plan_device_limits::reserved");
+static_assert(sizeof(lsim_plan_downlinks_v3_args) == expected::size_lsim_plan_downlinks_v3_args, "lsim_plan_downlinks_v3_args : taille");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, struct_size) == expected::off_lsim_plan_downlinks_v3_args__struct_size, "lsim_plan_downlinks_v3_args::struct_size");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, abi_version) == expected::off_lsim_plan_downlinks_v3_args__abi_version, "lsim_plan_downlinks_v3_args::abi_version");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, uplinks) == expected::off_lsim_plan_downlinks_v3_args__uplinks, "lsim_plan_downlinks_v3_args::uplinks");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, uplink_count) == expected::off_lsim_plan_downlinks_v3_args__uplink_count, "lsim_plan_downlinks_v3_args::uplink_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, devices) == expected::off_lsim_plan_downlinks_v3_args__devices, "lsim_plan_downlinks_v3_args::devices");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, device_count) == expected::off_lsim_plan_downlinks_v3_args__device_count, "lsim_plan_downlinks_v3_args::device_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, options) == expected::off_lsim_plan_downlinks_v3_args__options, "lsim_plan_downlinks_v3_args::options");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, rx2) == expected::off_lsim_plan_downlinks_v3_args__rx2, "lsim_plan_downlinks_v3_args::rx2");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, rx2_count) == expected::off_lsim_plan_downlinks_v3_args__rx2_count, "lsim_plan_downlinks_v3_args::rx2_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, limits) == expected::off_lsim_plan_downlinks_v3_args__limits, "lsim_plan_downlinks_v3_args::limits");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, limits_count) == expected::off_lsim_plan_downlinks_v3_args__limits_count, "lsim_plan_downlinks_v3_args::limits_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, events) == expected::off_lsim_plan_downlinks_v3_args__events, "lsim_plan_downlinks_v3_args::events");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, event_capacity) == expected::off_lsim_plan_downlinks_v3_args__event_capacity, "lsim_plan_downlinks_v3_args::event_capacity");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, event_count) == expected::off_lsim_plan_downlinks_v3_args__event_count, "lsim_plan_downlinks_v3_args::event_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, busy) == expected::off_lsim_plan_downlinks_v3_args__busy, "lsim_plan_downlinks_v3_args::busy");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, busy_capacity) == expected::off_lsim_plan_downlinks_v3_args__busy_capacity, "lsim_plan_downlinks_v3_args::busy_capacity");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, busy_count) == expected::off_lsim_plan_downlinks_v3_args__busy_count, "lsim_plan_downlinks_v3_args::busy_count");
+static_assert(offsetof(lsim_plan_downlinks_v3_args, reserved) == expected::off_lsim_plan_downlinks_v3_args__reserved, "lsim_plan_downlinks_v3_args::reserved");
 static_assert(sizeof(lsim_causal_args) == expected::size_lsim_causal_args, "lsim_causal_args : taille");
 static_assert(offsetof(lsim_causal_args, struct_size) == expected::off_lsim_causal_args__struct_size, "lsim_causal_args::struct_size");
 static_assert(offsetof(lsim_causal_args, abi_version) == expected::off_lsim_causal_args__abi_version, "lsim_causal_args::abi_version");
