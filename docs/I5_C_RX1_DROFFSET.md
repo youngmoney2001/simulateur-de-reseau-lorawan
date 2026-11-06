@@ -469,3 +469,78 @@ Le précédent du projet est une enveloppe versionnée (`lsim_closed_loop_v4_arg
 La même forme conviendrait, ou un paramètre ajouté à l'image de `mac` lors du passage v1 → v2.
 
 C'est une décision d'ABI de plus, à ne pas prendre sans l'utilisateur.
+
+---
+
+## 13. Enveloppe versionnée v5 (commit `b5e31ac`)
+
+Le §12.5 annonçait le câblage comme restant à faire. L'entrée est ouverte, sur le motif du
+projet : **v5 imbrique v4, qui imbrique v3**. Aucune structure n'est recopiée, chaque enveloppe ne
+fait que pointer vers la précédente.
+
+```
+lsim_closed_loop_v5_args ──> lsim_closed_loop_v4_args ──> lsim_closed_loop_v3_args
+        rx1_dr_offset              device_rf / gateway_rf
+```
+
+L'imbrication v5→v4, plutôt qu'une enveloppe v5 directe sur v3, évite toute combinaison
+impossible : les frontaux RF de v4 et les offsets de v5 se fournissent ensemble. La validation v4
+est extraite (`validate_closed_loop_v4_args`) pour être partagée par les deux entrées.
+
+`lsim_loop_region` reste intact. Les bornes par région sont vérifiées par le moteur, seul endroit
+qui connaît `max_dr` : refus explicite, jamais de saturation silencieuse (bbb3).
+
+### 13.1 Ce qui est livré
+
+| Pièce | Fichier |
+|---|---|
+| Enveloppe v5 | `core/include/lsim/c_api.h` |
+| Implémentation + validation partagée v4 | `core/src/c_api_closed_loop_v3.cpp` |
+| Garde-fous de disposition (32 et 64 bits) | `core/tests/abi_layout.cpp` |
+| Liaison ctypes | `python/lsim/_native.py` |
+| Paramètres `rx1_dr_offset` et `environment` | `python/lsim/closed_loop_v3.py` |
+
+L'aiguillage Python reste conservateur : v3 seul quand il n'y a rien à ajouter, v4 si des
+frontaux RF sont fournis, v5 si des offsets le sont.
+
+### 13.2 Correction au passage : l'environnement était perdu
+
+Le champ `env` de la structure v3 existait, mais `closed_loop_v3.py` le mettait **toujours** à
+`None` : le relief et les obstacles étaient donc ignorés par ce chemin. Il est désormais exposé et
+testé — −87,5 dBm à plat contre −222,6 dBm derrière un mur, 4 trames reçues contre 0.
+
+### 13.3 ⚠ Ce qui reste : le chemin scénario
+
+**`trace_events.py` reste sur v2 et n'alimente donc pas encore l'offset.** Une simulation de
+scénario produit les mêmes traces aux offsets 0, 2 et 4.
+
+Le basculement a été tenté, mesuré, puis **révoqué** : il fait apparaître deux régressions, et
+l'une et l'autre révèlent une intention, pas un test à ajuster.
+
+| Obstacle | Ce qu'il protège |
+|---|---|
+| `test_v3_python_binding_is_the_single_native_module` | invariant architectural : `closed_loop_v3.py` est le seul module autorisé à référencer v3 |
+| `test_abi_v1_and_v2_agree_without_mac_commands` | le contrat v1/v2 : le test force `abi=1` par monkeypatch et vérifie que `mac_queue` est alors `None` |
+
+Le second est le plus lourd. Router le scénario par v3 court-circuite la **sélection d'ABI** et
+supprime de fait le chemin v1 — déjà utilisé, déjà testé. Ce n'est pas un effet de bord, c'est un
+changement de contrat.
+
+Deux voies se présentent, qui ne sont pas de pure forme :
+
+- **(i) Basculer et assumer** : élargir l'invariant, redéfinir le contrat v1/v2 (ou retirer le
+  chemin v1). Cohérent, mais c'est une décision produit.
+- **(ii) Laisser le scénario sur v2** et réserver v5 aux appelants qui en ont besoin. Aucune
+  régression, mais l'offset reste sans effet sur les scénarios — c'est-à-dire, en pratique, sans
+  effet visible pour l'utilisateur final.
+
+À trancher avant d'aller plus loin.
+
+### 13.4 Vérification
+
+- C++ **690174/690174**, ctest 1/1.
+- Python **15 failed / 2551 passed** — aucun écart avec la référence des 15 échecs.
+- 4 tests C++ (équivalence entrée nulle = v3, offset effectif, validation de l'enveloppe, borne
+  régionale) et 11 tests Python.
+- Validés par mutation : neutraliser la transmission des offsets fait échouer 8 des 11 tests
+  Python, et T-V5-2 / T-V5-4 en C++.
