@@ -107,13 +107,10 @@ Aucune modification silencieuse des entrées existantes : `lsim_simulate_uplinks
 | **B** | Enveloppe `lsim_multi_dl_args` à pointeurs typés | moyen | une seule entrée, extensible ; variante retenue en I4 | nouvelle structure, harnais ABI à étendre |
 | **C** | Ajouter `rx1_sf`/`rx1_bw_hz` à `lsim_end_device` | nul | rien à transporter | **refusé** : change la taille d'une structure utilisée par des dizaines d'entrées — rupture d'ABI déguisée en extension |
 
-**Recommandation : option B.** C'est la variante déjà retenue en I4 pour une raison qui s'applique
-ici mot pour mot : le cartésien des tables optionnelles. Le multi en a deux aujourd'hui
-(frontaux) et en aurait quatre avec les radios. I4 a tranché ce exact problème.
-
-**À arbitrer avant d'écrire du code** : A est proportionné si l'on juge que le multi n'aura
-jamais d'autre table optionnelle. B est proportionné si l'on anticipe (fréquence RX2 par
-dispositif, contraintes de charge N par fenêtre comme en I6-c, …). **La question est ouverte.**
+**Décision : option B.** C'est la variante déjà retenue en I4 pour une raison qui s'applique ici
+mot pour mot : le cartésien des tables optionnelles. Le multi en a deux aujourd'hui (frontaux) et
+en aurait quatre avec les radios. I4 a tranché ce exact problème. Une seule entrée
+`lsim_simulate_uplinks_multi_dl_env` remplace donc la prolifération à venir.
 
 ### 4.3 Contrat de l'enveloppe (option B)
 
@@ -149,9 +146,13 @@ Règles, calquées sur I6-c et I4 :
 - `radios` non nul ⇒ `radio_count == device_count`, sinon refus ;
 - une table non nulle dont le SF est hors 7..12 ou la bande hors {125k, 250k, 500k} ⇒ refus
   (`InvalidRadio`), jamais de repli sur une valeur par défaut ;
-- `rx2` non nul ⇒ le repli est demandé et évalué avec `rx2_sf`/`rx2_bw_hz` **de la table**, et non
-  plus avec `rule.rx2_sf` à 125 kHz. Conflit entre `rule.rx2_sf` et la table ⇒ refus explicite,
-  pas de précédence implicite. **Point à trancher** : ou bien la table prime, ou bien l'on refuse.
+- **`rx2` non nul ⇒ `rule.rx2_sf` doit valoir 0.** Le repli est alors évalué avec `rx2_sf` /
+  `rx2_bw_hz` **de la table**, et non plus avec `rule.rx2_sf` à 125 kHz. Une même grandeur exprimée
+  à deux endroits est une ambiguïté, pas une redondance tolérable : refus explicite, jamais de
+  précédence implicite (bbb3).
+  Précédent direct dans le dépôt : `lsim_gateway_v2` (`c_api.h:342`) — « Avec le modèle 1,
+  `base.rx_sensitivity_offset_db` doit valoir 0 (pas de conversion implicite) ». Même motif : une
+  source riche rend le scalaire historique neutre au lieu de le concurrencer.
 
 ### 4.4 Le calcul corrigé
 
@@ -192,7 +193,7 @@ l'uplink, jamais une constante. C'est la règle R-N1 d'I6-c, appliquée au chemi
 | T-A-5 | `struct_size`, `abi_version`, `reserved` non nul ⇒ refus |
 | T-A-6 | Comptes incohérents (`radio_count` ≠ `device_count`) ⇒ refus, sans lecture |
 | T-A-7 | SF hors 7..12 ou bande hors {125k, 250k, 500k} ⇒ `InvalidRadio`, aucun repli |
-| T-A-8 | Conflit `rule.rx2_sf` / table `rx2` ⇒ refus (ou précédence, selon l'arbitrage §4.3) |
+| T-A-8 | Table `rx2` fournie avec `rule.rx2_sf != 0` ⇒ refus explicite ; `rule.rx2_sf == 0` ⇒ repli évalué sur la table |
 | T-A-9 | Parité : `build_multi_trace` avec et sans table produit les même événements quand RX1 = (SF montant, 125 kHz) |
 | T-A-10 | Mutation : forcer la bande à 125 kHz doit faire échouer T-A-3 et T-A-4 |
 
@@ -240,6 +241,4 @@ Contrôles ABI : **+1 symbole**, **0 retiré** ; structures existantes à taille
    (Python les a déjà via `device_radios`, qui les lit du profil régional — `trace_events.py:330`).
 2. **Le site 3 change le taux de livraison**, pas seulement l'occupation. Toute comparaison
    avant/après devra séparer les deux effets.
-3. **L'option A ou B n'est pas tranchée** (§4.2). La recommandation va à B par cohérence avec I4,
-   mais A reste défendable si l'on borne le nombre de tables optionnelles.
-4. **Le conflit `rule.rx2_sf` / table `rx2` n'est pas tranché** (§4.3).
+3. **Les deux arbitrages sont rendus** : option B (§4.2) et refus du conflit `rx2` (§4.3).
