@@ -381,3 +381,91 @@ spécifiquement sur un scénario **avec ADR** et un SF déplacé, pas seulement 
 - **T-C-9** — ADR inactif : la table fait foi, comportement inchangé à l'offset 0.
 - **T-C-10** — refus : `rx1_dr_offset > max_dr` ⇒ `InvalidInput`, avec contrôle positif.
 - **T-C-11** — mutation : altérer l'application de l'offset doit faire échouer T-C-8.
+
+---
+
+## 12. Bilan du correctif du cœur (commit `d7f07fb`)
+
+### 12.1 Ce qui a été fait
+
+Le point restant du §10.3 est corrigé. Le chemin boucle fermée applique désormais
+`RX1DROffset` selon la formule `RX1_DR = clamp(DR courant − offset, 0, max_dr)`.
+
+L'extension d'ABI a été faite par **nouvelle entrée** (décision de l'utilisateur, précédent I3) :
+un champ de `LoopChannelIo`, structure **C++ seule** (aucune occurrence dans `c_api.h`).
+`lsim_loop_region` est donc resté intact — son garde-fou de taille (`abi_layout.cpp:479`,
+160 octets) n'est pas touché — et aucun `reserved` n'a été réaffecté (arbitrage O1).
+
+| Régime | Condition | SF de RX1 |
+|---|---|---|
+| ADR actif | `dev[].dr >= 0` | `dr_sf[clamp(dr − offset, 0, max_dr)]` |
+| ADR inactif | `dev[].dr == -1` | la table `radios[]`, déjà calculée avec l'offset |
+
+Le second régime est la correction d'un défaut que j'avais d'abord introduit : sans ADR le DR
+courant est inconnu, et retomber sur `ta.sf` **annulait** l'offset. Le SF ne bougeant jamais
+dans ce régime, la table fait foi et n'est plus réécrite.
+
+### 12.2 Deux pièges rencontrés
+
+- **L'entrée était effacée.** L'appelant remet `io` à zéro en ne restaurant que `config`,
+  `config_count` et `trace_v3` (`engine.cpp`) : les nouveaux champs disparaissaient, si bien que
+  l'offset était accepté puis **ignoré silencieusement**. Défaut révélé par les tests, et non par
+  la revue — la validation hors bornes ne se déclenchait pas.
+- **Cinq tests construisaient une table incohérente.** Ils laissaient `rx1_sf` à sa valeur par
+  défaut (7) alors que leurs dispositifs allaient de SF5 à SF12. Le SF de RX1 n'étant plus déduit
+  du SF montant, ils déclarent désormais le SF de leur fenêtre. Leurs intentions sont préservées :
+  le test SF5 refuse toujours une descente **SF5**, et les tests d'occupation retrouvent
+  l'occupation du dispositif SF12.
+
+### 12.3 Mesure
+
+Un dispositif SF7, donc DR5 dans `region()` (ADR active, un seul dispositif pour éviter un repli
+en RX2) :
+
+| offset | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| DR | 5 | 4 | 3 | 2 | 1 | 0 |
+| SF | 7 | 8 | 9 | 10 | 11 | 12 |
+| airtime (ms) | 46,3 | 82,4 | 164,9 | 288,8 | 577,5 | 1155,1 |
+
+Chaque pas double l'airtime : c'est la signature de la table RP002.
+
+### 12.4 Tests
+
+| Test | Objet |
+|---|---|
+| **T-C-8** | offset effectif avec ADR : trois pas de SF, facteur ~8 (contrôle positif) |
+| **T-C-9** | relation strictement croissante sur toute la table (interdit un décrochage partiel) |
+| **T-C-10** | `offset > max_dr` ⇒ `InvalidInput`, avec contrôle positif sur la dernière valeur admise |
+| **T-C-11** | entrée nulle = offset 0 (non-régression de l'extension) |
+
+Vérifiés par mutation : neutraliser l'application de l'offset fait échouer T-C-8 et T-C-9.
+
+**Non-régression** : C++ **690150/690150** (référence 690127), ctest 1/1, Python
+**15 failed / 2540 passed** — les 15 échecs sont la référence établie, liste inchangée.
+
+### 12.5 Ce qui reste : le câblage depuis Python
+
+**Le moteur sait appliquer `RX1DROffset`, mais aucun appelant ne le lui fournit encore.**
+
+Le chemin scénario (`trace_events.py`) atteint la boucle fermée par
+`lsim.closed_loop.simulate_closed_loop`, qui enveloppe **`lsim_simulate_closed_loop_v2`**. Or
+l'entrée v2 n'a **aucun paramètre d'offset** : le tableau `io.rx1_dr_offset` reste nul, donc
+l'offset vaut 0 partout. Une simulation de scénario produira donc les mêmes traces aux offsets
+0, 2 et 4 qu'auparavant.
+
+Le câblage suppose une **extension d'ABI C**, distincte de celle qui vient d'être faite :
+
+| Pièce | Fichier |
+|---|---|
+| nouvelle entrée C | `core/include/lsim/c_api.h` |
+| validation `struct_size` / `abi_version` | `core/src/closed_loop_v3_validate.cpp` |
+| implémentation | `core/src/c_api_ext.cpp` |
+| parité ctypes (arbitrage zz4) | `python/lsim/_native.py`, `python/lsim/closed_loop.py` |
+| garde-fous de taille | `core/tests/abi_layout.cpp`, `test_abi_v3_prep.cpp` |
+
+Le précédent du projet est une enveloppe versionnée (`lsim_closed_loop_v4_args` :
+`struct_size` + `abi_version` + `reserved[2]`), qui enveloppe les arguments v3 sans les recopier.
+La même forme conviendrait, ou un paramètre ajouté à l'image de `mac` lors du passage v1 → v2.
+
+C'est une décision d'ABI de plus, à ne pas prendre sans l'utilisateur.
