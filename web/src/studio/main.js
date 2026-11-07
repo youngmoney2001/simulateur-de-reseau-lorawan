@@ -218,7 +218,7 @@ function nodeIcon(kind) {
 // Rafraîchit les deux vues. Un seul point de passage : la carte et le plan montrent les
 // mêmes équipements, ils ne peuvent donc pas être mis à jour séparément.
 function refreshViews() {
-  refreshViews();
+  renderPlan();
   syncMap();
 }
 
