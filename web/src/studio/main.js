@@ -370,12 +370,19 @@ function placeWindow(w) {
   const y = Math.min(70 + n * pas, Math.max(8, window.innerHeight - 260));
   w.el.style.left = `${x}px`;
   w.el.style.top = `${y}px`;
-  // La hauteur doit être bornée par la place restante sous le bord haut, sinon la fenêtre
-  // dépasse le bas de la fenêtre et recouvre le panneau d'observation — donc les commandes
-  // du lecteur. Seul le bord haut était borné jusqu'ici : une fenêtre de 760 px ouverte à
-  // y = 740 descendait à 1500 px, bien au-delà des 1000 px de l'écran. Le contenu défile
-  // déjà (`device-win-body`), borner la hauteur ne cache donc rien.
-  w.el.style.maxHeight = `${Math.max(220, window.innerHeight - y - 16)}px`;
+  // Quand plusieurs fenêtres sont ouvertes, `y` grandit par pas de 26 px jusqu'à
+  // `innerHeight - 260` : à cette position, la hauteur maximale de la CSS fait descendre la
+  // fenêtre bien au-delà du bas de l'écran. On resserre donc la borne sur la place restante.
+  //
+  // La borne de la CSS est **lue**, jamais remplacée : fixer `max-height` sans la comparer
+  // permet à la fenêtre de dépasser sa hauteur de conception — mesuré 805 px au lieu de
+  // 678 px, soit 127 px de panneau d'observation recouvert en plus. On ne fait que la
+  // resserrer quand la place manque. Le corps défile déjà, rien n'est donc caché.
+  const borneCss = parseFloat(getComputedStyle(w.el).maxHeight);
+  const place = window.innerHeight - y - 16;
+  if (Number.isFinite(borneCss) && place < borneCss) {
+    w.el.style.maxHeight = `${Math.max(220, place)}px`;
+  }
 }
 
 function makeWindowDraggable(win, handle) {
