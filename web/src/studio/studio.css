@@ -6,9 +6,16 @@ h3 { font-size:14px; margin:12px 0 4px; }
 .topbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:8px 12px; background:#1d2630; color:#fff; }
 .topbar .muted { color:#aeb8c4; }
 .topbar label { color:#fff; }
+/* D6 : le studio et la carte des resultats sont deux entrees distinctes, sans lien entre elles. */
+.topbar a.applink { color:#fff; text-decoration:none; border:1px solid #495b6d; border-radius:4px; padding:5px 10px; }
+.topbar a.applink:hover, .topbar a.applink:focus-visible { background:#2b3947; }
+.topbar .spacer { flex:1 1 auto; }
 .flash { margin:8px 12px; padding:8px 12px; border-radius:6px; background:#fde8e6; color:var(--danger); }
-.layout { display:grid; grid-template-columns: 240px 1fr 320px; gap:12px; padding:12px; }
+.layout { display:grid; grid-template-columns: 240px 1fr 480px; gap:12px; padding:12px; }
 .bottom { display:grid; grid-template-columns: 1fr 1fr; gap:12px; padding:0 12px 12px; }
+/* D1 : .bottom declare deux colonnes pour trois panneaux. L exercice prend toute la largeur,
+   sinon un trou apparait des que le panneau d animation cesse d etre masque. */
+.bottom > .exercise { grid-column: 1 / -1; }
 .panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
 label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted); }
 input, select, button, textarea { font:inherit; }
@@ -44,6 +51,18 @@ table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
 th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
 .exercise .statement { font-size:13px; }
 .tag { font-size:11px; padding:1px 6px; border-radius:10px; background:#eef2f6; color:var(--muted); }
+/* D5 : l inspecteur de trames etait un <details> replie dans un panneau masque par defaut :
+   trois niveaux d acces pour une fonction cle. Il devient une section visible des qu une trame
+   est active. */
+.frame-panel { margin-top:10px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
+.frame-panel h3 { margin:0 0 6px; font-size:13px; color:var(--fg); }
+.frame-panel table { margin-top:0; }
+.frame-panel th { color:var(--muted); font-weight:600; white-space:nowrap; }
+.frame-panel td { font:12px/1.35 ui-monospace, monospace; word-break:break-all; }
+.frame-panel p { margin:6px 0 0; }
+/* La colonne d equipement heberge la console, dont les erreurs s affichent par un caret aligne
+   sur la colonne fautive : elle a besoin de largeur. On la rend des qu il n y a plus la place. */
+@media (max-width: 1360px) { .layout { grid-template-columns: 220px 1fr 400px; } }
 @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } .bottom { grid-template-columns: 1fr; } }
 
 /* Animation des trames (player.js) */

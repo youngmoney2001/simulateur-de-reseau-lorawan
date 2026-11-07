@@ -17,6 +17,8 @@
       <button id="start-exercise" type="button">Démarrer</button>
       <button id="delete-session" type="button" class="danger">Supprimer la session</button>
       <span id="session-meta" class="muted"></span>
+      <span class="spacer"></span>
+      <a class="applink" href="/index.html">Carte des résultats &#8594;</a>
     </header>
     <div id="flash" role="alert" class="flash" hidden></div>
 
@@ -82,11 +84,11 @@
         <input id="play-clock" type="range" min="0" max="1000" value="0" aria-label="Instant de la simulation" />
         <p id="play-note" class="muted"></p>
         <ol id="journal" class="journal"></ol>
-        <details id="frame-inspector" hidden>
-          <summary>Trame LoRaWAN</summary>
+        <section id="frame-inspector" class="frame-panel" hidden>
+          <h3>Trame LoRaWAN</h3>
           <table id="frame-table"><tbody></tbody></table>
           <p id="frame-note" class="muted"></p>
-        </details>
+        </section>
       </div>
 
       <div class="panel exercise">
