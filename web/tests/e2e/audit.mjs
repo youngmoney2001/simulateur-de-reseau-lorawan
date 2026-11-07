@@ -136,7 +136,51 @@ const mesurer = () => {
     }
   }
 
-  // 4. régions attendues présentes, visibles et dimensionnées
+  // 4. contenu inaccessible : plus grand que sa boîte, avec un débordement masqué.
+  //    C'est la classe de défaut qui manquait et qui a laissé passer trois fois la hauteur
+  //    du panneau d'observation dans un panneau de 224 px : rien ne débordait en largeur,
+  //    rien n'était tronqué, le rapport sortait vierge. Un contenu que l'utilisateur ne
+  //    peut ni voir ni atteindre est un défaut certain — pas une question de goût.
+  for (const e of document.querySelectorAll("body *")) {
+    if (!vu(e)) continue;
+    const s = getComputedStyle(e);
+    const masqueY = s.overflowY === "hidden" || s.overflowY === "clip";
+    const defileX = s.overflowX === "auto" || s.overflowX === "scroll";
+    if (masqueY && e.scrollHeight > e.clientHeight + 1) {
+      ajouter("contenu-inaccessible", e,
+        `${e.scrollHeight}px de haut dans ${e.clientHeight}px, débordement vertical masqué`);
+    }
+    // En largeur, un défilement est un choix acceptable : seul le masque est un défaut.
+    if (!defileX && (s.overflowX === "hidden" || s.overflowX === "clip")
+        && e.scrollWidth > e.clientWidth + 1) {
+      ajouter("contenu-inaccessible", e,
+        `${e.scrollWidth}px de large dans ${e.clientWidth}px, débordement horizontal masqué`);
+    }
+  }
+
+  // 5. cibles trop petites : l'atelier se pilote à la souris et au doigt (glisser-déposer,
+  //    clic sur un équipement). Une cible de moins de 20 px est un défaut mesurable, pas
+  //    une préférence de confort — viser juste devient un jeu de hasard.
+  for (const e of document.querySelectorAll("button, select, input, a[href], [role=tab]")) {
+    if (!vu(e)) continue;
+    if (e.disabled) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width < 20 || r.height < 20) {
+      ajouter("cible-trop-petite", e, `${Math.round(r.width)}x${Math.round(r.height)} (seuil 20)`);
+    }
+  }
+
+  // 6. commande sans nom : un bouton dont le libellé n'est lisible par personne — ni à
+  //    l'œil (pas de texte), ni par une technologie d'assistance (pas d'aria-label ni de
+  //    titre). Fréquent dès qu'une commande n'est plus qu'une icône.
+  for (const e of document.querySelectorAll("button, a[href], [role=tab]")) {
+    if (!vu(e)) continue;
+    const texte = (e.textContent ?? "").trim();
+    const nom = e.getAttribute("aria-label") || e.getAttribute("title") || "";
+    if (!texte && !nom) ajouter("commande-sans-nom", e, "ni texte, ni aria-label, ni titre");
+  }
+
+  // 7. régions attendues présentes, visibles et dimensionnées
   const attendues = [".tool", ".plan-area", ".observation", ".statusbar", "#plan", "#session-select"];
   for (const sel of attendues) {
     const e = document.querySelector(sel);
@@ -148,7 +192,7 @@ const mesurer = () => {
     }
   }
 
-  // 5. géométrie des grandes régions, pour référence
+  // 8. géométrie des grandes régions, pour référence
   const geometrie = [...document.querySelectorAll(".tool, .plan-area, .observation, .statusbar, .device-win")]
     .filter(vu).map((e) => {
       const r = e.getBoundingClientRect();
