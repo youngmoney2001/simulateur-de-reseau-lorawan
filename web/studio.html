@@ -166,19 +166,24 @@
       <span id="status-right">Prêt</span>
     </footer>
 
-    <!-- Fenêtre d'équipement : panneau latéral pour l'instant, fenêtre flottante en phase C. -->
-    <aside class="device panel" id="device" hidden>
-      <div class="device-head">
-        <h2 id="device-title">Aucun équipement sélectionné</h2>
-        <button type="button" id="device-close" class="close" aria-label="Fermer">&#10005;</button>
-      </div>
-      <div class="device-tabs" role="tablist">
-        <button type="button" class="dtab active" data-dtab="phys" role="tab">Physique</button>
-        <button type="button" class="dtab" data-dtab="config" role="tab">Config</button>
-        <button type="button" class="dtab" data-dtab="cli" role="tab">CLI</button>
-      </div>
-      <div id="device-body"></div>
-    </aside>
+    <!-- Fenêtres d'équipement : flottantes, déplaçables, plusieurs ouvertes à la fois (phase E). -->
+    <div id="windows" class="windows"></div>
+
+    <template id="device-window-template">
+      <section class="device-win" role="dialog" aria-label="Équipement">
+        <header class="device-win-head">
+          <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
+          <h2 class="device-win-title"></h2>
+          <button type="button" class="close" aria-label="Fermer">&#10005;</button>
+        </header>
+        <div class="device-tabs" role="tablist">
+          <button type="button" class="dtab active" data-dtab="phys" role="tab">Physique</button>
+          <button type="button" class="dtab" data-dtab="config" role="tab">Config</button>
+          <button type="button" class="dtab" data-dtab="cli" role="tab">CLI</button>
+        </div>
+        <div class="device-win-body"></div>
+      </section>
+    </template>
 
     <script type="module" src="/src/studio/main.js"></script>
   </body>

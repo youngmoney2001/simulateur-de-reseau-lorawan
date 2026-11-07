@@ -193,12 +193,15 @@ function fail(message) {
 }
 
 // Affiche la carte (et son relief, si fourni). Le relief est validé avant tout changement.
-function show(mapText, demText) {
+// `fromSample` : la carte ouvre d'office sur public/sample.geojson. Sans signalement, ces
+// chiffres se lisent comme les resultats de l'utilisateur, qui n'a pourtant rien simule.
+function show(mapText, demText, fromSample = false) {
   try {
     const parsed = parseMap(JSON.parse(mapText));
     const next = demText ? parseDem(JSON.parse(demText)) : null;
     useDem(next);
     $("error").textContent = "";
+    $("sample-note").hidden = !fromSample;
     render(parsed);
   } catch (err) {
     fail(err instanceof Error ? err.message : "Fichier illisible");
@@ -215,7 +218,7 @@ $("file").addEventListener("change", async (event) => {
   }
   const demFile = $("dem-file")?.files?.[0] ?? null;
   const demText = demFile ? await demFile.text() : null;
-  show(await file.text(), demText);
+  show(await file.text(), demText, false);
 });
 
 // Carte d'exemple (et MNT) : ?map=...&dem=... ou par défaut la carte sans relief.
@@ -232,6 +235,6 @@ if (!SAFE_NAME.test(mapName) || (demName !== null && !SAFE_NAME.test(demName))) 
       ? fetch(`/${demName}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("MNT absent"))))
       : Promise.resolve(null),
   ])
-    .then(([mapText, demText]) => show(mapText, demText))
+    .then(([mapText, demText]) => show(mapText, demText, true))
     .catch((err) => fail(err.message));
 }

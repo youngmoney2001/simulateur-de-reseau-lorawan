@@ -240,7 +240,7 @@ précisément le cas d'usage visé ; ce ne l'est pas pour un serveur partagé.
 | **B** | Plan dominant + palette en bas à gauche + barre d'outils à droite + barre d'état | Faible | **Fait** |
 | **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus | Fait *en panneau ancré* ; le flottant reste à faire |
 | **D** | Panneau d'observation à onglets (Simulation / Journal / Trame / Exercice) | Faible | **Fait** |
-| **E** | Fenêtre réellement flottante et redimensionnable (détachement du panneau) | Moyen | À faire |
+| **E** | Fenêtre réellement flottante et redimensionnable (détachement du panneau) | Moyen | **Fait** |
 | **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible | À faire |
 
 ### Ce que couvrent les phases A–D
@@ -256,9 +256,26 @@ précisément le cas d'usage visé ; ce ne l'est pas pour un serveur partagé.
 - **D** — quatre onglets d'observation. L'inspecteur de trames quitte le panneau d'animation et
   devient un onglet de plein droit, ce qui clôt le défaut D5.
 
-**Le test e2e a été mis à jour** pour cette structure à onglets (sélection de l'onglet avant chaque
-étape). Il ne peut pas être exécuté ici — aucun navigateur n'est installé — et la CI ne lance
-aucun test web. Les phases A–D sont donc vérifiées par la syntaxe, le build et les 29 tests Node,
+### Phase E — fenêtres flottantes
+
+Le panneau ancré de la phase C devient une **fenêtre par équipement** :
+
+- **Plusieurs ouvertes à la fois**, ce qui permet de comparer deux configurations côte à côte —
+  impossible avec un panneau unique.
+- **Déplaçable** par sa barre de titre, en cascade à l'ouverture, sans jamais sortir de l'écran.
+- **Redimensionnable** (`resize: both`), y compris en largeur.
+- La fenêtre active est mise en avant (bordure d'accent, élévation).
+- Une fenêtre dont l'équipement disparaît est fermée par `renderDevice`, qui rafraîchit toutes les
+  fenêtres ouvertes.
+
+Conséquence directe sur le défaut **D2** : la console n'a plus de hauteur plafonnée
+(`max-height: none`) et la fenêtre s'élargit à volonté. **Le caret d'erreur ne peut plus se
+décaler**, quelle que soit la taille de l'écran — ce que la colonne de 480 px ne garantissait pas.
+
+**Le test e2e a été mis à jour** pour cette structure à onglets et pour les fenêtres flottantes
+(sélection de l'onglet avant chaque étape, attente de `.device-win`). Il ne peut pas être exécuté
+ici — aucun navigateur n'est installé — et la CI ne lance aucun test web. Les phases A–E sont donc
+vérifiées par la syntaxe, le build, la résolution des identifiants et les 29 tests Node,
 **mais n'ont pas été vues dans un navigateur**.
 
 La phase C est la seule sensible : la console garde le focus et l'historique par équipement, et le

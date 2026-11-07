@@ -14,8 +14,6 @@ const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
 
-let deviceTab = "phys";          // onglet actif de la fenetre d'equipement : phys | config | cli
-
 const state = {
   client: null,
   sessions: [],
@@ -232,50 +230,138 @@ function startDrag(ev, nodeId) {
 }
 
 function selectNode(nodeId) {
-  state.selected = nodeId;
+  openDeviceWindow(nodeId);
   renderPlan();
+}
+
+// --- Fenêtres d'équipement flottantes (phase E) -------------------------------------------
+// Une fenêtre par équipement, déplaçable et redimensionnable : on peut en ouvrir plusieurs
+// pour comparer deux configurations côte à côte, ce qu'un panneau fixe interdisait.
+
+const deviceWindows = new Map();   // node_id -> { el, body, title, tab }
+let windowZ = 50;
+
+function openDeviceWindow(nodeId) {
+  let w = deviceWindows.get(nodeId);
+  if (!w) {
+    const modele = $("device-window-template");
+    const elWin = modele.content.firstElementChild.cloneNode(true);
+    elWin.dataset.nodeId = nodeId;
+    w = {
+      el: elWin,
+      body: elWin.querySelector(".device-win-body"),
+      title: elWin.querySelector(".device-win-title"),
+      tab: "phys",
+    };
+    deviceWindows.set(nodeId, w);
+    for (const b of elWin.querySelectorAll(".dtab")) {
+      b.addEventListener("click", () => {
+        w.tab = b.dataset.dtab;
+        syncDeviceTabs(w);
+        renderDevice();
+      });
+    }
+    elWin.querySelector(".close").addEventListener("click", () => closeDeviceWindow(nodeId));
+    makeWindowDraggable(elWin, elWin.querySelector(".device-win-head"));
+    $("windows").append(elWin);
+    placeWindow(w);
+  }
+  for (const [id, autre] of deviceWindows) autre.el.classList.toggle("active", id === nodeId);
+  w.el.style.zIndex = String(++windowZ);
+  state.selected = nodeId;
   renderDevice();
 }
 
-// --- Panneau équipement --------------------------------------------------------------------
+function closeDeviceWindow(nodeId) {
+  const w = deviceWindows.get(nodeId);
+  if (!w) return;
+  w.el.remove();
+  deviceWindows.delete(nodeId);
+  delete state.consoles[nodeId];
+  if (state.selected === nodeId) state.selected = null;
+  renderPlan();
+}
+
+// Disposition en cascade : chaque nouvelle fenêtre est décalée, sans sortir de l'écran.
+function placeWindow(w) {
+  const n = deviceWindows.size - 1;
+  const pas = 26, largeur = 430;
+  const x = Math.min(90 + n * pas, Math.max(8, window.innerWidth - largeur - 16));
+  const y = Math.min(70 + n * pas, Math.max(8, window.innerHeight - 260));
+  w.el.style.left = `${x}px`;
+  w.el.style.top = `${y}px`;
+}
+
+function makeWindowDraggable(win, handle) {
+  let ox = 0, oy = 0, actif = false;
+  handle.addEventListener("pointerdown", (ev) => {
+    if (ev.target.closest("button")) return;      // ne pas déplacer en fermant
+    actif = true;
+    const r = win.getBoundingClientRect();
+    ox = ev.clientX - r.left;
+    oy = ev.clientY - r.top;
+    handle.setPointerCapture(ev.pointerId);
+    win.style.zIndex = String(++windowZ);
+  });
+  handle.addEventListener("pointermove", (ev) => {
+    if (!actif) return;
+    const x = Math.min(Math.max(0, ev.clientX - ox), window.innerWidth - 40);
+    const y = Math.min(Math.max(0, ev.clientY - oy), window.innerHeight - 30);
+    win.style.left = `${x}px`;
+    win.style.top = `${y}px`;
+  });
+  const stop = (ev) => {
+    if (!actif) return;
+    actif = false;
+    handle.releasePointerCapture?.(ev.pointerId);
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+}
+
+function syncDeviceTabs(w) {
+  for (const b of w.el.querySelectorAll(".dtab"))
+    b.classList.toggle("active", b.dataset.dtab === w.tab);
+}
+
+// Rafraîchit toutes les fenêtres ouvertes ; supprime celles d'un équipement disparu.
 function renderDevice() {
-  const body = $("device-body");
-  clear(body);
-  const node = state.topo?.nodes.find((n) => n.id === state.selected);
-  if (!node) {
-    $("device").hidden = true;
-    $("device-title").textContent = "Aucun équipement sélectionné";
-    return;
+  for (const [id, w] of [...deviceWindows]) {
+    const existe = state.topo?.nodes.some((n) => n.id === id);
+    if (!existe) { w.el.remove(); deviceWindows.delete(id); }
   }
-  $("device").hidden = false;
-  $("device-title").textContent = nodeCaption(node);
-  if (deviceTab === "phys") {
-    body.append(el("div", { id: "device-info" }));
-    renderDeviceInfo(node);
-    body.append(el("button", {
-      type: "button", class: "danger", text: "Retirer cet équipement",
-      onclick: async () => {
-        if (!window.confirm(`Retirer ${node.id} ?`)) return;
-        const done = await guard(() => state.client.removeNode(state.sid, node.id));
-        if (done === undefined) return;
-        state.selected = null;
-        delete state.consoles[node.id];
-        await loadTopology();
-      },
-    }));
-  } else if (deviceTab === "config") {
-    if (node.kind === "sensor") renderSensorForm(node);
-    else renderGatewayConfig(node);
-  } else if (deviceTab === "cli") {
-    if (CLI_KINDS.includes(node.kind)) renderConsole(node);
-    else body.append(el("p", { class: "no-cli", text: cliAbsentMessage(node.kind) }));
+  for (const [id, w] of deviceWindows) {
+    const node = state.topo.nodes.find((n) => n.id === id);
+    w.title.textContent = nodeCaption(node);
+    syncDeviceTabs(w);
+    const body = w.body;
+    clear(body);
+    if (w.tab === "phys") {
+      body.append(el("div", { class: "device-info" }));
+      renderDeviceInfo(node, body);
+      body.append(el("button", {
+        type: "button", class: "danger", text: "Retirer cet équipement",
+        onclick: async () => {
+          if (!window.confirm(`Retirer ${node.id} ?`)) return;
+          const done = await guard(() => state.client.removeNode(state.sid, node.id));
+          if (done === undefined) return;
+          closeDeviceWindow(node.id);
+          await loadTopology();
+        },
+      }));
+    } else if (w.tab === "config") {
+      if (node.kind === "sensor") renderSensorForm(node, body);
+      else renderGatewayConfig(node, body);
+    } else if (w.tab === "cli") {
+      if (CLI_KINDS.includes(node.kind)) renderConsole(node, body);
+      else body.append(el("p", { class: "no-cli", text: cliAbsentMessage(node.kind) }));
+    }
   }
 }
 
 // Onglet Config des passerelles et du serveur : l'etat reel, et ou le changer.
 // Il n existe pas d endpoint de configuration hors CLI : on ne pretend pas le contraire.
-function renderGatewayConfig(node) {
-  const body = $("device-body");
+function renderGatewayConfig(node, body) {
   const st = stateOf(node.id);
   body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
   body.append(el("p", { class: "muted", text: `Nom d'hôte : ${st?.hostname ?? node.id}` }));
@@ -297,16 +383,15 @@ function cliAbsentMessage(kind) {
 }
 
 // Infos seules (rafraîchies après une commande sans reconstruire la console, qui garde le focus).
-function renderDeviceInfo(node) {
-  const info = $("device-info");
+function renderDeviceInfo(node, body) {
+  const info = body.querySelector(".device-info");
   clear(info);
   const st = stateOf(node.id);
   info.append(el("p", { class: "muted", text: `${KIND_LABEL[node.kind]} · x ${node.x_m} m · y ${node.y_m} m` }));
   if (st) info.append(el("p", { class: "muted", text: `Nom d'hôte : ${st.hostname} · ${st.configured ? "configuré" : "non configuré"}${st.region ? " · " + st.region : ""}` }));
 }
 
-function renderConsole(node) {
-  const body = $("device-body");
+function renderConsole(node, body) {
   if (!state.consoles[node.id]) {
     state.consoles[node.id] = {
       text: "Console de l'équipement. Tapez « ? » pour l'aide, « enable » pour le mode privilégié.\n",
@@ -353,8 +438,7 @@ function renderConsole(node) {
   body.append(el("div", { class: "console" }, out, form));
 }
 
-function renderSensorForm(node) {
-  const body = $("device-body");
+function renderSensorForm(node, body) {
   const values = sensorFormFrom(node);
   const fields = {};
   const grid = el("div", { class: "sensor-form" });
@@ -660,12 +744,7 @@ function selectObservationTab(name) {
 }
 
 // --- Onglets de la fenêtre d'équipement ------------------------------------------------------
-function selectDeviceTab(name) {
-  deviceTab = name;
-  for (const b of document.querySelectorAll(".dtab"))
-    b.classList.toggle("active", b.dataset.dtab === name);
-  renderDevice();
-}
+// L'onglet est propre à chaque fenêtre (voir syncDeviceTabs) : plus d'état global.
 
 // --- Palette d'équipements (bas à gauche) ----------------------------------------------------
 const PALETTE = [
@@ -729,12 +808,13 @@ $("delete-session").addEventListener("click", deleteSession);
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
 for (const b of document.querySelectorAll(".tab"))
   b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
-for (const b of document.querySelectorAll(".dtab"))
-  b.addEventListener("click", () => selectDeviceTab(b.dataset.dtab));
-$("device-close").addEventListener("click", () => {
-  state.selected = null;
+// Les onglets d'équipement et la fermeture sont câblés par fenêtre (openDeviceWindow).
+$("windows").addEventListener("pointerdown", (ev) => {
+  const win = ev.target.closest(".device-win");
+  if (!win) return;
+  for (const [id, w] of deviceWindows) w.el.classList.toggle("active", w.el === win);
+  state.selected = win.dataset.nodeId;
   renderPlan();
-  renderDevice();
 });
 
 // Choix du mode : sur l'écran de lancement, puis dans la barre du haut.

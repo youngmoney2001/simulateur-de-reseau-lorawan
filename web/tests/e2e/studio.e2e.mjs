@@ -119,7 +119,7 @@ try {
 
   await step("console : configuration CLI et erreur de syntaxe au caret", async () => {
     await page.click('g.node[data-id="gw-nord"] rect');
-    await page.waitForFunction(() => !document.getElementById("device").hidden);
+    await page.waitForSelector(".device-win");
     await deviceTab("CLI");
     await page.waitForSelector("#device-body .console input");
     const send = async (cmd) => {
@@ -144,7 +144,7 @@ try {
 
   await step("capteur : refus d'un SF hors bornes au studio, puis enregistrement", async () => {
     await page.click('g.node[data-id="capt-1"] circle');
-    await page.waitForFunction(() => !document.getElementById("device").hidden);
+    await page.waitForSelector(".device-win");
     await deviceTab("Config");
     await page.waitForSelector('#device-body .sensor-form input[name="spreading_factor"]');
     await setValue('#device-body .sensor-form input[name="spreading_factor"]', "13");
