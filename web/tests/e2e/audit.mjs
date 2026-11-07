@@ -207,6 +207,16 @@ try {
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }
+  // La carte 3D est la vue par défaut : le plan, seul endroit où l'on peut viser un nœud,
+  // doit être affiché explicitement.
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    if (b) b.click();
+  });
+  await page.waitForFunction(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    return b?.classList.contains("active");
+  }, { timeout: 10_000 });
   await page.click('g.node[data-id="capteur-a"] circle');
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(400);
