@@ -135,7 +135,10 @@ def test_missing_or_wrong_token_is_401_without_detail(api):
 
 def test_health_needs_no_token(api):
     status, body = api.call("GET", "/api/v1/health", token=None)
-    assert status == 200 and body == {"status": "ok", "api_version": "v1"}
+    assert status == 200
+    assert body["status"] == "ok" and body["api_version"] == "v1"
+    # Indique au client si un jeton automatique existe, pour éviter de sonder une route absente.
+    assert body["auto_token"] is False
 
 
 def test_revoked_and_expired_tokens_are_refused(api):
