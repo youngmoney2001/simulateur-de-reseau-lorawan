@@ -76,16 +76,21 @@ export function createMap3D(container, onPick) {
 
   // Le fond routier, en surcouche : précis à l'échelle d'une ville, mais distant. On le tente
   // et on l'oublie s'il ne répond pas — le fond local reste visible en dessous.
-  try {
-    viewer.imageryLayers.addImageryProvider(
-      new Cesium.ArcGisMapServerImageryProvider({
-        url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
-        credit: new Cesium.Credit(BASEMAP_CREDIT),
-      }),
-    );
-  } catch (err) {
+  // Le constructeur direct ne crée pas la ressource du fournisseur : la première tuile
+  // demandée appelle alors `getDerivedResource` sur un objet indéfini, et Cesium arrête
+  // sa boucle de rendu — le globe restait vide sans qu'aucune erreur ne remonte. Il faut
+  // `fromUrl`, puis une couche construite depuis la promesse.
+  const routier = Cesium.ImageryLayer.fromProviderAsync(
+    Cesium.ArcGisMapServerImageryProvider.fromUrl(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
+      { credit: new Cesium.Credit(BASEMAP_CREDIT) },
+    ),
+  );
+  routier.readyEvent?.catch?.((err) => {
+    // Service injoignable : le fond local reste visible, ce n'est pas un échec.
     console.warn("fond routier indisponible, le fond local suffit :", err);
-  }
+  });
+  viewer.scene.imageryLayers.add(routier);
 
   // Cesium émet cet événement quand sa boucle de rendu échoue et s'arrête. Sans lui, un globe
   // vide ne se distingue pas d'un défaut de notre code : on saurait que rien n'est peint, pas
