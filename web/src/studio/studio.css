@@ -156,6 +156,17 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .dtab.active { color:var(--fg); font-weight:600; box-shadow:inset 0 -2px 0 var(--accent); }
 .device-win-body { flex:1 1 auto; overflow:auto; min-height:0; }
 /* La console profite de la largeur : le caret d'erreur ne se décale plus (défaut D2). */
+/* --- Pose des équipements (glisser depuis la palette) --------------------------------- */
+/* Le repère suit le curseur : on voit où l'équipement atterrira avant de lâcher. Il est
+   détaché du flux et insensible aux clics, sinon il intercepterait le relâchement. */
+.pose-ghost { position:fixed; z-index:400; width:64px; height:46px; margin:-32px 0 0 -23px;
+  pointer-events:none; opacity:.85; filter:drop-shadow(0 2px 6px rgba(15,23,32,.35));
+  background:#fff; border:1px solid var(--accent); border-radius:5px; padding:2px; }
+.pose-ghost .device-art { width:100%; height:100%; }
+/* Pendant le geste, le curseur dit « ceci sera posé là » sur toute la fenêtre. */
+body.en-pose { cursor:grabbing; }
+body.en-pose .tool:hover { background:var(--accent); color:#fff; }
+
 /* --- Vue physique de l'équipement ----------------------------------------------------- */
 .phys-top { display:flex; gap:12px; align-items:flex-start; }
 .phys-art { flex:0 0 auto; width:180px; border:1px solid var(--line); border-radius:6px;
@@ -175,6 +186,17 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .phys-ports li { display:flex; gap:8px; justify-content:space-between; font-size:12px;
   padding:1px 0; }
 .phys-nom { font-weight:600; }
+
+/* Déplacer un équipement en saisissant ses coordonnées. Les champs sont étroits : six
+   décimales suffisent, et un champ plus large pousserait le bouton hors de la fenêtre. */
+.phys-geo { margin:6px 0 0; padding:8px; border:1px solid var(--line); border-radius:6px;
+  background:#f7f9fb; }
+.phys-geo .phys-titre { margin:0 0 6px; }
+.phys-geo .row { display:flex; gap:8px; flex-wrap:wrap; }
+.phys-geo label { flex:1 1 120px; display:flex; flex-direction:column; gap:2px;
+  font-size:11px; color:var(--muted); }
+.phys-geo input { font-size:12px; padding:3px 5px; width:100%; }
+.phys-geo button { margin-top:8px; }
 
 .device-win .console pre { max-height:none; }
 .frame-panel { margin-top:0; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }

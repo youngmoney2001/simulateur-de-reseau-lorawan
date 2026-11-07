@@ -1,4 +1,5 @@
 // Géométrie du plan et validation des formulaires (logique pure, sans DOM).
+import { degresVersMetres, estLatitude, estLongitude } from "./geo.js";
 // Les règles reprennent celles du serveur (`study_contract.py`) pour un retour immédiat ; le serveur
 // reste l'autorité : une valeur refusée ici n'est jamais acceptée par défaut ailleurs.
 
@@ -111,6 +112,41 @@ export function validateNewNode(form) {
   if (!Number.isFinite(x) || Math.abs(x) > COORD_LIMIT) return bad("x_m", "abscisse : nombre attendu");
   if (!Number.isFinite(y) || Math.abs(y) > COORD_LIMIT) return bad("y_m", "ordonnée : nombre attendu");
   return { ok: true, node: { id, kind: form.kind, name, x_m: x, y_m: y } };
+}
+
+/**
+ * Ajout par coordonnées géographiques : l'utilisateur saisit des degrés, le moteur reçoit
+ * des mètres (invariant D2).
+ *
+ * La validation porte sur ce que l'utilisateur a **tapé**. Un refus doit parler de latitude
+ * hors domaine, pas d'une ordonnée en mètres qu'il n'a jamais vue — sinon le message
+ * d'erreur décrit un nombre que rien ne relie à sa saisie.
+ *
+ * @param {Record<string, string>} form champs `id`, `name`, `kind`, `lat`, `lon`
+ * @param {{lat: number, lon: number}} origine ancre géographique de la zone
+ */
+export function validateNewNodeGeo(form, origine) {
+  // Les champs communs (identifiant, type, nom) sont validés une seule fois : on passe des
+  // coordonnées nulles, puis on remplace la position. Réécrire ces règles ici les ferait
+  // diverger de `validateNewNode` à la première correction.
+  const base = validateNewNode({ ...form, x_m: 0, y_m: 0 });
+  if (!base.ok) return base;
+
+  const lat = num(form.lat);
+  const lon = num(form.lon);
+  if (!estLatitude(lat)) return bad("lat", "latitude : nombre attendu, entre −90 et 90");
+  if (!estLongitude(lon)) return bad("lon", "longitude : nombre attendu, entre −180 et 180");
+
+  const { x_m, y_m } = degresVersMetres(lat, lon, origine);
+  // Un degré de longitude vaut 111 km : une zone reste petite, mais rien n'empêche de
+  // saisir une coordonnée à l'autre bout du monde. La borne évite d'envoyer au moteur une
+  // position que l'échelle du plan rendrait absurde.
+  if (!Number.isFinite(x_m) || Math.abs(x_m) > COORD_LIMIT)
+    return bad("lon", "longitude : trop éloignée de l'origine de la zone");
+  if (!Number.isFinite(y_m) || Math.abs(y_m) > COORD_LIMIT)
+    return bad("lat", "latitude : trop éloignée de l'origine de la zone");
+
+  return { ok: true, node: { ...base.node, x_m, y_m } };
 }
 
 // Valeurs du formulaire capteur, à partir de l'équipement (défauts si aucun réglage n'est saisi).

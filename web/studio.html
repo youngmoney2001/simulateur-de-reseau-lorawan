@@ -117,10 +117,15 @@
               <option value="server">Serveur</option>
             </select>
           </label>
+          <!-- On saisit des degrés, pas des mètres : c'est ainsi qu'on relève un lieu, et
+               c'est l'invariant D2. Les mètres partent au moteur, ils ne s'affichent pas. -->
           <div class="row">
-            <label>x (m) <input name="x_m" type="number" step="any" value="0" /></label>
-            <label>y (m) <input name="y_m" type="number" step="any" value="0" /></label>
+            <label>Latitude <input name="lat" type="text" inputmode="decimal"
+              placeholder="4.051100" /></label>
+            <label>Longitude <input name="lon" type="text" inputmode="decimal"
+              placeholder="9.767900" /></label>
           </div>
+          <p class="hint" id="add-hint"></p>
           <button type="submit">Ajouter</button>
         </form>
         <label class="session-pick">Session <select id="session-select"></select></label>

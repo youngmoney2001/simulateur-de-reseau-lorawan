@@ -199,11 +199,14 @@ try {
   await setValue('#add-form [name="id"]', "gw-nord");
   await submitForm("#add-form");
   await page.waitForSelector('g.node[data-id="gw-nord"]');
-  for (const [id, x, y] of [["capteur-a", "250", "90"], ["capteur-b", "620", "340"]]) {
+  // Coordonnées en degrés, converties depuis les mètres par la formule de geo.py :
+  // 250 m à l'est et 90 m au nord de l'origine 4.0511 / 9.7679.
+  for (const [id, lat, lon] of [["capteur-a", "4.051909", "9.770154"],
+                                ["capteur-b", "4.054158", "9.773490"]]) {
     await setValue('#add-form [name="id"]', id);
     await page.select('#add-form [name="kind"]', "sensor");
-    await setValue('#add-form [name="x_m"]', x);
-    await setValue('#add-form [name="y_m"]', y);
+    await setValue('#add-form [name="lat"]', lat);
+    await setValue('#add-form [name="lon"]', lon);
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }

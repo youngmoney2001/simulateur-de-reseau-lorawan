@@ -115,11 +115,13 @@ try {
   await setValue('#add-form [name="name"]', "Passerelle nord");
   await submitForm("#add-form");
   await page.waitForSelector('g.node[data-id="gw-nord"]');
-  for (const [id, x, y] of [["capteur-a", "250", "90"], ["capteur-b", "620", "340"], ["capteur-c", "180", "430"]]) {
+  for (const [id, lat, lon] of [["capteur-a", "4.051909", "9.770154"],
+                                ["capteur-b", "4.054158", "9.773490"],
+                                ["capteur-c", "4.054967", "9.769523"]]) {
     await setValue('#add-form [name="id"]', id);
     await page.select('#add-form [name="kind"]', "sensor");
-    await setValue('#add-form [name="x_m"]', x);
-    await setValue('#add-form [name="y_m"]', y);
+    await setValue('#add-form [name="lat"]', lat);
+    await setValue('#add-form [name="lon"]', lon);
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }

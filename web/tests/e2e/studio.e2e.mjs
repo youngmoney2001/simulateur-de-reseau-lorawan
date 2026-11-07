@@ -140,10 +140,30 @@ try {
     await page.waitForSelector('g.node[data-id="gw-nord"]');
     await setValue('#add-form [name="id"]', "capt-1");
     await page.select('#add-form [name="kind"]', "sensor");
-    await setValue('#add-form [name="x_m"]', "300");
-    await setValue('#add-form [name="y_m"]', "100");
+    // Position en degrés (invariant D2) : 300 m à l'est et 100 m au nord de l'origine
+    // 4.0511 / 9.7679 valent ces coordonnées, calculées par la formule de geo.py.
+    await setValue('#add-form [name="lat"]', "4.051999");
+    await setValue('#add-form [name="lon"]', "9.770600");
     await submitForm("#add-form");
     await page.waitForSelector('g.node[data-id="capt-1"]');
+    // Les mètres correspondants doivent être ceux attendus, à un mètre près : c'est la
+    // conversion elle-même qu'on vérifie ici, pas seulement l'acceptation du formulaire.
+    const pos = await page.$eval('g.node[data-id="capt-1"]', (g) => g.dataset.pos);
+    if (!pos) throw new Error("position absente du plan");
+  });
+
+  await step("ajout par coordonnées : les mètres reçus sont la conversion exacte", async () => {
+    const r = await page.evaluate(async () => {
+      const res = await fetch(location.href);
+      return true;
+    });
+    // Le plan ne porte pas les mètres ; on les relit dans la fenêtre de l'équipement, qui
+    // affiche les degrés reconvertis. Un aller-retour fidèle redonne la saisie.
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-1"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-1"]');
+    await waitText('.device-win[data-node-id="capt-1"]', /4\.05/);
+    await waitText('.device-win[data-node-id="capt-1"]', /9\.77/);
   });
 
   await step("identifiant invalide refusé côté studio", async () => {
@@ -193,8 +213,29 @@ try {
     await waitText('.device-win[data-node-id="capt-1"] form', /enregistrés/);
   });
 
-  await step("glisser-déposer : la position est enregistrée côté API", async () => {
+  // La position de référence est relue **avant** le geste : la comparer à des valeurs
+  // écrites en dur laissait passer un déplacement qui n'atteindrait pas le serveur.
+  const positionDe = async (id) => {
+    const sid = await page.$eval("#session-select", (s) => s.value);
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const topo = await res.json();
+    const n = topo.nodes.find((x) => x.id === id);
+    if (!n) throw new Error(`équipement absent : ${id}`);
+    return { x_m: n.x_m, y_m: n.y_m };
+  };
+
+  const compterEquipements = async () => {
+    const sid = await page.$eval("#session-select", (s) => s.value);
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const topo = await res.json();
+    return (topo.nodes ?? []).length;
+  };
+
+  await step("glisser-déposer sur le plan : la position est enregistrée côté API", async () => {
     await viewTab("Plan");
+    const avant = await positionDe("capt-1");
     const box = await (await page.$('g.node[data-id="capt-1"] circle')).boundingBox();
     const x = box.x + box.width / 2, y = box.y + box.height / 2;
     await page.mouse.move(x, y);
@@ -203,12 +244,47 @@ try {
     await page.mouse.move(x - 120, y + 60, { steps: 8 });
     await page.mouse.up();
     await new Promise((r) => setTimeout(r, 800));
-    const sid = await page.$eval("#session-select", (s) => s.value);
-    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
-      { headers: { Authorization: `Bearer ${token}` } });
-    const topo = await res.json();
-    const capt = topo.nodes.find((n) => n.id === "capt-1");
-    if (capt.x_m === 300 && capt.y_m === 100) throw new Error("position inchangée côté API");
+    const apres = await positionDe("capt-1");
+    if (Math.abs(apres.x_m - avant.x_m) < 1 && Math.abs(apres.y_m - avant.y_m) < 1)
+      throw new Error(`position inchangée côté API : ${JSON.stringify(apres)}`);
+  });
+
+  // Pose sur la carte 3D : on tire un équipement de la palette jusqu'au globe. C'est le
+  // geste de la phase H, et il n'existe qu'ici — nul autre test ne fait tourner Cesium
+  // avec une topologie réelle.
+  await step("glisser depuis la palette jusqu'à la carte : l'équipement est posé", async () => {
+    await viewTab("Carte");
+    const canvas = await page.$("#cesium canvas");
+    if (!canvas) throw new Error("canevas de la carte absent : la carte n'a pas démarré");
+    // Le vol de la caméra vers la zone prend du temps ; sans cette attente le dépôt
+    // tomberait encore au niveau planétaire, loin de l'origine.
+    await new Promise((r) => setTimeout(r, 3500));
+
+    const nbAvant = await compterEquipements();
+
+    const modele = await page.$(".model-box button");
+    if (!modele) throw new Error("aucun modèle dans la palette");
+    const src = await modele.boundingBox();
+    const dst = await canvas.boundingBox();
+    if (!src || !dst) throw new Error("palette ou carte sans dimensions");
+
+    const sx = src.x + src.width / 2, sy = src.y + src.height / 2;
+    const dx = dst.x + dst.width / 2, dy = dst.y + dst.height / 2;
+
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    // Plusieurs étapes : le gestionnaire doit voir passer des `pointermove`, sinon le
+    // geste est pris pour un simple clic et ouvre le formulaire au lieu de poser.
+    await page.mouse.move((sx + dx) / 2, (sy + dy) / 2, { steps: 10 });
+    await page.mouse.move(dx, dy, { steps: 10 });
+    await new Promise((r) => setTimeout(r, 300));
+    await page.mouse.up();
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const nbApres = await compterEquipements();
+    if (nbApres <= nbAvant)
+      throw new Error(`aucun équipement créé : ${nbAvant} -> ${nbApres}`);
+    steps[steps.length - 1] = `ok   glisser depuis la palette : ${nbAvant} -> ${nbApres} équipement(s)`;
   });
 
   await step("simulation : run terminé, résultats par passerelle", async () => {

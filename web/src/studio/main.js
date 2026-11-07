@@ -3,7 +3,7 @@
 import { createClient, ApiError } from "./api.js";
 import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
-  validateNewNode, validateSensor, sensorFormFrom, nodeCaption,
+  validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
@@ -11,7 +11,10 @@ import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animat
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
 // toute confusion entre les deux conversions.
-import { createMap3D, toMeters as degreesToMeters } from "./map3d.js";
+import { createMap3D, toMeters as degreesToMeters, toLonLat as metresVersDegres }
+  from "./map3d.js";
+// Conversion et lecture des coordonnées, sans dépendance : mêmes fonctions que la carte.
+import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
@@ -450,6 +453,29 @@ function cliAbsentMessage(kind) {
 // Vue physique de l'équipement : son illustration, puis le panneau de ce qu'il est
 // réellement. Rien n'est avancé ici qui ne soit simulé ; les ports et voyants décrivent le
 // matériel représenté, ils ne prétendent pas offrir des réglages inexistants.
+/**
+ * Déplace un équipement vers les coordonnées saisies dans sa fenêtre.
+ * Mêmes garde-fous que l'ajout : domaine des degrés, puis éloignement raisonnable.
+ */
+async function deplacerParCoordonnees(node, form) {
+  const o = readOrigin();
+  if (!o || !state.sid) return;
+  const lu = lireCoordonnees(`${form.lat.value}, ${form.lon.value}`);
+  if (!lu) return showError(new Error(
+    "coordonnées illisibles : deux nombres attendus, par exemple « 4.051100, 9.767900 »"));
+  const pos = degreesToMeters(lu.lat, lu.lon, o.lat, o.lon);
+  // La même borne qu'à l'ajout, pour la même raison : au-delà, l'équipement sort de
+  // l'échelle du plan et devient introuvable sans que rien ne le signale.
+  if (Math.abs(pos.x_m) > 1_000_000 || Math.abs(pos.y_m) > 1_000_000) {
+    return showError(new Error("coordonnées trop éloignées de l'origine de la zone"));
+  }
+  const topo = await guard(() => state.client.moveNode(state.sid, node.id, pos));
+  if (!topo) return;
+  state.topo = topo;
+  refreshViews();
+  renderDevice();
+}
+
 function renderDeviceInfo(node, body) {
   // La zone n'existe que dans l'onglet Physique. Ailleurs (CLI, Config), il n'y a rien à
   // rafraîchir : on sort au lieu de construire un bloc fantôme, ce qui arrive quand une
@@ -474,13 +500,45 @@ function renderDeviceInfo(node, body) {
   const ligne = (titre, valeur) => {
     etat.append(el("dt", { text: titre }), el("dd", { text: valeur }));
   };
-  ligne("Position", `${node.x_m} m, ${node.y_m} m`);
+  // La position est montrée en degrés : c'est ainsi qu'on relève un lieu, et c'est le seul
+  // repère qui parle à qui connaît ses coordonnées. Les mètres restent le langage du moteur.
+  const o = readOrigin();
+  if (o) {
+    const d = metresVersDegres(node.x_m, node.y_m, o.lat, o.lon);
+    ligne("Position", formaterCoordonnees(d.lat, d.lon));
+    const distance = distanceM(o, d);
+    // La distance à l'origine donne l'échelle : « 0,012345° » ne dit rien, « 1,4 km » si.
+    ligne("Éloignement", distance < 1000
+      ? `${Math.round(distance)} m de l'origine`
+      : `${(distance / 1000).toFixed(2)} km de l'origine`);
+  } else {
+    ligne("Position", `${node.x_m} m, ${node.y_m} m`);
+  }
   if (st) {
     ligne("Nom d'hôte", st.hostname);
     ligne("Configuration", st.configured ? "configuré" : "non configuré");
     if (st.region) ligne("Plan régional", st.region);
   }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
+
+  // Second moyen de placer un équipement : saisir ses coordonnées au lieu de le tirer sur
+  // la carte. Les deux gestes convergent vers les mêmes mètres, par la même conversion.
+  if (o) info.append(el("form", { class: "phys-geo", onsubmit: (ev) => {
+    ev.preventDefault();
+    deplacerParCoordonnees(node, ev.target);
+  } },
+    el("h3", { class: "phys-titre", text: "Déplacer vers" }),
+    el("div", { class: "row" },
+      el("label", {}, document.createTextNode("Latitude"),
+        el("input", { name: "lat", type: "text", inputmode: "decimal",
+          value: metresVersDegres(node.x_m, node.y_m, o.lat, o.lon).lat.toFixed(6) })),
+      el("label", {}, document.createTextNode("Longitude"),
+        el("input", { name: "lon", type: "text", inputmode: "decimal",
+          value: metresVersDegres(node.x_m, node.y_m, o.lat, o.lon).lon.toFixed(6) })),
+    ),
+    el("button", { type: "submit", text: "Déplacer" }),
+    el("p", { class: "muted", text: "Ou tirez l'équipement sur la carte." }),
+  ));
 
   // Ports, tels qu'illustrés : la description doit correspondre au dessin.
   if (spec?.ports?.length) {
@@ -609,7 +667,12 @@ $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!state.sid) return showError(new Error("aucune session"));
   const f = new FormData(ev.target);
-  const checked = validateNewNode(Object.fromEntries(f.entries()));
+  const o = readOrigin();
+  if (!o) return showError(new Error("origine de la zone absente : cliquez sur la carte"));
+  // Degrés en façade, mètres au moteur (D2). Le message d'erreur parle donc de latitude et
+  // de longitude, les seuls nombres que l'utilisateur a réellement tapés — lui annoncer
+  // une « ordonnée en mètres » décrirait une valeur qu'il n'a jamais vue.
+  const checked = validateNewNodeGeo(Object.fromEntries(f.entries()), o);
   if (!checked.ok) return showError(new Error(checked.message));
   const topo = await guard(() => state.client.addNode(state.sid, checked.node));
   if (topo) {
@@ -865,6 +928,17 @@ function writeOrigin(o) {
   $("origin-lat").value = String(o.lat);
   $("origin-lon").value = String(o.lon);
 }
+// Les coordonnées demandées sont relatives à l'origine de la zone : le dire évite de saisir
+// un lieu au hasard en croyant qu'il sera converti.
+function refreshAddHint() {
+  const h = $("add-hint");
+  if (!h) return;
+  const o = readOrigin();
+  h.textContent = o
+    ? `Origine de la zone : ${o.lat.toFixed(6)}, ${o.lon.toFixed(6)}.`
+    : "Aucune origine : cliquez d'abord sur la carte pour choisir la zone.";
+}
+
 // Le lien porte l'origine et le dernier résultat : sans eux la carte ne peut rien situer.
 function refreshMapLink() {
   const q = new URLSearchParams();
@@ -887,6 +961,10 @@ function ensureMap() {
   if (state.mapFailed) return null;
   try {
     state.map = construireCarte();
+    // La carte vient d'être créée : la caméra est encore au niveau planétaire. On la
+    // cadrera sur la zone au premier `syncMap`, sans quoi un équipement déposé au centre
+    // de l'écran atterrirait à des milliers de kilomètres de l'origine.
+    state.mapNeedsFly = true;
   } catch (err) {
     state.mapFailed = true;
     // La raison est conservée et affichée : un repli silencieux empêcherait de savoir si la
@@ -922,10 +1000,18 @@ function syncMap(fly = false) {
   const o = readOrigin();
   carte.setOrigin(o);
   carte.setNodes(state.topo?.nodes ?? [], state.selected);
-  if (fly) carte.flyToOrigin(porteeDesEquipements());
+  // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
+  // encore la planète entière. La seconde compte autant que la première — c'est elle qui
+  // fait que « la carte est centrée sur le lieu choisi » dès l'ouverture.
+  if (fly || state.mapNeedsFly) {
+    state.mapNeedsFly = false;
+    carte.flyToOrigin(porteeDesEquipements());
+  }
+  // Les deux gestes de la phase H sont annoncés ici : sans ce rappel, rien n'indique que
+  // la palette se glisse sur la carte, et la pose se fait par le seul formulaire.
   $("map-hint").textContent = (state.topo?.nodes?.length ?? 0) === 0
-    ? "Cliquez sur la carte pour y placer l'origine de votre zone de test."
-    : `Origine : ${o.lat.toFixed(5)}, ${o.lon.toFixed(5)} — cliquez pour la déplacer.`;
+    ? "Cliquez pour placer l'origine de la zone, ou glissez un équipement depuis la palette."
+    : `Origine : ${o.lat.toFixed(5)}, ${o.lon.toFixed(5)} · glissez un équipement depuis la palette pour le poser, tirez-le pour le déplacer.`;
 }
 
 // Encombrement du réseau, en mètres : sert à cadrer la caméra.
@@ -938,6 +1024,206 @@ function porteeDesEquipements() {
     minY = Math.min(minY, n.y_m); maxY = Math.max(maxY, n.y_m);
   }
   return Math.max(maxX - minX, maxY - minY, 60) * 1.4;
+}
+
+// --- Pose des équipements (phase H) -------------------------------------------------------
+// Deux gestes, comme dans un atelier réseau : on tire un équipement de la palette jusqu'à la
+// carte pour le créer, et on déplace un équipement existant en le tirant sur la carte.
+//
+// Le canevas de Cesium porte ses propres écouteurs, posés à la création de la carte donc
+// avant les nôtres : un `pointerdown` sur le canevas déclencherait une rotation du globe
+// avant qu'on ait pu dire « non, c'est un équipement ». On écoute donc sur le conteneur en
+// phase de capture, ce qui nous atteint avant le canevas, et `stopPropagation` y coupe la
+// route. C'est ce qui rend le glisser d'un équipement possible sans casser la navigation.
+
+// Préfixes d'identifiants, par type : un nom qu'on peut lire à voix haute dans une CLI.
+const PREFIXE_ID = { border: "gw", relay: "relais", sensor: "capt", server: "srv" };
+
+/** Un identifiant libre, lisible et stable : `capt-3`, `gw-2`… */
+export function suggererId(kind, pris = new Set()) {
+  const base = PREFIXE_ID[kind] ?? "n";
+  for (let i = 1; i <= 9999; i++) {
+    const id = `${base}-${i}`;
+    if (!pris.has(id)) return id;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+/** Les identifiants déjà utilisés, pour ne pas proposer un doublon. */
+function idsPris() {
+  return new Set((state.topo?.nodes ?? []).map((n) => n.id));
+}
+
+/**
+ * Position du curseur en pixels CSS relatifs au canevas de la carte — le repère qu'attend
+ * Cesium. `null` si la carte n'a pas encore de canevas.
+ */
+function pointCanevas(ev) {
+  const c = $("cesium").querySelector("canvas");
+  if (!c) return null;
+  const r = c.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+}
+
+/** Le curseur est-il au-dessus de la carte ? */
+function surLaCarte(ev) {
+  const r = $("cesium").getBoundingClientRect();
+  return !$("cesium").hidden
+    && ev.clientX >= r.left && ev.clientX <= r.right
+    && ev.clientY >= r.top && ev.clientY <= r.bottom;
+}
+
+// Le repère qui suit le curseur pendant le geste : on voit où l'équipement atterrira avant
+// de lâcher, au lieu de poser à l'aveugle et de corriger ensuite.
+function poserFantomeDOM(kind) {
+  const g = el("div", { class: "pose-ghost" }, drawDevice(kind));
+  document.body.append(g);
+  return g;
+}
+function deplacerFantomeDOM(g, ev) {
+  if (g) { g.style.left = `${ev.clientX}px`; g.style.top = `${ev.clientY}px`; }
+}
+
+/**
+ * Fait glisser un équipement depuis la palette. Retourne une promesse résolue avec la
+ * position géographique choisie, ou `null` si le geste est abandonné.
+ *
+ * Le geste est suivi sur `document` : le pointeur sort forcément du bouton de la palette,
+ * et le capturer sur celui-ci bloquerait les événements de la carte.
+ *
+ * @param {PointerEvent} ev départ
+ * @param {string} kind type d'équipement
+ */
+function glisserDepuisPalette(ev, kind) {
+  // Toutes les issues rendent le même objet : l'appelant lit `cible` sans avoir à deviner
+  // si le geste a seulement avorté.
+  const rien = { cible: null };
+  if (ev.button !== 0) return Promise.resolve(rien);
+  ev.preventDefault();
+  const carte = state.map;
+  if (!carte || state.view !== "map") return Promise.resolve(rien);
+
+  const fantome = poserFantomeDOM(kind);
+  deplacerFantomeDOM(fantome, ev);
+  document.body.classList.add("en-pose");
+
+  return new Promise((resoudre) => {
+    let cible = null;
+
+    const bouger = (e) => {
+      deplacerFantomeDOM(fantome, e);
+      const p = pointCanevas(e);
+      const ll = surLaCarte(e) && p ? carte.lonLatAt(p) : null;
+      cible = ll;
+      // Le repère sur la carte montre le point exact ; sans lui on ne sait pas si le
+      // relâchement tombera sur le globe ou dans le ciel.
+      if (ll) carte.showGhost(ll.lat, ll.lon, kind); else carte.clearGhost();
+    };
+
+    const finir = (e) => {
+      document.removeEventListener("pointermove", bouger);
+      document.removeEventListener("pointerup", finir);
+      document.removeEventListener("pointercancel", annuler);
+      document.removeEventListener("keydown", touche);
+      fantome.remove();
+      document.body.classList.remove("en-pose");
+      carte.clearGhost();
+      carte.setDragging(false);
+      // Relâché hors de la carte, ou dans le ciel : rien n'est créé, et surtout aucun
+      // clic résiduel ne doit déplacer l'origine de la zone.
+      carte.setIgnoreClick(true);
+      resoudre({ cible: surLaCarte(e) ? cible : null });
+    };
+
+    const annuler = () => {
+      document.removeEventListener("pointermove", bouger);
+      document.removeEventListener("pointerup", finir);
+      document.removeEventListener("pointercancel", annuler);
+      document.removeEventListener("keydown", touche);
+      fantome.remove();
+      document.body.classList.remove("en-pose");
+      carte.clearGhost();
+      carte.setDragging(false);
+      resoudre({ cible: null });
+    };
+
+    // Échap abandonne le geste : sans cette issue, un clic malencontreux sur la palette
+    // oblige à relâcher n'importe où en espérant ne rien créer.
+    const touche = (e) => { if (e.key === "Escape") annuler(); };
+
+    document.addEventListener("pointermove", bouger);
+    document.addEventListener("pointerup", finir);
+    document.addEventListener("pointercancel", annuler);
+    document.addEventListener("keydown", touche);
+  });
+}
+
+/** Crée l'équipement à la position géographique donnée. */
+async function poserEquipement(kind, ll) {
+  const o = readOrigin();
+  if (!o || !state.sid) return;
+  const { x_m, y_m } = degreesToMeters(ll.lat, ll.lon, o.lat, o.lon);
+  // Même borne qu'au formulaire, pour la même raison : au-delà d'un million de mètres,
+  // l'équipement sort de l'échelle du plan et devient introuvable. L'appliquer ici aussi
+  // évite qu'un dépôt égaré au niveau planétaire crée un nœud à l'autre bout du monde.
+  if (Math.abs(x_m) > 1_000_000 || Math.abs(y_m) > 1_000_000) {
+    return showError(new Error(
+      "point trop éloigné de la zone : recentrez la carte sur votre zone de test"));
+  }
+  const id = suggererId(kind, idsPris());
+  const noeud = { id, kind, name: `${KIND_LABEL[kind]} ${id.split("-").pop()}`, x_m, y_m };
+  const topo = await guard(() => state.client.addNode(state.sid, noeud));
+  if (!topo) return;
+  state.topo = topo;
+  state.selected = id;
+  refreshViews();
+  renderDevice();
+  await refreshSessions();
+}
+
+/**
+ * Déplace un équipement existant, en le tirant sur la carte.
+ * Appelé depuis l'écouteur en capture du conteneur : l'événement n'a pas encore atteint
+ * le canevas, d'où `stopPropagation` pour que Cesium n'y voie pas une rotation.
+ */
+function demarrerDeplacement(ev, noeud) {
+  const carte = state.map;
+  if (!carte) return false;
+  const depart = pointCanevas(ev);
+  if (!depart) return false;
+
+  ev.stopPropagation();
+  ev.preventDefault();
+  carte.setDragging(true);
+
+  let cible = null;
+  const bouger = (e) => {
+    const p = pointCanevas(e);
+    const ll = p ? carte.lonLatAt(p) : null;
+    if (!ll) return;
+    cible = ll;
+    carte.showGhost(ll.lat, ll.lon, noeud.kind);
+  };
+  const finir = async () => {
+    document.removeEventListener("pointermove", bouger);
+    document.removeEventListener("pointerup", finir);
+    document.removeEventListener("pointercancel", finir);
+    carte.clearGhost();
+    carte.setDragging(false);
+    carte.setIgnoreClick(true);
+    if (!cible) return;
+    const o = readOrigin();
+    if (!o) return;
+    const pos = degreesToMeters(cible.lat, cible.lon, o.lat, o.lon);
+    const topo = await guard(() => state.client.moveNode(state.sid, noeud.id, pos));
+    if (topo) state.topo = topo;
+    refreshViews();
+    renderDevice();
+  };
+  document.addEventListener("pointermove", bouger);
+  document.addEventListener("pointerup", finir);
+  document.addEventListener("pointercancel", finir);
+  return true;
 }
 
 function showView(view) {
@@ -1003,8 +1289,16 @@ function renderPalette() {
     clear(models);
     for (const m of cat.models) {
       models.append(el("button", {
-        type: "button", class: "tool", title: m.label,
-        onclick: () => addFromPalette(m.kind),
+        type: "button", class: "tool", title: `${m.label} — glissez sur la carte, ou cliquez`,
+        // Le geste part du `pointerdown` : attendre le `click` interdirait de connaître la
+        // position du curseur au relâchement, donc où poser l'équipement.
+        onpointerdown: (ev) => demarrerDepuisPalette(ev, m.kind),
+        // Le `click` garde la voie clavier (Entrée) et le raccourci d'ajout au formulaire.
+        // On l'ignore juste après un dépôt réussi, sinon un glisser créerait deux fois.
+        onclick: () => {
+          if (Date.now() - (state.poseRecent ?? 0) < 600) return;
+          addFromPalette(m.kind);
+        },
       }, el("span", { class: "tool-art" }, drawDevice(m.kind)),
          el("span", { class: "tool-label", text: m.label })));
     }
@@ -1022,11 +1316,34 @@ function renderPalette() {
 
 // Clic sur un modèle : on remplit le formulaire existant et on le soumet. Aucune logique
 // d'ajout dupliquée : validateNewNode et l'API restent seuls juges.
+/**
+ * Part d'un bouton de la palette : le geste pose l'équipement là où on le lâche.
+ *
+ * Le simple clic ne passe pas par ici mais par `onclick`, resté en place pour le clavier —
+ * un bouton qui ne répond qu'au pointeur devient inutilisable sans souris. Les deux voies
+ * sont disjointes : le geste ne pose que s'il aboutit, et le clic ne s'ouvre que s'il ne
+ * suit pas un dépôt réussi (`poseRecent`, ci-dessous).
+ */
+async function demarrerDepuisPalette(ev, kind) {
+  const r = await glisserDepuisPalette(ev, kind);
+  if (!r.cible) return;
+  state.poseRecent = Date.now();
+  await poserEquipement(kind, r.cible);
+}
+
 function addFromPalette(kind) {
   const f = $("add-form");
   f.querySelector('[name="kind"]').value = kind;
-  const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`;
+  const id = suggererId(kind, idsPris());
   f.querySelector('[name="id"]').value = id;
+  // Le formulaire propose l'origine de la zone : un nouvel équipement se pose là où la
+  // scène est cadrée bien plus souvent qu'ailleurs, et des champs vides obligeraient à
+  // recopier des coordonnées qu'on a déjà données en choisissant la zone.
+  const o = readOrigin();
+  if (o && !f.querySelector('[name="lat"]').value) {
+    f.querySelector('[name="lat"]').value = o.lat.toFixed(6);
+    f.querySelector('[name="lon"]').value = o.lon.toFixed(6);
+  }
   f.requestSubmit();
 }
 
@@ -1090,6 +1407,23 @@ for (const b of document.querySelectorAll(".mode-card"))
 $("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
 
 renderPalette();
+
+// Tirer un équipement sur la carte pour le déplacer.
+//
+// L'écoute est posée sur le **conteneur en phase de capture** : l'événement nous atteint
+// donc avant le canevas de Cesium, dont les écouteurs ont été enregistrés à la création de
+// la carte. `stopPropagation` dans `demarrerDeplacement` l'empêche alors d'y arriver, et le
+// geste déplace l'équipement au lieu de faire pivoter le globe. Écouter sur le canevas lui-
+// même ne marcherait pas : nos écouteurs y seraient seconds dans l'ordre d'appel.
+$("cesium").addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || state.view !== "map") return;
+  const carte = state.map;
+  if (!carte) return;
+  const p = pointCanevas(ev);
+  const noeud = p ? carte.nodeAt(p) : null;
+  if (noeud) demarrerDeplacement(ev, noeud);
+}, { capture: true });
+
 for (const b of document.querySelectorAll(".view-tab")) {
   b.addEventListener("click", () => showView(b.dataset.view));
 }
@@ -1103,6 +1437,7 @@ try {
 for (const id of ["origin-lat", "origin-lon"]) {
   $(id).addEventListener("change", () => {
     const o = readOrigin();
+    refreshAddHint();
     if (o) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
     refreshMapLink();
     // L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu.
@@ -1110,6 +1445,7 @@ for (const id of ["origin-lat", "origin-lon"]) {
   });
 }
 refreshMapLink();
+refreshAddHint();
 
 (async () => {
   // 1. jeton déjà saisi lors d'une visite précédente

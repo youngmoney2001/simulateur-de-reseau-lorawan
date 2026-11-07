@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { createClient, ApiError } from "../src/studio/api.js";
 import {
   planBounds, toScreen, toMeters, validateNewNode, validateSensor, sensorFormFrom,
-  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL,
+  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL, validateNewNodeGeo,
 } from "../src/studio/topology.js";
+import { degresVersMetres, metresVersDegres } from "../src/studio/geo.js";
 // Seules les données sont testées ici (le dessin exige le DOM). Ce sont elles qui engagent
 // la conformité de ce que l'interface annonce.
 import { DEVICE_SPECS, DEVICE_KINDS, hasArt } from "../src/studio/device-art.js";
@@ -173,4 +174,85 @@ test("mise en forme : latence absente, lien non lié, score avec indices", () =>
   assert.equal(rows[1].mesh, "—");
   assert.equal(scoreLine({ score: 18, max_score: 20, hints_used: 1 }), "18 / 20 points · 1 indice(s)");
   assert.deepEqual(criteriaRows({ criteria: [{ label: "x", passed: true, points: 5, max_points: 5 }] })[0].points, "5 / 5");
+});
+
+// --- Ajout par coordonnées géographiques (phase H) -------------------------------------------
+// L'utilisateur saisit des degrés ; le moteur reçoit des mètres. Le test porte sur la
+// jonction : ce qui part au serveur doit être la conversion exacte de ce qui a été tapé.
+
+const ORIGINE = { lat: 4.0511, lon: 9.7679 };
+
+test("un ajout par coordonnées produit les mètres correspondants", () => {
+  const r = validateNewNodeGeo(
+    { id: "capt-sud", name: "", kind: "sensor", lat: "4.0600", lon: "9.7800" },
+    ORIGINE,
+  );
+  assert.equal(r.ok, true, r.message);
+  // Mêmes nombres que `degresVersMetres` : la validation ne doit pas refaire le calcul.
+  const m = degresVersMetres(4.06, 9.78, ORIGINE);
+  assert.equal(r.node.x_m, m.x_m);
+  assert.equal(r.node.y_m, m.y_m);
+  assert.equal(r.node.id, "capt-sud");
+  assert.equal(r.node.name, "capt-sud");   // nom vide : l'identifiant sert de nom
+  assert.equal(r.node.kind, "sensor");
+});
+
+test("saisir l'origine place l'équipement au point zéro", () => {
+  const r = validateNewNodeGeo(
+    { id: "gw-0", kind: "border", lat: "4.0511", lon: "9.7679" },
+    ORIGINE,
+  );
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.node.x_m, 0);
+  assert.equal(r.node.y_m, 0);
+});
+
+test("une coordonnée hors domaine est refusée avec le champ fautif", () => {
+  const cas = [
+    ["lat", { lat: "91", lon: "9.7679" }, /latitude/],
+    ["lon", { lat: "4.0511", lon: "181" }, /longitude/],
+    ["lat", { lat: "", lon: "9.7679" }, /latitude/],
+    ["lon", { lat: "4.0511", lon: "abc" }, /longitude/],
+  ];
+  for (const [champ, coords, motif] of cas) {
+    const r = validateNewNodeGeo({ id: "x", kind: "sensor", ...coords }, ORIGINE);
+    assert.equal(r.ok, false, `accepté à tort : ${JSON.stringify(coords)}`);
+    assert.equal(r.field, champ);
+    assert.match(r.message, motif);
+  }
+});
+
+test("une coordonnée très lointaine est refusée au lieu de sortir de l'échelle", () => {
+  // À l'autre bout du monde : la conversion donnerait des millions de mètres, hors de
+  // l'échelle du plan. Mieux vaut refuser que d'afficher un équipement introuvable.
+  const r = validateNewNodeGeo(
+    { id: "loin", kind: "sensor", lat: "-33.8688", lon: "151.2093" }, ORIGINE);
+  assert.equal(r.ok, false);
+  assert.match(r.message, /trop éloignée/);
+});
+
+test("les champs communs restent validés à l'identique", () => {
+  // L'identifiant est refusé de la même manière que par `validateNewNode` : la variante
+  // géographique ne doit pas ouvrir une brèche dans les règles communes.
+  const r = validateNewNodeGeo({ id: "MAUVAIS", kind: "sensor", lat: "4.05", lon: "9.76" }, ORIGINE);
+  assert.equal(r.ok, false);
+  assert.equal(r.field, "id");
+  assert.equal(
+    validateNewNodeGeo({ id: "ok", kind: "inexistant", lat: "4.05", lon: "9.76" }, ORIGINE).field,
+    "kind",
+  );
+});
+
+test("aller-retour : une position posée au clic se relit à l'identique", () => {
+  // Le scénario réel de la phase H : on clique la carte, la position part en mètres, et la
+  // fenêtre la réaffiche en degrés. Le nombre montré doit être celui du clic, sinon
+  // l'équipement « saute » à chaque ouverture.
+  for (const [x, y] of [[0, 0], [1500, -2200], [-800, 377.5], [12345.6, -9876.5]]) {
+    const d = metresVersDegres(x, y, ORIGINE);
+    const r = validateNewNodeGeo(
+      { id: "n", kind: "sensor", lat: String(d.lat), lon: String(d.lon) }, ORIGINE);
+    assert.equal(r.ok, true, r.message);
+    assert.ok(Math.abs(r.node.x_m - x) < 1e-6, `x : ${r.node.x_m} au lieu de ${x}`);
+    assert.ok(Math.abs(r.node.y_m - y) < 1e-6, `y : ${r.node.y_m} au lieu de ${y}`);
+  }
 });

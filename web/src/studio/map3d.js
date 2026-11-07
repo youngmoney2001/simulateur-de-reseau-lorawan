@@ -4,8 +4,17 @@
 // module porte la conversion entre les deux, qui reprend exactement `_to_lonlat` du serveur
 // (geo.py) pour que les positions coïncident avec l'export produit par celui-ci.
 import * as Cesium from "cesium";
+// La conversion mètres ↔ degrés vit dans `geo.js`, sans dépendance, pour être testée hors
+// navigateur. On la réexporte ici : l'ancienne copie locale risquait de dériver de celle
+// du serveur sans que rien ne le signale, ce qui est exactement la panne invisible que
+// l'invariant D2 cherche à éviter.
+import {
+  EARTH_RADIUS_M,
+  metresVersDegres as toLonLat,
+  degresVersMetres as toMeters,
+} from "./geo.js";
 
-export const EARTH_RADIUS_M = 6_371_000.0;
+export { EARTH_RADIUS_M, toLonLat, toMeters };
 
 // Ressources Cesium servies localement (public/cesium). Doit être posé avant tout import
 // de widgets, sinon Cesium cherche ses ressources sur un serveur distant.
@@ -20,25 +29,6 @@ const BASEMAP_CREDIT =
 // restait désespérément vide. Cette texture, elle, est toujours là : la carte n'est donc
 // jamais blanche, et son rendu devient vérifiable partout.
 const FOND_LOCAL = window.CESIUM_BASE_URL + "Assets/Textures/NaturalEarthII";
-
-// Mètres (plan) vers degrés (carte). Même formule que geo.py.
-export function toLonLat(x_m, y_m, originLat, originLon) {
-  const lat = originLat + (y_m / EARTH_RADIUS_M) * (180 / Math.PI);
-  const lon =
-    originLon +
-    (x_m / (EARTH_RADIUS_M * Math.cos((originLat * Math.PI) / 180))) * (180 / Math.PI);
-  return { lon, lat };
-}
-
-// Degrés (carte) vers mètres (plan). Inverse exact de toLonLat.
-export function toMeters(lat, lon, originLat, originLon) {
-  const y_m = ((lat - originLat) * Math.PI / 180) * EARTH_RADIUS_M;
-  const x_m =
-    ((lon - originLon) * Math.PI / 180) *
-    EARTH_RADIUS_M *
-    Math.cos((originLat * Math.PI) / 180);
-  return { x_m, y_m };
-}
 
 // Couleur d'un équipement par type. Reprend la palette du plan 2D, pour que la même forme
 // garde la même couleur d'une vue à l'autre.
@@ -102,7 +92,17 @@ export function createMap3D(container, onPick) {
 
   const points = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   const labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
+
+  // Repère fantôme : il montre où l'équipement atterrira pendant qu'on le fait glisser,
+  // avant que la position ne soit envoyée au serveur. Sans lui, on lâche à l'aveugle.
+  const fantome = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+
   let origine = { lat: 4.0511, lon: 9.7679 };
+
+  // Les équipements affichés, gardés pour retrouver lequel est sous le curseur. On les
+  // projette à l'écran plutôt que d'appeler `scene.pick` : le résultat ne dépend alors pas
+  // de la manière dont Cesium construit ses objets de sélection d'une version à l'autre.
+  let affiches = [];
 
   // Cesium mesure son conteneur à la construction. S'il le fait avant que la mise en page
   // soit stabilisée, il retient une hauteur trop faible et ses blocs internes, dimensionnés
@@ -116,20 +116,38 @@ export function createMap3D(container, onPick) {
   const observateur = typeof ResizeObserver === "function" ? new ResizeObserver(recaler) : null;
   observateur?.observe(container);
 
+  // Position géographique sous un point de l'écran, ou null si le rayon ne touche pas le
+  // globe (ciel, ou caméra au ras de l'horizon). `position` est en pixels CSS, relatifs
+  // au canevas — le repère que fournissent Cesium comme les événements du DOM convertis.
+  function lonLatAt(position) {
+    if (!position) return null;
+    const p = position instanceof Cesium.Cartesian2
+      ? position
+      : new Cesium.Cartesian2(position.x, position.y);
+    const cible = viewer.scene.pickPosition?.(p)
+      ?? viewer.camera.pickEllipsoid(p, viewer.scene.globe.ellipsoid);
+    if (!cible) return null;
+    const carto = Cesium.Cartographic.fromCartesian(cible);
+    if (!carto) return null;
+    return {
+      lat: Cesium.Math.toDegrees(carto.latitude),
+      lon: Cesium.Math.toDegrees(carto.longitude),
+    };
+  }
+
   // Un clic sur le globe : on lève la position géographique. Un clic dans le vide (ciel)
   // ne produit rien de exploitable et doit être ignoré silencieusement.
+  // Un glisser se termine par un relâchement du bouton, que Cesium lit aussi comme un clic.
+  // Sans cette trappe, poser un équipement déplacerait l'origine de la zone par-dessus le
+  // marché. On neutralise donc le clic pendant une courte fenêtre après un geste de pose.
+  let ignorerClicJusqua = 0;
+
   const gestionnaire = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   gestionnaire.setInputAction((mouvement) => {
     if (!onPick) return;
-    const cible = viewer.scene.pickPosition?.(mouvement.position)
-      ?? viewer.camera.pickEllipsoid(mouvement.position, viewer.scene.globe.ellipsoid);
-    if (!cible) return;
-    const carto = Cesium.Cartographic.fromCartesian(cible);
-    if (!carto) return;
-    onPick(
-      Cesium.Math.toDegrees(carto.latitude),
-      Cesium.Math.toDegrees(carto.longitude),
-    );
+    if (Date.now() < ignorerClicJusqua) return;
+    const ll = lonLatAt(mouvement.position);
+    if (ll) onPick(ll.lat, ll.lon);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
   return {
@@ -159,6 +177,7 @@ export function createMap3D(container, onPick) {
     setNodes(noeuds, selectionId = null) {
       points.removeAll();
       labels.removeAll();
+      affiches = noeuds ?? [];
       for (const n of noeuds ?? []) {
         const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
         const estCapteur = n.kind === "sensor";
@@ -189,6 +208,76 @@ export function createMap3D(container, onPick) {
       }
     },
 
+    /** Position géographique sous un point de l'écran (pixels CSS relatifs au canevas). */
+    lonLatAt,
+
+    /**
+     * L'équipement affiché le plus proche de ce point de l'écran, ou null.
+     *
+     * On projette chaque équipement et on garde le plus proche dans un rayon de
+     * `tolerancePx`, plutôt que d'appeler `scene.pick` : c'est déterministe, ça marche
+     * même quand le point est dessiné sans profondeur (disableDepthTestDistance), et ça ne
+     * casse pas si Cesium change la forme de ses objets de sélection.
+     *
+     * @param {{x: number, y: number}} position pixels CSS relatifs au canevas
+     * @param {number} [tolerancePx]
+     */
+    nodeAt(position, tolerancePx = 22) {
+      if (!position) return null;
+      const scene = viewer.scene;
+      let meilleur = null;
+      let meilleurD = tolerancePx;
+      for (const n of affiches) {
+        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
+        const ecran = Cesium.SceneTransforms.worldToWindowCoordinates(
+          scene, Cesium.Cartesian3.fromDegrees(lon, lat));
+        // Derrière la caméra, ou hors écran : `worldToWindowCoordinates` rend undefined.
+        if (!ecran) continue;
+        const d = Math.hypot(ecran.x - position.x, ecran.y - position.y);
+        if (d <= meilleurD) { meilleurD = d; meilleur = n; }
+      }
+      return meilleur;
+    },
+
+    /**
+     * Montre un repère à l'endroit où l'équipement sera posé, pendant le glisser.
+     * @param {number} lat @param {number} lon @param {string} [kind]
+     */
+    showGhost(lat, lon, kind = "sensor") {
+      fantome.removeAll();
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      fantome.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        color: (COULEURS[kind] ?? COULEURS.sensor).withAlpha(0.55),
+        pixelSize: 22,
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 3,
+        disableDepthTestDistance: 0,
+      });
+    },
+
+    /** Retire le repère, le glisser est fini. */
+    clearGhost() {
+      fantome.removeAll();
+    },
+
+    /**
+     * Empêche la caméra de pivoter pendant qu'on déplace un équipement. Sans ça, le
+     * geste qui veut poser un capteur fait tourner le globe à la place.
+     */
+    setDragging(actif) {
+      const c = viewer.scene.screenSpaceCameraController;
+      if (c) c.enableInputs = !actif;
+    },
+
+    /**
+     * Neutralise le clic pendant `dureeMs`. À appeler à la fin d'un glisser, pour que le
+     * relâchement du bouton ne soit pas pris pour une demande de déplacer l'origine.
+     */
+    setIgnoreClick(dureeMs = 500) {
+      ignorerClicJusqua = Date.now() + Math.max(0, dureeMs);
+    },
+
     /** À appeler quand la carte devient visible : elle n'a pas de taille quand elle est masquée. */
     resize() {
       recaler();
@@ -196,6 +285,7 @@ export function createMap3D(container, onPick) {
 
     destroy() {
       observateur?.disconnect();
+      fantome.removeAll();
       gestionnaire.destroy?.();
       viewer.destroy?.();
     },
