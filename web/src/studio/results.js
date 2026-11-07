@@ -37,3 +37,17 @@ export function criteriaRows(result) {
     points: `${c.points} / ${c.max_points}`,
   }));
 }
+
+// Une ligne par champ de la trame, pour l inspecteur.
+export function frameRows(mac = {}, app = {}) {
+  const rows = [
+    ["MHDR", mac.mhdr_hex ?? "-", mac.mtype ?? "-"],
+    ["DevAddr", mac.dev_addr_hex ?? "-", ""],
+    ["FCtrl", mac.fctrl_hex ?? "-", "ADR=" + (mac.adr ? 1 : 0)],
+    ["FCnt", mac.fcnt ?? "-", ""],
+    ["FPort", app.fport ?? "-", ""],
+    ["Charge", app.frm_payload_hex ?? "-", (app.frm_payload_octets ?? 0) + " octets"],
+    ["MIC", mac.mic_hex ?? "-", ""],
+  ];
+  return rows.map((r) => ({ label: r[0], value: r[1], note: r[2] }));
+}
