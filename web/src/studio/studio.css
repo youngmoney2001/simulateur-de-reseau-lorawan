@@ -1,36 +1,128 @@
-:root { --bg:#f4f6f8; --fg:#1d2630; --muted:#63707d; --line:#c9d1d9; --accent:#1f6feb; --danger:#b42318; }
+/* Studio LoRaWAN — disposition de type Packet Tracer, contenu et couleurs propres.
+   Remplace l'ancienne mise en page en trois colonnes fixes (voir docs/UI_PT_CONCEPTION.md). */
+:root {
+  --bg:#f4f6f8; --fg:#1d2630; --muted:#63707d; --line:#c9d1d9; --accent:#1f6feb; --danger:#b42318;
+  --menu:#e8ecf1; --menu-line:#ccd4de; --canvas:#ffffff; --palette:#eef2f6; --palette-head:#d8e2ee;
+  --accent-soft:#bfd9f2; --status:#e8ecf1;
+}
 * { box-sizing: border-box; }
-body { margin:0; font: 14px/1.4 system-ui, sans-serif; color:var(--fg); background:var(--bg); }
+body { margin:0; font: 14px/1.4 system-ui, sans-serif; color:var(--fg); background:var(--bg);
+  height:100vh; display:flex; flex-direction:column; }
 h2 { font-size:15px; margin:0 0 8px; }
 h3 { font-size:14px; margin:12px 0 4px; }
-.topbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:8px 12px; background:#1d2630; color:#fff; }
-.topbar .muted { color:#aeb8c4; }
-.topbar label { color:#fff; }
-/* D6 : le studio et la carte des resultats sont deux entrees distinctes, sans lien entre elles. */
-.topbar a.applink { color:#fff; text-decoration:none; border:1px solid #495b6d; border-radius:4px; padding:5px 10px; }
-.topbar a.applink:hover, .topbar a.applink:focus-visible { background:#2b3947; }
-.topbar .spacer { flex:1 1 auto; }
-.flash { margin:8px 12px; padding:8px 12px; border-radius:6px; background:#fde8e6; color:var(--danger); }
-.layout { display:grid; grid-template-columns: 240px 1fr 480px; gap:12px; padding:12px; }
-.bottom { display:grid; grid-template-columns: 1fr 1fr; gap:12px; padding:0 12px 12px; }
-/* D1 : .bottom declare deux colonnes pour trois panneaux. L exercice prend toute la largeur,
-   sinon un trou apparait des que le panneau d animation cesse d etre masque. */
-.bottom > .exercise { grid-column: 1 / -1; }
-.panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
 label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted); }
 input, select, button, textarea { font:inherit; }
 input, select { padding:4px 6px; border:1px solid var(--line); border-radius:4px; color:var(--fg); }
 button { padding:5px 10px; border:1px solid var(--line); border-radius:4px; background:#fff; color:var(--fg); cursor:pointer; }
 button:disabled { opacity:.5; cursor:default; }
 button.primary, button[type=submit] { background:var(--accent); border-color:var(--accent); color:#fff; }
-button.danger { background:transparent; color:#ffb4ab; border-color:#ffb4ab; }
+button.danger { background:transparent; color:var(--danger); border-color:var(--danger); }
 .row { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
-#add-form { display:flex; flex-direction:column; gap:6px; }
 .muted { color:var(--muted); }
 .strong { font-weight:600; }
 .hint { font-size:12px; color:var(--muted); }
 .statement { white-space:pre-wrap; }
-.plan svg { width:100%; height:auto; background:#fff; border:1px solid var(--line); border-radius:6px; touch-action:none; }
+.notes { margin:6px 0; padding-left:18px; font-size:13px; }
+table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+.tag { font-size:11px; padding:1px 6px; border-radius:10px; background:var(--palette); color:var(--muted); }
+.flash { margin:8px 12px; padding:8px 12px; border-radius:6px; background:#fde8e6; color:var(--danger); }
+
+/* --- Écran de lancement --------------------------------------------------------------- */
+.launch { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(160deg,#f4f6f8,#dde6f2); }
+.launch[hidden] { display:none; }
+.launch-card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:24px;
+  width:min(560px,92vw); box-shadow:0 8px 30px rgba(29,38,48,.18); display:flex; flex-direction:column; gap:12px; }
+.launch-card h1 { font-size:20px; margin:0; }
+.launch-card p { margin:0; }
+.modes { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.mode-card { display:flex; flex-direction:column; gap:6px; align-items:flex-start; text-align:left;
+  padding:12px; border:2px solid var(--line); border-radius:8px; background:#fff; }
+.mode-card strong { font-size:15px; }
+.mode-card span { font-size:12px; color:var(--muted); }
+.mode-card[aria-pressed=true] { border-color:var(--accent); background:#f0f6ff; }
+.mode-card:hover { border-color:var(--accent-soft); }
+
+/* --- Barre de menu -------------------------------------------------------------------- */
+.menubar { display:flex; align-items:center; gap:14px; padding:5px 10px; background:var(--menu);
+  border-bottom:1px solid var(--menu-line); flex:0 0 auto; }
+.brand { font-weight:700; letter-spacing:.02em; }
+.menu { display:flex; gap:12px; font-size:13px; color:#3d4a58; }
+.menu span { cursor:default; padding:2px 4px; border-radius:3px; }
+.menu span:hover { background:#d9e0e9; }
+.mode-pick { flex-direction:row; align-items:center; gap:6px; font-size:13px; color:var(--fg); }
+.spacer { flex:1 1 auto; }
+.menubar a.applink { color:#3d4a58; text-decoration:none; font-size:13px; padding:3px 8px;
+  border:1px solid var(--menu-line); border-radius:4px; background:#fff; }
+.menubar a.applink:hover { background:#d9e0e9; }
+
+/* --- Espace de travail : le plan domine ----------------------------------------------- */
+.workspace { flex:1 1 auto; display:flex; min-height:0; gap:0; }
+.plan-area { flex:1 1 auto; position:relative; background:var(--canvas);
+  border:1px solid var(--line); margin:8px 0 8px 8px; border-radius:6px; overflow:hidden; }
+.plan-area svg { width:100%; height:100%; display:block; background:var(--canvas); touch-action:none; }
+.empty-plan { position:absolute; inset:auto 0 12px 0; text-align:center; margin:0; }
+
+.toolbar { flex:0 0 78px; display:flex; flex-direction:column; gap:2px; padding:8px 6px;
+  background:var(--menu); border-left:1px solid var(--menu-line); margin:8px 8px 8px 0; border-radius:0 6px 6px 0; }
+.tool { display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 2px; font-size:10px;
+  border:1px solid transparent; background:transparent; border-radius:5px; color:#3d4a58; }
+.tool span { font-size:17px; line-height:1; }
+.tool:hover { background:#d9e0e9; }
+.tool.active { background:#fff; border-color:var(--accent); color:var(--accent); }
+.tool.danger:hover { background:#fde8e6; color:var(--danger); }
+.tool-sep { height:1px; background:var(--menu-line); margin:4px 2px; }
+
+/* --- Bas : palette à gauche, observation à droite ------------------------------------- */
+.bottom-dock { flex:0 0 232px; display:flex; gap:8px; padding:0 8px 8px; min-height:0; }
+.palette { flex:0 0 340px; display:flex; flex-direction:column; gap:6px; background:var(--palette);
+  border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; }
+.cat-box, .model-box { display:flex; flex-wrap:wrap; gap:6px; }
+.cat-box button, .model-box button { padding:6px 8px; font-size:12px; }
+.cat-box button.active, .model-box button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.device-icon { display:inline-block; width:14px; height:14px; border-radius:2px; margin-right:6px;
+  vertical-align:-2px; }
+.icon-border { background:#2ea043; border:1px solid #1a7f37; }
+.icon-relay { background:#f2cc60; border:1px solid #9a6700; }
+.icon-sensor { background:#8fb8ff; border:1px solid #1f6feb; border-radius:50%; }
+.icon-server { background:#c9b5ff; border:1px solid #6e40c9; }
+.session-pick { flex-direction:row; align-items:center; gap:6px; margin-top:auto; padding-top:6px;
+  border-top:1px solid var(--line); }
+
+.observation { flex:1 1 auto; display:flex; flex-direction:column; background:#fff;
+  border:1px solid var(--line); border-radius:6px; overflow:hidden; min-width:0; }
+.tabs { display:flex; gap:0; background:var(--palette); border-bottom:1px solid var(--line); flex:0 0 auto; }
+.tab { border:none; border-radius:0; background:transparent; padding:7px 14px; font-size:13px;
+  border-right:1px solid var(--line); color:var(--muted); }
+.tab.active { background:#fff; color:var(--fg); font-weight:600; box-shadow:inset 0 -2px 0 var(--accent); }
+.tab-body { flex:1 1 auto; overflow:auto; padding:10px 12px; }
+.exercise-pick { margin-bottom:6px; }
+
+/* --- Barre d'état --------------------------------------------------------------------- */
+.statusbar { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:4px 10px;
+  background:var(--status); border-top:1px solid var(--menu-line); font-size:12px; color:#3d4a58; }
+
+/* --- Fenêtre d'équipement : panneau pour l'instant, flottante en phase C --------------- */
+.device { position:fixed; top:64px; right:96px; z-index:50; width:420px; max-height:calc(100vh - 120px);
+  background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto;
+  box-shadow:0 6px 24px rgba(29,38,48,.22); }
+.device[hidden] { display:none; }
+.device-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.device-head h2 { margin:0 0 6px; }
+.close { border:none; background:transparent; font-size:14px; color:var(--muted); padding:2px 6px; }
+.close:hover { color:var(--danger); }
+.device-tabs { display:flex; gap:0; border-bottom:1px solid var(--line); margin:6px 0 8px; }
+.dtab { border:none; background:transparent; padding:5px 12px; font-size:12px; color:var(--muted); }
+.dtab.active { color:var(--fg); font-weight:600; box-shadow:inset 0 -2px 0 var(--accent); }
+.frame-panel { margin-top:0; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
+.frame-panel h3 { margin:0 0 6px; font-size:13px; }
+.frame-panel table { margin-top:0; }
+.frame-panel th { color:var(--muted); font-weight:600; white-space:nowrap; }
+.frame-panel td { font:12px/1.35 ui-monospace, monospace; word-break:break-all; }
+.frame-panel p { margin:6px 0 0; }
+
+/* --- Plan : nœuds --------------------------------------------------------------------- */
 .node { cursor:grab; }
 .node.selected circle, .node.selected rect { stroke:var(--accent); stroke-width:3; }
 .node text { font-size:12px; fill:var(--fg); pointer-events:none; }
@@ -38,45 +130,43 @@ button.danger { background:transparent; color:#ffb4ab; border-color:#ffb4ab; }
 .node .border { fill:#2ea043; stroke:#1a7f37; }
 .node .relay { fill:#f2cc60; stroke:#9a6700; }
 .node .server { fill:#c9b5ff; stroke:#6e40c9; }
+
+/* --- Console (onglet CLI) ------------------------------------------------------------- */
 .console { background:#0d1117; color:#c9d1d9; font:13px/1.35 ui-monospace, monospace; border-radius:6px; padding:8px; }
 .console pre { margin:0; white-space:pre-wrap; max-height:260px; overflow:auto; }
 .console .err { color:#ff7b72; }
 .console form { display:flex; gap:6px; margin-top:6px; }
 .console input { flex:1; background:transparent; color:#fff; border:none; border-bottom:1px solid #30363d; font:inherit; }
 .console .prompt { color:#7ee787; white-space:nowrap; }
-.sensor-form { display:grid; grid-template-columns: 1fr 1fr; gap:6px; }
+.no-cli { background:var(--palette); border:1px dashed var(--line); border-radius:6px; padding:12px;
+  color:var(--muted); font-size:13px; }
+.sensor-form { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .field-error { outline:2px solid var(--danger); }
-.notes { margin:6px 0; padding-left:18px; font-size:13px; }
-table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
-th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
-.exercise .statement { font-size:13px; }
-.tag { font-size:11px; padding:1px 6px; border-radius:10px; background:#eef2f6; color:var(--muted); }
-/* D5 : l inspecteur de trames etait un <details> replie dans un panneau masque par defaut :
-   trois niveaux d acces pour une fonction cle. Il devient une section visible des qu une trame
-   est active. */
-.frame-panel { margin-top:10px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
-.frame-panel h3 { margin:0 0 6px; font-size:13px; color:var(--fg); }
-.frame-panel table { margin-top:0; }
-.frame-panel th { color:var(--muted); font-weight:600; white-space:nowrap; }
-.frame-panel td { font:12px/1.35 ui-monospace, monospace; word-break:break-all; }
-.frame-panel p { margin:6px 0 0; }
-/* La colonne d equipement heberge la console, dont les erreurs s affichent par un caret aligne
-   sur la colonne fautive : elle a besoin de largeur. On la rend des qu il n y a plus la place. */
-@media (max-width: 1360px) { .layout { grid-template-columns: 220px 1fr 400px; } }
-@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } .bottom { grid-template-columns: 1fr; } }
 
-/* Animation des trames (player.js) */
-.anim-ok { stroke: #2e7d32; fill: #2e7d32; }
-.anim-lost { stroke: #c62828; fill: #c62828; }
-.anim-neutral { stroke: #546e7a; fill: #546e7a; }
-#anim-layer .trail { stroke-width: 2; stroke-opacity: 0.45; stroke-dasharray: 4 3; }
-#anim-layer .frame { stroke: #fff; stroke-width: 1; }
-#anim-layer .ring { fill: none; stroke-width: 2; }
-.player .journal { max-height: 260px; overflow: auto; padding-left: 0; list-style: none; font-size: 0.9em; }
-.journal-row { border-bottom: 1px solid var(--line); padding: 2px 0; }
-.journal-row.ok { border-left: 3px solid #2e7d32; padding-left: 6px; }
-.journal-row.lost { border-left: 3px solid #c62828; padding-left: 6px; }
-.journal-row.mac { border-left: 3px solid #6a1b9a; padding-left: 6px; }
-.journal-row.current { background: #fff8e1; }
-.journal-head { background: none; border: 0; padding: 2px 0; cursor: pointer; text-align: left; font: inherit; }
-.journal-row ul { margin: 2px 0 4px 16px; padding: 0; color: #546e7a; }
+/* --- Animation des trames (player.js) ------------------------------------------------- */
+.anim-ok { stroke:#2e7d32; fill:#2e7d32; }
+.anim-lost { stroke:#c62828; fill:#c62828; }
+.anim-neutral { stroke:#546e7a; fill:#546e7a; }
+#anim-layer .trail { stroke-width:2; stroke-opacity:.45; stroke-dasharray:4 3; }
+#anim-layer .frame { stroke:#fff; stroke-width:1; }
+#anim-layer .ring { fill:none; stroke-width:2; }
+.player .journal { max-height:260px; overflow:auto; padding-left:0; list-style:none; font-size:.9em; }
+.journal-row { border-bottom:1px solid var(--line); padding:2px 0; }
+.journal-row.ok { border-left:3px solid #2e7d32; padding-left:6px; }
+.journal-row.lost { border-left:3px solid #c62828; padding-left:6px; }
+.journal-row.mac { border-left:3px solid #6a1b9a; padding-left:6px; }
+.journal-row.current { background:#fff8e1; }
+.journal-head { background:none; border:0; padding:2px 0; cursor:pointer; text-align:left; font:inherit; }
+.journal-row ul { margin:2px 0 4px 16px; padding:0; color:#546e7a; }
+
+/* --- Adaptatif ------------------------------------------------------------------------ */
+@media (max-width:1180px) {
+  .workspace { flex-direction:column; }
+  .toolbar { flex-direction:row; flex:0 0 auto; border-left:none; border-top:1px solid var(--menu-line);
+    margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; }
+  .plan-area { margin:8px; min-height:300px; }
+  .bottom-dock { flex-direction:column; flex:0 0 auto; max-height:none; }
+  .palette { flex:0 0 auto; }
+  .observation { min-height:240px; }
+  .device { right:8px; width:min(420px,calc(100vw - 16px)); }
+}

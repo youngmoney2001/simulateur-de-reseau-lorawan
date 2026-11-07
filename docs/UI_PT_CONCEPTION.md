@@ -197,14 +197,32 @@ donnerait une image fausse du protocole. Le plan montre donc les **portées et l
 
 ## 7. Phasage
 
-| Phase | Contenu | Risque |
-|---|---|---|
-| **A** | Écran de lancement : saisie du jeton, choix Conception / Étude, mode changeable à chaud | Faible |
-| **B** | Plan dominant + palette en bas à gauche (déplacement de l'existant) | Faible |
-| **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus |
-| **D** | Barre d'outils verticale à droite | Faible |
-| **E** | Panneau d'observation à onglets (Journal / Trame / Résultats) + barre d'état | Faible |
-| **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible |
+| Phase | Contenu | Risque | État |
+|---|---|---|---|
+| **A** | Écran de lancement : saisie du jeton, choix Conception / Étude, mode changeable à chaud | Faible | **Fait** |
+| **B** | Plan dominant + palette en bas à gauche + barre d'outils à droite + barre d'état | Faible | **Fait** |
+| **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus | Fait *en panneau ancré* ; le flottant reste à faire |
+| **D** | Panneau d'observation à onglets (Simulation / Journal / Trame / Exercice) | Faible | **Fait** |
+| **E** | Fenêtre réellement flottante et redimensionnable (détachement du panneau) | Moyen | À faire |
+| **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible | À faire |
+
+### Ce que couvrent les phases A–D
+
+- **A** — écran `#launch` : jeton, deux cartes *Conception* / *Étude*, erreur visible sur place. Le mode
+  est mémorisé et se change depuis la barre du haut (`#mode-select`).
+- **B** — `.workspace` : plan en zone dominante, barre d'outils verticale à droite, palette en bas à
+  gauche (catégories puis modèles), barre d'état en bas. Cliquer un modèle remplit et soumet le
+  formulaire d'ajout existant : aucune logique d'ajout dupliquée, `validateNewNode` reste seul juge.
+- **C** — fenêtre d'équipement à trois onglets **Physique / Config / CLI**. Elle est pour l'instant un
+  panneau ancré (`position:fixed`) et non une fenêtre déplaçable : le gain principal — la console
+  large et les trois vues séparées — est acquis, le détachement reste à faire.
+- **D** — quatre onglets d'observation. L'inspecteur de trames quitte le panneau d'animation et
+  devient un onglet de plein droit, ce qui clôt le défaut D5.
+
+**Le test e2e a été mis à jour** pour cette structure à onglets (sélection de l'onglet avant chaque
+étape). Il ne peut pas être exécuté ici — aucun navigateur n'est installé — et la CI ne lance
+aucun test web. Les phases A–D sont donc vérifiées par la syntaxe, le build et les 29 tests Node,
+**mais n'ont pas été vues dans un navigateur**.
 
 La phase C est la seule sensible : la console garde le focus et l'historique par équipement, et le
 passage d'un panneau fixe à une fenêtre flottante touche `renderConsole`, `renderDeviceInfo` et

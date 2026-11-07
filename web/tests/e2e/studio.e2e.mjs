@@ -81,6 +81,16 @@ try {
     { timeout }, sel, re.source);
   const setValue = (sel, value) => page.$eval(sel, (e, v) => { e.value = v; }, value);
   const submitForm = (sel) => page.$eval(sel, (f) => f.requestSubmit());
+  // L'interface est a onglets (disposition Packet Tracer) : on choisit l'onglet par son libelle.
+  const clickTab = async (sel, label) => {
+    await page.evaluate((s, txt) => {
+      const b = [...document.querySelectorAll(s)].find((e) => e.textContent.includes(txt));
+      if (!b) throw new Error(`onglet introuvable : ${txt}`);
+      b.click();
+    }, sel, label);
+  };
+  const deviceTab = (label) => clickTab(".dtab", label);
+  const obsTab = (label) => clickTab(".tab", label);
 
   await step("connexion et session créée automatiquement", async () => {
     await page.type("#token", token);
@@ -109,6 +119,8 @@ try {
 
   await step("console : configuration CLI et erreur de syntaxe au caret", async () => {
     await page.click('g.node[data-id="gw-nord"] rect');
+    await page.waitForFunction(() => !document.getElementById("device").hidden);
+    await deviceTab("CLI");
     await page.waitForSelector("#device-body .console input");
     const send = async (cmd) => {
       await page.click("#device-body .console input");
@@ -132,6 +144,8 @@ try {
 
   await step("capteur : refus d'un SF hors bornes au studio, puis enregistrement", async () => {
     await page.click('g.node[data-id="capt-1"] circle');
+    await page.waitForFunction(() => !document.getElementById("device").hidden);
+    await deviceTab("Config");
     await page.waitForSelector('#device-body .sensor-form input[name="spreading_factor"]');
     await setValue('#device-body .sensor-form input[name="spreading_factor"]', "13");
     await submitForm("#device-body form");
@@ -169,8 +183,8 @@ try {
   });
 
   await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {
-    await page.waitForFunction(() => !document.getElementById("player").hidden, { timeout: 60_000 });
-    await page.waitForFunction(() => document.querySelectorAll("#journal > li").length >= 1);
+    await obsTab("Journal");
+    await page.waitForFunction(() => document.querySelectorAll("#journal > li").length >= 1, { timeout: 60_000 });
     const before = await page.$eval("#play-time", (n) => n.textContent);
     await page.evaluate(() => document.getElementById("play-speed").value = "300");
     await page.evaluate(() => document.getElementById("play-speed").dispatchEvent(new Event("change")));
@@ -196,6 +210,7 @@ try {
   });
 
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {
+    await obsTab("Exercice");
     await page.select("#exercise-start", "eu868-passerelle");
     await page.click("#start-exercise");
     await waitText("#ex-title", /eu868|EU868|passerelle/i);

@@ -14,6 +14,8 @@ const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
 
+let deviceTab = "phys";          // onglet actif de la fenetre d'equipement : phys | config | cli
+
 const state = {
   client: null,
   sessions: [],
@@ -52,10 +54,17 @@ function clear(node) {
 }
 
 function showError(err) {
-  const box = $("flash");
-  box.textContent = err instanceof ApiError
+  const text = err instanceof ApiError
     ? `${err.message} (${err.code})`
     : `Erreur : ${err?.message || err}`;
+  // L'écran de lancement recouvre l'application : l'erreur doit y être visible aussi.
+  const launch = $("launch"), launchErr = $("launch-error");
+  if (launch && !launch.hidden && launchErr) {
+    launchErr.textContent = text;
+    launchErr.hidden = false;
+  }
+  const box = $("flash");
+  box.textContent = text;
   box.hidden = false;
   clearTimeout(showError.timer);
   showError.timer = setTimeout(() => { box.hidden = true; }, 8000);
@@ -87,6 +96,8 @@ async function connect() {
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
+  closeLaunch();
+  setStatus(state.sessions.length ? "Session chargée" : "Nouvelle session");
 }
 
 function renderSessionChoices() {
@@ -232,26 +243,57 @@ function renderDevice() {
   clear(body);
   const node = state.topo?.nodes.find((n) => n.id === state.selected);
   if (!node) {
+    $("device").hidden = true;
     $("device-title").textContent = "Aucun équipement sélectionné";
     return;
   }
+  $("device").hidden = false;
   $("device-title").textContent = nodeCaption(node);
-  body.append(el("div", { id: "device-info" }));
-  renderDeviceInfo(node);
-  if (CLI_KINDS.includes(node.kind)) renderConsole(node);
-  if (node.kind === "sensor") renderSensorForm(node);
-  if (node.kind === "server") body.append(el("p", { class: "muted", text: "Serveur de réseau : pas de configuration dans cette version." }));
-  body.append(el("button", {
-    type: "button", class: "danger", text: "Retirer cet équipement",
-    onclick: async () => {
-      if (!window.confirm(`Retirer ${node.id} ?`)) return;
-      const done = await guard(() => state.client.removeNode(state.sid, node.id));
-      if (done === undefined) return;
-      state.selected = null;
-      delete state.consoles[node.id];
-      await loadTopology();
-    },
-  }));
+  if (deviceTab === "phys") {
+    body.append(el("div", { id: "device-info" }));
+    renderDeviceInfo(node);
+    body.append(el("button", {
+      type: "button", class: "danger", text: "Retirer cet équipement",
+      onclick: async () => {
+        if (!window.confirm(`Retirer ${node.id} ?`)) return;
+        const done = await guard(() => state.client.removeNode(state.sid, node.id));
+        if (done === undefined) return;
+        state.selected = null;
+        delete state.consoles[node.id];
+        await loadTopology();
+      },
+    }));
+  } else if (deviceTab === "config") {
+    if (node.kind === "sensor") renderSensorForm(node);
+    else renderGatewayConfig(node);
+  } else if (deviceTab === "cli") {
+    if (CLI_KINDS.includes(node.kind)) renderConsole(node);
+    else body.append(el("p", { class: "no-cli", text: cliAbsentMessage(node.kind) }));
+  }
+}
+
+// Onglet Config des passerelles et du serveur : l'etat reel, et ou le changer.
+// Il n existe pas d endpoint de configuration hors CLI : on ne pretend pas le contraire.
+function renderGatewayConfig(node) {
+  const body = $("device-body");
+  const st = stateOf(node.id);
+  body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
+  body.append(el("p", { class: "muted", text: `Nom d'hôte : ${st?.hostname ?? node.id}` }));
+  body.append(el("p", { class: "muted", text: `Région : ${st?.region ?? "non configurée"}` }));
+  body.append(el("p", { class: "muted", text: `État : ${st?.configured ? "configuré" : "non configuré"}` }));
+  if (CLI_KINDS.includes(node.kind)) {
+    body.append(el("p", { class: "no-cli",
+      text: "La configuration des passerelles se fait en ligne de commande, comme sur un équipement réel. Ouvrez l'onglet CLI." }));
+  } else {
+    body.append(el("p", { class: "no-cli", text: "Serveur de réseau : pas de configuration dans cette version." }));
+  }
+}
+
+// Pourquoi cet equipement n a pas de console, au lieu de masquer l onglet.
+function cliAbsentMessage(kind) {
+  if (kind === "sensor") return "Un capteur ne se configure pas en ligne de commande : utilisez l'onglet Config pour ses réglages radio.";
+  if (kind === "server") return "Le serveur de réseau n'expose pas de console dans cette version.";
+  return "Cet équipement n'a pas de ligne de commande.";
 }
 
 // Infos seules (rafraîchies après une commande sans reconstruire la console, qui garde le focus).
@@ -570,14 +612,118 @@ async function renderAttemptsFromServer() {
   }
 }
 
+// --- Mode : Conception / Étude ---------------------------------------------------------------
+// Les deux pans existent réellement (réseau libre d'un côté, exercices notés de l'autre).
+// Aucun rôle serveur n'existe : on ne prétend donc pas restreindre des droits (voir
+// docs/UI_PT_CONCEPTION.md §2.1).
+function applyMode(mode) {
+  const m = mode === "study" ? "study" : "design";
+  sessionStorage.setItem("lsim-mode", m);
+  $("mode-select").value = m;
+  for (const b of document.querySelectorAll(".mode-card"))
+    b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+  selectObservationTab(m === "study" ? "exercise" : "sim");
+  $("status-right").textContent = m === "study" ? "Mode Étude" : "Mode Conception";
+}
+
+// --- Onglets d'observation (bas à droite) ----------------------------------------------------
+function selectObservationTab(name) {
+  for (const b of document.querySelectorAll(".tab"))
+    b.classList.toggle("active", b.dataset.tab === name);
+  for (const p of document.querySelectorAll(".tab-body"))
+    p.hidden = p.dataset.panel !== name;
+}
+
+// --- Onglets de la fenêtre d'équipement ------------------------------------------------------
+function selectDeviceTab(name) {
+  deviceTab = name;
+  for (const b of document.querySelectorAll(".dtab"))
+    b.classList.toggle("active", b.dataset.dtab === name);
+  renderDevice();
+}
+
+// --- Palette d'équipements (bas à gauche) ----------------------------------------------------
+const PALETTE = [
+  { cat: "Passerelles", icon: "icon-border", models: [
+      { kind: "border", label: "Passerelle frontière", icon: "icon-border" },
+      { kind: "relay",  label: "Passerelle relais",    icon: "icon-relay" } ] },
+  { cat: "Capteurs", icon: "icon-sensor", models: [
+      { kind: "sensor", label: "Capteur", icon: "icon-sensor" } ] },
+  { cat: "Serveur", icon: "icon-server", models: [
+      { kind: "server", label: "Serveur de réseau", icon: "icon-server" } ] },
+];
+
+function renderPalette() {
+  const cats = $("cat-box"), models = $("model-box");
+  clear(cats);
+  const draw = (cat, active) => {
+    clear(models);
+    for (const m of cat.models) {
+      models.append(el("button", {
+        type: "button", class: "tool", title: m.label,
+        onclick: () => addFromPalette(m.kind),
+      }, el("span", { class: "device-icon " + m.icon }), document.createTextNode(m.label)));
+    }
+    for (const b of cats.children) b.classList.toggle("active", b === active);
+  };
+  PALETTE.forEach((cat, i) => {
+    cats.append(el("button", {
+      type: "button", class: "tool",
+      onclick: () => draw(cat, cats.children[i]),
+    }, el("span", { class: "device-icon " + cat.icon }), document.createTextNode(cat.cat)));
+  });
+  if (cats.children.length) draw(PALETTE[0], cats.children[0]);
+}
+
+// Clic sur un modèle : on remplit le formulaire existant et on le soumet. Aucune logique
+// d'ajout dupliquée : validateNewNode et l'API restent seuls juges.
+function addFromPalette(kind) {
+  const f = $("add-form");
+  f.querySelector('[name="kind"]').value = kind;
+  const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`;
+  f.querySelector('[name="id"]').value = id;
+  f.requestSubmit();
+}
+
+// --- Barre d'état ---------------------------------------------------------------------------
+function setStatus(text) {
+  $("status-left").textContent = text;
+}
+
+// --- Écran de lancement ----------------------------------------------------------------------
+function closeLaunch() {
+  $("launch").hidden = true;
+}
+
 // --- Démarrage -----------------------------------------------------------------------------
 $("connect").addEventListener("click", connect);
 $("session-select").addEventListener("change", (ev) => selectSession(ev.target.value));
 $("new-session").addEventListener("click", () => newSession(null));
 $("delete-session").addEventListener("click", deleteSession);
 
+// Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
+for (const b of document.querySelectorAll(".tab"))
+  b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
+for (const b of document.querySelectorAll(".dtab"))
+  b.addEventListener("click", () => selectDeviceTab(b.dataset.dtab));
+$("device-close").addEventListener("click", () => {
+  state.selected = null;
+  renderPlan();
+  renderDevice();
+});
+
+// Choix du mode : sur l'écran de lancement, puis dans la barre du haut.
+for (const b of document.querySelectorAll(".mode-card"))
+  b.addEventListener("click", () => applyMode(b.dataset.mode));
+$("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
+
+renderPalette();
+applyMode(sessionStorage.getItem("lsim-mode") || "design");
+
 const saved = sessionStorage.getItem("lsim-token");
 if (saved) {
   $("token").value = saved;
   connect();
+} else {
+  $("launch").hidden = false;
 }
