@@ -14,6 +14,13 @@ window.CESIUM_BASE_URL = "/cesium/";
 const BASEMAP_CREDIT =
   "Basemap : Esri, HERE, Garmin, © OpenStreetMap contributors, et partenaires SIG";
 
+// Fond garanti : la texture mondiale fournie avec Cesium, servie depuis public/cesium.
+// Le fond routier vient d'un service distant, que rien ne garantit accessible — depuis
+// l'environnement de développement comme depuis la CI, il ne l'est pas, et le globe y
+// restait désespérément vide. Cette texture, elle, est toujours là : la carte n'est donc
+// jamais blanche, et son rendu devient vérifiable partout.
+const FOND_LOCAL = window.CESIUM_BASE_URL + "Assets/Textures/NaturalEarthII";
+
 // Mètres (plan) vers degrés (carte). Même formule que geo.py.
 export function toLonLat(x_m, y_m, originLat, originLon) {
   const lat = originLat + (y_m / EARTH_RADIUS_M) * (180 / Math.PI);
@@ -50,12 +57,11 @@ const COULEURS = {
  */
 export function createMap3D(container, onPick) {
   const viewer = new Cesium.Viewer(container, {
-    // Fournisseur asynchrone : le constructeur direct n'initialise pas ses ressources.
+    // Le fond local d'abord : il est toujours disponible. Le fond routier est ajouté
+    // ensuite, par-dessus, et reste transparent s'il ne charge jamais — la carte dégrade
+    // donc proprement au lieu de disparaître.
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
-      Cesium.ArcGisMapServerImageryProvider.fromUrl(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
-        { credit: new Cesium.Credit(BASEMAP_CREDIT) },
-      ),
+      Cesium.TileMapServiceImageryProvider.fromUrl(FOND_LOCAL),
     ),
     baseLayerPicker: false,
     geocoder: false,
@@ -67,6 +73,19 @@ export function createMap3D(container, onPick) {
     infoBox: false,
     selectionIndicator: false,
   });
+
+  // Le fond routier, en surcouche : précis à l'échelle d'une ville, mais distant. On le tente
+  // et on l'oublie s'il ne répond pas — le fond local reste visible en dessous.
+  try {
+    viewer.imageryLayers.addImageryProvider(
+      new Cesium.ArcGisMapServerImageryProvider({
+        url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer",
+        credit: new Cesium.Credit(BASEMAP_CREDIT),
+      }),
+    );
+  } catch (err) {
+    console.warn("fond routier indisponible, le fond local suffit :", err);
+  }
 
   const points = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   const labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
