@@ -63,6 +63,7 @@ from lsim.study_contract import (
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
+from lsim.studio_static import content_type, find_dist, resolve_asset
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
 from lsim.trace_events import (
@@ -746,13 +747,15 @@ class ApiServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
                  tls_context: Optional[ssl.SSLContext] = None,
                  study: Optional[StudyService] = None,
-                 db_lock: Optional[DatabaseLock] = None) -> None:
+                 db_lock: Optional[DatabaseLock] = None,
+                 studio_root: Optional[Path] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
         self.study = study if study is not None else StudyService()
         self._tls = tls_context
         self._db_lock = db_lock
+        self.studio_root = studio_root
 
     def server_close(self) -> None:
         super().server_close()
@@ -785,6 +788,32 @@ class _Handler(BaseHTTPRequestHandler):
         return  # pas de journal d'accès : les en-têtes contiennent des jetons
 
     def do_GET(self) -> None:
+        if not self._serve_static():
+            self._handle("GET")
+
+    def _serve_static(self) -> bool:
+        """Sert le studio precompile. Rend la main (False) si l URL n est pas un fichier du studio."""
+        root = getattr(self.server, "studio_root", None)
+        if root is None:
+            return False
+        path = urlsplit(self.path).path
+        fichier = resolve_asset(root, path)
+        if fichier is None:
+            return False
+        try:
+            data = fichier.read_bytes()
+        except OSError:
+            return False
+        cache = "no-store" if fichier.suffix == ".html" else "public, max-age=3600"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type(fichier))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
         self._handle("GET")
 
     def do_POST(self) -> None:
@@ -1027,7 +1056,8 @@ def make_tls_context(cert: Path, key: Path) -> ssl.SSLContext:
 def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":memory:",
                 max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
                 tls: Optional[ssl.SSLContext] = None,
-                terrain_dir: Optional[Path] = None) -> ApiServer:
+                terrain_dir: Optional[Path] = None,
+                dist: Optional[Path] = None) -> ApiServer:
     lock = DatabaseLock(runs_db) if runs_db != ":memory:" else None
     try:
         service = RunService(RunStore(runs_db), max_queue=max_queue,
@@ -1035,7 +1065,8 @@ def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":mem
                              terrains=TerrainCatalog(terrain_dir))
         study = StudyService(store=StudyStore(runs_db))
         return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
-                         study=study, db_lock=lock)
+                         study=study, db_lock=lock,
+                         studio_root=(dist if dist is not None else find_dist()))
     except BaseException:
         if lock is not None:
             lock.release()
@@ -1062,6 +1093,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_serve.add_argument("--rate-per-minute", type=int, default=DEFAULT_RATE_PER_MIN)
     p_serve.add_argument("--terrain-catalog", type=Path, default=None,
                          help="dossier de reliefs <id>.csv (optionnel)")
+    p_serve.add_argument("--dist", type=Path, default=None,
+                         help="dossier du studio precompile a servir sur la meme origine que l API")
     args = parser.parse_args(argv)
 
     if args.cmd == "issue-token":
@@ -1079,9 +1112,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
     server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
                          rate_per_min=args.rate_per_minute, tls=tls,
-                         terrain_dir=args.terrain_catalog)
+                         terrain_dir=args.terrain_catalog, dist=args.dist)
     scheme = "https" if tls else "http"
     log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
+    if server.studio_root is not None:
+        log.info("studio servi depuis %s", server.studio_root)
+    else:
+        log.info("studio non servi : aucun dossier dist trouve (--dist pour le precise)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

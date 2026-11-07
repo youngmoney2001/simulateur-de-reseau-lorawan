@@ -884,3 +884,63 @@ def test_validate_refuses_mesh_payloads_only_when_protocol_is_given(api):
     assert status == 200 and body["valid"] is False  # erreur de format : problème, pas de 422
     status, body = api.call("POST", "/api/v1/scenarios/validate", {"scenario": d})
     assert status == 200 and body["valid"] is True
+
+
+@contextlib.contextmanager
+def _api_avec_studio(tmp_path, dist):
+    """Un serveur qui sert aussi le studio precompile (option `dist`)."""
+    tokens = tmp_path / "tokens.json"
+    alice = srv.TokenStore(tokens).issue("alice")
+    server = srv.make_server("127.0.0.1", 0, tokens, dist=Path(dist))
+    server.studio_root = Path(dist).resolve()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    def brut(path):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        corps = resp.read()
+        conn.close()
+        return resp.status, corps
+
+    try:
+        yield brut, alice
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class TestStudioServi:
+    """Le studio precompile est servi sur la meme origine que l API."""
+
+
+    def test_studio_html_servi(self, tmp_path):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "studio.html").write_text("<html>studio</html>", encoding="utf-8")
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            status, corps = brut("/studio.html")
+        assert status == 200
+        assert corps == b"<html>studio</html>"
+
+    def test_api_toujours_vivante(self, tmp_path):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "studio.html").write_text("<html>", encoding="utf-8")
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            status, _ = brut("/api/v1/health")
+        assert status == 200
+
+    def test_traversee_refusee(self, tmp_path):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOPSECRET", encoding="utf-8")
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            for chemin in ("/../secret.txt", "/%2e%2e/secret.txt", "//etc/passwd"):
+                status, corps = brut(chemin)
+                assert status == 404
+                assert b"TOPSECRET" not in corps
