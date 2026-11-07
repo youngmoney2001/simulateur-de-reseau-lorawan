@@ -333,3 +333,56 @@ def test_run_summary_publishes_latency_and_observed_mesh_links(api, mesh_run):
     assert gw["frontiere"]["mesh_inbound"] == [
         {"from_gateway": "relais", "delivered": gw["frontiere"]["mesh_inbound"][0]["delivered"]}]
     assert "mesh_inbound" not in gw["ip"] and gw["relais"]["latency_samples"] == 0
+
+
+# --- Exercices ajoutés : AU915, AS923, bande large du mesh -----------------------------------
+
+def test_au915_sous_bande_scores_with_config_then_reception(api, run_frontiere):
+    _, out = _session(api, exercise="au915-sous-bande")
+    sid = out["session_id"]
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "region AU915", "sub-band 5", "end")
+    _, body = _submit(api, "au915-sous-bande", sid)
+    assert body["score"] == 20 and _points(body)["reception"] is False
+    _link(api, sid, run_frontiere, [{"node_id": "frontiere", "gateway": "frontiere"}])
+    _, body = _submit(api, "au915-sous-bande", sid)
+    assert _points(body) == {"region": True, "sous-bande": True, "reception": True}
+    assert body["score"] == 30
+
+
+def test_au915_sub_band_is_graded_on_its_value_not_its_presence(api):
+    """Une sous-bande renseignée mais différente ne rapporte pas le point."""
+    _, out = _session(api, exercise="au915-sous-bande")
+    sid = out["session_id"]
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "region AU915", "sub-band 3", "end")
+    _, body = _submit(api, "au915-sous-bande", sid)
+    assert _points(body) == {"region": True, "sous-bande": False, "reception": False}
+    _cli(api, sid, "frontiere", "conf t", "int lora 0", "sub-band 5", "end")
+    _, body = _submit(api, "au915-sous-bande", sid)
+    assert _points(body)["sous-bande"] is True
+
+
+def test_as923_scores_config_and_reception(api, run_frontiere):
+    _, out = _session(api, exercise="as923-sans-sous-bande")
+    sid = out["session_id"]
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "region AS923", "exit",
+         "lorawan server 10.0.0.9 up-port 1700 down-port 1701", "end")
+    _, body = _submit(api, "as923-sans-sous-bande", sid)
+    assert body["score"] == 20 and _points(body)["reception"] is False
+    _link(api, sid, run_frontiere, [{"node_id": "frontiere", "gateway": "frontiere"}])
+    _, body = _submit(api, "as923-sans-sous-bande", sid)
+    assert _points(body) == {"region": True, "serveur": True, "reception": True}
+    assert body["score"] == 30
+
+
+def test_relais_bande_large_needs_the_bandwidth_and_the_observed_link(api, mesh_run):
+    _, out = _session(api, exercise="relais-bande-large")
+    sid = out["session_id"]
+    _cli(api, sid, "relais-1", "en", "conf t", "int mesh 0", "mode relay", "bandwidth 203", "end")
+    _link(api, sid, mesh_run, [{"node_id": "frontiere", "gateway": "frontiere"},
+                               {"node_id": "relais-1", "gateway": "relais"}])
+    _, body = _submit(api, "relais-bande-large", sid)
+    assert _points(body) == {"mode": True, "bande": False, "lien": True}
+    assert body["score"] == 20
+    _cli(api, sid, "relais-1", "conf t", "int mesh 0", "bandwidth 1625", "end")
+    _, body = _submit(api, "relais-bande-large", sid)
+    assert _points(body)["bande"] is True and body["score"] == 30
