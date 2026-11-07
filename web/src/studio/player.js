@@ -11,7 +11,7 @@ function svgEl(tag, attrs = {}) {
   return node;
 }
 
-export function createPlayer({ svg, panel, positionOf }) {
+export function createPlayer({ svg, panel, positionOf, onActive = null }) {
   let segments = [];
   let rows = [];
   let bounds = { startNs: 0n, endNs: 0n };
@@ -116,6 +116,7 @@ export function createPlayer({ svg, panel, positionOf }) {
       items[i].classList.toggle("current", i === current);
     }
     if (current >= 0 && items[current] && playing) items[current].scrollIntoView({ block: "nearest" });
+    if (onActive) onActive(current);
   }
 
   function renderJournal() {

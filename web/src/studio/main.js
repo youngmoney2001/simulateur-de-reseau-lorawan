@@ -6,7 +6,7 @@ import {
   validateNewNode, validateSensor, sensorFormFrom, nodeCaption,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
-import { gatewayRows, scoreLine, criteriaRows, formatPercent } from "./results.js";
+import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 
@@ -26,6 +26,7 @@ const state = {
   result: null,      // dernière notation
   drag: null,
   busy: false,
+  events: [],        // evenements du run courant (inspecteur de trames)
 };
 
 // --- DOM helpers ---------------------------------------------------------------------------
@@ -379,6 +380,37 @@ $("add-form").addEventListener("submit", async (ev) => {
   }
 });
 
+// --- Inspecteur de trames ------------------------------------------------------------------
+
+// Affiche la trame LoRaWAN de l evenement actif, couche par couche. Les octets viennent du
+// serveur (coeur C++ via frame_view) ; rien n est reconstruit ici.
+function showFrame(index) {
+  const box = $("frame-inspector");
+  const body = $("frame-table")?.querySelector("tbody");
+  const note = $("frame-note");
+  if (!box || !body || !note) return;
+  const ev = state.events[index];
+  if (!ev || !ev.frame) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  while (body.firstChild) body.removeChild(body.firstChild);
+  for (const r of frameRows(ev.frame.mac || {}, ev.frame.application || {})) {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = r.label;
+    const td = document.createElement("td");
+    td.textContent = r.value;
+    const tn = document.createElement("td");
+    tn.className = "muted";
+    tn.textContent = r.note;
+    tr.append(th, td, tn);
+    body.append(tr);
+  }
+  const octets = ev.frame.phy ? ev.frame.phy.octets : "?";
+  note.textContent = `${ev.kind} - dispositif ${ev.device_index} - ${octets} octets sur l air`;
+}
 // --- Simulation ----------------------------------------------------------------------------
 const player = createPlayer({
   svg: $("plan"),
@@ -387,12 +419,14 @@ const player = createPlayer({
     const node = state.topo?.nodes?.find((n) => n.id === id);
     return node && state.bounds ? toScreen(node, state.bounds, W, H) : null;
   },
+  onActive: (index) => showFrame(index),
 });
 
 // Charge les événements et la table dispositif -> capteur du run, puis prépare le lecteur.
 async function loadAnimation(runId) {
   try {
     const events = await collectPages((cursor) => state.client.eventsPage(runId, cursor));
+    state.events = events;
     const rows = await collectPages((cursor) => state.client.devicesPage(runId, cursor));
     const groups = deviceGroupsFromRows(rows);
     player.load({ events, segs: segmentsFromEvents(events, groups), groups });
