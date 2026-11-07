@@ -313,6 +313,23 @@ try {
       .map((f) => f.getAttribute("fill"))
       .filter((c) => c && c.startsWith("#")));
     if (peints.length < 1) throw new Error("aucun équipement coloré par son résultat sur le plan");
+
+    // La fenêtre de l'équipement chiffre ce que la carte colore. Les deux viennent du même
+    // objet en mémoire : si jamais ils divergent, c'est ce test qui le dira.
+    // La fenêtre de « capteur-a » est ouverte depuis l'étape d'aller-retour ; on s'assure
+    // seulement d'être sur son onglet Physique, où vit le bloc de résultat.
+    await deviceTab("Physique", "capteur-a");
+    await page.waitForSelector('.device-win[data-node-id="capteur-a"] .phys-etat', { timeout: 10_000 });
+    const bloc = await page.$eval('.device-win[data-node-id="capteur-a"] .phys-resultat',
+      (dl) => [...dl.querySelectorAll("dt")].map((dt, i) => [dt.textContent,
+        dl.querySelectorAll("dd")[i]?.textContent]));
+    if (bloc.length < 5) throw new Error(`${bloc.length} ligne(s) de résultat, 5 attendues`);
+    const taux = bloc.find((l) => l[0].includes("Taux de livraison"));
+    if (!taux) throw new Error(bloc.map((l) => l[0]).join(" | "));
+    if (!/%/.test(taux[1])) throw new Error(`taux sans unité : ${taux[1]}`);
+    const pastille = await page.$$eval('.device-win[data-node-id="capteur-a"] .phys-titre .lg-rond',
+      (n) => n.length);
+    if (pastille < 1) throw new Error("pastille de couleur absente de la fenêtre");
   });
 
   await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {

@@ -387,3 +387,25 @@ export function resultatsParNoeud(lignes = [], noeuds = []) {
   }
   return out;
 }
+
+/**
+ * Lignes « Résultat » d'un équipement, pour sa fenêtre.
+ *
+ * Reprend exactement ce que porte la carte : le même taux de livraison, la même couleur.
+ * Deux lectures du même nombre calculées séparément finiraient par diverger, et l'une des
+ * deux serait crue — sans qu'on sache laquelle. `null` si l'équipement n'a pas de résultat.
+ */
+export function lignesResultat(resultat, fenetreNs = null) {
+  if (!resultat || !Number.isFinite(resultat.pdr)) return null;
+  const occupation = ratio(resultat.airtimeNs, fenetreNs);
+  return {
+    couleur: resultat.couleur,
+    lignes: [
+      { titre: "Taux de livraison", valeur: resultat.pdrText },
+      { titre: "Trames reçues", valeur: `${resultat.received} sur ${resultat.sent}` },
+      { titre: "Perte hors portée", valeur: String(resultat.lostSensitivity) },
+      { titre: "Perte en collision", valeur: String(resultat.lostCollision) },
+      { titre: "Occupation", valeur: pct(occupation, 3) },
+    ],
+  };
+}

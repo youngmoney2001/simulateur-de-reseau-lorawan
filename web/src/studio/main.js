@@ -8,7 +8,7 @@ import {
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
-  resultatsParNoeud, echellePdr } from "./metrics.js";
+  resultatsParNoeud, echellePdr, lignesResultat } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -43,6 +43,7 @@ const state = {
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
   deviceRows: [],    // lignes par dispositif du dernier run : matiere des indicateurs
   resultats: null,   // Map node_id -> resultat : la carte colore par la, plus par type
+  fenetreNs: null,   // fenetre d observation du dernier run : denominators des taux
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
@@ -533,6 +534,20 @@ function renderDeviceInfo(node, body) {
   }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
+  // Résultat du dernier run, sur l'équipement lui-même. La carte colore, la fenêtre chiffre :
+  // les deux viennent du même `state.resultats`, donc ne peuvent pas se contredire.
+  const res = lignesResultat(state.resultats?.get(node.id), state.fenetreNs);
+  if (res) {
+    const dl = el("dl", { class: "phys-etat phys-resultat" });
+    for (const l of res.lignes) {
+      dl.append(el("dt", { text: l.titre }), el("dd", { text: l.valeur }));
+    }
+    // La pastille rappelle la couleur de la carte : c'est le même équipement, vu deux fois.
+    info.append(el("h3", { class: "phys-titre" },
+      el("span", { class: "lg-rond", style: `background:${res.couleur}` }),
+      document.createTextNode(" Résultat du dernier run")), dl);
+  }
+
   // Second moyen de placer un équipement : saisir ses coordonnées au lieu de le tirer sur
   // la carte. Les deux gestes convergent vers les mêmes mètres, par la même conversion.
   if (o) info.append(el("form", { class: "phys-geo", onsubmit: (ev) => {
@@ -789,8 +804,10 @@ $("sim-form").addEventListener("submit", async (ev) => {
       (cursor) => state.client.devicesPage(started.run_id, cursor), MAX_METRIC_DEVICES));
     state.deviceRows = deviceRows ?? [];
     state.resultats = resultatsParNoeud(state.deviceRows, state.topo?.nodes ?? []);
+    state.fenetreNs = fenetreObservationNs(summary);
     renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
     renderLegend();
+    renderDevice();             // la fenêtre ouverte chiffre le résultat
     syncMap();                  // la carte change de couleur : elle montre le run
     await loadAnimation(started.run_id);
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;

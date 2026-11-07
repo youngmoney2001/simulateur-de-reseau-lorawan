@@ -48,7 +48,10 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .pdr-legend[hidden] { display:none; }   /* display:flex écraserait hidden sinon */
 .pdr-legend .lg-titre { font-weight:600; }
 .pdr-legend .lg-item { display:flex; align-items:center; gap:6px; }
-.pdr-legend .lg-rond { width:10px; height:10px; border-radius:50%; flex:0 0 auto;
+.phys-resultat dd { font-variant-numeric:tabular-nums; }
+/* Pastille de couleur : même pastille dans la légende de la carte et dans la fenêtre
+   d'équipement, pour que le rapprochement se fasse sans le dire. */
+.lg-rond { display:inline-block; width:10px; height:10px; border-radius:50%; flex:0 0 auto;
   border:1px solid rgba(0,0,0,.4); }
 .flash { margin:8px 12px; padding:8px 12px; border-radius:6px; background:#fde8e6; color:var(--danger); }
 

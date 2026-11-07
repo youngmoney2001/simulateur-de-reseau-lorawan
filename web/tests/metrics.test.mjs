@@ -24,6 +24,7 @@ import {
   echellePdr,
   ECHELLE_PDR,
   resultatsParNoeud,
+  lignesResultat,
 } from "../src/studio/metrics.js";
 
 const FIXTURE = JSON.parse(
@@ -322,4 +323,27 @@ test("résultats par équipement : entrées vides et dispositifs sans groupe", (
   assert.equal(resultatsParNoeud([], []).size, 0);
   assert.equal(resultatsParNoeud(undefined, undefined).size, 0);
   assert.equal(resultatsParNoeud([{ sent: 1, received: 1 }], [{ id: "a" }]).size, 0);
+});
+
+test("lignes de résultat d'un équipement : mêmes chiffres que la carte", () => {
+  const r = { pdr: 0.9, pdrText: "90.0 %", couleur: ECHELLE_PDR[1].couleur,
+    sent: 10, received: 9, lostSensitivity: 0, lostCollision: 1, airtimeNs: 5e8 };
+  const l = lignesResultat(r, 1e9);
+  assert.equal(l.couleur, ECHELLE_PDR[1].couleur);
+  assert.equal(l.lignes[0].valeur, "90.0 %");
+  assert.equal(l.lignes[1].valeur, "9 sur 10");
+  assert.equal(l.lignes[3].valeur, "1");
+  assert.equal(l.lignes[4].valeur, "50.000 %");   // 5e8 ns sur 1e9 ns
+});
+
+test("lignes de résultat : absentes sans résultat, et sans fenêtre", () => {
+  assert.equal(lignesResultat(null, 1e9), null);
+  assert.equal(lignesResultat(undefined), null);
+  assert.equal(lignesResultat({ pdr: null }, 1e9), null);
+  // Sans fenêtre d'observation, l'occupation est « — » mais le reste reste affiché :
+  // le taux de livraison ne dépend pas de la fenêtre.
+  const l = lignesResultat({ pdr: 0.5, pdrText: "50.0 %", couleur: "#000000",
+    sent: 2, received: 1, lostSensitivity: 0, lostCollision: 1, airtimeNs: 5e8 }, null);
+  assert.equal(l.lignes[0].valeur, "50.0 %");
+  assert.equal(l.lignes[4].valeur, "—");
 });
