@@ -244,12 +244,13 @@ export function indicateursPasserelle(g = {}) {
  * ligne de dispositif, le regroupement est donc une agrégation de données du run, pas une
  * reconstitution devinée du scénario.
  */
-export function ventilationGroupes(lignes = []) {
+export function ventilationGroupes(lignes = [], fenetreNs = null) {
   const groupes = new Map();
   for (const l of lignes) {
     const cle = l.group ?? "(sans groupe)";
     if (!groupes.has(cle)) {
-      groupes.set(cle, { name: cle, spreadingFactors: new Set(), count: 0, sent: 0, received: 0, lostSensitivity: 0, lostCollision: 0, airtimeNs: 0 });
+      groupes.set(cle, { name: cle, spreadingFactors: new Set(), count: 0, sent: 0, received: 0,
+        lostSensitivity: 0, lostCollision: 0, airtimeNs: 0, airtimeMax: 0 });
     }
     const g = groupes.get(cle);
     g.count += 1;
@@ -259,6 +260,7 @@ export function ventilationGroupes(lignes = []) {
     g.lostSensitivity += l.lost_sensitivity ?? 0;
     g.lostCollision += l.lost_collision ?? 0;
     g.airtimeNs += l.airtime_ns ?? 0;
+    if (Number.isFinite(l.airtime_ns)) g.airtimeMax = Math.max(g.airtimeMax, l.airtime_ns);
   }
   return [...groupes.values()].map((g) => {
     const sf = [...g.spreadingFactors].sort((a, b) => a - b);
@@ -274,6 +276,12 @@ export function ventilationGroupes(lignes = []) {
       pdr,
       pdrText: pct(pdr),
       airtimeMs: g.airtimeNs / NS_PER_MS,
+      // Rapport cyclique du dispositif le plus émetteur du groupe. C'est le maximum qui
+      // importe face à une limite réglementaire : celle-ci s'applique à chaque émetteur,
+      // pas à la moyenne du réseau. Mesure sur la fenêtre d'observation du run — qui n'est
+      // pas nécessairement la fenêtre de moyennage du texte réglementaire.
+      occupancyMax: ratio(g.airtimeMax, fenetreNs),
+      occupancyMaxText: pct(ratio(g.airtimeMax, fenetreNs), 3),
     };
   });
 }
@@ -288,11 +296,11 @@ export function ventilationGroupes(lignes = []) {
 export function ventilationTable(groupes = []) {
   const unParGroupe = groupes.length > 0 && groupes.every((g) => g.count === 1);
   const entetes = unParGroupe
-    ? ["Équipement", "SF", "Émises", "Reçues", "PDR", "Sensibilité", "Collision"]
-    : ["Groupe", "SF", "Dispositifs", "Émises", "Reçues", "PDR", "Sensibilité", "Collision"];
+    ? ["Équipement", "SF", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation"]
+    : ["Groupe", "SF", "Dispositifs", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation"];
   const lignes = groupes.map((g) => (unParGroupe
-    ? [g.name, g.spreadingFactor, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision]
-    : [g.name, g.spreadingFactor, g.count, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision]));
+    ? [g.name, g.spreadingFactor, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, g.occupancyMaxText]
+    : [g.name, g.spreadingFactor, g.count, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, g.occupancyMaxText]));
   return { entetes, lignes, unParGroupe };
 }
 

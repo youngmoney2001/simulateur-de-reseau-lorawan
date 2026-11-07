@@ -25,6 +25,7 @@ import {
 const FIXTURE = JSON.parse(
   readFileSync(new URL("./fixtures/run-metrics.json", import.meta.url), "utf-8"));
 const { summary, devices } = FIXTURE;
+const FENETRE = 1_742_526_688_314;   // fenêtre d observation du run, lue dans le fixture
 
 function parId(liste) {
   return Object.fromEntries(liste.map((i) => [i.id, i]));
@@ -208,16 +209,16 @@ test("taux de livraison par dispositif : un par ligne, dans l'ordre", () => {
 
 test("table de ventilation : un équipement par groupe supprime la colonne inutile", () => {
   // Cas d'une session studio : study_compile.py nomme chaque groupe d'après le capteur.
-  const un = [{ name: "capt-1", count: 1, spreadingFactor: "SF9", sent: 4, received: 3, pdrText: "75.0 %", lostSensitivity: 0, lostCollision: 1 }];
+  const un = [{ name: "capt-1", count: 1, spreadingFactor: "SF9", sent: 4, received: 3, pdrText: "75.0 %", lostSensitivity: 0, lostCollision: 1, occupancyMaxText: "0.500 %" }];
   const t = ventilationTable(un);
   assert.equal(t.unParGroupe, true);
   assert.ok(!t.entetes.includes("Dispositifs"));
   assert.equal(t.entetes[0], "Équipement");
-  assert.deepEqual(t.lignes[0], ["capt-1", "SF9", 4, 3, "75.0 %", 0, 1]);
+  assert.deepEqual(t.lignes[0], ["capt-1", "SF9", 4, 3, "75.0 %", 0, 1, "0.500 %"]);
 });
 
 test("table de ventilation : de vrais groupes gardent la colonne Dispositifs", () => {
-  const groupes = ventilationGroupes(FIXTURE.devices);
+  const groupes = ventilationGroupes(FIXTURE.devices, FENETRE);
   const t = ventilationTable(groupes);
   assert.equal(t.unParGroupe, false);
   assert.ok(t.entetes.includes("Dispositifs"));
@@ -231,4 +232,28 @@ test("table de ventilation : vide, une forme définie plutôt qu'une exception",
   assert.equal(t.unParGroupe, false);
   assert.ok(t.entetes.includes("Dispositifs"));
   assert.deepEqual(t.lignes, []);
+});
+
+test("occupation par groupe : le dispositif le plus émetteur, pas la moyenne", () => {
+  // La limite réglementaire s'applique à chaque émetteur : c'est le maximum qui compte,
+  // une moyenne laisserait passer un dispositif hors limite noyé dans les autres.
+  const groupes = ventilationGroupes(FIXTURE.devices, FENETRE);
+  const g = Object.fromEntries(groupes.map((x) => [x.name, x]));
+  // capteurs-lointains : 10 dispositifs SF12, 148 275,2 ms d'antenne au total sur
+  // 1 742,5 s d'observation. Le maximum par dispositif, pas la somme.
+  const maxLointains = Math.max(...FIXTURE.devices
+    .filter((d) => d.group === "capteurs-lointains").map((d) => d.airtime_ns));
+  assert.equal(g["capteurs-lointains"].occupancyMax, maxLointains / FENETRE);
+  // Un groupe de 10 dispositifs : la somme serait environ dix fois le maximum.
+  assert.ok(g["capteurs-lointains"].occupancyMax
+    < g["capteurs-lointains"].airtimeMs * 1000 * 1e6 / FENETRE);
+  assert.equal(typeof g["capteurs-lointains"].occupancyMaxText, "string");
+});
+
+test("occupation par groupe : absente sans fenêtre d'observation", () => {
+  const groupes = ventilationGroupes(FIXTURE.devices, null);
+  for (const g of groupes) {
+    assert.equal(g.occupancyMax, null);
+    assert.equal(g.occupancyMaxText, "—");
+  }
 });

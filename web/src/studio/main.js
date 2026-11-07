@@ -7,7 +7,7 @@ import {
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
-import { indicateursReseau, ventilationGroupes, ventilationTable } from "./metrics.js";
+import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -833,7 +833,7 @@ function renderMetrics(summary, deviceRows) {
   }
   $("sim-metrics").hidden = liste.length === 0;
 
-  const groupes = ventilationGroupes(deviceRows);
+  const groupes = ventilationGroupes(deviceRows, fenetreObservationNs(summary));
   const table = $("sim-groups");
   const thead = table.querySelector("thead");
   const tbody = table.querySelector("tbody");
