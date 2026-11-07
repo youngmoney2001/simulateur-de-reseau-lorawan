@@ -71,6 +71,16 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .stage { flex:1 1 auto; position:relative; display:flex; min-height:0; }
 .cesium-stage { position:absolute; inset:0; }
 .cesium-stage .cesium-widget-credits { font-size:9px; }
+/* Cesium dimensionne ses blocs en pourcentage. Faute de hauteur explicite sur la chaîne
+   complète, chacun se réduit sur le précédent — mesuré : 640 puis 329 puis 156 — et le
+   canevas reste à 300×150. On impose donc la hauteur à chaque niveau. */
+.cesium-stage .cesium-viewer,
+.cesium-stage .cesium-viewer-cesiumWidgetContainer,
+.cesium-stage .cesium-widget,
+.cesium-stage .cesium-widget canvas {
+  width:100%;
+  height:100%;
+}
 /* Le plan reprend la meme place que la carte quand il est affiche. */
 .plan-area { position:absolute; inset:0; }
 .map-hint { position:absolute; left:10px; bottom:10px; z-index:2; margin:0;
