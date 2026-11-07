@@ -5,6 +5,15 @@ html, body, #cesiumContainer { margin: 0; height: 100%; width: 100%; overflow: h
   padding: 12px 14px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); font-size: 14px; color: #1b1b1b;
 }
 #panel h1 { font-size: 16px; margin: 0 0 8px; }
+/* D6 : lien retour vers le studio, miroir de celui de la barre du studio. */
+#applink { margin: 0 0 10px; font-size: 13px; }
+/* La carte ouvre sur public/sample.geojson : sans ce bandeau, ces chiffres passent pour
+   les resultats de l'utilisateur alors qu'il n'a encore rien simule. */
+.sample-note { margin: 0 0 10px; padding: 7px 9px; font-size: 12px; line-height: 1.35;
+  background: #fff8e1; border: 1px solid #f0d68a; border-radius: 5px; color: #5c4400; }
+.sample-note strong { color: #3d2e00; }
+#applink a { color: #1f6feb; text-decoration: none; }
+#applink a:hover, #applink a:focus-visible { text-decoration: underline; }
 #panel label.file { display: block; margin-bottom: 10px; }
 #panel input[type="file"] { display: block; margin-top: 4px; width: 100%; }
 #summary { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0 0 10px; }

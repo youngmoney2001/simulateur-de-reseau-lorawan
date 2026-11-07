@@ -7,23 +7,106 @@
     <link rel="stylesheet" href="/src/studio/studio.css" />
   </head>
   <body>
-    <header class="topbar">
-      <strong>Studio LoRaWAN</strong>
-      <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
-      <button id="connect" type="button">Se connecter</button>
-      <label>Session <select id="session-select"></select></label>
-      <button id="new-session" type="button">Nouvelle session</button>
-      <label>Exercice <select id="exercise-start"></select></label>
-      <button id="start-exercise" type="button">Démarrer</button>
-      <button id="delete-session" type="button" class="danger">Supprimer la session</button>
-      <span id="session-meta" class="muted"></span>
-    </header>
+    <!-- Écran de lancement : jeton et choix du mode. Masque l'application jusqu'au choix. -->
+    <div id="launch" class="launch">
+      <div class="launch-card">
+        <h1>Simulateur de réseau LoRaWAN</h1>
+        <p class="muted">Saisissez votre jeton, puis choisissez un mode. Le mode reste changeable
+          ensuite, depuis la barre du haut.</p>
+        <div id="token-field">
+          <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
+        </div>
+        <p id="token-note" class="muted" hidden></p>
+        <!-- Masqué dès qu'un jeton automatique est disponible. Sans cette indication,
+             l'utilisateur à qui l'on demande un jeton n'a aucun moyen d'en obtenir un. -->
+        <p id="token-help" class="hint" hidden>
+          Le serveur n'a pas fourni de jeton. Pour en créer un, lancez sur la machine qui
+          héberge l'API :<br />
+          <code>python -m lsim.api_server issue-token --tokens FICHIER --owner NOM</code><br />
+          Ou relancez l'API avec <code>--auto-token NOM</code> pour que la saisie disparaisse.
+        </p>
+        <div class="modes">
+          <button type="button" class="mode-card" data-mode="design" aria-pressed="true">
+            <strong>Conception</strong>
+            <span>Réseau libre : construire, configurer, simuler, observer. Aucun barème, aucune note.</span>
+          </button>
+          <button type="button" class="mode-card" data-mode="study" aria-pressed="false">
+            <strong>Étude</strong>
+            <span>Exercices guidés : énoncé, indices pénalisés, notation, tentatives.</span>
+          </button>
+        </div>
+        <button type="button" id="connect" class="primary">Entrer</button>
+        <p id="launch-error" class="flash" role="alert" hidden></p>
+      </div>
+    </div>
+
     <div id="flash" role="alert" class="flash" hidden></div>
 
-    <main class="layout">
-      <aside class="palette panel">
-        <h2>Ajouter un équipement</h2>
-        <form id="add-form">
+    <header class="menubar">
+      <span class="brand">LoRaWAN</span>
+      <nav class="menu" aria-label="Menu">
+        <span>Fichier</span><span>Édition</span><span>Affichage</span><span>Outils</span><span>Aide</span>
+      </nav>
+      <label class="mode-pick">Mode
+        <select id="mode-select">
+          <option value="design">Conception</option>
+          <option value="study">Étude</option>
+        </select>
+      </label>
+      <span class="spacer"></span>
+      <span id="session-meta" class="muted"></span>
+      <!-- Origine géographique : le plan travaille en mètres, la carte en latitude/longitude.
+           Sans ce point d'ancrage, les résultats du studio ne peuvent pas être situés. -->
+      <span id="origin-field" class="origin">
+        <label>Latitude <input id="origin-lat" type="number" step="0.00001" min="-90" max="90" value="4.0511" /></label>
+        <label>Longitude <input id="origin-lon" type="number" step="0.00001" min="-180" max="180" value="9.7679" /></label>
+      </span>
+      <a class="applink" id="map-link" href="/index.html"
+         title="Situer ce réseau sur la carte 3D">Carte des résultats &#8594;</a>
+    </header>
+
+    <main class="workspace">
+      <!-- Deux vues d'un même réseau : la carte 3D, géographique, et le plan 2D, métrique.
+           La carte est la surface de travail, comme dans Packet Tracer ; le plan reste le
+           meilleur outil pour régler des distances précises. -->
+      <div class="views" role="tablist" aria-label="Vue du réseau">
+        <button type="button" class="view-tab active" data-view="map" role="tab"
+                aria-selected="true">Carte 3D</button>
+        <button type="button" class="view-tab" data-view="plan" role="tab"
+                aria-selected="false">Plan</button>
+      </div>
+
+      <section class="stage">
+        <div id="cesium" class="cesium-stage" aria-label="Carte 3D du réseau"></div>
+        <p id="map-hint" class="map-hint">
+          Cliquez sur la carte pour y placer l'origine de votre zone de test.
+        </p>
+
+        <section class="plan-area" hidden>
+          <svg id="plan" viewBox="0 0 800 520" role="img" aria-label="Plan du réseau"></svg>
+          <p id="empty-plan" class="empty-plan" hidden>Aucun équipement : ajoutez une passerelle frontière, puis des capteurs.</p>
+        </section>
+      </section>
+
+      <!-- Barre d'outils verticale à droite. -->
+      <aside class="toolbar" aria-label="Outils">
+        <button type="button" class="tool active" data-tool="select" title="Sélection"><span>&#9633;</span>Sélection</button>
+        <button type="button" class="tool" data-tool="move" title="Déplacer"><span>&#10010;</span>Déplacer</button>
+        <button type="button" class="tool" data-tool="delete" title="Supprimer"><span>&#10005;</span>Supprimer</button>
+        <button type="button" class="tool" data-tool="inspect" title="Inspecter"><span>&#9906;</span>Inspecter</button>
+        <button type="button" class="tool" data-tool="frame" title="Trame"><span>&#10148;</span>Trame</button>
+        <div class="tool-sep"></div>
+        <button type="button" class="tool" id="new-session" title="Nouvelle session"><span>&#43;</span>Nouvelle</button>
+        <button type="button" class="tool danger" id="delete-session" title="Supprimer la session"><span>&#10005;</span>Supprimer</button>
+      </aside>
+    </main>
+
+    <!-- Bas : palette à gauche, observation à droite. -->
+    <section class="bottom-dock">
+      <div class="palette" id="palette">
+        <div class="cat-box" id="cat-box" role="listbox" aria-label="Catégories d'équipement"></div>
+        <div class="model-box" id="model-box" aria-label="Modèles"></div>
+        <form id="add-form" hidden>
           <label>Identifiant <input name="id" placeholder="gw-nord" required /></label>
           <label>Nom <input name="name" placeholder="Passerelle nord" /></label>
           <label>Type
@@ -40,64 +123,98 @@
           </div>
           <button type="submit">Ajouter</button>
         </form>
-        <p class="hint">Glissez un équipement sur le plan pour le déplacer.</p>
-      </aside>
-
-      <section class="plan panel">
-        <h2>Plan</h2>
-        <svg id="plan" viewBox="0 0 800 520" role="img" aria-label="Plan du réseau"></svg>
-        <p id="empty-plan" class="muted" hidden>Aucun équipement : ajoutez une passerelle frontière, puis des capteurs.</p>
-      </section>
-
-      <aside class="device panel">
-        <h2 id="device-title">Aucun équipement sélectionné</h2>
-        <div id="device-body"></div>
-      </aside>
-    </main>
-
-    <section class="bottom">
-      <div class="panel sim">
-        <h2>Simulation</h2>
-        <form id="sim-form" class="row">
-          <label>Graine <input id="seed" type="number" min="0" max="4294967295" value="1" /></label>
-          <button type="submit" id="simulate">Simuler</button>
-        </form>
-        <p id="sim-status" class="muted"></p>
-        <ul id="sim-notes" class="notes"></ul>
-        <table id="sim-results" hidden>
-          <thead>
-            <tr><th>Passerelle</th><th>Reçues</th><th>Pertes</th><th>Latence p95</th><th>Relais mesh</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <label class="session-pick">Session <select id="session-select"></select></label>
       </div>
 
-      <div class="panel player" id="player" hidden>
-        <h2>Animation des trames</h2>
-        <div class="row">
-          <button type="button" id="play-toggle">Lecture</button>
-          <label>Vitesse <select id="play-speed"></select></label>
-          <span id="play-time" class="muted"></span>
+      <div class="observation">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab active" data-tab="sim" role="tab">Simulation</button>
+          <button type="button" class="tab" data-tab="journal" role="tab">Journal</button>
+          <button type="button" class="tab" data-tab="frame" role="tab">Trame</button>
+          <button type="button" class="tab" data-tab="exercise" role="tab">Exercice</button>
         </div>
-        <input id="play-clock" type="range" min="0" max="1000" value="0" aria-label="Instant de la simulation" />
-        <p id="play-note" class="muted"></p>
-        <ol id="journal" class="journal"></ol>
-      </div>
 
-      <div class="panel exercise">
-        <h2>Exercice</h2>
-        <p id="ex-title" class="strong"></p>
-        <p id="ex-statement" class="statement"></p>
-        <div class="row">
-          <button type="button" id="hint" disabled>Indice</button>
-          <button type="button" id="submit" disabled>Noter</button>
+        <div class="tab-body" data-panel="sim">
+          <form id="sim-form" class="row">
+            <label>Graine <input id="seed" type="number" min="0" max="4294967295" value="1" /></label>
+            <button type="submit" id="simulate">Simuler</button>
+          </form>
+          <p id="sim-status" class="muted"></p>
+          <ul id="sim-notes" class="notes"></ul>
+          <table id="sim-results" hidden>
+            <thead>
+              <tr><th>Passerelle</th><th>Reçues</th><th>Pertes</th><th>Latence p95</th><th>Relais mesh</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
-        <ol id="ex-hints" class="notes"></ol>
-        <div id="ex-result"></div>
-        <h3>Tentatives</h3>
-        <ol id="ex-attempts" class="notes"></ol>
+
+        <div class="tab-body" data-panel="journal" hidden>
+          <div id="player" class="player">
+            <div class="row">
+              <button type="button" id="play-toggle">Lecture</button>
+              <label>Vitesse <select id="play-speed"></select></label>
+              <span id="play-time" class="muted"></span>
+            </div>
+            <input id="play-clock" type="range" min="0" max="1000" value="0" aria-label="Instant de la simulation" />
+            <p id="play-note" class="muted"></p>
+            <ol id="journal" class="journal"></ol>
+          </div>
+          <p id="player-empty" class="muted">Lancez une simulation : le journal des trames apparaîtra ici.</p>
+        </div>
+
+        <div class="tab-body" data-panel="frame" hidden>
+          <section id="frame-inspector" class="frame-panel">
+            <h3>Trame LoRaWAN</h3>
+            <table id="frame-table"><tbody></tbody></table>
+            <p id="frame-note" class="muted"></p>
+          </section>
+          <p id="frame-empty" class="muted">Avancez dans le journal : la trame de l'événement courant s'affichera ici.</p>
+        </div>
+
+        <div class="tab-body" data-panel="exercise" hidden>
+          <div class="row exercise-pick">
+            <label>Exercice <select id="exercise-start"></select></label>
+            <button type="button" id="start-exercise">Démarrer</button>
+          </div>
+          <p id="ex-title" class="strong"></p>
+          <p id="ex-statement" class="statement"></p>
+          <div class="row">
+            <button type="button" id="hint" disabled>Indice</button>
+            <button type="button" id="submit" disabled>Noter</button>
+          </div>
+          <ol id="ex-hints" class="notes"></ol>
+          <div id="ex-result"></div>
+          <h3>Tentatives</h3>
+          <ol id="ex-attempts" class="notes"></ol>
+        </div>
       </div>
     </section>
+
+    <footer class="statusbar">
+      <span id="status-left">Aucune session</span>
+      <span class="spacer"></span>
+      <span id="status-right">Prêt</span>
+    </footer>
+
+    <!-- Fenêtres d'équipement : flottantes, déplaçables, plusieurs ouvertes à la fois (phase E). -->
+    <div id="windows" class="windows"></div>
+
+    <template id="device-window-template">
+      <section class="device-win" role="dialog" aria-label="Équipement">
+        <header class="device-win-head">
+          <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
+          <h2 class="device-win-title"></h2>
+          <button type="button" class="close" aria-label="Fermer">&#10005;</button>
+        </header>
+        <div class="device-tabs" role="tablist">
+          <button type="button" class="dtab active" data-dtab="phys" role="tab">Physique</button>
+          <button type="button" class="dtab" data-dtab="config" role="tab">Config</button>
+          <button type="button" class="dtab" data-dtab="cli" role="tab">CLI</button>
+        </div>
+        <div class="device-win-body"></div>
+      </section>
+    </template>
 
     <script type="module" src="/src/studio/main.js"></script>
   </body>

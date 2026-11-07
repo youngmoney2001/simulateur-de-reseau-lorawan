@@ -15,3 +15,13 @@ dist/
 # Cache des tuiles MNT (scripts/fetch_copernicus_dem.py) : volumineux, jamais versionné
 data/cache/
 build_*/
+
+# Studio precompile (produit par scripts/package_studio.sh) : artefact de build, jamais versionne
+
+python/lsim/web_dist/
+
+# Environnement virtuel de developpement (jamais versionne : cree par python -m venv)
+pyenv/
+
+# Captures d'ecran du studio (produites par web/tests/e2e/capture.mjs en CI : artefacts de diagnostic)
+captures/

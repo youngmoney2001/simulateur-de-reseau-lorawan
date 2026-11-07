@@ -2,13 +2,16 @@
 // Tout texte venant du serveur passe par textContent : aucune donnée n'est interprétée comme HTML.
 import { createClient, ApiError } from "./api.js";
 import {
-  KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters,
+  KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateSensor, sensorFormFrom, nodeCaption,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
-import { gatewayRows, scoreLine, criteriaRows, formatPercent } from "./results.js";
+import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
+// `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
+// toute confusion entre les deux conversions.
+import { createMap3D, toMeters as degreesToMeters } from "./map3d.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -26,6 +29,12 @@ const state = {
   result: null,      // dernière notation
   drag: null,
   busy: false,
+  events: [],        // evenements du run courant (inspecteur de trames)
+  runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
+  map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
+  mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
+  mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
+  view: "map",      // vue courante : carte 3D (defaut) ou plan 2D
 };
 
 // --- DOM helpers ---------------------------------------------------------------------------
@@ -51,10 +60,17 @@ function clear(node) {
 }
 
 function showError(err) {
-  const box = $("flash");
-  box.textContent = err instanceof ApiError
+  const text = err instanceof ApiError
     ? `${err.message} (${err.code})`
     : `Erreur : ${err?.message || err}`;
+  // L'écran de lancement recouvre l'application : l'erreur doit y être visible aussi.
+  const launch = $("launch"), launchErr = $("launch-error");
+  if (launch && !launch.hidden && launchErr) {
+    launchErr.textContent = text;
+    launchErr.hidden = false;
+  }
+  const box = $("flash");
+  box.textContent = text;
   box.hidden = false;
   clearTimeout(showError.timer);
   showError.timer = setTimeout(() => { box.hidden = true; }, 8000);
@@ -86,6 +102,8 @@ async function connect() {
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
+  closeLaunch();
+  setStatus(state.sessions.length ? "Session chargée" : "Nouvelle session");
 }
 
 function renderSessionChoices() {
@@ -140,7 +158,7 @@ async function deleteSession() {
   await refreshSessions();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else {
-    renderPlan();
+    refreshViews();
     renderDevice();
   }
 }
@@ -150,12 +168,59 @@ async function loadTopology() {
   if (!state.sid) return;
   const topo = await guard(() => state.client.topology(state.sid));
   if (topo) state.topo = topo;
-  renderPlan();
+  refreshViews();
   renderDevice();
 }
 
 function stateOf(nodeId) {
   return state.topo?.states.find((s) => s.node_id === nodeId);
+}
+
+// Grille graduée : repère visuel et échelle en mètres. Sans elle, le plan n'est qu'un
+// vide blanc où l'on ne peut juger ni les distances ni les positions relatives.
+function renderGrid(bounds) {
+  const g = svgEl("g", { class: "grid" });
+  const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  const step = gridStep(span);
+  const premier = (v) => Math.ceil(v / step) * step;
+  for (let x = premier(bounds.minX); x <= bounds.maxX; x += step) {
+    const sx = toScreen({ x_m: x, y_m: 0 }, bounds, W, H).x;
+    g.append(svgEl("line", { x1: sx.toFixed(1), y1: 0, x2: sx.toFixed(1), y2: H, class: "grid-line" }));
+    const t = svgEl("text", { x: (sx + 3).toFixed(1), y: 12, class: "grid-label" });
+    t.textContent = `${Math.round(x)} m`;
+    g.append(t);
+  }
+  for (let y = premier(bounds.minY); y <= bounds.maxY; y += step) {
+    const sy = toScreen({ x_m: 0, y_m: y }, bounds, W, H).y;
+    g.append(svgEl("line", { x1: 0, y1: sy.toFixed(1), x2: W, y2: sy.toFixed(1), class: "grid-line" }));
+    const t = svgEl("text", { x: 3, y: (sy - 3).toFixed(1), class: "grid-label" });
+    t.textContent = `${Math.round(y)} m`;
+    g.append(t);
+  }
+  return g;
+}
+
+// Marque intérieure : distingue les types au premier coup d'œil, sans dépendre de la couleur.
+function nodeIcon(kind) {
+  if (kind === "sensor") {
+    return svgEl("circle", { r: 5, class: "icon" });
+  }
+  if (kind === "server") {
+    return svgEl("rect", { x: -6, y: -6, width: 12, height: 12, class: "icon" });
+  }
+  // Passerelle ou frontière : antenne, trois barres de portée.
+  const g = svgEl("g", { class: "icon-stroke" });
+  g.append(svgEl("path", { d: "M 0 8 L 0 -6" }));
+  g.append(svgEl("path", { d: "M -7 -1 A 9 9 0 0 1 7 -1" }));
+  g.append(svgEl("path", { d: "M -12 5 A 15 15 0 0 1 12 5" }));
+  return g;
+}
+
+// Rafraîchit les deux vues. Un seul point de passage : la carte et le plan montrent les
+// mêmes équipements, ils ne peuvent donc pas être mis à jour séparément.
+function refreshViews() {
+  renderPlan();
+  syncMap();
 }
 
 function renderPlan() {
@@ -166,15 +231,19 @@ function renderPlan() {
   if (!nodes.length) return;
   const bounds = planBounds(nodes);
   state.bounds = bounds;
+  svg.append(renderGrid(bounds));
   for (const n of nodes) {
     const p = toScreen(n, bounds, W, H);
     const g = svgEl("g", { class: `node${state.selected === n.id ? " selected" : ""}`, "data-id": n.id, transform: `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})` });
+    // Équipements agrandis : à l'échelle précédente (9 px de rayon) un capteur était
+    // quasiment invisible sur un plan de plus de mille pixels de large.
     const shape = n.kind === "sensor"
-      ? svgEl("circle", { r: 9, class: "sensor" })
-      : n.kind === "server" ? svgEl("rect", { x: -10, y: -10, width: 20, height: 20, transform: "rotate(45)", class: "server" })
-      : svgEl("rect", { x: -11, y: -11, width: 22, height: 22, rx: 3, class: n.kind });
+      ? svgEl("circle", { r: 15, class: "sensor" })
+      : n.kind === "server" ? svgEl("rect", { x: -17, y: -17, width: 34, height: 34, transform: "rotate(45)", class: "server" })
+      : svgEl("rect", { x: -18, y: -18, width: 36, height: 36, rx: 5, class: n.kind });
     g.append(shape);
-    const label = svgEl("text", { x: 14, y: -10 });
+    g.append(nodeIcon(n.kind));
+    const label = svgEl("text", { x: 24, y: -16 });
     label.textContent = n.name;
     g.append(label);
     g.addEventListener("pointerdown", (ev) => startDrag(ev, n.id));
@@ -212,7 +281,7 @@ function startDrag(ev, nodeId) {
     const pos = toMeters(drag.last, state.bounds, W, H);
     const topo = await guard(() => state.client.moveNode(state.sid, nodeId, pos));
     if (topo) state.topo = topo;
-    renderPlan();
+    refreshViews();
     renderDevice();
   };
   $("plan").addEventListener("pointermove", onMove);
@@ -220,50 +289,176 @@ function startDrag(ev, nodeId) {
 }
 
 function selectNode(nodeId) {
-  state.selected = nodeId;
-  renderPlan();
-  renderDevice();
+  openDeviceWindow(nodeId);
+  refreshViews();
 }
 
-// --- Panneau équipement --------------------------------------------------------------------
-function renderDevice() {
-  const body = $("device-body");
-  clear(body);
-  const node = state.topo?.nodes.find((n) => n.id === state.selected);
-  if (!node) {
-    $("device-title").textContent = "Aucun équipement sélectionné";
-    return;
+// --- Fenêtres d'équipement flottantes (phase E) -------------------------------------------
+// Une fenêtre par équipement, déplaçable et redimensionnable : on peut en ouvrir plusieurs
+// pour comparer deux configurations côte à côte, ce qu'un panneau fixe interdisait.
+
+const deviceWindows = new Map();   // node_id -> { el, body, title, tab }
+let windowZ = 50;
+
+function openDeviceWindow(nodeId) {
+  let w = deviceWindows.get(nodeId);
+  if (!w) {
+    const modele = $("device-window-template");
+    const elWin = modele.content.firstElementChild.cloneNode(true);
+    elWin.dataset.nodeId = nodeId;
+    w = {
+      el: elWin,
+      body: elWin.querySelector(".device-win-body"),
+      title: elWin.querySelector(".device-win-title"),
+      tab: "phys",
+    };
+    deviceWindows.set(nodeId, w);
+    for (const b of elWin.querySelectorAll(".dtab")) {
+      b.addEventListener("click", () => {
+        w.tab = b.dataset.dtab;
+        syncDeviceTabs(w);
+        renderDevice();
+      });
+    }
+    elWin.querySelector(".close").addEventListener("click", () => closeDeviceWindow(nodeId));
+    wireTabs(elWin.querySelector(".device-tabs"));
+    makeWindowDraggable(elWin, elWin.querySelector(".device-win-head"));
+    $("windows").append(elWin);
+    placeWindow(w);
   }
-  $("device-title").textContent = nodeCaption(node);
-  body.append(el("div", { id: "device-info" }));
-  renderDeviceInfo(node);
-  if (CLI_KINDS.includes(node.kind)) renderConsole(node);
-  if (node.kind === "sensor") renderSensorForm(node);
-  if (node.kind === "server") body.append(el("p", { class: "muted", text: "Serveur de réseau : pas de configuration dans cette version." }));
-  body.append(el("button", {
-    type: "button", class: "danger", text: "Retirer cet équipement",
-    onclick: async () => {
-      if (!window.confirm(`Retirer ${node.id} ?`)) return;
-      const done = await guard(() => state.client.removeNode(state.sid, node.id));
-      if (done === undefined) return;
-      state.selected = null;
-      delete state.consoles[node.id];
-      await loadTopology();
-    },
-  }));
+  for (const [id, autre] of deviceWindows) autre.el.classList.toggle("active", id === nodeId);
+  w.el.style.zIndex = String(++windowZ);
+  state.selected = nodeId;
+  renderDevice();
+  // Le clavier suit la fenêtre ouverte : on y place le focus sans voler celui d'une console
+  // en cours de saisie, sinon taper une commande deviendrait impossible.
+  if (!w.body.querySelector("input:focus")) w.el.querySelector(".device-tabs .dtab")?.focus();
+}
+
+function closeDeviceWindow(nodeId) {
+  const w = deviceWindows.get(nodeId);
+  if (!w) return;
+  w.el.remove();
+  deviceWindows.delete(nodeId);
+  delete state.consoles[nodeId];
+  if (state.selected === nodeId) state.selected = null;
+  refreshViews();
+}
+
+// Disposition en cascade : chaque nouvelle fenêtre est décalée, sans sortir de l'écran.
+function placeWindow(w) {
+  const n = deviceWindows.size - 1;
+  const pas = 26, largeur = 430;
+  const x = Math.min(90 + n * pas, Math.max(8, window.innerWidth - largeur - 16));
+  const y = Math.min(70 + n * pas, Math.max(8, window.innerHeight - 260));
+  w.el.style.left = `${x}px`;
+  w.el.style.top = `${y}px`;
+}
+
+function makeWindowDraggable(win, handle) {
+  let ox = 0, oy = 0, actif = false;
+  handle.addEventListener("pointerdown", (ev) => {
+    if (ev.target.closest("button")) return;      // ne pas déplacer en fermant
+    actif = true;
+    const r = win.getBoundingClientRect();
+    ox = ev.clientX - r.left;
+    oy = ev.clientY - r.top;
+    handle.setPointerCapture(ev.pointerId);
+    win.style.zIndex = String(++windowZ);
+  });
+  handle.addEventListener("pointermove", (ev) => {
+    if (!actif) return;
+    const x = Math.min(Math.max(0, ev.clientX - ox), window.innerWidth - 40);
+    const y = Math.min(Math.max(0, ev.clientY - oy), window.innerHeight - 30);
+    win.style.left = `${x}px`;
+    win.style.top = `${y}px`;
+  });
+  const stop = (ev) => {
+    if (!actif) return;
+    actif = false;
+    handle.releasePointerCapture?.(ev.pointerId);
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+}
+
+function syncDeviceTabs(w) {
+  for (const b of w.el.querySelectorAll(".dtab"))
+    b.classList.toggle("active", b.dataset.dtab === w.tab);
+}
+
+// Rafraîchit toutes les fenêtres ouvertes ; supprime celles d'un équipement disparu.
+function renderDevice() {
+  for (const [id, w] of [...deviceWindows]) {
+    const existe = state.topo?.nodes.some((n) => n.id === id);
+    if (!existe) { w.el.remove(); deviceWindows.delete(id); }
+  }
+  for (const [id, w] of deviceWindows) {
+    const node = state.topo.nodes.find((n) => n.id === id);
+    w.title.textContent = nodeCaption(node);
+    syncDeviceTabs(w);
+    const body = w.body;
+    clear(body);
+    if (w.tab === "phys") {
+      body.append(el("div", { class: "device-info" }));
+      renderDeviceInfo(node, body);
+      body.append(el("button", {
+        type: "button", class: "danger", text: "Retirer cet équipement",
+        onclick: async () => {
+          if (!window.confirm(`Retirer ${node.id} ?`)) return;
+          const done = await guard(() => state.client.removeNode(state.sid, node.id));
+          if (done === undefined) return;
+          closeDeviceWindow(node.id);
+          await loadTopology();
+        },
+      }));
+    } else if (w.tab === "config") {
+      if (node.kind === "sensor") renderSensorForm(node, body);
+      else renderGatewayConfig(node, body);
+    } else if (w.tab === "cli") {
+      if (CLI_KINDS.includes(node.kind)) renderConsole(node, body);
+      else body.append(el("p", { class: "no-cli", text: cliAbsentMessage(node.kind) }));
+    }
+  }
+}
+
+// Onglet Config des passerelles et du serveur : l'etat reel, et ou le changer.
+// Il n existe pas d endpoint de configuration hors CLI : on ne pretend pas le contraire.
+function renderGatewayConfig(node, body) {
+  const st = stateOf(node.id);
+  body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
+  body.append(el("p", { class: "muted", text: `Nom d'hôte : ${st?.hostname ?? node.id}` }));
+  body.append(el("p", { class: "muted", text: `Région : ${st?.region ?? "non configurée"}` }));
+  body.append(el("p", { class: "muted", text: `État : ${st?.configured ? "configuré" : "non configuré"}` }));
+  if (CLI_KINDS.includes(node.kind)) {
+    body.append(el("p", { class: "no-cli",
+      text: "La configuration des passerelles se fait en ligne de commande, comme sur un équipement réel. Ouvrez l'onglet CLI." }));
+  } else {
+    body.append(el("p", { class: "no-cli", text: "Serveur de réseau : pas de configuration dans cette version." }));
+  }
+}
+
+// Pourquoi cet equipement n a pas de console, au lieu de masquer l onglet.
+function cliAbsentMessage(kind) {
+  if (kind === "sensor") return "Un capteur ne se configure pas en ligne de commande : utilisez l'onglet Config pour ses réglages radio.";
+  if (kind === "server") return "Le serveur de réseau n'expose pas de console dans cette version.";
+  return "Cet équipement n'a pas de ligne de commande.";
 }
 
 // Infos seules (rafraîchies après une commande sans reconstruire la console, qui garde le focus).
-function renderDeviceInfo(node) {
-  const info = $("device-info");
+function renderDeviceInfo(node, body) {
+  // La zone n'existe que dans l'onglet Physique. Ailleurs (CLI, Config), il n'y a rien à
+  // rafraîchir : on sort au lieu de construire un bloc fantôme, ce qui arrive quand une
+  // commande CLI met à jour la topologie alors que l'onglet ouvert n'est pas Physique.
+  const info = body?.querySelector(".device-info");
+  if (!info) return;
   clear(info);
   const st = stateOf(node.id);
   info.append(el("p", { class: "muted", text: `${KIND_LABEL[node.kind]} · x ${node.x_m} m · y ${node.y_m} m` }));
   if (st) info.append(el("p", { class: "muted", text: `Nom d'hôte : ${st.hostname} · ${st.configured ? "configuré" : "non configuré"}${st.region ? " · " + st.region : ""}` }));
 }
 
-function renderConsole(node) {
-  const body = $("device-body");
+function renderConsole(node, body) {
   if (!state.consoles[node.id]) {
     state.consoles[node.id] = {
       text: "Console de l'équipement. Tapez « ? » pour l'aide, « enable » pour le mode privilégié.\n",
@@ -294,12 +489,16 @@ function renderConsole(node) {
       out.textContent = c.text;
       out.scrollTop = out.scrollHeight;
       input.focus();
-      // La configuration peut avoir changé (nom d'hôte, région) : on rafraîchit sans reconstruire la console.
+      // La configuration peut avoir changé (nom d'hôte, région) : on rafraîchit sans reconstruire
+      // la console, pour ne pas perdre le focus ni le texte déjà saisi.
       const fresh = await guard(() => state.client.topology(state.sid));
       if (fresh && state.selected === node.id) {
         state.topo = fresh;
-        renderPlan();
-        renderDeviceInfo(node);
+        refreshViews();
+        // Le corps de la fenêtre est passé explicitement : renderDeviceInfo écrit dedans et ne
+        // peut plus deviner un panneau unique. On ne rafraîchit que si la zone est toujours là —
+        // la fenêtre a pu être refermée pendant l'aller-retour réseau.
+        if (body.isConnected) renderDeviceInfo(node, body);
       }
     },
   }, promptNode, input);
@@ -310,8 +509,7 @@ function renderConsole(node) {
   body.append(el("div", { class: "console" }, out, form));
 }
 
-function renderSensorForm(node) {
-  const body = $("device-body");
+function renderSensorForm(node, body) {
   const values = sensorFormFrom(node);
   const fields = {};
   const grid = el("div", { class: "sensor-form" });
@@ -353,7 +551,7 @@ function renderSensorForm(node) {
       const topo = await guard(() => state.client.setSensor(state.sid, node.id, checked.settings));
       if (topo) {
         state.topo = topo;
-        renderPlan();                       // le formulaire reste en place : il porte le message
+        refreshViews();                       // le formulaire reste en place : il porte le message
         message.textContent = "Réglages enregistrés.";
       }
     },
@@ -373,12 +571,43 @@ $("add-form").addEventListener("submit", async (ev) => {
     state.topo = topo;
     state.selected = checked.node.id;
     ev.target.reset();
-    renderPlan();
+    refreshViews();
     renderDevice();
     await refreshSessions();
   }
 });
 
+// --- Inspecteur de trames ------------------------------------------------------------------
+
+// Affiche la trame LoRaWAN de l evenement actif, couche par couche. Les octets viennent du
+// serveur (coeur C++ via frame_view) ; rien n est reconstruit ici.
+function showFrame(index) {
+  const box = $("frame-inspector");
+  const body = $("frame-table")?.querySelector("tbody");
+  const note = $("frame-note");
+  if (!box || !body || !note) return;
+  const ev = state.events[index];
+  if (!ev || !ev.frame) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  while (body.firstChild) body.removeChild(body.firstChild);
+  for (const r of frameRows(ev.frame.mac || {}, ev.frame.application || {})) {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = r.label;
+    const td = document.createElement("td");
+    td.textContent = r.value;
+    const tn = document.createElement("td");
+    tn.className = "muted";
+    tn.textContent = r.note;
+    tr.append(th, td, tn);
+    body.append(tr);
+  }
+  const octets = ev.frame.phy ? ev.frame.phy.octets : "?";
+  note.textContent = `${ev.kind} - dispositif ${ev.device_index} - ${octets} octets sur l air`;
+}
 // --- Simulation ----------------------------------------------------------------------------
 const player = createPlayer({
   svg: $("plan"),
@@ -387,12 +616,14 @@ const player = createPlayer({
     const node = state.topo?.nodes?.find((n) => n.id === id);
     return node && state.bounds ? toScreen(node, state.bounds, W, H) : null;
   },
+  onActive: (index) => showFrame(index),
 });
 
 // Charge les événements et la table dispositif -> capteur du run, puis prépare le lecteur.
 async function loadAnimation(runId) {
   try {
     const events = await collectPages((cursor) => state.client.eventsPage(runId, cursor));
+    state.events = events;
     const rows = await collectPages((cursor) => state.client.devicesPage(runId, cursor));
     const groups = deviceGroupsFromRows(rows);
     player.load({ events, segs: segmentsFromEvents(events, groups), groups });
@@ -428,6 +659,8 @@ $("sim-form").addEventListener("submit", async (ev) => {
       return;
     }
     await guard(() => state.client.bind(state.sid, started.run_id));
+    state.runId = started.run_id;   // la carte situera ce résultat, pas le jeu d'exemple
+    refreshMapLink();
     const summary = await guard(() => state.client.summary(started.run_id));
     if (!summary) return;
     renderResults(summary, started.links.map((l) => l.gateway));
@@ -536,14 +769,312 @@ async function renderAttemptsFromServer() {
   }
 }
 
+// --- Jeton -----------------------------------------------------------------------------------
+// Le serveur ne stocke que l'empreinte des jetons : il ne peut pas restituer un jeton déjà émis.
+// La saisie automatique repose donc sur un jeton émis au démarrage (option --auto-token),
+// transmis soit dans la page quand le serveur sert lui-même le studio, soit par un point
+// d'accès dédié. Sans cette option, la route n'existe pas (404) et le champ reste affiché.
+async function resolveToken() {
+  if (typeof window.LSIM_TOKEN === "string" && window.LSIM_TOKEN) return window.LSIM_TOKEN;
+  try {
+    // On consulte /health : il indique si le jeton automatique existe, ce qui évite de
+    // déclencher un 404 attendu à chaque ouverture quand l'option n'est pas activée.
+    const sante = await fetch("/api/v1/health", { headers: { Accept: "application/json" } });
+    if (!sante.ok) return null;
+    const info = await sante.json();
+    if (!info?.auto_token) return null;
+    const res = await fetch("/api/v1/auto-token", { headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.token === "string" && body.token ? body.token : null;
+  } catch {
+    return null;   // serveur injoignable ou sans jeton automatique : saisie manuelle
+  }
+}
+
+// Le jeton étant fourni, le champ n'a plus lieu d'être montré.
+function markTokenAutomatic() {
+  $("token-help").hidden = true;
+  const field = $("token-field");
+  if (field) field.hidden = true;
+  const note = $("token-note");
+  if (note) { note.textContent = "Jeton fourni automatiquement par le serveur."; note.hidden = false; }
+}
+
+// --- Mode : Conception / Étude ---------------------------------------------------------------
+// Les deux pans existent réellement (réseau libre d'un côté, exercices notés de l'autre).
+// Aucun rôle serveur n'existe : on ne prétend donc pas restreindre des droits (voir
+// docs/UI_PT_CONCEPTION.md §2.1).
+// --- Origine géographique -------------------------------------------------------------------
+// Le plan travaille en mètres, la carte 3D en latitude/longitude. Ce point d'ancrage est ce
+// qui permet de situer les résultats du studio ; sans lui, la carte retombe sur un exemple.
+const ORIGIN_KEY = "lsim-origin";
+function readOrigin() {
+  const lat = Number($("origin-lat").value);
+  const lon = Number($("origin-lon").value);
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 ? { lat, lon } : null;
+}
+function writeOrigin(o) {
+  if (!o) return;
+  $("origin-lat").value = String(o.lat);
+  $("origin-lon").value = String(o.lon);
+}
+// Le lien porte l'origine et le dernier résultat : sans eux la carte ne peut rien situer.
+function refreshMapLink() {
+  const q = new URLSearchParams();
+  const o = readOrigin();
+  if (o) { q.set("lat", String(o.lat)); q.set("lon", String(o.lon)); }
+  if (state.runId) q.set("run", state.runId);
+  // La session donne la position des passerelles, que les seules lignes de dispositifs
+  // ne portent pas.
+  if (state.sid) q.set("sid", state.sid);
+  const s = q.toString();
+  $("map-link").href = s ? `/index.html?${s}` : "/index.html";
+}
+
+// --- Vue carte 3D ---------------------------------------------------------------------------
+// La carte est la surface de travail ; le plan 2D reste la vue métrique de secours.
+function ensureMap() {
+  if (state.map) return state.map;
+  // Cesium exige WebGL. Un navigateur sans accélération, ou un environnement qui la refuse,
+  // doit continuer à fonctionner : on retombe alors sur le plan 2D au lieu de casser.
+  if (state.mapFailed) return null;
+  try {
+    state.map = construireCarte();
+  } catch (err) {
+    state.mapFailed = true;
+    // La raison est conservée et affichée : un repli silencieux empêcherait de savoir si la
+    // carte est absente par limite de l'environnement ou par défaut de notre code.
+    state.mapError = err instanceof Error ? err.message : String(err);
+    console.error("carte 3D indisponible :", err);
+    if (state.view === "map") showView("plan");
+    const note = $("map-hint");
+    if (note) note.textContent =
+      `Carte 3D indisponible : ${state.mapError}. Le plan 2D reste utilisable.`;
+    return null;
+  }
+  return state.map;
+}
+
+function construireCarte() {
+  return createMap3D($("cesium"), (lat, lon) => {
+    // Un clic pose l'origine de la zone : c'est le premier des deux moyens de la choisir.
+    writeOrigin({ lat: Math.round(lat * 1e5) / 1e5, lon: Math.round(lon * 1e5) / 1e5 });
+    sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(readOrigin()));
+    refreshMapLink();
+    syncMap();
+    $("map-hint").textContent =
+      `Origine : ${readOrigin().lat.toFixed(5)}, ${readOrigin().lon.toFixed(5)} — cliquez à nouveau pour la déplacer.`;
+  });
+}
+
+// Aligne la carte sur l'état : origine, équipements, sélection.
+function syncMap(fly = false) {
+  if (state.view !== "map") return;
+  const carte = ensureMap();
+  if (!carte) return;            // carte indisponible : le plan 2D a pris le relais
+  const o = readOrigin();
+  carte.setOrigin(o);
+  carte.setNodes(state.topo?.nodes ?? [], state.selected);
+  if (fly) carte.flyToOrigin(porteeDesEquipements());
+  $("map-hint").textContent = (state.topo?.nodes?.length ?? 0) === 0
+    ? "Cliquez sur la carte pour y placer l'origine de votre zone de test."
+    : `Origine : ${o.lat.toFixed(5)}, ${o.lon.toFixed(5)} — cliquez pour la déplacer.`;
+}
+
+// Encombrement du réseau, en mètres : sert à cadrer la caméra.
+function porteeDesEquipements() {
+  const ns = state.topo?.nodes ?? [];
+  if (!ns.length) return 300;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of ns) {
+    minX = Math.min(minX, n.x_m); maxX = Math.max(maxX, n.x_m);
+    minY = Math.min(minY, n.y_m); maxY = Math.max(maxY, n.y_m);
+  }
+  return Math.max(maxX - minX, maxY - minY, 60) * 1.4;
+}
+
+function showView(view) {
+  state.view = view;
+  const estCarte = view === "map";
+  $("cesium").hidden = !estCarte;
+  // Si la carte a échoué, l'indice porte la raison du repli : il doit rester lisible même
+  // sur le plan, sinon on cache précisément l'information qui explique l'absence de carte.
+  $("map-hint").hidden = state.mapFailed ? false : !estCarte;
+  $("plan").parentElement.hidden = estCarte;
+  for (const b of document.querySelectorAll(".view-tab")) {
+    const actif = b.dataset.view === view;
+    b.classList.toggle("active", actif);
+    b.setAttribute("aria-selected", actif ? "true" : "false");
+  }
+  if (estCarte) syncMap(true);
+  else renderPlan();
+}
+
+function applyMode(mode) {
+  const m = mode === "study" ? "study" : "design";
+  sessionStorage.setItem("lsim-mode", m);
+  $("mode-select").value = m;
+  for (const b of document.querySelectorAll(".mode-card"))
+    b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+  selectObservationTab(m === "study" ? "exercise" : "sim");
+  $("status-right").textContent = m === "study" ? "Mode Étude" : "Mode Conception";
+}
+
+// --- Onglets d'observation (bas à droite) ----------------------------------------------------
+function selectObservationTab(name) {
+  for (const b of document.querySelectorAll(".tab"))
+    b.classList.toggle("active", b.dataset.tab === name);
+  for (const p of document.querySelectorAll(".tab-body"))
+    p.hidden = p.dataset.panel !== name;
+}
+
+// --- Onglets de la fenêtre d'équipement ------------------------------------------------------
+// L'onglet est propre à chaque fenêtre (voir syncDeviceTabs) : plus d'état global.
+
+// --- Palette d'équipements (bas à gauche) ----------------------------------------------------
+const PALETTE = [
+  { cat: "Passerelles", icon: "icon-border", models: [
+      { kind: "border", label: "Passerelle frontière", icon: "icon-border" },
+      { kind: "relay",  label: "Passerelle relais",    icon: "icon-relay" } ] },
+  { cat: "Capteurs", icon: "icon-sensor", models: [
+      { kind: "sensor", label: "Capteur", icon: "icon-sensor" } ] },
+  { cat: "Serveur", icon: "icon-server", models: [
+      { kind: "server", label: "Serveur de réseau", icon: "icon-server" } ] },
+];
+
+function renderPalette() {
+  const cats = $("cat-box"), models = $("model-box");
+  clear(cats);
+  const draw = (cat, active) => {
+    clear(models);
+    for (const m of cat.models) {
+      models.append(el("button", {
+        type: "button", class: "tool", title: m.label,
+        onclick: () => addFromPalette(m.kind),
+      }, el("span", { class: "device-icon " + m.icon }), document.createTextNode(m.label)));
+    }
+    for (const b of cats.children) b.classList.toggle("active", b === active);
+  };
+  PALETTE.forEach((cat, i) => {
+    cats.append(el("button", {
+      type: "button", class: "tool",
+      onclick: () => draw(cat, cats.children[i]),
+    }, el("span", { class: "device-icon " + cat.icon }), document.createTextNode(cat.cat)));
+  });
+  if (cats.children.length) draw(PALETTE[0], cats.children[0]);
+}
+
+// Clic sur un modèle : on remplit le formulaire existant et on le soumet. Aucune logique
+// d'ajout dupliquée : validateNewNode et l'API restent seuls juges.
+function addFromPalette(kind) {
+  const f = $("add-form");
+  f.querySelector('[name="kind"]').value = kind;
+  const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`;
+  f.querySelector('[name="id"]').value = id;
+  f.requestSubmit();
+}
+
+// --- Accessibilité clavier -------------------------------------------------------------------
+// Les onglets suivent le motif ARIA « tablist » : les flèches parcourent les onglets, ce qui
+// évite de tabuler à travers chacun pour atteindre le suivant.
+function wireTabs(container) {
+  container.addEventListener("keydown", (ev) => {
+    const sens = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+    if (!sens) return;
+    const onglets = [...container.querySelectorAll('[role="tab"]')];
+    const i = onglets.indexOf(document.activeElement);
+    if (i < 0) return;
+    ev.preventDefault();
+    const suivant = onglets[(i + sens + onglets.length) % onglets.length];
+    suivant.focus();
+    suivant.click();
+  });
+}
+
+// Échap ferme la fenêtre d'équipement la plus récente : raccourci attendu d'une fenêtre.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || deviceWindows.size === 0) return;
+  const cible = ev.target.closest?.(".device-win");
+  const id = cible?.dataset.nodeId ?? [...deviceWindows.keys()].at(-1);
+  if (id && deviceWindows.has(id)) { closeDeviceWindow(id); ev.preventDefault(); }
+});
+
+// --- Barre d'état ---------------------------------------------------------------------------
+function setStatus(text) {
+  $("status-left").textContent = text;
+}
+
+// --- Écran de lancement ----------------------------------------------------------------------
+function closeLaunch() {
+  $("launch").hidden = true;
+}
+
 // --- Démarrage -----------------------------------------------------------------------------
 $("connect").addEventListener("click", connect);
 $("session-select").addEventListener("change", (ev) => selectSession(ev.target.value));
 $("new-session").addEventListener("click", () => newSession(null));
 $("delete-session").addEventListener("click", deleteSession);
 
-const saved = sessionStorage.getItem("lsim-token");
-if (saved) {
-  $("token").value = saved;
-  connect();
+// Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
+for (const b of document.querySelectorAll(".tab"))
+  b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
+wireTabs(document.querySelector(".tabs"));
+// Les onglets d'équipement et la fermeture sont câblés par fenêtre (openDeviceWindow).
+$("windows").addEventListener("pointerdown", (ev) => {
+  const win = ev.target.closest(".device-win");
+  if (!win) return;
+  for (const [id, w] of deviceWindows) w.el.classList.toggle("active", w.el === win);
+  state.selected = win.dataset.nodeId;
+  refreshViews();
+});
+
+// Choix du mode : sur l'écran de lancement, puis dans la barre du haut.
+for (const b of document.querySelectorAll(".mode-card"))
+  b.addEventListener("click", () => applyMode(b.dataset.mode));
+$("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
+
+renderPalette();
+for (const b of document.querySelectorAll(".view-tab")) {
+  b.addEventListener("click", () => showView(b.dataset.view));
 }
+applyMode(sessionStorage.getItem("lsim-mode") || "design");
+
+// Origine géographique : relue à l'ouverture, puis suivie à chaque modification.
+try {
+  const o = JSON.parse(sessionStorage.getItem(ORIGIN_KEY) ?? "null");
+  if (o && Number.isFinite(o.lat) && Number.isFinite(o.lon)) writeOrigin(o);
+} catch { /* valeur illisible : on garde le défaut */ }
+for (const id of ["origin-lat", "origin-lon"]) {
+  $(id).addEventListener("change", () => {
+    const o = readOrigin();
+    if (o) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
+    refreshMapLink();
+    // L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu.
+    syncMap(true);
+  });
+}
+refreshMapLink();
+
+(async () => {
+  // 1. jeton déjà saisi lors d'une visite précédente
+  const saved = sessionStorage.getItem("lsim-token");
+  if (saved) {
+    $("token").value = saved;
+    await connect();
+    return;
+  }
+  // 2. jeton fourni par le serveur (option --auto-token) : aucune saisie
+  const auto = await resolveToken();
+  if (auto) {
+    $("token").value = auto;
+    markTokenAutomatic();
+    await connect();
+    return;
+  }
+  // 3. sinon, saisie manuelle : on indique alors où trouver un jeton, sans quoi la demande
+  //    est sans réponse possible.
+  $("token-help").hidden = false;
+  $("launch").hidden = false;
+})();

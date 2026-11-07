@@ -84,6 +84,16 @@ def _max_hops_at_most(node: str, limit: int) -> Callable[[State], bool]:
     return check
 
 
+def _mesh_bandwidth(node: str, value: str) -> Callable[[State], bool]:
+    """Bande passante du mesh en kHz, telle que la rapporte la CLI (203, 406, 812, 1625)."""
+
+    def check(st: State) -> bool:
+        cfg = st.config(node)
+        return cfg is not None and cfg.mesh.bandwidth_khz == value
+
+    return check
+
+
 def _received_at_least(node: str, count: int) -> Callable[[State], bool]:
     def check(st: State) -> bool:
         report = st.reports.get(node)
@@ -194,6 +204,64 @@ EXERCISES: tuple[Exercise, ...] = (
                "Le délai d'une trame relayée dépend de la durée d'émission sur le mesh : la commande "
                "« bandwidth » de l'interface mesh (203, 406, 812 ou 1625 kHz) la raccourcit."),
     ),
+    Exercise(
+        id="au915-sous-bande",
+        title="Configurer AU915 sur la sous-bande 5",
+        statement=("Configurez la passerelle frontiere sur le plan AU915, sous-bande 5. Liez une "
+                   "simulation : la frontiere doit recevoir au moins une trame."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
+        criteria=(
+            Criterion("region", "Plan régional AU915", 10, _region("frontiere", "AU915")),
+            Criterion("sous-bande", "Sous-bande 5", 10, _sub_band("frontiere", 5)),
+            Criterion("reception", "Au moins une trame reçue par la frontière", 10,
+                      _received_at_least("frontiere", 1)),
+        ),
+        hints=("AU915 partage avec US915 la particularité des sous-bandes : la commande "
+               "« sub-band » n'a d'effet que sur ces deux plans.",
+               "Sous « int lora 0 » : « region AU915 » puis « sub-band 5 ». La réception se lit "
+               "dans le run lié à la session."),
+    ),
+    Exercise(
+        id="as923-sans-sous-bande",
+        title="Configurer AS923 et son serveur réseau",
+        statement=("Configurez la passerelle frontiere sur le plan AS923, puis déclarez son "
+                   "serveur réseau : adresse 10.0.0.9, port montant 1700, port descendant 1701. "
+                   "Liez une simulation : la frontiere doit recevoir au moins une trame."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
+        criteria=(
+            Criterion("region", "Plan régional AS923", 10, _region("frontiere", "AS923")),
+            Criterion("serveur", "Serveur réseau 10.0.0.9, ports 1700 et 1701", 10,
+                      _lorawan_server("frontiere", "10.0.0.9", 1700, 1701)),
+            Criterion("reception", "Au moins une trame reçue par la frontière", 10,
+                      _received_at_least("frontiere", 1)),
+        ),
+        hints=("AS923 n'a pas de sous-bande : la commande « sub-band » y est sans effet, ce plan "
+               "ne la porte pas.",
+               "La commande complète est « lorawan server <adresse> up-port <n> down-port <n> », "
+               "depuis le mode configuration."),
+    ),
+    Exercise(
+        id="relais-bande-large",
+        title="Réduire la durée d'émission du mesh",
+        statement=("Configurez le relais relais-1 en mode relay avec la bande passante la plus "
+                   "large (1625 kHz). Liez une simulation : la frontière doit recevoir par le mesh "
+                   "des trames de relais-1."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     _node("relais-1", "relay", "Relais 1", 1200, 0),
+                     _sensor(1500, tx_power_dbm=-10.0)),
+        criteria=(
+            Criterion("mode", "Relais en mode relay", 10, _mesh_mode("relais-1", "relay")),
+            Criterion("bande", "Bande passante du mesh à 1625 kHz", 10,
+                      _mesh_bandwidth("relais-1", "1625")),
+            Criterion("lien", "Lien mesh observé : relais-1 vers la frontière", 10,
+                      _mesh_inbound("frontiere", "relais-1")),
+        ),
+        hints=("La bande passante se règle sous « int mesh 0 » ; les valeurs acceptées sont 203, "
+               "406, 812 et 1625 kHz.",
+               "Une bande plus large raccourcit l'émission mais réduit la portée : c'est le "
+               "compromis que cet exercice demande d'appliquer à la valeur extrême."),
+    ),
+
 )
 
 _BY_ID = {e.id: e for e in EXERCISES}

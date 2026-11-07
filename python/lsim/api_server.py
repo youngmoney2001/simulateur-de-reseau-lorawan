@@ -63,12 +63,14 @@ from lsim.study_contract import (
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
+from lsim.studio_static import content_type, find_dist, resolve_asset
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
 from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
 )
+from lsim.frame_view import frames_for_run
 
 log = logging.getLogger("lsim.api")
 
@@ -669,14 +671,17 @@ class RunService:
                 or (mesh_lost_total is not None
                     and sum(r.get("lost_mesh", 0) for r in rows) != mesh_lost_total)):
             raise RuntimeError("compteurs par dispositif et totaux ne concordent pas")
+        _run_obj = mt if job.multi else tr
+        _vues = frames_for_run(_run_obj, scenario)
         events_out = []
-        for ev in events:
+        for _i, ev in enumerate(events):
             events_out.append(TraceEvent(
                 seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
                 gateway_index=ev.gateway_index, outcome=ev.outcome,
                 hops=[{"from_id": h.from_id, "to_id": h.to_id, "t_ns": h.t_ns,
                        "freq_hz": h.freq_hz, "dr": h.dr, "rssi_dbm": h.rssi_dbm,
                        "outcome": h.outcome} for h in ev.hops],
+                frame=(_vues[_i].couches() if _vues[_i] is not None else None),
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total)
@@ -742,13 +747,19 @@ class ApiServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
                  tls_context: Optional[ssl.SSLContext] = None,
                  study: Optional[StudyService] = None,
-                 db_lock: Optional[DatabaseLock] = None) -> None:
+                 db_lock: Optional[DatabaseLock] = None,
+                 studio_root: Optional[Path] = None,
+                 auto_token: Optional[str] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
         self.study = study if study is not None else StudyService()
         self._tls = tls_context
         self._db_lock = db_lock
+        self.studio_root = studio_root
+        # Jeton émis au démarrage pour que le studio n'ait pas à le réclamer à la main.
+        # None hors option --auto-token : le comportement par défaut reste la saisie manuelle.
+        self.auto_token = auto_token
 
     def server_close(self) -> None:
         super().server_close()
@@ -766,6 +777,20 @@ class ApiServer(ThreadingHTTPServer):
         log.debug("connexion refusée ou interrompue", exc_info=True)
 
 
+_TOKEN_SUR = re.compile(r"\A[A-Za-z0-9_-]{1,256}\Z")
+_INJECT = b'<script>window.LSIM_TOKEN="%s";</script>'
+
+def _inject_token(data: bytes, token: Optional[str]) -> bytes:
+    """Inscrit le jeton automatique dans la page, juste avant </head>. Sans jeton : page intacte."""
+    if not token or not _TOKEN_SUR.match(token):
+        return data
+    # Le jeton est émis par secrets.token_urlsafe : ni guillemet ni chevron, aucune échappatoire.
+    # Le motif ci-dessus le reverifie : on n'insère jamais une chaîne non conforme.
+    marque = data.lower().rfind(b"</head>")
+    if marque < 0:
+        return data
+    return data[:marque] + (_INJECT % token.encode("ascii")) + data[marque:]
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "lsim-api"
@@ -781,6 +806,38 @@ class _Handler(BaseHTTPRequestHandler):
         return  # pas de journal d'accès : les en-têtes contiennent des jetons
 
     def do_GET(self) -> None:
+        if not self._serve_static():
+            self._handle("GET")
+
+    def _serve_static(self) -> bool:
+        """Sert le studio precompile. Rend la main (False) si l URL n est pas un fichier du studio."""
+        root = getattr(self.server, "studio_root", None)
+        if root is None:
+            return False
+        path = urlsplit(self.path).path
+        fichier = resolve_asset(root, path)
+        if fichier is None:
+            return False
+        try:
+            data = fichier.read_bytes()
+        except OSError:
+            return False
+        cache = "no-store" if fichier.suffix == ".html" else "public, max-age=3600"
+        # En production le serveur sert lui-même le studio : il glisse le jeton dans la page,
+        # ce qui évite un aller-retour et surtout de l'exposer dans une URL.
+        # Seul le studio reçoit le jeton : la carte des résultats n'appelle pas l'API et n'a
+        # donc aucune raison d'y avoir accès.
+        if fichier.suffix == ".html" and fichier.name.startswith("studio"):
+            data = _inject_token(data, getattr(self.server, "auto_token", None))
+        self.send_response(200)
+        self.send_header("Content-Type", content_type(fichier))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
         self._handle("GET")
 
     def do_POST(self) -> None:
@@ -857,7 +914,18 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(parts.query, keep_blank_values=True)
         base = f"/api/{API_VERSION}"
         if method == "GET" and path == f"{base}/health":
-            return 200, {"status": "ok", "api_version": API_VERSION}
+            # Indique si le jeton automatique est disponible : le client consulte /health
+            # au lieu de sonder /auto-token, ce qui évitait un 404 attendu mais bruyant.
+            return 200, {"status": "ok", "api_version": API_VERSION,
+                         "auto_token": bool(getattr(self.server, "auto_token", None))}
+
+        # Jeton automatique : volontairement non authentifié (c'est lui qui sert à s'authentifier),
+        # et inexistant — 404 — tant que l'option --auto-token n'est pas activée au démarrage.
+        if method == "GET" and path == f"{base}/auto-token":
+            tok = getattr(self.server, "auto_token", None)
+            if not tok:
+                raise ApiError(404, "not_found", "route inconnue")
+            return 200, {"token": tok}
 
         if not path.startswith(base + "/"):
             raise ApiError(404, "not_found", "route inconnue")
@@ -1023,15 +1091,22 @@ def make_tls_context(cert: Path, key: Path) -> ssl.SSLContext:
 def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":memory:",
                 max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
                 tls: Optional[ssl.SSLContext] = None,
-                terrain_dir: Optional[Path] = None) -> ApiServer:
+                terrain_dir: Optional[Path] = None,
+                dist: Optional[Path] = None,
+                auto_token_owner: Optional[str] = None) -> ApiServer:
     lock = DatabaseLock(runs_db) if runs_db != ":memory:" else None
     try:
+        # --auto-token : un jeton est émis une fois au démarrage, pour un propriétaire nommé.
+        # Le serveur ne stockant que l'empreinte des jetons, il ne peut pas restituer un jeton
+        # déjà émis : il faut en émettre un nouveau, d'où cette option explicite.
+        auto = TokenStore(tokens_path).issue(auto_token_owner) if auto_token_owner else None
         service = RunService(RunStore(runs_db), max_queue=max_queue,
                              limiter=RateLimiter(per_minute=rate_per_min),
                              terrains=TerrainCatalog(terrain_dir))
         study = StudyService(store=StudyStore(runs_db))
         return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
-                         study=study, db_lock=lock)
+                         study=study, db_lock=lock,
+                         studio_root=find_dist(dist), auto_token=auto)
     except BaseException:
         if lock is not None:
             lock.release()
@@ -1058,6 +1133,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_serve.add_argument("--rate-per-minute", type=int, default=DEFAULT_RATE_PER_MIN)
     p_serve.add_argument("--terrain-catalog", type=Path, default=None,
                          help="dossier de reliefs <id>.csv (optionnel)")
+    p_serve.add_argument("--dist", type=Path, default=None,
+                         help="dossier du studio precompile a servir sur la meme origine que l API")
+    p_serve.add_argument("--auto-token", metavar="PROPRIETAIRE", default=None,
+                         help="emet un jeton au demarrage pour ce proprietaire : le studio se "
+                              "connecte sans saisie. Desactive par defaut. L'authentification "
+                              "disparait : reserve a une instance locale.")
     args = parser.parse_args(argv)
 
     if args.cmd == "issue-token":
@@ -1071,13 +1152,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--tls-cert et --tls-key vont ensemble")
     if args.host not in _LOOPBACK and args.tls_cert is None:
         parser.error("adresse non locale sans TLS : fournir --tls-cert et --tls-key")
+    # Le jeton automatique supprime la frontiere d'authentification : toute personne atteignant
+    # le port obtient l'acces. On l'interdit donc sur une adresse non locale.
+    if args.auto_token and args.host not in _LOOPBACK:
+        parser.error("--auto-token exige une adresse locale (127.0.0.1, ::1, localhost) : "
+                     "sur le reseau, emettez des jetons avec issue-token")
     tls = make_tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
-                         rate_per_min=args.rate_per_minute, tls=tls,
-                         terrain_dir=args.terrain_catalog)
+    try:
+        server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
+                             rate_per_min=args.rate_per_minute, tls=tls,
+                             terrain_dir=args.terrain_catalog, dist=args.dist,
+                             auto_token_owner=args.auto_token)
+    except ValueError as exc:
+        parser.error(str(exc))
     scheme = "https" if tls else "http"
     log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
+    if args.auto_token:
+        log.warning("jeton automatique actif pour %r : authentification desactivee, "
+                    "instance locale uniquement", args.auto_token)
+    if server.studio_root is not None:
+        log.info("studio servi depuis %s", server.studio_root)
+    else:
+        log.info("studio non servi : aucun dossier dist trouve (--dist pour le precise)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -233,6 +233,7 @@ class TraceEvent(_Strict):
     gateway_index: int = Field(default=0, ge=0)
     hops: list[Hop] = Field(default_factory=list, max_length=MAX_HOPS_PER_EVENT)
     outcome: str = Field(max_length=64)
+    frame: Optional[dict] = Field(default=None)  # trame LoRaWAN reconstruite (frame_view)
 
 
 class TracePage(_Strict):
