@@ -260,6 +260,27 @@ export function createMap3D(container, onPick) {
     },
 
     /**
+     * Positions à l'écran des équipements affichés, en pixels CSS relatifs au canevas.
+     *
+     * Sert à viser un point **vide** : un essai qui clique au hasard peut tomber sur un
+     * équipement, dont l'écouteur en capture intercepte alors le geste — à juste titre,
+     * puisque cliquer un équipement sert à le déplacer, pas à déplacer la zone. Sans cette
+     * liste, on ne peut pas distinguer un défaut de l'application d'un clic mal placé.
+     *
+     * @returns {Array<{id: string, x: number, y: number}>}
+     */
+    nodeScreenPositions() {
+      const out = [];
+      for (const n of affiches) {
+        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
+        const e = Cesium.SceneTransforms.worldToWindowCoordinates(
+          viewer.scene, Cesium.Cartesian3.fromDegrees(lon, lat));
+        if (e) out.push({ id: n.id, x: e.x, y: e.y });
+      }
+      return out;
+    },
+
+    /**
      * Montre un repère à l'endroit où l'équipement sera posé, pendant le glisser.
      * @param {number} lat @param {number} lon @param {string} [kind]
      */

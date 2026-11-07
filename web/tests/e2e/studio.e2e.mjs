@@ -378,7 +378,15 @@ try {
     await new Promise((r) => setTimeout(r, 1500));
 
     const apres = await lireZone();
-    if (apres === avant) throw new Error("le clic armé n'a pas déplacé la zone");
+    if (apres === avant) {
+      // Deux causes possibles, qu'il faut distinguer faute de navigateur local :
+      // le geste a été consommé mais l'ancre n'a pas bougé, ou le clic n'est jamais
+      // arrivé jusqu'à la carte. Le bouton encore armé tranche entre les deux.
+      const encoreArme = await page.$eval("#pick-origin", (b) => b.classList.contains("active"));
+      const indice = await page.$eval("#map-hint", (n) => n.textContent.trim());
+      throw new Error(
+        `le clic armé n'a pas déplacé la zone (${avant}) · geste ${encoreArme ? "NON consommé : le clic n'a pas atteint la carte" : "consommé, mais l'ancre est restée"} · indice : « ${indice} »`);
+    }
     if (!/^-?\d+\.\d+,\s?-?\d+\.\d+$/.test(apres))
       throw new Error(`zone écrite dans un format inattendu : « ${apres} »`);
     // Le geste est à usage unique : il se désarme après le clic.
