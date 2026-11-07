@@ -171,8 +171,9 @@ Répond à D4 et D6. Trois groupes, séparés visuellement :
   demandé en allant configurer un équipement.
 - **État** : session active, indicateur de jeton (connecté / non connecté).
 
-Le jeton reste un champ de saisie (la question de l'injection automatique au démarrage est une
-décision produit, non traitée ici).
+Le jeton n'est plus à saisir : il est fourni automatiquement au démarrage par l'option serveur
+`--auto-token` (voir `docs/UI_PT_CONCEPTION.md` §6 bis). Le champ de saisie subsiste, mais n'est
+affiché que si le serveur ne fournit pas de jeton.
 
 ### Onglets d'observation
 

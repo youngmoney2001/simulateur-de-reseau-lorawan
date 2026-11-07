@@ -612,6 +612,31 @@ async function renderAttemptsFromServer() {
   }
 }
 
+// --- Jeton -----------------------------------------------------------------------------------
+// Le serveur ne stocke que l'empreinte des jetons : il ne peut pas restituer un jeton déjà émis.
+// La saisie automatique repose donc sur un jeton émis au démarrage (option --auto-token),
+// transmis soit dans la page quand le serveur sert lui-même le studio, soit par un point
+// d'accès dédié. Sans cette option, la route n'existe pas (404) et le champ reste affiché.
+async function resolveToken() {
+  if (typeof window.LSIM_TOKEN === "string" && window.LSIM_TOKEN) return window.LSIM_TOKEN;
+  try {
+    const res = await fetch("/api/v1/auto-token", { headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.token === "string" && body.token ? body.token : null;
+  } catch {
+    return null;   // serveur sans jeton automatique : saisie manuelle
+  }
+}
+
+// Le jeton étant fourni, le champ n'a plus lieu d'être montré.
+function markTokenAutomatic() {
+  const field = $("token-field");
+  if (field) field.hidden = true;
+  const note = $("token-note");
+  if (note) { note.textContent = "Jeton fourni automatiquement par le serveur."; note.hidden = false; }
+}
+
 // --- Mode : Conception / Étude ---------------------------------------------------------------
 // Les deux pans existent réellement (réseau libre d'un côté, exercices notés de l'autre).
 // Aucun rôle serveur n'existe : on ne prétend donc pas restreindre des droits (voir
@@ -720,10 +745,22 @@ $("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
 renderPalette();
 applyMode(sessionStorage.getItem("lsim-mode") || "design");
 
-const saved = sessionStorage.getItem("lsim-token");
-if (saved) {
-  $("token").value = saved;
-  connect();
-} else {
+(async () => {
+  // 1. jeton déjà saisi lors d'une visite précédente
+  const saved = sessionStorage.getItem("lsim-token");
+  if (saved) {
+    $("token").value = saved;
+    await connect();
+    return;
+  }
+  // 2. jeton fourni par le serveur (option --auto-token) : aucune saisie
+  const auto = await resolveToken();
+  if (auto) {
+    $("token").value = auto;
+    markTokenAutomatic();
+    await connect();
+    return;
+  }
+  // 3. sinon, saisie manuelle
   $("launch").hidden = false;
-}
+})();

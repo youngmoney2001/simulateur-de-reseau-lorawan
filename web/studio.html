@@ -13,7 +13,10 @@
         <h1>Simulateur de réseau LoRaWAN</h1>
         <p class="muted">Saisissez votre jeton, puis choisissez un mode. Le mode reste changeable
           ensuite, depuis la barre du haut.</p>
-        <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
+        <div id="token-field">
+          <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
+        </div>
+        <p id="token-note" class="muted" hidden></p>
         <div class="modes">
           <button type="button" class="mode-card" data-mode="design" aria-pressed="true">
             <strong>Conception</strong>

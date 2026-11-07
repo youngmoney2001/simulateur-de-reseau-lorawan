@@ -195,6 +195,43 @@ donnerait une image fausse du protocole. Le plan montre donc les **portées et l
 
 ---
 
+## 6 bis. La saisie automatique du jeton
+
+Demandée explicitement : le jeton ne doit plus être collé à la main.
+
+### Ce qui rendait la chose non triviale
+
+Le serveur **ne stocke que l'empreinte** (`sha256`) des jetons : `TokenStore.issue` génère
+`secrets.token_urlsafe(32)`, conserve le hash et renvoie le jeton en clair **une seule fois**. Il est
+donc impossible de restituer un jeton déjà émis — il faut en **émettre un nouveau**.
+
+### Ce qui a été fait
+
+Option `--auto-token PROPRIETAIRE` sur `serve` :
+
+1. Au démarrage, le serveur émet **un** jeton pour ce propriétaire et le garde en mémoire.
+2. **Chemin production** (`--dist`) : le serveur inscrit le jeton dans `studio.html` avant `</head>`.
+3. **Chemin développement** (Vite proxy `/api`) : le point d'accès `GET /api/v1/auto-token` le
+   fournit. Sans l'option, la route **n'existe pas** (404).
+4. Le studio essaie `window.LSIM_TOKEN`, puis l'appel réseau ; s'il obtient un jeton, il se connecte
+   et **masque le champ**. Sinon, la saisie manuelle reste disponible.
+
+### Gardes
+
+| Garde | Effet |
+|---|---|
+| Option absente par défaut | Comportement inchangé : saisie manuelle |
+| `--auto-token` hors boucle locale | Refusé : *« sur le réseau, émettez des jetons avec issue-token »* |
+| Injection limitée à `studio.*.html` | La carte des résultats n'appelle pas l'API : elle ne reçoit rien |
+| Motif strict avant insertion | Aucune chaîne non conforme insérée dans la page |
+| Avertissement au démarrage | `WARNING jeton automatique actif ... authentification désactivée` |
+
+**Ce que cela coûte, en clair :** tant que l'option est active, **toute personne qui peut joindre le
+port dispose de l'accès**. C'est acceptable pour une instance locale mono-utilisateur, ce qui est
+précisément le cas d'usage visé ; ce ne l'est pas pour un serveur partagé.
+
+---
+
 ## 7. Phasage
 
 | Phase | Contenu | Risque | État |
