@@ -1,0 +1,242 @@
+# Conception de l'interface — disposition Packet Tracer, contenu LoRaWAN
+
+Statut : **proposition**. Ce document **remplace les §3, §4, §5 et la décision Q2** de
+`docs/UI_STUDIO_CONCEPTION.md`, qui proposaient trois colonnes fixes et un dock de console en bas.
+Cette orientation a été écartée : elle ne correspond pas à l'interface attendue. L'état des lieux
+mesuré (§1, défauts D1–D6) et les principes (§2, P1–P6) du document initial restent valables.
+
+Référence amont : `docs/STUDY_PANEL_SPEC.md` définit le **quoi** et prime en cas de conflit. Elle
+précise déjà (§4) que l'interface de configuration est *« inspirée d'IOS »* avec les modes Cisco
+`gw1>` → `gw1#` → `gw1(config)#` → `gw1(config-if)#`. Ces modes **existent déjà et fonctionnent**.
+Ce document porte sur l'**enveloppe visuelle**, pas sur la CLI.
+
+---
+
+## 1. Ce qui est demandé
+
+Deux choses, distinctes :
+
+1. **Au lancement, un choix de mode.**
+2. **Ensuite, une interface de type Cisco Packet Tracer** — avec nos équipements LoRaWAN et nos
+   propres icônes, pas celles de Cisco.
+
+---
+
+## 2. Le choix du mode au lancement
+
+### 2.1 Constat mesuré : le serveur n'a pas de rôles
+
+Avant de dessiner un sélecteur, il faut savoir ce qu'il commande. Vérification faite dans le code :
+
+| Élément | État réel |
+|---|---|
+| `TokenStore` | porte un `owner` : une chaîne d'identité (`[A-Za-z0-9_.-]{1,64}`). Sert à l'isolation et à la limitation de débit. **Aucun rôle.** |
+| `study_session.py` | les sessions **sont** rattachées à un propriétaire : `_get_locked` rejette si `st.owner != owner`. L'isolation entre utilisateurs est donc réelle. |
+| `runs` (base SQLite) | les runs sont également rattachés à un `owner` (`owner_runs`, `_owned`). |
+| `GET /api/v1/exercises` | renvoie `study_exercises.listing()` : **liste globale en lecture seule**. Aucun jeton ne peut créer ou modifier un exercice. |
+| `POST /api/v1/exercises/{id}/submit` | ouvert à tout jeton valide. |
+
+**Conséquence :** un sélecteur *Élève / Enseignant* n'aurait aujourd'hui **rien à commander**. Le
+mode « Enseignant » implique au minimum *créer un exercice* et *consulter les tentatives d'un
+élève* ; aucun des deux n'existe côté serveur. Le construire côté client produirait un
+interrupteur décoratif — exactement ce que le principe P2 du document initial interdit
+(présenter une commande qui n'agit sur rien).
+
+### 2.2 Recommandation : deux modes adossés à du réel
+
+Le choix « Élève / Enseignant, ou conception / étude » recouvrait deux lectures. La seconde est
+**réalisable immédiatement**, parce que les deux pans existent déjà :
+
+| Mode | Ce qu'il ouvre | Existe déjà ? |
+|---|---|---|
+| **Conception** | Réseau libre : construire, configurer, simuler, observer. Aucun barème, aucune note. | Oui — c'est le studio actuel |
+| **Étude** | Exercice guidé : énoncé, indices pénalisés, notation, tentatives. | Oui — 7 exercices, `study_exercises.py` |
+
+L'écran de lancement présente ces deux modes en cartes, avec le jeton demandé une seule fois.
+Le mode reste **changeable à chaud** depuis la barre du haut : imposer un choix définitif au
+démarrage obligerait à relancer l'application pour passer de l'un à l'autre.
+
+### 2.3 Ce que demanderait le mode Enseignant
+
+À titre d'information, et **hors périmètre de cette conception** : il faudrait ajouter au serveur
+un rôle dans le jeton, un endpoint d'écriture sur les exercices, et un endpoint de consultation des
+tentatives par élève — avec le risque que cela introduise une notion d'établissement ou de classe
+qui n'existe pas dans le modèle actuel. C'est une décision produit, pas une variante d'interface.
+
+---
+
+## 3. La disposition Packet Tracer, adaptée
+
+### 3.1 Ce qui fait qu'une interface « ressemble à Packet Tracer »
+
+Ce n'est pas une affaire de couleurs. Ce sont six traits structurels :
+
+1. **Le plan domine.** L'espace de travail occupe l'essentiel de la fenêtre ; les panneaux ne
+   l'encadrent pas.
+2. **La palette est en bas à gauche**, en deux boîtes : les catégories, puis les modèles de la
+   catégorie choisie.
+3. **Une barre d'outils verticale à droite**, pour les outils (sélection, déplacement,
+   suppression, inspection, annotation, trame).
+4. **Des fenêtres d'équipement flottantes**, ouvrables plusieurs à la fois, avec des onglets.
+5. **Une barre d'état en bas** : bascule temps réel / simulation, et onglets de scénario.
+6. **Les équipements sont des icônes posées sur le plan**, déplaçables, nommées.
+
+L'interface actuelle ne respecte **aucun** de ces six traits : la palette est une barre latérale de
+240 px, le plan est une colonne parmi d'autres, le panneau d'équipement est fixe à droite, et les
+trois panneaux du bas se partagent l'écran avec le plan. Ce n'est pas une variante à corriger :
+c'est une autre logique d'organisation.
+
+### 3.2 Disposition proposée
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Fichier  Édition  Affichage  Outils  Aide        [ Conception ▾ ]   alice  ▾  │
+├────────────────────────────────────────────────────────┬─────────────────────┤
+│                                                        │ ▣ Sélection         │
+│                                                        │ ✥ Déplacer          │
+│                                                        │ ✕  Supprimer        │
+│                     PLAN (dominant)                    │ ⚲  Inspecter        │
+│                                                        │ ✎  Annoter          │
+│      ◯ capt-1        ▭ gw-nord ──── ▣ serveur          │ ➤  Trame simple     │
+│                          │                             │ ➤  Trame complexe   │
+│                        ▭ gw-relais                     │                     │
+│                                                        │                     │
+│      (couche d'animation superposée)                   │                     │
+│                                                        │                     │
+├─────────────────────────┬──────────────────────────────┴─────────────────────┤
+│ CATÉGORIES  │ MODÈLES   │ Journal │ Trame │ Résultats                        │
+│ ▸ Passerelle│ ▭ frontière│                                                    │
+│ ▸ Relais    │ ▭ relais   │                                                    │
+│ ▸ Capteur   │ ◯ capteur  │  (panneau d'observation, repliable)                │
+│ ▸ Serveur   │ ▣ serveur  │                                                    │
+├─────────────┴───────────┴────────────────────────────────────────────────────┤
+│ ◉ Simulation  ○ Temps réel     │ Scénario 0 │ 7 équipements · 0 erreur       │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 Correspondance avec le code existant
+
+L'intérêt de cette disposition est qu'elle se greffe sur des modules qui existent déjà :
+
+| Zone | Reprend | État |
+|---|---|---|
+| Plan central | `renderPlan()`, `startDrag`/`onMove`/`onUp`, couche `#anim-layer` | existe |
+| Icônes d'équipement | styles `.node .border/.relay/.sensor/.server` | existe |
+| Palette bas-gauche | les 4 valeurs de `KINDS` (border, relay, sensor, server) | existe, à déplacer |
+| Barre d'outils droite | outil *Trame* → `player.js` | en partie |
+| Onglets Journal / Trame / Résultats | `player.js`, inspecteur de trames, `results.js` | existe |
+| Fenêtre d'équipement | voir §4 | à construire |
+| Bascule temps réel / simulation | **n'existe pas** | voir §6 |
+
+---
+
+## 4. La fenêtre d'équipement : trois onglets
+
+C'est le trait le plus reconnaissable de Packet Tracer, et celui qui apporte le plus ici. La
+fenêtre est **flottante** : plusieurs équipements peuvent être ouverts en même temps, ce qui permet
+de comparer deux configurations côte à côte — impossible avec un panneau fixe.
+
+| Onglet | Contenu | Reprend |
+|---|---|---|
+| **Physique** | Rôle, position (x, y) en mètres, état (configuré / non), nom d'hôte | `renderDeviceInfo()` |
+| **Config** | Réglages par formulaire : région, sous-bande, SF, BW, mode mesh | `renderSensorForm()` pour les capteurs ; **à créer** pour les passerelles |
+| **CLI** | Console IOS : modes `>` `#` `(config)#` `(config-if)#` | `renderConsole()` |
+
+Deux bénéfices directs :
+
+- **Le défaut D2 se résout mieux ainsi qu'avec la colonne à 480 px.** Une fenêtre flottante est
+  redimensionnable : la console peut occuper la largeur nécessaire, et le caret d'erreur
+  (`" ".repeat(column) + "^"`) ne se décale plus jamais, quelle que soit la taille de l'écran.
+- **Le défaut D5 disparaît naturellement** : l'inspecteur de trames rejoint l'onglet *Trame* du
+  panneau d'observation, au lieu d'être un `<details>` replié dans un panneau masqué.
+
+Le principe de la décision Q2 (pas de zone qui apparaît et disparaît sans action de
+l'utilisateur) demeure, mais change de support : la fenêtre s'ouvre sur un double-clic explicite,
+et un équipement sans CLI (capteur, serveur) affiche un **état explicatif dans l'onglet CLI** au
+lieu de masquer l'onglet.
+
+---
+
+## 5. Ce qui survit de la phase 0 déjà réalisée
+
+La phase 0 (`f0a7319`) corrigeait quatre défauts. Le changement d'orientation n'annule pas tout :
+
+| Correction | Sort |
+|---|---|
+| **D5** — inspecteur sorti du `<details>` | **conservé**, et renforcé par l'onglet *Trame* |
+| **D6** — liens studio ↔ carte | **conservé** sans réserve |
+| **D1** — exercice sur toute la largeur | **devenu sans objet** : la rangée du bas disparaît au profit de la palette |
+| **D2** — colonne élargie à 480 px | **devenue sans objet** : la console passe en fenêtre flottante, mieux encore |
+
+Aucune de ces quatre corrections n'était inutile : D5 et D6 restent, et D1/D2 ont été remplacées
+par de meilleures réponses aux mêmes défauts. Le commit reste donc justifié.
+
+---
+
+## 6. Deux points qui ne sont pas de l'interface
+
+### 6.1 La bascule temps réel / simulation
+
+Packet Tracer l'affiche en bas à droite. **Ici, elle ne peut pas être branchée** : le moteur
+fonctionne par lots, avec une file bornée — une simulation est lancée, elle produit un run, puis
+un jeu d'événements que l'on rejoue. Il n'y a pas d'état « réseau vivant » à observer en direct.
+
+Afficher un bouton *Temps réel* qui ne fait rien violerait le principe P2. Proposition : **ne pas
+reproduire cette bascule**, et garder à la place l'état du run dans la barre du bas
+(`7 équipements · 0 erreur`). Si le temps réel devient souhaitable, c'est un chantier moteur, pas
+un chantier d'interface.
+
+### 6.2 Les liaisons
+
+Packet Tracer tire des câbles explicites entre équipements. Ici, les liaisons LoRaWAN ne sont pas
+des câbles : un capteur émet, toutes les passerelles à portée reçoivent. Forcer un tracé de câble
+donnerait une image fausse du protocole. Le plan montre donc les **portées et les trames**
+(anneaux, trajectoires animées), pas des liaisons fixes.
+
+---
+
+## 7. Phasage
+
+| Phase | Contenu | Risque |
+|---|---|---|
+| **A** | Écran de lancement : saisie du jeton, choix Conception / Étude, mode changeable à chaud | Faible |
+| **B** | Plan dominant + palette en bas à gauche (déplacement de l'existant) | Faible |
+| **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus |
+| **D** | Barre d'outils verticale à droite | Faible |
+| **E** | Panneau d'observation à onglets (Journal / Trame / Résultats) + barre d'état | Faible |
+| **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible |
+
+La phase C est la seule sensible : la console garde le focus et l'historique par équipement, et le
+passage d'un panneau fixe à une fenêtre flottante touche `renderConsole`, `renderDeviceInfo` et
+`renderSensorForm`.
+
+**Dette connue, inchangée** : la spec §8.7 signale que la vérification visuelle en navigateur réel
+n'a jamais été faite. Aucune phase ne doit être tenue pour acquise sans ce passage — et la CI
+n'exécute aujourd'hui **aucun** test web, ni les 29 tests Node ni l'e2e.
+
+---
+
+## 8. Questions ouvertes
+
+1. **Le mode Enseignant est-il souhaité ?** Il demande des rôles côté serveur, qui n'existent pas.
+   Si oui, il faut arbitrer le modèle (établissement, classe, tentatives) avant toute interface.
+2. **La bascule temps réel / simulation est-elle attendue ?** Elle est emblématique de Packet
+   Tracer, mais le moteur actuel ne peut pas l'alimenter (§6.1).
+3. **Faut-il conserver les deux applications ?** Le studio en disposition PT, et la carte Cesium
+   en applicatif séparé, reliées comme décidé en Q3.
+
+---
+
+## 9. Tableau récapitulatif
+
+| Sujet | Décision |
+|---|---|
+| Orientation | Disposition Packet Tracer, **contenu et icônes LoRaWAN** |
+| Document initial | §3, §4, §5 et Q2 **remplacés** ; §1 (D1–D6) et §2 (P1–P6) conservés |
+| Mode au lancement | **Conception / Étude**, changeable à chaud — les deux pans existent |
+| Mode Élève / Enseignant | **Écarté** : aucun rôle côté serveur, rien à commander |
+| Fenêtre d'équipement | Flottante, trois onglets : Physique / Config / CLI |
+| Console | Dans l'onglet CLI, fenêtre redimensionnable → le caret ne se décale plus |
+| Bascule temps réel | **Non reproduite** : le moteur travaille par lots |
+| Liaisons | Non représentées en câbles : contraires au modèle LoRaWAN |
+| Phase 0 (`f0a7319`) | D5 et D6 conservés ; D1 et D2 remplacés par de meilleures réponses |

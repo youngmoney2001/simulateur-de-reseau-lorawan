@@ -1,5 +1,10 @@
 # Conception de l'interface du studio (brouillon, aucune ligne de code écrite)
 
+**⚠ Orientation remplacée.** Les §3 (architecture d'information), §4 (corrections immédiates),
+§5 (phasage) et la décision Q2 de ce document sont **supersédés** par
+`docs/UI_PT_CONCEPTION.md`, qui reprend la disposition Packet Tracer demandée. Restent valables ici :
+le §1 (état des lieux mesuré, défauts D1–D6) et le §2 (principes P1–P6).
+
 Statut : **proposition** — aucune ligne de code n'a été écrite. Les trois questions laissées
 ouvertes dans une première version sont tranchées au §7, preuves à l'appui.
 
