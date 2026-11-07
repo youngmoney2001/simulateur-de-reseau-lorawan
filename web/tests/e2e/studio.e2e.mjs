@@ -89,7 +89,10 @@ try {
       b.click();
     }, sel, label);
   };
-  const deviceTab = (label) => clickTab(".dtab", label);
+  // Plusieurs fenetres peuvent etre ouvertes : l onglet doit viser celle de l equipement vise,
+  // sinon on clique l onglet de la premiere fenetre venue.
+  const deviceTab = (label, nodeId) =>
+    clickTab('.device-win[data-node-id="' + nodeId + '"] .dtab', label);
   const obsTab = (label) => clickTab(".tab", label);
 
   await step("connexion et session créée automatiquement", async () => {
@@ -119,41 +122,41 @@ try {
 
   await step("console : configuration CLI et erreur de syntaxe au caret", async () => {
     await page.click('g.node[data-id="gw-nord"] rect');
-    await page.waitForSelector(".device-win");
-    await deviceTab("CLI");
-    await page.waitForSelector(".device-win-body .console input");
+    await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
+    await deviceTab("CLI", "gw-nord");
+    await page.waitForSelector('.device-win[data-node-id="gw-nord"] .console input');
     const send = async (cmd) => {
-      await page.click(".device-win-body .console input");
-      await page.type(".device-win-body .console input", cmd);
+      await page.click('.device-win[data-node-id="gw-nord"] .console input');
+      await page.type('.device-win[data-node-id="gw-nord"] .console input', cmd);
       await page.keyboard.press("Enter");
-      await page.waitForFunction((c) => !document.querySelector(".device-win-body .console input").value && (document.querySelector(".device-win-body .console pre").textContent.includes(c)), { timeout: 20_000 }, cmd);
+      await page.waitForFunction((c) => !document.querySelector('.device-win[data-node-id="gw-nord"] .console input').value && (document.querySelector('.device-win[data-node-id="gw-nord"] .console pre').textContent.includes(c)), { timeout: 20_000 }, cmd);
     };
     await send("enable");
     await send("configure terminal");
     await send("hostname frontiere-nord");
     await send("end");
-    await waitText(".device-win-body", /frontiere-nord/);
+    await waitText('.device-win[data-node-id="gw-nord"]', /frontiere-nord/);
     await send("commande-inconnue");
-    await page.waitForFunction(() => document.querySelector(".device-win-body .console pre").textContent.includes("^"), { timeout: 20_000 });
-    await page.click(".device-win-body .console input");
+    await page.waitForFunction(() => document.querySelector('.device-win[data-node-id="gw-nord"] .console pre').textContent.includes("^"), { timeout: 20_000 });
+    await page.click('.device-win[data-node-id="gw-nord"] .console input');
     await page.keyboard.press("ArrowUp");
-    const recalled = await page.$eval(".device-win-body .console input", (i) => i.value);
+    const recalled = await page.$eval('.device-win[data-node-id="gw-nord"] .console input', (i) => i.value);
     if (recalled !== "commande-inconnue") throw new Error(`historique : ${recalled}`);
-    await page.$eval(".device-win-body .console input", (i) => { i.value = ""; });
+    await page.$eval('.device-win[data-node-id="gw-nord"] .console input', (i) => { i.value = ""; });
   });
 
   await step("capteur : refus d'un SF hors bornes au studio, puis enregistrement", async () => {
     await page.click('g.node[data-id="capt-1"] circle');
-    await page.waitForSelector(".device-win");
-    await deviceTab("Config");
-    await page.waitForSelector('.device-win-body .sensor-form input[name="spreading_factor"]');
-    await setValue('.device-win-body .sensor-form input[name="spreading_factor"]', "13");
-    await submitForm(".device-win-body form");
-    await waitText(".device-win-body form", /spreading_factor/);
-    await setValue('.device-win-body .sensor-form input[name="spreading_factor"]', "9");
-    await setValue('.device-win-body .sensor-form input[name="messages"]', "2");
-    await submitForm(".device-win-body form");
-    await waitText(".device-win-body form", /enregistrés/);
+    await page.waitForSelector('.device-win[data-node-id="capt-1"]');
+    await deviceTab("Config", "capt-1");
+    await page.waitForSelector('.device-win[data-node-id="capt-1"] .sensor-form input[name="spreading_factor"]');
+    await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="spreading_factor"]', "13");
+    await submitForm('.device-win[data-node-id="capt-1"] form');
+    await waitText('.device-win[data-node-id="capt-1"] form', /spreading_factor/);
+    await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="spreading_factor"]', "9");
+    await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="messages"]', "2");
+    await submitForm('.device-win[data-node-id="capt-1"] form');
+    await waitText('.device-win[data-node-id="capt-1"] form', /enregistrés/);
   });
 
   await step("glisser-déposer : la position est enregistrée côté API", async () => {
