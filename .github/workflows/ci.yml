@@ -115,6 +115,9 @@ jobs:
           cd web
           CHROME=$(find "$HOME/.cache/puppeteer" -type f -name chrome -perm -u+x | head -1)
           set -o pipefail
+          # Les captures sont rapatriées dans la branche. Sans ce nettoyage, celles des runs
+          # précédents s'accumulent et l'historique s'alourdit d'images périmées.
+          rm -rf ../captures
           CHROME_PATH="$CHROME" node tests/e2e/capture.mjs 2>&1 | tee ../capture.log
       - name: Déposer les captures
         if: always()
