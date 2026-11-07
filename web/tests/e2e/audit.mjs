@@ -238,6 +238,14 @@ try {
       toileCss: toile ? `${toile.clientWidth}x${toile.clientHeight}` : "aucune",
       // Raison d'arrêt du rendu, le cas échéant.
       erreurRendu: window.__carteErreur ?? "",
+      // Si le conteneur lui-même n'a pas de dimensions, le canevas ne peut pas en avoir :
+      // c'est la première chose à vérifier avant d'accuser Cesium.
+      zoneTaille: zone ? `${zone.clientWidth}x${zone.clientHeight}` : "aucune",
+      conteneurs: zone
+        ? [...zone.querySelectorAll("div")].slice(0, 3)
+            .map((d) => `${d.className || "(sans classe)"} ${d.clientWidth}x${d.clientHeight}`)
+            .join(" | ")
+        : "",
     };
   });
   console.log(`WebGL : ${webgl.disponible ? "disponible" : "ABSENT"}` +
@@ -245,6 +253,7 @@ try {
   console.log(`Carte 3D : vue active = ${cesium.vueActive} · zone ${cesium.zoneVisible ? "visible" : "masquée"}` +
     ` · toile = ${cesium.toile} (affichée ${cesium.toileCss})`);
   if (cesium.erreurRendu) console.log(`Carte 3D : rendu arrêté — ${cesium.erreurRendu}`);
+  console.log(`Carte 3D : conteneur ${cesium.zoneTaille} · internes : ${cesium.conteneurs}`);
   if (cesium.indice) console.log(`Carte 3D : ${cesium.indice}`);
 
   // La carte 3D est la vue par défaut : le plan, seul endroit où l'on peut viser un nœud,
