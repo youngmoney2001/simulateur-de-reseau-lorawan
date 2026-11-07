@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createClient, ApiError } from "../src/studio/api.js";
 import {
   planBounds, toScreen, toMeters, validateNewNode, validateSensor, sensorFormFrom,
+  gridStep, PLAN_MIN_SPAN_M,
 } from "../src/studio/topology.js";
 import { createHistory } from "../src/studio/console.js";
 import { gatewayRows, formatMs, scoreLine, criteriaRows } from "../src/studio/results.js";
@@ -62,7 +63,29 @@ test("les coordonnées aller-retour restent cohérentes et la boîte englobe les
   const p = toScreen({ x_m: 100, y_m: 50 }, b, 800, 520);
   const back = toMeters(p, b, 800, 520);
   assert.ok(Math.abs(back.x_m - 100) < 0.2 && Math.abs(back.y_m - 50) < 0.2);
-  assert.ok(planBounds([]).maxX - planBounds([]).minX >= 1000);
+  // Cadrage resserré : le plan vide fait maintenant 60 m, contre 1000 m avant. Une
+  // portée minimale aussi grande noyait les petits réseaux dans un vide blanc.
+  assert.ok(planBounds([]).maxX - planBounds([]).minX === 60);
+});
+
+test("le pas de grille reste un palier 1, 2 ou 5 et cadre entre 5 et 12 lignes", () => {
+  const palierValide = (s) => {
+    const p = Math.pow(10, Math.floor(Math.log10(s)));
+    return [1, 2, 5, 10].some((m) => Math.abs(s - m * p) < 1e-9 * Math.max(1, s));
+  };
+  // De 60 m (plan vide) à 12 km : le pas doit toujours être lisible et le nombre de
+  // lignes raisonnable, sinon la grille devient un quadrillage illisible.
+  for (const portee of [60, 120, 300, 800, 1_500, 4_000, 12_000]) {
+    const pas = gridStep(portee);
+    assert.ok(palierValide(pas), `pas ${pas} pour ${portee} m n'est pas un palier 1/2/5`);
+    const lignes = portee / pas;
+    assert.ok(lignes >= 4 && lignes <= 16, `${lignes} lignes pour ${portee} m`);
+  }
+  assert.equal(gridStep(PLAN_MIN_SPAN_M) > 0, true);
+  // Entrées dégénérées : jamais NaN, sinon le rendu produit des coordonnées invalides.
+  for (const mauvais of [0, -5, NaN, Infinity]) {
+    assert.ok(Number.isFinite(gridStep(mauvais)), `pas non fini pour ${mauvais}`);
+  }
 });
 
 test("validation d'un équipement : identifiant, type, coordonnées", () => {

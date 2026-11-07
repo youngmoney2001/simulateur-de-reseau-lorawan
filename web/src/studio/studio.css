@@ -138,7 +138,16 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .frame-panel p { margin:6px 0 0; }
 
 /* --- Plan : nœuds --------------------------------------------------------------------- */
+/* Grille du plan : repère de distance. Très discrète, elle ne doit pas concurrencer les
+   équipements, mais assez présente pour que le vide soit lisible comme un espace mesuré. */
+.grid-line { stroke:#e3e8ee; stroke-width:1; }
+.grid-label { font-size:10px; fill:#8b98a5; pointer-events:none; }
+
 .node { cursor:grab; }
+/* Marques intérieures : la forme distingue les types, la couleur ne fait que renforcer. */
+.node .icon { fill:#ffffff; opacity:0.85; pointer-events:none; }
+.node .icon-stroke { fill:none; stroke:#ffffff; stroke-width:2; stroke-linecap:round; opacity:0.9;
+  pointer-events:none; }
 .node.selected circle, .node.selected rect { stroke:var(--accent); stroke-width:3; }
 .node text { font-size:12px; fill:var(--fg); pointer-events:none; }
 .node .sensor { fill:#8fb8ff; stroke:#1f6feb; }

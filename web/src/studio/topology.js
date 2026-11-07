@@ -36,8 +36,17 @@ export const SENSOR_DEFAULTS = {
 };
 
 // Cadre du plan : englobe les équipements, marge de 10 %, étendue minimale de 1 km.
+// Cadrage du plan. La portée minimale était de 1000 m : un réseau de quatre capteurs
+// distants de 300 m était donc noyé dans 1200 m de vide, et les équipements devenaient
+// invisibles. On cadre désormais sur ce qui existe, avec une marge minimale.
+export const PLAN_MIN_SPAN_M = 60;   // plan vide : 60 m de large, pour que la grille ait un sens
+export const PLAN_MIN_MARGIN_M = 15; // marge minimale autour des équipements, même très serrés
+
 export function planBounds(nodes) {
-  if (!nodes.length) return { minX: -500, maxX: 500, minY: -500, maxY: 500 };
+  if (!nodes.length) {
+    const d = PLAN_MIN_SPAN_M / 2;
+    return { minX: -d, maxX: d, minY: -d, maxY: d };
+  }
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const n of nodes) {
     minX = Math.min(minX, n.x_m);
@@ -45,9 +54,20 @@ export function planBounds(nodes) {
     minY = Math.min(minY, n.y_m);
     maxY = Math.max(maxY, n.y_m);
   }
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const span = Math.max(maxX - minX, maxY - minY, 1000) * 1.2;
-  return { minX: cx - span / 2, maxX: cx + span / 2, minY: cy - span / 2, maxY: cy + span / 2 };
+  // Cadrage serré : 20 % de marge autour de l'encombrement réel, jamais moins de 15 m.
+  const span = Math.max(maxX - minX, maxY - minY, 0.001);
+  const pad = Math.max(span * 0.2, PLAN_MIN_MARGIN_M);
+  return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
+}
+
+// Pas de la grille : un des paliers 1, 2 ou 5 × 10^n, choisi pour obtenir de 5 à 12 lignes.
+export function gridStep(span) {
+  if (!(span > 0) || !Number.isFinite(span)) return 10;
+  const brut = span / 8;
+  const puissance = Math.pow(10, Math.floor(Math.log10(brut)));
+  const mantisse = brut / puissance;
+  const palier = mantisse <= 1 ? 1 : mantisse <= 2 ? 2 : mantisse <= 5 ? 5 : 10;
+  return palier * puissance;
 }
 
 // Mètres -> pixels (y vers le bas). `toMeters` est l'inverse, utilisé au glisser-déposer.

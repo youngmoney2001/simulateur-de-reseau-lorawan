@@ -2,7 +2,7 @@
 // Tout texte venant du serveur passe par textContent : aucune donnée n'est interprétée comme HTML.
 import { createClient, ApiError } from "./api.js";
 import {
-  KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters,
+  KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateSensor, sensorFormFrom, nodeCaption,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
@@ -27,6 +27,7 @@ const state = {
   drag: null,
   busy: false,
   events: [],        // evenements du run courant (inspecteur de trames)
+  runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
 };
 
 // --- DOM helpers ---------------------------------------------------------------------------
@@ -168,6 +169,46 @@ function stateOf(nodeId) {
   return state.topo?.states.find((s) => s.node_id === nodeId);
 }
 
+// Grille graduée : repère visuel et échelle en mètres. Sans elle, le plan n'est qu'un
+// vide blanc où l'on ne peut juger ni les distances ni les positions relatives.
+function renderGrid(bounds) {
+  const g = svgEl("g", { class: "grid" });
+  const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  const step = gridStep(span);
+  const premier = (v) => Math.ceil(v / step) * step;
+  for (let x = premier(bounds.minX); x <= bounds.maxX; x += step) {
+    const sx = toScreen({ x_m: x, y_m: 0 }, bounds, W, H).x;
+    g.append(svgEl("line", { x1: sx.toFixed(1), y1: 0, x2: sx.toFixed(1), y2: H, class: "grid-line" }));
+    const t = svgEl("text", { x: (sx + 3).toFixed(1), y: 12, class: "grid-label" });
+    t.textContent = `${Math.round(x)} m`;
+    g.append(t);
+  }
+  for (let y = premier(bounds.minY); y <= bounds.maxY; y += step) {
+    const sy = toScreen({ x_m: 0, y_m: y }, bounds, W, H).y;
+    g.append(svgEl("line", { x1: 0, y1: sy.toFixed(1), x2: W, y2: sy.toFixed(1), class: "grid-line" }));
+    const t = svgEl("text", { x: 3, y: (sy - 3).toFixed(1), class: "grid-label" });
+    t.textContent = `${Math.round(y)} m`;
+    g.append(t);
+  }
+  return g;
+}
+
+// Marque intérieure : distingue les types au premier coup d'œil, sans dépendre de la couleur.
+function nodeIcon(kind) {
+  if (kind === "sensor") {
+    return svgEl("circle", { r: 5, class: "icon" });
+  }
+  if (kind === "server") {
+    return svgEl("rect", { x: -6, y: -6, width: 12, height: 12, class: "icon" });
+  }
+  // Passerelle ou frontière : antenne, trois barres de portée.
+  const g = svgEl("g", { class: "icon-stroke" });
+  g.append(svgEl("path", { d: "M 0 8 L 0 -6" }));
+  g.append(svgEl("path", { d: "M -7 -1 A 9 9 0 0 1 7 -1" }));
+  g.append(svgEl("path", { d: "M -12 5 A 15 15 0 0 1 12 5" }));
+  return g;
+}
+
 function renderPlan() {
   const svg = $("plan");
   clear(svg);
@@ -176,15 +217,19 @@ function renderPlan() {
   if (!nodes.length) return;
   const bounds = planBounds(nodes);
   state.bounds = bounds;
+  svg.append(renderGrid(bounds));
   for (const n of nodes) {
     const p = toScreen(n, bounds, W, H);
     const g = svgEl("g", { class: `node${state.selected === n.id ? " selected" : ""}`, "data-id": n.id, transform: `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})` });
+    // Équipements agrandis : à l'échelle précédente (9 px de rayon) un capteur était
+    // quasiment invisible sur un plan de plus de mille pixels de large.
     const shape = n.kind === "sensor"
-      ? svgEl("circle", { r: 9, class: "sensor" })
-      : n.kind === "server" ? svgEl("rect", { x: -10, y: -10, width: 20, height: 20, transform: "rotate(45)", class: "server" })
-      : svgEl("rect", { x: -11, y: -11, width: 22, height: 22, rx: 3, class: n.kind });
+      ? svgEl("circle", { r: 15, class: "sensor" })
+      : n.kind === "server" ? svgEl("rect", { x: -17, y: -17, width: 34, height: 34, transform: "rotate(45)", class: "server" })
+      : svgEl("rect", { x: -18, y: -18, width: 36, height: 36, rx: 5, class: n.kind });
     g.append(shape);
-    const label = svgEl("text", { x: 14, y: -10 });
+    g.append(nodeIcon(n.kind));
+    const label = svgEl("text", { x: 24, y: -16 });
     label.textContent = n.name;
     g.append(label);
     g.addEventListener("pointerdown", (ev) => startDrag(ev, n.id));
@@ -600,6 +645,8 @@ $("sim-form").addEventListener("submit", async (ev) => {
       return;
     }
     await guard(() => state.client.bind(state.sid, started.run_id));
+    state.runId = started.run_id;   // la carte situera ce résultat, pas le jeu d'exemple
+    refreshMapLink();
     const summary = await guard(() => state.client.summary(started.run_id));
     if (!summary) return;
     renderResults(summary, started.links.map((l) => l.gateway));
@@ -744,6 +791,34 @@ function markTokenAutomatic() {
 // Les deux pans existent réellement (réseau libre d'un côté, exercices notés de l'autre).
 // Aucun rôle serveur n'existe : on ne prétend donc pas restreindre des droits (voir
 // docs/UI_PT_CONCEPTION.md §2.1).
+// --- Origine géographique -------------------------------------------------------------------
+// Le plan travaille en mètres, la carte 3D en latitude/longitude. Ce point d'ancrage est ce
+// qui permet de situer les résultats du studio ; sans lui, la carte retombe sur un exemple.
+const ORIGIN_KEY = "lsim-origin";
+function readOrigin() {
+  const lat = Number($("origin-lat").value);
+  const lon = Number($("origin-lon").value);
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 ? { lat, lon } : null;
+}
+function writeOrigin(o) {
+  if (!o) return;
+  $("origin-lat").value = String(o.lat);
+  $("origin-lon").value = String(o.lon);
+}
+// Le lien porte l'origine et le dernier résultat : sans eux la carte ne peut rien situer.
+function refreshMapLink() {
+  const q = new URLSearchParams();
+  const o = readOrigin();
+  if (o) { q.set("lat", String(o.lat)); q.set("lon", String(o.lon)); }
+  if (state.runId) q.set("run", state.runId);
+  // La session donne la position des passerelles, que les seules lignes de dispositifs
+  // ne portent pas.
+  if (state.sid) q.set("sid", state.sid);
+  const s = q.toString();
+  $("map-link").href = s ? `/index.html?${s}` : "/index.html";
+}
+
 function applyMode(mode) {
   const m = mode === "study" ? "study" : "design";
   sessionStorage.setItem("lsim-mode", m);
@@ -869,6 +944,20 @@ $("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
 
 renderPalette();
 applyMode(sessionStorage.getItem("lsim-mode") || "design");
+
+// Origine géographique : relue à l'ouverture, puis suivie à chaque modification.
+try {
+  const o = JSON.parse(sessionStorage.getItem(ORIGIN_KEY) ?? "null");
+  if (o && Number.isFinite(o.lat) && Number.isFinite(o.lon)) writeOrigin(o);
+} catch { /* valeur illisible : on garde le défaut */ }
+for (const id of ["origin-lat", "origin-lon"]) {
+  $(id).addEventListener("change", () => {
+    const o = readOrigin();
+    if (o) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
+    refreshMapLink();
+  });
+}
+refreshMapLink();
 
 (async () => {
   // 1. jeton déjà saisi lors d'une visite précédente

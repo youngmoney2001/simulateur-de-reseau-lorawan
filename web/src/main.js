@@ -11,6 +11,7 @@ import {
   groundAtLonLat,
   footprintBase,
   heightmapTile,
+  EARTH_RADIUS_M,
 } from "./model.js";
 
 // Ressources Cesium servies localement (public/cesium, copiées au démarrage).
@@ -221,20 +222,132 @@ $("file").addEventListener("change", async (event) => {
   show(await file.text(), demText, false);
 });
 
-// Carte d'exemple (et MNT) : ?map=...&dem=... ou par défaut la carte sans relief.
+// --------------------------------------------------------------- chargement au démarrage
+//
+// La carte ouvrait d'office sur un jeu d'exemple : on y lisait 500 compteurs et un taux de
+// réussite qui n'étaient pas les vôtres, ce qui les faisait passer pour vos résultats. Elle
+// n'affiche plus rien par elle-même. Trois cas :
+//   1. `?run=...`  -> les résultats que vous venez de produire dans le studio ;
+//   2. `?map=...`  -> un exemple nommé explicitement, signalé comme tel ;
+//   3. rien        -> carte vide, invitation à ouvrir un fichier ou à passer par le studio.
 const params = new URLSearchParams(window.location.search);
-const mapName = params.get("map") ?? "sample.geojson";
+const mapName = params.get("map");
 const demName = params.get("dem");
+const runId = params.get("run");
+const sid = params.get("sid");
 const SAFE_NAME = /^[A-Za-z0-9_.-]+\.(geojson|json)$/;
-if (!SAFE_NAME.test(mapName) || (demName !== null && !SAFE_NAME.test(demName))) {
-  fail("Nom de fichier d'exemple refusé");
+
+// Mètres (plan du studio) vers degrés. Reprend exactement `_to_lonlat` de geo.py, pour que
+// les positions coïncident avec celles de l'export produit par le serveur.
+function toLonLat(x_m, y_m, originLat, originLon) {
+  const lat = originLat + (y_m / EARTH_RADIUS_M) * (180 / Math.PI);
+  const lon = originLon
+    + (x_m / (EARTH_RADIUS_M * Math.cos((originLat * Math.PI) / 180))) * (180 / Math.PI);
+  return [lon, lat];
+}
+
+function origine() {
+  const lat = Number(params.get("lat"));
+  const lon = Number(params.get("lon"));
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : { lat: 4.0511, lon: 9.7679 };
+}
+
+// Le jeton ne transite jamais par l'URL : il serait écrit dans l'historique et les journaux.
+// S'il est en mémoire de session (même onglet) ou fourni par le serveur (instance locale),
+// la carte peut lire le run ; sinon elle le dit au lieu d'échouer en silence.
+async function jetonDisponible() {
+  const enMemoire = sessionStorage.getItem("lsim-token");
+  if (enMemoire) return enMemoire;
+  try {
+    const h = await fetch("/api/v1/health", { headers: { Accept: "application/json" } });
+    if (!h.ok) return null;
+    if (!((await h.json()).auto_token === true)) return null;
+    const r = await fetch("/api/v1/auto-token", { headers: { Accept: "application/json" } });
+    if (!r.ok) return null;
+    const corps = await r.json();
+    return typeof corps?.token === "string" && corps.token ? corps.token : null;
+  } catch {
+    return null;
+  }
+}
+
+async function lirePages(url, token) {
+  const items = [];
+  let cursor = null;
+  do {
+    const u = cursor === null ? url : `${url}${url.includes("?") ? "&" : "?"}cursor=${cursor}`;
+    const r = await fetch(u, { headers: { Accept: "application/json", "Authorization": `Bearer ${token}` } });
+    if (!r.ok) throw new Error(`API ${r.status} sur ${u.replace(/^.*\/api\/v1\//, "")}`);
+    const page = await r.json();
+    items.push(...(page.items ?? []));
+    cursor = page.next_cursor ?? null;
+  } while (cursor !== null && items.length < 20000);
+  return items;
+}
+
+// Construit la FeatureCollection d'un run réel : passerelles issues de la topologie de la
+// session, dispositifs issus des lignes du run. Sans relief ni couverture, que le serveur
+// seul peut calculer — la carte montre donc les points et leur taux de réussite.
+async function carteDepuisLeStudio() {
+  const token = await jetonDisponible();
+  if (!token) {
+    fail("Aucun jeton disponible : ouvrez la carte depuis le studio, après une simulation.");
+    return;
+  }
+  const o = origine();
+  const base = "/api/v1";
+  const entetes = { Accept: "application/json", "Authorization": `Bearer ${token}` };
+  const dispositifs = await lirePages(`${base}/runs/${encodeURIComponent(runId)}/devices`, token);
+  const features = [];
+  if (sid) {
+    const r = await fetch(`${base}/sessions/${encodeURIComponent(sid)}/topology`, { headers: entetes });
+    if (r.ok) {
+      const topo = await r.json();
+      for (const n of topo.nodes ?? []) {
+        if (n.kind === "sensor") continue;
+        features.push({ type: "Feature",
+          geometry: { type: "Point", coordinates: toLonLat(n.x_m, n.y_m, o.lat, o.lon) },
+          properties: { kind: "gateway", name: n.name || n.id } });
+      }
+    }
+  }
+  let totalEnvoyes = 0, totalRecus = 0;
+  for (const d of dispositifs) {
+    totalEnvoyes += d.sent ?? 0;
+    totalRecus += d.received ?? 0;
+    features.push({ type: "Feature",
+      geometry: { type: "Point", coordinates: toLonLat(d.x_m, d.y_m, o.lat, o.lon) },
+      properties: { kind: "device", device_index: d.device_index, group: d.group,
+        spreading_factor: d.spreading_factor, sent: d.sent, received: d.received,
+        lost_sensitivity: d.lost_sensitivity, lost_collision: d.lost_collision,
+        pdr: d.sent > 0 ? d.received / d.sent : 0 } });
+  }
+  if (!features.length) {
+    fail("Ce run ne contient aucun dispositif.");
+    return;
+  }
+  const doc = { type: "FeatureCollection", features,
+    properties: { scenario_name: "Studio", origin: { latitude: o.lat, longitude: o.lon },
+      total_sent: totalEnvoyes, total_received: totalRecus } };
+  show(JSON.stringify(doc), null, false);
+}
+
+if (runId) {
+  carteDepuisLeStudio().catch((err) => fail(err instanceof Error ? err.message : String(err)));
+} else if (mapName !== null) {
+  if (!SAFE_NAME.test(mapName) || (demName !== null && !SAFE_NAME.test(demName))) {
+    fail("Nom de fichier d'exemple refusé");
+  } else {
+    Promise.all([
+      fetch(`/${mapName}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("exemple absent")))),
+      demName
+        ? fetch(`/${demName}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("MNT absent"))))
+        : Promise.resolve(null),
+    ])
+      .then(([mapText, demText]) => show(mapText, demText, true))
+      .catch((err) => fail(err.message));
+  }
 } else {
-  Promise.all([
-    fetch(`/${mapName}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("exemple absent")))),
-    demName
-      ? fetch(`/${demName}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("MNT absent"))))
-      : Promise.resolve(null),
-  ])
-    .then(([mapText, demText]) => show(mapText, demText, true))
-    .catch((err) => fail(err.message));
+  // Rien à afficher : on le dit, au lieu de substituer un exemple.
+  $("empty-note").hidden = false;
 }
