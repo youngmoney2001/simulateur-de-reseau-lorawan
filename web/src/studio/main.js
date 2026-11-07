@@ -733,6 +733,7 @@ async function resolveToken() {
 
 // Le jeton étant fourni, le champ n'a plus lieu d'être montré.
 function markTokenAutomatic() {
+  $("token-help").hidden = true;
   const field = $("token-field");
   if (field) field.hidden = true;
   const note = $("token-note");
@@ -885,6 +886,8 @@ applyMode(sessionStorage.getItem("lsim-mode") || "design");
     await connect();
     return;
   }
-  // 3. sinon, saisie manuelle
+  // 3. sinon, saisie manuelle : on indique alors où trouver un jeton, sans quoi la demande
+  //    est sans réponse possible.
+  $("token-help").hidden = false;
   $("launch").hidden = false;
 })();

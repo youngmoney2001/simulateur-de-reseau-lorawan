@@ -17,6 +17,14 @@
           <label>Jeton <input id="token" type="password" autocomplete="off" /></label>
         </div>
         <p id="token-note" class="muted" hidden></p>
+        <!-- Masqué dès qu'un jeton automatique est disponible. Sans cette indication,
+             l'utilisateur à qui l'on demande un jeton n'a aucun moyen d'en obtenir un. -->
+        <p id="token-help" class="hint" hidden>
+          Le serveur n'a pas fourni de jeton. Pour en créer un, lancez sur la machine qui
+          héberge l'API :<br />
+          <code>python -m lsim.api_server issue-token --tokens FICHIER --owner NOM</code><br />
+          Ou relancez l'API avec <code>--auto-token NOM</code> pour que la saisie disparaisse.
+        </p>
         <div class="modes">
           <button type="button" class="mode-card" data-mode="design" aria-pressed="true">
             <strong>Conception</strong>
