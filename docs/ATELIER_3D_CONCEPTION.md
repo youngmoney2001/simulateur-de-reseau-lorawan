@@ -217,6 +217,37 @@ de l'échelle — les recopier ici les laisserait dériver de la couleur réelle
 La carte 3D **et** le plan 2D portent la même lecture. Le plan pose un attribut `fill` quand un
 résultat existe, et laisse la classe CSS du type décider sinon.
 
+### La fenêtre de l'équipement chiffre ce que la carte colore
+
+La carte colore, la fenêtre chiffre. Bloc « Résultat du dernier run » dans l'onglet Physique :
+taux de livraison, trames reçues, causes de perte, occupation — avec la **même pastille** que le
+point sur la carte.
+
+Les deux lectures sortent du même objet `state.resultats`. C'est le seul moyen honnête de
+garantir qu'un équipement vert sur la carte n'affiche pas 40 % dans sa fenêtre : deux calculs
+séparés finiraient par diverger, et l'un des deux serait cru sans qu'on sache lequel.
+
+### Défaut trouvé en route : une fenêtre qui sort de l'écran
+
+`placeWindow` bornait le bord **haut** de la fenêtre, jamais sa hauteur. Ouverte à y = 740 avec
+sa hauteur maximale de 760 px, elle descendait à 1500 px sur un écran de 1000 px — recouvrant le
+panneau d'observation, donc les commandes du lecteur d'animation. En e2e, le symptôme était
+« horloge figée » : rien ne nommait la fenêtre comme cause.
+
+Deux corrections ont été nécessaires, et la première était fausse :
+
+| Tentative | Effet mesuré par l'audit |
+|---|---|
+| Remplacer `max-height` par la place restante | fenêtre passée de **678 à 805 px** — 127 px de panneau recouvert en plus, l'inverse du but |
+| Lire la borne CSS et ne faire que la resserrer | **760 px**, la borne de conception, resserrée seulement si la place manque |
+
+Une valeur recopiée en dur aurait divergé de la feuille de style : la borne est donc
+**lue** (`getComputedStyle`), jamais supposée.
+
+Le chevauchement d'une fenêtre flottante avec le plan de travail reste **voulu** — c'est le
+comportement d'un atelier, la fenêtre se déplace ou se ferme. Ce qui ne l'est pas, c'est
+qu'elle sorte de l'écran. L'audit a gagné la classe de défaut correspondante (9 contrôles).
+
 ## 5. Difficultés connues
 
 - **Imagerie de fond distante inaccessible** depuis l'environnement de développement comme
