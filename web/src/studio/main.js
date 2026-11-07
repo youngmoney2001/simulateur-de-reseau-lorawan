@@ -463,7 +463,7 @@ async function deplacerParCoordonnees(node, form) {
   const lu = lireCoordonnees(`${form.lat.value}, ${form.lon.value}`);
   if (!lu) return showError(new Error(
     "coordonnées illisibles : deux nombres attendus, par exemple « 4.051100, 9.767900 »"));
-  const pos = degreesToMeters(lu.lat, lu.lon, o.lat, o.lon);
+  const pos = degreesToMeters(lu.lat, lu.lon, o);
   // La même borne qu'à l'ajout, pour la même raison : au-delà, l'équipement sort de
   // l'échelle du plan et devient introuvable sans que rien ne le signale.
   if (Math.abs(pos.x_m) > 1_000_000 || Math.abs(pos.y_m) > 1_000_000) {
@@ -504,7 +504,7 @@ function renderDeviceInfo(node, body) {
   // repère qui parle à qui connaît ses coordonnées. Les mètres restent le langage du moteur.
   const o = readOrigin();
   if (o) {
-    const d = metresVersDegres(node.x_m, node.y_m, o.lat, o.lon);
+    const d = metresVersDegres(node.x_m, node.y_m, o);
     ligne("Position", formaterCoordonnees(d.lat, d.lon));
     const distance = distanceM(o, d);
     // La distance à l'origine donne l'échelle : « 0,012345° » ne dit rien, « 1,4 km » si.
@@ -531,10 +531,10 @@ function renderDeviceInfo(node, body) {
     el("div", { class: "row" },
       el("label", {}, document.createTextNode("Latitude"),
         el("input", { name: "lat", type: "text", inputmode: "decimal",
-          value: metresVersDegres(node.x_m, node.y_m, o.lat, o.lon).lat.toFixed(6) })),
+          value: metresVersDegres(node.x_m, node.y_m, o).lat.toFixed(6) })),
       el("label", {}, document.createTextNode("Longitude"),
         el("input", { name: "lon", type: "text", inputmode: "decimal",
-          value: metresVersDegres(node.x_m, node.y_m, o.lat, o.lon).lon.toFixed(6) })),
+          value: metresVersDegres(node.x_m, node.y_m, o).lon.toFixed(6) })),
     ),
     el("button", { type: "submit", text: "Déplacer" }),
     el("p", { class: "muted", text: "Ou tirez l'équipement sur la carte." }),
@@ -1166,7 +1166,7 @@ function glisserDepuisPalette(ev, kind) {
 async function poserEquipement(kind, ll) {
   const o = readOrigin();
   if (!o || !state.sid) return;
-  const { x_m, y_m } = degreesToMeters(ll.lat, ll.lon, o.lat, o.lon);
+  const { x_m, y_m } = degreesToMeters(ll.lat, ll.lon, o);
   // Même borne qu'au formulaire, pour la même raison : au-delà d'un million de mètres,
   // l'équipement sort de l'échelle du plan et devient introuvable. L'appliquer ici aussi
   // évite qu'un dépôt égaré au niveau planétaire crée un nœud à l'autre bout du monde.
@@ -1218,7 +1218,7 @@ function demarrerDeplacement(ev, noeud) {
     if (!cible) return;
     const o = readOrigin();
     if (!o) return;
-    const pos = degreesToMeters(cible.lat, cible.lon, o.lat, o.lon);
+    const pos = degreesToMeters(cible.lat, cible.lon, o);
     const topo = await guard(() => state.client.moveNode(state.sid, noeud.id, pos));
     if (topo) state.topo = topo;
     refreshViews();

@@ -163,6 +163,13 @@ export function createMap3D(container, onPick) {
 
     /** La caméra se place au-dessus de l'origine, à une hauteur qui cadre `porteeM` mètres. */
     flyToOrigin(porteeM = 1200) {
+      // Une position non finie fait lever à Cesium un « normalized result is not a number »
+      // qui ne nomme rien. On préfère dire ce qui cloche, et renoncer au vol plutôt que
+      // d'interrompre le rafraîchissement de toute l'interface.
+      if (!Number.isFinite(origine.lat) || !Number.isFinite(origine.lon)) {
+        console.error("vol impossible, origine inexploitable :", origine);
+        return;
+      }
       const hauteur = Math.max(180, porteeM * 3.2);
       viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(origine.lon, origine.lat, hauteur),
@@ -179,7 +186,15 @@ export function createMap3D(container, onPick) {
       labels.removeAll();
       affiches = noeuds ?? [];
       for (const n of noeuds ?? []) {
-        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
+        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine);
+        // Un seul équipement inexploitable ne doit pas priver la carte de tous les autres :
+        // on l'ignore en disant lequel, au lieu de laisser Cesium lever une erreur anonyme
+        // qui interrompt le tracé du reste du réseau.
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+          console.error(`équipement ${n.id} non tracé, position inexploitable :`,
+            { x_m: n.x_m, y_m: n.y_m, origine });
+          continue;
+        }
         const estCapteur = n.kind === "sensor";
         const selectionne = n.id === selectionId;
         points.add({
@@ -228,7 +243,7 @@ export function createMap3D(container, onPick) {
       let meilleur = null;
       let meilleurD = tolerancePx;
       for (const n of affiches) {
-        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
+        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine);
         const ecran = Cesium.SceneTransforms.worldToWindowCoordinates(
           scene, Cesium.Cartesian3.fromDegrees(lon, lat));
         // Derrière la caméra, ou hors écran : `worldToWindowCoordinates` rend undefined.

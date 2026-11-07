@@ -171,3 +171,43 @@ test("l'affichage garde une précision au niveau de la rue", () => {
   // d'encombrer la fenêtre de chiffres inutiles.
   assert.equal(formaterCoordonnees(4.0511, 9.7679), "4.051100, 9.767900");
 });
+
+// Le piège qui a coûté deux exécutions de CI : l'ancienne signature prenait l'origine en deux
+// nombres, celle-ci attend un objet. Un appelant resté sur l'ancienne forme passait un nombre,
+// `origine.lat` valait undefined, et la conversion rendait NaN **sans rien dire** — jusqu'à ce
+// que Cesium lève un « normalized result is not a number » qui ne nommait aucun coupable.
+
+test("une origine inexploitable est refusée bruyamment, pas convertie en NaN", () => {
+  const mauvaises = [undefined, null, 4.0511, "4.0511", {}, { lat: 4.0511 }, { lon: 9.7679 },
+    { lat: NaN, lon: 9.7679 }, { lat: 4.0511, lon: Infinity }];
+  for (const o of mauvaises) {
+    assert.throws(
+      () => metresVersDegres(0, 0, o),
+      TypeError,
+      `acceptée à tort : ${JSON.stringify(o)}`);
+    assert.throws(
+      () => degresVersMetres(4.0511, 9.7679, o),
+      TypeError,
+      `acceptée à tort : ${JSON.stringify(o)}`);
+  }
+});
+
+test("l'appel à quatre arguments, forme historique, échoue au lieu de rendre NaN", () => {
+  // C'est exactement l'appel fautif : `toLonLat(x, y, origineLat, origineLon)`. Le quatrième
+  // argument est ignoré et le troisième, un nombre, est rejeté par la vérification.
+  assert.throws(() => metresVersDegres(300, 100, 4.0511, 9.7679), TypeError);
+  assert.throws(() => degresVersMetres(4.06, 9.78, 4.0511, 9.7679), TypeError);
+});
+
+test("toute conversion aboutit à des nombres finis", () => {
+  // La propriété que le tracé de la carte exige : Cesium lève dès qu'une coordonnée n'est
+  // pas un nombre, et une seule valeur NaN privait la carte de tout le réseau.
+  for (const [x, y] of [[0, 0], [1500, -2200], [-800, 377.5], [12345.6, -9876.5]]) {
+    const d = metresVersDegres(x, y, DOUALA);
+    assert.ok(Number.isFinite(d.lat) && Number.isFinite(d.lon),
+      `degrés non finis pour (${x}, ${y}) : ${JSON.stringify(d)}`);
+    const m = degresVersMetres(d.lat, d.lon, DOUALA);
+    assert.ok(Number.isFinite(m.x_m) && Number.isFinite(m.y_m),
+      `mètres non finis pour (${x}, ${y}) : ${JSON.stringify(m)}`);
+  }
+});

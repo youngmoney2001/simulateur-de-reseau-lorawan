@@ -16,12 +16,33 @@ export const EARTH_RADIUS_M = 6_371_000.0;
 const DEG = Math.PI / 180;
 
 /**
+ * Vérifie l'ancre géographique et la renvoie.
+ *
+ * L'ancienne signature prenait l'origine en deux nombres (`origineLat`, `origineLon`) ; celle-ci
+ * attend un objet. Un appelant resté sur l'ancienne forme passait donc un **nombre** en guise
+ * d'origine : `origine.lat` valait alors `undefined`, et la conversion rendait `NaN` sans rien
+ * dire — jusqu'à ce que Cesium lève un « normalized result is not a number » qui ne nommait
+ * aucun coupable. Mieux vaut échouer ici, bruyamment et en nommant la faute.
+ *
+ * @param {{lat: number, lon: number}} origine
+ */
+function verifierOrigine(origine) {
+  if (!origine || typeof origine !== "object"
+      || !Number.isFinite(origine.lat) || !Number.isFinite(origine.lon)) {
+    throw new TypeError(
+      `origine inexploitable : ${JSON.stringify(origine)} — un objet {lat, lon} est attendu`);
+  }
+  return origine;
+}
+
+/**
  * Mètres (plan) vers degrés (carte).
  * @param {number} x_m abscisse en mètres, positive vers l'est
  * @param {number} y_m ordonnée en mètres, positive vers le nord
  * @param {{lat: number, lon: number}} origine ancre géographique du plan
  */
 export function metresVersDegres(x_m, y_m, origine) {
+  verifierOrigine(origine);
   const lat = origine.lat + (y_m / EARTH_RADIUS_M) / DEG;
   const lon = origine.lon + (x_m / (EARTH_RADIUS_M * Math.cos(origine.lat * DEG))) / DEG;
   return { lon, lat };
@@ -34,6 +55,7 @@ export function metresVersDegres(x_m, y_m, origine) {
  * @param {{lat: number, lon: number}} origine
  */
 export function degresVersMetres(lat, lon, origine) {
+  verifierOrigine(origine);
   const y_m = (lat - origine.lat) * DEG * EARTH_RADIUS_M;
   const x_m = (lon - origine.lon) * DEG * EARTH_RADIUS_M * Math.cos(origine.lat * DEG);
   return { x_m, y_m };
