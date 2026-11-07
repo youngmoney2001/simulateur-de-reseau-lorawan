@@ -331,6 +331,14 @@ try {
     const pastille = await page.$$eval('.device-win[data-node-id="capt-1"] .phys-titre .lg-rond',
       (n) => n.length);
     if (pastille < 1) throw new Error("pastille de couleur absente de la fenêtre");
+
+    // On referme : une fenêtre flottante laissée ouverte recouvre ce qui se trouve dessous,
+    // et l'étape suivante clique alors la fenêtre au lieu du bouton « Lecture ». Le bloc de
+    // résultat a agrandi l'onglet Physique juste assez pour masquer les commandes du lecteur
+    // — l'horloge restait figée sans que rien ne nomme la fenêtre comme cause.
+    await page.click('.device-win[data-node-id="capt-1"] .close');
+    await page.waitForFunction(
+      () => !document.querySelector('.device-win[data-node-id="capt-1"]'), { timeout: 10_000 });
   });
 
   await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {

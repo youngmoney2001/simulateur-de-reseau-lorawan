@@ -204,7 +204,23 @@ const mesurer = () => {
     }
   }
 
-  // 7. régions attendues présentes, visibles et dimensionnées
+  // 7. fenêtre d'équipement sortant de l'écran. Une fenêtre flottante qui dépasse le bas
+  //    recouvre le panneau d'observation, donc les commandes du lecteur : le clic part sur
+  //    la fenêtre au lieu du bouton, et l'animation semble cassée sans que rien ne nomme la
+  //    fenêtre. Trouvé parce qu'un bloc de résultat a suffi à allonger l'onglet Physique.
+  const basEcran = document.documentElement.clientHeight;
+  for (const e of document.querySelectorAll(".device-win")) {
+    if (!vu(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.bottom > basEcran + 1) {
+      ajouter("fenetre-hors-ecran", e, `bas à ${Math.round(r.bottom)}px pour ${basEcran}px d'écran`);
+    }
+    if (r.right > largeur + 1) {
+      ajouter("fenetre-hors-ecran", e, `droite à ${Math.round(r.right)}px pour ${largeur}px de large`);
+    }
+  }
+
+  // 8. régions attendues présentes, visibles et dimensionnées
   const attendues = [".tool", ".plan-area", ".observation", ".statusbar", "#plan", "#session-select"];
   for (const sel of attendues) {
     const e = document.querySelector(sel);
@@ -216,7 +232,7 @@ const mesurer = () => {
     }
   }
 
-  // 8. géométrie des grandes régions, pour référence
+  // 9. géométrie des grandes régions, pour référence
   const geometrie = [...document.querySelectorAll(".tool, .plan-area, .observation, .statusbar, .device-win")]
     .filter(vu).map((e) => {
       const r = e.getBoundingClientRect();
