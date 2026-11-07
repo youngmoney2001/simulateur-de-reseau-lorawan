@@ -914,7 +914,10 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(parts.query, keep_blank_values=True)
         base = f"/api/{API_VERSION}"
         if method == "GET" and path == f"{base}/health":
-            return 200, {"status": "ok", "api_version": API_VERSION}
+            # Indique si le jeton automatique est disponible : le client consulte /health
+            # au lieu de sonder /auto-token, ce qui évitait un 404 attendu mais bruyant.
+            return 200, {"status": "ok", "api_version": API_VERSION,
+                         "auto_token": bool(getattr(self.server, "auto_token", None))}
 
         # Jeton automatique : volontairement non authentifié (c'est lui qui sert à s'authentifier),
         # et inexistant — 404 — tant que l'option --auto-token n'est pas activée au démarrage.

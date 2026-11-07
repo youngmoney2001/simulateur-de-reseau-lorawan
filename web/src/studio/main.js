@@ -708,12 +708,18 @@ async function renderAttemptsFromServer() {
 async function resolveToken() {
   if (typeof window.LSIM_TOKEN === "string" && window.LSIM_TOKEN) return window.LSIM_TOKEN;
   try {
+    // On consulte /health : il indique si le jeton automatique existe, ce qui évite de
+    // déclencher un 404 attendu à chaque ouverture quand l'option n'est pas activée.
+    const sante = await fetch("/api/v1/health", { headers: { Accept: "application/json" } });
+    if (!sante.ok) return null;
+    const info = await sante.json();
+    if (!info?.auto_token) return null;
     const res = await fetch("/api/v1/auto-token", { headers: { Accept: "application/json" } });
     if (!res.ok) return null;
     const body = await res.json();
     return typeof body?.token === "string" && body.token ? body.token : null;
   } catch {
-    return null;   // serveur sans jeton automatique : saisie manuelle
+    return null;   // serveur injoignable ou sans jeton automatique : saisie manuelle
   }
 }
 
