@@ -32,7 +32,7 @@ ne soit réécrit.
 import pytest
 
 from lsim.ack_mac import AckTiming, plan_acks
-from lsim.downlink_plan import DeviceRx2, plan_native, plan_native_v2
+from lsim.downlink_plan import DeviceLimits, DeviceRx2, plan_native, plan_native_v3
 from lsim.radio import receiver_sensitivity_dbm
 from lsim.scenario import Scenario, ScenarioModel
 from lsim.simulator import TxRecord, simulate_uplinks_trace
@@ -44,6 +44,19 @@ SECONDE = 1_000_000_000
 # Régions exigées par la directive (§3). [H] — lues dans `lsim.plan`, pas recopiées.
 REGIONS_EXIGEES = ("EU868", "US915", "AS923", "IN865")
 REGIONS_COUVERTES = ("EU868", "US915", "AS923", "AU915", "IN865", "KR920", "RU864")
+
+# Régions dont la scène de référence ne peut pas exercer le repli, **mesuré** et non concédé.
+#
+# US915 et AU915 descendent en 500 kHz : leur RX1 ne dure que 29 ms, contre 118 ms dans les
+# autres régions. La passerelle absorbe donc tout ce que la voie montante lui demande —
+# occupation mesurée ~9 %, **aucune** RX1 manquée, et ce jusqu'à 900 terminaux émettant chaque
+# seconde (le rendement montant s'effondre avant que la passerelle ne sature : à 900 terminaux
+# il ne reste que 91 descentes à servir, contre 562 à 60). Le repli n'a donc rien à rattraper.
+#
+# L'exclusion est réexaminée par `test_chaque_region_exerce_le_repli`, qui vérifie la raison
+# (`rx2 == 0` **et** `aucune == 0`) au lieu de se contenter de ne rien affirmer : si un jour
+# ces régions saturent, le test l'exigera au lieu de passer à côté.
+REGIONS_SANS_REPLI = ("US915", "AU915")
 
 
 def _rx2_de_la_region(nom):
@@ -80,12 +93,23 @@ def _canal(nom):
 # `test_chaque_region_exerce_le_repli`, pas supposé. Le bon SF dépend du profil : les débits RX1
 # descendants n'ont pas le même rapport aux RX2 d'une région à l'autre, et la saturation de
 # l'émetteur en découle. [H] — valeurs trouvées par balayage, voir le rapport de validation.
-SF_SATURANT = {"EU868": 11, "US915": 11, "AS923": 7, "AU915": 7,
+SF_SATURANT = {"EU868": 11, "US915": 10, "AS923": 7, "AU915": 7,
                "IN865": 7, "KR920": 9, "RU864": 10}
 
+def _sf_montants(region):
+    """SF montants disponibles dans la région, lus dans `lsim.plan` [H].
+
+    Toutes les régions ne portent pas les mêmes débits montants : US915 s'arrête à SF10
+    (DR0 = SF10/125). Balayer (7, 9, 11, 12) partout fabriquerait des scènes qu'aucun
+    terminal réel ne pourrait émettre, et que `device_radios` refuse depuis P1.
+    """
+    from lsim.plan import get_plan
+
+    return sorted({s for s, bw, _ in get_plan(region).dr_table() if bw == 125})
+
 # Paramètres de saturation communs : 60 terminaux, période 5 s, 20 messages, étalement 60 s,
-# rayon 600 m, descente de 120 octets.
-SATURATION = dict(count=60, period=5, messages=20, spread=60, charge=120, rayon=600)
+# rayon 600 m, descente de 40 octets (sous le plafond RX2 de 51 : voir la note de capacité).
+SATURATION = dict(count=60, period=5, messages=20, spread=60, charge=40, rayon=600)
 
 
 def _scene(region="EU868", sf=None, **kw):
@@ -113,7 +137,7 @@ def _scene(region="EU868", sf=None, **kw):
     }))
 
 
-def _options(repli=True, every=1, charge=120):
+def _options(repli=True, every=1, charge=40):
     return ProtocolOptions(confirmed_uplinks=True, downlink_every=every,
                            downlink_payload_bytes=charge, gateway_tx_power_dbm=27.0,
                            rx2_fallback=repli)
@@ -132,7 +156,10 @@ def _comparer(records, radios, options):
     """Les deux moteurs sur la même trace. Retourne les grandeurs comparables, par critère."""
     table = _table_rx2(radios) if options.rx2_fallback else None
     if table is not None:
-        ev_coeur, occupation_coeur = plan_native_v2(records, radios, options, table)
+        ev_coeur, occupation_coeur = plan_native_v3(
+            records, radios, options, table,
+            [DeviceLimits(rx1_max_payload=r.rx1_max_payload,
+                          rx2_max_payload=r.rx2_max_payload) for r in radios])
     else:
         ev_coeur, occupation_coeur = plan_native(records, radios, options)
 
@@ -588,7 +615,7 @@ def test_frequences_confondues_la_fenetre_nest_pas_inferee_de_la_frequence(regio
 
 
 @pytest.mark.parametrize("region,sf", (("EU868", 7), ("IN865", 7), ("KR920", 9), ("RU864", 10),
-                                       ("US915", 11), ("US915", 12)))
+                                       ("EU868", 11), ("EU868", 12)))
 def test_frequences_distinctes_le_join_accept_porte_la_bonne(region, sf):
     """§3 : profils à fréquences distinctes — le Join-Accept RX2 porte bien celle de RX2.
 
@@ -714,7 +741,7 @@ def test_le_repli_ajoute_de_lantenne_et_nen_retire_jamais(region):
     une borne supérieure, pas une grandeur à optimiser. Aucune hypothèse sur le signe de Δlivr
     n'est faite ici : c'est l'objet du test suivant.
     """
-    for sf in (7, 9, 11, 12):
+    for sf in _sf_montants(region):
         scenario = _scene(region=region, sf=sf)
         radios = device_radios(scenario)
         resultat = _trace_sans_occupation(scenario)
@@ -734,7 +761,7 @@ def test_quand_la_fenetre_de_repli_est_plus_rapide_le_repli_nest_jamais_perdant(
     (rx2 > 0) : ailleurs il n'y a rien à mesurer. Aucune affirmation n'est portée pour R >= 1 —
     voir la note du §4 : le signe y dépend de la charge, et une loi de seuil serait fausse.
     """
-    for sf in (7, 9, 11, 12):
+    for sf in _sf_montants(region):
         scenario = _scene(region=region, sf=sf)
         radios = device_radios(scenario)
         resultat = _trace_sans_occupation(scenario)
@@ -761,12 +788,12 @@ def test_le_sf12_nest_juge_ni_favorable_ni_defavorable():
     """
     cas = []
     for region in REGIONS_COUVERTES:
-        for sf in (7, 9, 11, 12):
+        for sf in _sf_montants(region):
             scenario = _scene(region=region, sf=sf)
             radios = device_radios(scenario)
             resultat = _trace_sans_occupation(scenario)
-            avec = _mesurer(resultat.records, radios, 240, True)
-            sans = _mesurer(resultat.records, radios, 240, False)
+            avec = _mesurer(resultat.records, radios, SATURATION["charge"], True)
+            sans = _mesurer(resultat.records, radios, SATURATION["charge"], False)
             if avec["rx2"] == 0:
                 continue
             j0 = avec["jobs"][0]
@@ -796,10 +823,20 @@ def test_chaque_region_exerce_le_repli():
         scenario = _scene(region=region)
         radios = device_radios(scenario)
         resultat = _trace_sans_occupation(scenario)
-        avec = _mesurer(resultat.records, radios, 120, repli=True)
-        assert avec["rx2"] > 0, (
-            f"{region} : la scène de référence ne déclenche aucune descente RX2 "
-            f"(rx1={avec['rx1']}, aucune={avec['aucune']}, jobs={len(avec['jobs'])})")
+        avec = _mesurer(resultat.records, radios, SATURATION["charge"], repli=True)
+        if region in REGIONS_SANS_REPLI:
+            # L'exclusion est **vérifiée**, pas concédée : aucune RX1 n'y est manquée, donc le
+            # repli n'a rien à rattraper. Si un changement de moteur parvenait à y manquer une
+            # RX1, cette assertion échouerait et la région devrait revenir dans le camp d'en
+            # face — au lieu de rester exclue en silence.
+            assert (avec["rx2"], avec["aucune"]) == (0, 0), (
+                f"{region} : exclue au motif qu'aucune RX1 n'y est manquée, or "
+                f"rx2={avec['rx2']} et aucune={avec['aucune']} — la mesure est périmée, "
+                f"reclasser la région")
+        else:
+            assert avec["rx2"] > 0, (
+                f"{region} : la scène de référence ne déclenche aucune descente RX2 "
+                f"(rx1={avec['rx1']}, aucune={avec['aucune']}, jobs={len(avec['jobs'])})")
 
 
 # ----------------------------------------------------------------------- 5. non-rM-CM-)gression
