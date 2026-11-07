@@ -371,10 +371,41 @@ try {
     rapport.push({ largeur, ...(await page.evaluate(mesurer)) });
   }
 
+  // Balayage des états : la boucle ci-dessus ne mesure qu'un seul état — l'onglet
+  // Simulation, juste après un run. Les autres onglets d'observation et les trois onglets
+  // d'une fenêtre d'équipement n'ont jamais été mesurés par quoi que ce soit. Un défaut qui
+  // n'existe que sur « Config » ou « Trame » passerait donc inaperçu indéfiniment.
+  // Deux largeurs suffisent ici : 1400 (disposition large) et 900 (sous les seuils de repli).
+  const cliquerTexte = (selecteur, texte) => page.evaluate((sel, t) => {
+    const b = [...document.querySelectorAll(sel)].find((e) => e.textContent.trim() === t);
+    if (b) b.click();
+    return Boolean(b);
+  }, selecteur, texte);
+
+  const etats = [
+    { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
+    { nom: "observation · Trame", action: () => cliquerTexte(".tab", "Trame") },
+    { nom: "observation · Exercice", action: () => cliquerTexte(".tab", "Exercice") },
+    { nom: "équipement · Physique", action: () => cliquerTexte(".dtab", "Physique") },
+    { nom: "équipement · Config", action: () => cliquerTexte(".dtab", "Config") },
+    { nom: "équipement · CLI", action: () => cliquerTexte(".dtab", "CLI") },
+  ];
+  for (const largeur of [1400, 900]) {
+    await page.setViewport({ width: largeur, height: 1000 });
+    for (const etat of etats) {
+      const trouve = await etat.action();
+      if (!trouve) { rapport.push({ etat: `${largeur} · ${etat.nom}`, introuvable: true, problemes: [] }); continue; }
+      await pause(400);
+      rapport.push({ etat: `${largeur} · ${etat.nom}`, ...(await page.evaluate(mesurer)) });
+    }
+  }
+
   // Résumé lisible
   for (const bloc of rapport) {
     const p = bloc.problemes;
-    console.log(`\n=== ${bloc.largeur}px · ${p.length} problème(s) · défilement horizontal : ${bloc.scrollHorizontal ? "oui" : "non"} ===`);
+    if (bloc.introuvable) { console.log(`\n=== ${bloc.etat} · ÉTAT NON ATTEINT ===`); continue; }
+    const titre = bloc.etat ?? `${bloc.largeur}px`;
+    console.log(`\n=== ${titre} · ${p.length} problème(s) · défilement horizontal : ${bloc.scrollHorizontal ? "oui" : "non"} ===`);
     console.log("géométrie :");
     for (const g of bloc.geometrie) console.log(`  ${g.quoi.padEnd(28)} x=${String(g.x).padStart(5)} y=${String(g.y).padStart(4)} ${g.l}x${g.h}`);
     const parType = {};
