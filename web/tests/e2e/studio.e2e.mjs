@@ -259,44 +259,6 @@ try {
       throw new Error(`position inchangée côté API : ${JSON.stringify(apres)}`);
   });
 
-  // Pose sur la carte 3D : on tire un équipement de la palette jusqu'au globe. C'est le
-  // geste de la phase H, et il n'existe qu'ici — nul autre test ne fait tourner Cesium
-  // avec une topologie réelle.
-  await step("glisser depuis la palette jusqu'à la carte : l'équipement est posé", async () => {
-    await viewTab("Carte");
-    const canvas = await page.$("#cesium canvas");
-    if (!canvas) throw new Error("canevas de la carte absent : la carte n'a pas démarré");
-    // Le vol de la caméra vers la zone prend du temps ; sans cette attente le dépôt
-    // tomberait encore au niveau planétaire, loin de l'origine.
-    await new Promise((r) => setTimeout(r, 3500));
-
-    const nbAvant = await compterEquipements();
-
-    const modele = await page.$(".model-box button");
-    if (!modele) throw new Error("aucun modèle dans la palette");
-    const src = await modele.boundingBox();
-    const dst = await canvas.boundingBox();
-    if (!src || !dst) throw new Error("palette ou carte sans dimensions");
-
-    const sx = src.x + src.width / 2, sy = src.y + src.height / 2;
-    const dx = dst.x + dst.width / 2, dy = dst.y + dst.height / 2;
-
-    await page.mouse.move(sx, sy);
-    await page.mouse.down();
-    // Plusieurs étapes : le gestionnaire doit voir passer des `pointermove`, sinon le
-    // geste est pris pour un simple clic et ouvre le formulaire au lieu de poser.
-    await page.mouse.move((sx + dx) / 2, (sy + dy) / 2, { steps: 10 });
-    await page.mouse.move(dx, dy, { steps: 10 });
-    await new Promise((r) => setTimeout(r, 300));
-    await page.mouse.up();
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const nbApres = await compterEquipements();
-    if (nbApres <= nbAvant)
-      throw new Error(`aucun équipement créé : ${nbAvant} -> ${nbApres}`);
-    steps[steps.length - 1] = `ok   glisser depuis la palette : ${nbAvant} -> ${nbApres} équipement(s)`;
-  });
-
   await step("simulation : run terminé, résultats par passerelle", async () => {
     await setValue("#seed", "7");
     await page.click("#simulate");
@@ -344,6 +306,44 @@ try {
     await page.click("#submit");
     await waitText("#ex-result", /Note :/);
     await waitText("#ex-attempts", /#1 /);
+  });
+
+  // Pose sur la carte 3D : on tire un équipement de la palette jusqu'au globe. C'est le
+  // geste de la phase H, et il n'existe qu'ici — nul autre test ne fait tourner Cesium
+  // avec une topologie réelle.
+  //
+  // Placé en dernier, juste avant la suppression de la session : l'équipement créé reste
+  // dans la topologie, et les étapes de simulation et d'exercice ont été écrites pour un
+  // réseau précis. Un nœud de plus les faisait dérailler.
+  await step("glisser depuis la palette jusqu'à la carte : l'équipement est posé", async () => {
+    await viewTab("Carte");
+    const canvas = await page.$("#cesium canvas");
+    if (!canvas) throw new Error("canevas de la carte absent : la carte n'a pas démarré");
+    await new Promise((r) => setTimeout(r, 3500));
+
+    const nbAvant = await compterEquipements();
+
+    const modele = await page.$(".model-box button");
+    if (!modele) throw new Error("aucun modèle dans la palette");
+    const src = await modele.boundingBox();
+    const dst = await canvas.boundingBox();
+    if (!src || !dst) throw new Error("palette ou carte sans dimensions");
+
+    const sx = src.x + src.width / 2, sy = src.y + src.height / 2;
+    const dx = dst.x + dst.width / 2, dy = dst.y + dst.height / 2;
+
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move((sx + dx) / 2, (sy + dy) / 2, { steps: 10 });
+    await page.mouse.move(dx, dy, { steps: 10 });
+    await new Promise((r) => setTimeout(r, 300));
+    await page.mouse.up();
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const nbApres = await compterEquipements();
+    if (nbApres <= nbAvant)
+      throw new Error(`aucun équipement créé : ${nbAvant} -> ${nbApres}`);
+    steps[steps.length - 1] = `ok   glisser depuis la palette : ${nbAvant} -> ${nbApres} équipement(s)`;
   });
 
   await step("suppression de la session", async () => {
