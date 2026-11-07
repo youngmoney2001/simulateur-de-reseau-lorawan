@@ -388,7 +388,11 @@ function cliAbsentMessage(kind) {
 
 // Infos seules (rafraîchies après une commande sans reconstruire la console, qui garde le focus).
 function renderDeviceInfo(node, body) {
-  const info = body.querySelector(".device-info");
+  // La zone n'existe que dans l'onglet Physique. Ailleurs (CLI, Config), il n'y a rien à
+  // rafraîchir : on sort au lieu de construire un bloc fantôme, ce qui arrive quand une
+  // commande CLI met à jour la topologie alors que l'onglet ouvert n'est pas Physique.
+  const info = body?.querySelector(".device-info");
+  if (!info) return;
   clear(info);
   const st = stateOf(node.id);
   info.append(el("p", { class: "muted", text: `${KIND_LABEL[node.kind]} · x ${node.x_m} m · y ${node.y_m} m` }));
@@ -426,12 +430,16 @@ function renderConsole(node, body) {
       out.textContent = c.text;
       out.scrollTop = out.scrollHeight;
       input.focus();
-      // La configuration peut avoir changé (nom d'hôte, région) : on rafraîchit sans reconstruire la console.
+      // La configuration peut avoir changé (nom d'hôte, région) : on rafraîchit sans reconstruire
+      // la console, pour ne pas perdre le focus ni le texte déjà saisi.
       const fresh = await guard(() => state.client.topology(state.sid));
       if (fresh && state.selected === node.id) {
         state.topo = fresh;
         renderPlan();
-        renderDeviceInfo(node);
+        // Le corps de la fenêtre est passé explicitement : renderDeviceInfo écrit dedans et ne
+        // peut plus deviner un panneau unique. On ne rafraîchit que si la zone est toujours là —
+        // la fenêtre a pu être refermée pendant l'aller-retour réseau.
+        if (body.isConnected) renderDeviceInfo(node, body);
       }
     },
   }, promptNode, input);
