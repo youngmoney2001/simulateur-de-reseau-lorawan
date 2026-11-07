@@ -1,7 +1,9 @@
 /* Studio LoRaWAN — disposition de type Packet Tracer, contenu et couleurs propres.
    Remplace l'ancienne mise en page en trois colonnes fixes (voir docs/UI_PT_CONCEPTION.md). */
 :root {
-  --bg:#f4f6f8; --fg:#1d2630; --muted:#63707d; --line:#c9d1d9; --accent:#1f6feb; --danger:#b42318;
+  /* --muted : #63707d ne donnait que 4,27 de contraste sur le fond des menus (seuil 4,5).
+     #56626e est la teinte la plus claire qui passe sur les cinq fonds clairs de l'interface. */
+  --bg:#f4f6f8; --fg:#1d2630; --muted:#56626e; --line:#c9d1d9; --accent:#1f6feb; --danger:#b42318;
   --menu:#e8ecf1; --menu-line:#ccd4de; --canvas:#ffffff; --palette:#eef2f6; --palette-head:#d8e2ee;
   --accent-soft:#bfd9f2; --status:#e8ecf1;
 }
@@ -114,7 +116,9 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .device-win-head { display:flex; align-items:center; gap:6px; cursor:grab;
   padding:2px 0 6px; user-select:none; }
 .device-win-head:active { cursor:grabbing; }
-.grip { color:var(--line); font-size:13px; letter-spacing:-2px; }
+/* La poignée est le seul indice que la fenêtre se déplace : en couleur de ligne elle ne
+   se voyait pas du tout (1,54 de contraste). */
+.grip { color:var(--muted); font-size:13px; letter-spacing:-2px; }
 .device-win-title { margin:0; font-size:14px; flex:1 1 auto; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
 .close { border:none; background:transparent; font-size:14px; color:var(--muted); padding:2px 6px; }
