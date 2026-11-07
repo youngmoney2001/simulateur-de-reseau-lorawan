@@ -108,3 +108,74 @@ class ChiffrementParLeCoeur(unittest.TestCase):
         wire = build_uplink_wire(session, fcnt32=9, payload=clair, fport=1)
         ctx = security.UplinkContext(fcnt32=9, tx_dr=0, tx_ch=0)
         self.assertEqual(security.open_uplink(wire, session.keys, ctx).payload, clair)
+
+
+class Robustesse(unittest.TestCase):
+    def test_trame_trop_courte_refusee(self) -> None:
+        with self.assertRaises(ValueError):
+            describe(b"\x40\x01\x02")
+    def test_type_invalide_refuse(self) -> None:
+        with self.assertRaises(ValueError):
+            describe("4040")
+    def test_fopts_annonces_au_dela_de_la_trame(self) -> None:
+        t = bytes([0x40, 1, 2, 3, 4, 0x0F, 0, 0]) + b"\x00" * 4
+        with self.assertRaises(ValueError):
+            describe(t)
+    def test_charge_trop_grande(self) -> None:
+        with self.assertRaises(ValueError):
+            build_uplink_wire(derive_session(1, 1), fcnt32=0,
+                              payload=b"X" * (security.MAX_FRM_PAYLOAD + 1), fport=1)
+    def test_charge_sans_fport(self) -> None:
+        with self.assertRaises(ValueError):
+            build_uplink_wire(derive_session(1, 1), fcnt32=0, payload=b"X", fport=None)
+
+
+class Presentation(unittest.TestCase):
+    def setUp(self) -> None:
+        self.vue = describe(build_uplink_wire(derive_session(3, 3), fcnt32=2,
+                                              payload=b"AB", fport=1))
+    def test_trois_couches(self) -> None:
+        self.assertEqual(set(self.vue.couches()), {"phy", "mac", "application"})
+    def test_hex_complet(self) -> None:
+        self.assertEqual(self.vue.couches()["phy"]["contenu_hex"], self.vue.wire.hex())
+    def test_lignes(self) -> None:
+        texte = "\n".join(self.vue.lignes())
+        for c in ("PHY", "MHDR", "DevAddr", "FCtrl", "FCnt", "FPort", "Charge", "MIC"):
+            self.assertIn(c, texte)
+    def test_mtypes(self) -> None:
+        self.assertEqual(len(MTYPE_NAMES), 8)
+
+
+class TramesDUneTrace(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.sc = _scenario()
+        cls.trace = build_trace(cls.sc)
+        cls.vues = frames_for_run(cls.trace, cls.sc)
+
+    def test_une_vue_par_evenement(self) -> None:
+        self.assertEqual(len(self.vues), len(self.trace.events))
+
+    def test_les_uplinks_portent_une_trame(self) -> None:
+        up = [i for i, e in enumerate(self.trace.events) if e.kind == "uplink"]
+        self.assertTrue(up)
+        for i in up:
+            self.assertIsNotNone(self.vues[i])
+
+    def test_la_charge_suit_le_scenario(self) -> None:
+        for i, v in enumerate(self.vues):
+            if v is not None:
+                self.assertEqual(len(v.frm_payload), 8)
+
+    def test_fcnt_croissant_par_dispositif(self) -> None:
+        par = {}
+        for e, v in zip(self.trace.events, self.vues):
+            if v is not None:
+                par.setdefault(e.device_index, []).append(v.fcnt)
+        for d, suite in par.items():
+            self.assertEqual(suite, list(range(len(suite))))
+
+    def test_determinisme_de_bout_en_bout(self) -> None:
+        autres = frames_for_run(build_trace(_scenario()), _scenario())
+        self.assertEqual(tuple(v.wire if v else None for v in self.vues),
+                         tuple(v.wire if v else None for v in autres))
