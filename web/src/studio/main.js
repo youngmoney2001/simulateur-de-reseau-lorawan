@@ -1513,6 +1513,10 @@ try {
 // L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu (D3).
 function appliquerZone(o, { garder = true, voler = true } = {}) {
   if (!o) return;
+  // Le champ d'abord : c'est la source de vérité que relit `readOrigin`. L'écrire après
+  // `sessionStorage`, comme le faisait le refactor, laissait l'ancre affichée inchangée —
+  // le message annonçait « zone déplacée » alors que rien n'avait bougé.
+  writeOrigin(o);
   if (garder) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
   refreshAddHint();
   refreshOriginState();
