@@ -245,7 +245,8 @@ try {
       zonePresente: Boolean(zone),
       zoneVisible: zone ? !zone.hidden : false,
       toile: toile ? `${toile.width}x${toile.height}` : "aucune",
-      indice: indice && !indice.hidden ? indice.textContent.replace(/\s+/g, " ").trim() : "",
+      // Lu même masqué : en cas d'échec de la carte, c'est là qu'est la raison du repli.
+      indice: indice ? indice.textContent.replace(/\s+/g, " ").trim() : "",
     };
   });
   console.log(`WebGL : ${webgl.disponible ? "disponible" : "ABSENT"}` +

@@ -899,7 +899,9 @@ function showView(view) {
   state.view = view;
   const estCarte = view === "map";
   $("cesium").hidden = !estCarte;
-  $("map-hint").hidden = !estCarte;
+  // Si la carte a échoué, l'indice porte la raison du repli : il doit rester lisible même
+  // sur le plan, sinon on cache précisément l'information qui explique l'absence de carte.
+  $("map-hint").hidden = state.mapFailed ? false : !estCarte;
   $("plan").parentElement.hidden = estCarte;
   for (const b of document.querySelectorAll(".view-tab")) {
     const actif = b.dataset.view === view;
