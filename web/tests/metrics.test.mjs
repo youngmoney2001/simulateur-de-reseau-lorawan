@@ -20,6 +20,10 @@ import {
   ventilationGroupes,
   pdrParDispositif,
   ventilationTable,
+  couleurPdr,
+  echellePdr,
+  ECHELLE_PDR,
+  resultatsParNoeud,
 } from "../src/studio/metrics.js";
 
 const FIXTURE = JSON.parse(
@@ -256,4 +260,66 @@ test("occupation par groupe : absente sans fenêtre d'observation", () => {
     assert.equal(g.occupancyMax, null);
     assert.equal(g.occupancyMaxText, "—");
   }
+});
+
+test("échelle de couleur : décroissante, bornée, et nommable", () => {
+  const e = ECHELLE_PDR;
+  assert.equal(e.length, 4);
+  // Du meilleur au pire, sans trou ni recouvrement : un palier oublié laisserait un
+  // équipement sans couleur, deux paliers qui se recouvrent rendraient le choix ambigu.
+  for (let i = 1; i < e.length; i += 1) assert.ok(e[i].min < e[i - 1].min);
+  assert.equal(e[e.length - 1].min, 0);
+  for (const p of e) {
+    assert.match(p.couleur, /^#[0-9a-f]{6}$/);
+    assert.ok(p.label.length > 0);
+  }
+  assert.deepEqual(echellePdr().map((x) => x.couleur), e.map((x) => x.couleur));
+});
+
+test("couleur d'un taux de livraison : paliers et absence de mesure", () => {
+  assert.equal(couleurPdr(1.0), ECHELLE_PDR[0].couleur);
+  assert.equal(couleurPdr(0.95), ECHELLE_PDR[0].couleur);   // borne basse incluse
+  assert.equal(couleurPdr(0.949), ECHELLE_PDR[1].couleur);
+  assert.equal(couleurPdr(0.80), ECHELLE_PDR[1].couleur);
+  assert.equal(couleurPdr(0.799), ECHELLE_PDR[2].couleur);
+  assert.equal(couleurPdr(0.50), ECHELLE_PDR[2].couleur);
+  assert.equal(couleurPdr(0.499), ECHELLE_PDR[3].couleur);
+  assert.equal(couleurPdr(0), ECHELLE_PDR[3].couleur);
+  // Non mesuré : null, pour que l'appelant garde la couleur de type au lieu de peindre
+  // en rouge un équipement qui n'a simplement pas encore de résultat.
+  assert.equal(couleurPdr(null), null);
+  assert.equal(couleurPdr(undefined), null);
+  assert.equal(couleurPdr(NaN), null);
+});
+
+test("résultats par équipement : jointure par le nom du groupe", () => {
+  // Un run de session studio : study_compile.py nomme le groupe d'après le capteur.
+  const lignes = [
+    { group: "capt-a", sent: 10, received: 9, lost_collision: 1, lost_sensitivity: 0, airtime_ns: 5e8 },
+    { group: "capt-b", sent: 10, received: 4, lost_collision: 6, lost_sensitivity: 0, airtime_ns: 9e8 },
+  ];
+  const noeuds = [{ id: "capt-a", kind: "sensor" }, { id: "capt-b", kind: "sensor" },
+                  { id: "gw-nord", kind: "gateway" }];
+  const r = resultatsParNoeud(lignes, noeuds);
+  assert.equal(r.size, 2);
+  assert.equal(r.get("capt-a").pdr, 0.9);
+  assert.equal(r.get("capt-a").couleur, ECHELLE_PDR[1].couleur);
+  assert.equal(r.get("capt-b").pdr, 0.4);
+  assert.equal(r.get("capt-b").couleur, ECHELLE_PDR[3].couleur);
+  // Une passerelle n'a pas de ligne de dispositif : elle garde sa couleur de type.
+  assert.equal(r.has("gw-nord"), false);
+});
+
+test("résultats par équipement : un vrai groupe n'est pas coloré au hasard", () => {
+  // Scénario YAML : un groupe de 12 dispositifs, sans équivalent dans la topologie.
+  // Colorer un équipement avec la moyenne d'un groupe serait un chiffre inventé.
+  const lignes = Array.from({ length: 12 }, () => ({ group: "capteurs", sent: 6, received: 5 }));
+  const noeuds = [{ id: "capteurs", kind: "sensor" }];
+  assert.equal(resultatsParNoeud(lignes, noeuds).size, 0);
+});
+
+test("résultats par équipement : entrées vides et dispositifs sans groupe", () => {
+  assert.equal(resultatsParNoeud([], []).size, 0);
+  assert.equal(resultatsParNoeud(undefined, undefined).size, 0);
+  assert.equal(resultatsParNoeud([{ sent: 1, received: 1 }], [{ id: "a" }]).size, 0);
 });

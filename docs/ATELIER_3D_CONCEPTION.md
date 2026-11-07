@@ -23,7 +23,7 @@ L'utilisateur décrit son attente ainsi :
 | 3b | Pose par coordonnées | **fait (H)** | — |
 | 4 | Fenêtres propres, illustrées, conformes | **fait (J)** | — |
 | 5a | Indicateurs calculés | **fait (K)** | — |
-| 5b | Visualisation unifiée sur la carte | **à faire (L)** | les résultats sont dans un onglet, pas sur la carte |
+| 5b | Visualisation unifiée sur la carte | **fait (L)** | — |
 
 ## 2. Architecture
 
@@ -174,6 +174,48 @@ signale une rupture (`coherent: false`) au lieu de la masquer.
 `GET /runs/{id}/devices` sur un run à trois passerelles, deux groupes et profil énergie,
 régénérable par `web/scripts/capture-metrics-fixture.py`. Les valeurs attendues sont
 recalculées à la main — les reprendre du module en ferait une reformulation.
+
+## 4ter. Phase L — le résultat se lit sur la carte
+
+Avant : la carte colorait chaque équipement selon son **type** (`COULEURS[n.kind]`). Après un
+run, elle colore selon son **résultat**. C'est là que se lit le comportement du réseau — dans
+la géographie, pas dans un tableau.
+
+### Répartition
+
+La décision de couleur vit dans `metrics.js` (module pur, testé sans Cesium) ; la carte ne
+fait que l'appliquer. Un dégradé continu a été écarté : il suggère une précision que la mesure
+n'a pas, et rend deux équipements voisins indiscernables. Quatre paliers francs, qu'on peut
+nommer dans une légende.
+
+| Taux de livraison | Couleur |
+|---|---|
+| 95 % et plus | vert `#2ea043` |
+| de 80 à 95 % | ambre `#9a6700` |
+| de 50 à 80 % | orange `#bc4c00` |
+| moins de 50 % | rouge `#b42318` |
+
+Sans résultat pour un équipement, il garde sa **couleur de type**. Un équipement non mesuré
+n'est pas un équipement en échec — le peindre en rouge serait un mensonge.
+
+### Jointure, et pourquoi elle refuse de deviner
+
+Une session studio compile **un groupe par équipement**, nommé d'après l'identifiant du
+capteur (`study_compile.py`) : la jointure est donc directe. Un run issu d'un scénario YAML a
+de vrais groupes (12 dispositifs, par exemple) sans équivalent dans la topologie.
+`resultatsParNoeud` n'y colore **rien** plutôt que d'affecter à un équipement la moyenne d'un
+groupe : ce serait un chiffre inventé. Le test le verrouille.
+
+### Légende
+
+Affichée seulement quand un run colore effectivement des équipements : une légende sans
+résultat décrirait des couleurs absentes. Les libellés viennent de `metrics.js`, seule source
+de l'échelle — les recopier ici les laisserait dériver de la couleur réellement peinte.
+
+### Les deux vues
+
+La carte 3D **et** le plan 2D portent la même lecture. Le plan pose un attribut `fill` quand un
+résultat existe, et laisse la classe CSS du type décider sinon.
 
 ## 5. Difficultés connues
 

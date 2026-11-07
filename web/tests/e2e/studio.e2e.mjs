@@ -293,6 +293,28 @@ try {
     if (!libelles.includes("Occupation du canal")) throw new Error(libelles.join(" | "));
   });
 
+  // Phase L : le résultat doit se lire sur la carte et sur le plan, pas seulement dans un
+  // tableau. Un module pur peut vérifier l'échelle de couleurs ; seul un run réel dans un
+  // navigateur vérifie que la couleur arrive jusqu'au pixel affiché.
+  await step("visualisation : équipements colorés par leur résultat, légende affichée", async () => {
+    const legende = await page.$eval("#pdr-legend", (e) => ({
+      visible: !e.hidden,
+      texte: e.textContent.replace(/\s+/g, " ").trim(),
+      pastilles: e.querySelectorAll(".lg-rond").length,
+    }));
+    if (!legende.visible) throw new Error("légende masquée alors qu'un run colore des équipements");
+    if (legende.pastilles !== 4) throw new Error(`${legende.pastilles} pastille(s), 4 attendues`);
+    if (!legende.texte.includes("Taux de livraison")) throw new Error(legende.texte);
+
+    // Le plan 2D porte la même lecture : un fill posé par le résultat, pas par le type.
+    // `viewTab` est idempotent : l'étape de glisser-déposer a déjà basculé sur le plan.
+    await viewTab("Plan");
+    const peints = await page.$$eval("#plan g.node > *", (formes) => formes
+      .map((f) => f.getAttribute("fill"))
+      .filter((c) => c && c.startsWith("#")));
+    if (peints.length < 1) throw new Error("aucun équipement coloré par son résultat sur le plan");
+  });
+
   await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {
     await obsTab("Journal");
     await page.waitForFunction(() => document.querySelectorAll("#journal > li").length >= 1, { timeout: 60_000 });

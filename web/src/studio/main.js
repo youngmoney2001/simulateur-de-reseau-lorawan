@@ -7,7 +7,8 @@ import {
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
-import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs } from "./metrics.js";
+import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
+  resultatsParNoeud, echellePdr } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -40,6 +41,8 @@ const state = {
   choixZone: false,  // le prochain clic sur la carte déplacera l'ancre de la zone
   events: [],        // evenements du run courant (inspecteur de trames)
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
+  deviceRows: [],    // lignes par dispositif du dernier run : matiere des indicateurs
+  resultats: null,   // Map node_id -> resultat : la carte colore par la, plus par type
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
@@ -250,6 +253,10 @@ function renderPlan() {
       ? svgEl("circle", { r: 15, class: "sensor" })
       : n.kind === "server" ? svgEl("rect", { x: -17, y: -17, width: 34, height: 34, transform: "rotate(45)", class: "server" })
       : svgEl("rect", { x: -18, y: -18, width: 36, height: 36, rx: 5, class: n.kind });
+    // Même lecture sur les deux vues : le plan porte la couleur du résultat, comme
+    // la carte. Sans résultat, la classe CSS du type continue de décider.
+    const couleur = state.resultats?.get(n.id)?.couleur;
+    if (couleur) shape.setAttribute("fill", couleur);
     g.append(shape);
     g.append(nodeIcon(n.kind));
     const label = svgEl("text", { x: 24, y: -16 });
@@ -780,7 +787,11 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // totaux seraient affichés et la ventilation par groupe serait impossible.
     const deviceRows = await guard(() => collectPages(
       (cursor) => state.client.devicesPage(started.run_id, cursor), MAX_METRIC_DEVICES));
-    renderResults(summary, started.links.map((l) => l.gateway), deviceRows ?? []);
+    state.deviceRows = deviceRows ?? [];
+    state.resultats = resultatsParNoeud(state.deviceRows, state.topo?.nodes ?? []);
+    renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
+    renderLegend();
+    syncMap();                  // la carte change de couleur : elle montre le run
     await loadAnimation(started.run_id);
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
   } finally {
@@ -846,6 +857,27 @@ function renderMetrics(summary, deviceRows) {
   }
   // Un seul groupe : la table n'apprend rien que les totaux ne disent déjà.
   table.hidden = groupes.length < 2;
+}
+
+/**
+ * Légende du taux de livraison sur la carte.
+ *
+ * Affichée seulement quand un run colore effectivement des équipements : une légende sans
+ * résultat décrirait des couleurs absentes. Le nom de chaque palier vient de `metrics.js`,
+ * seule source de l'échelle — le recopier ici le laisserait dériver de la couleur réelle.
+ */
+function renderLegend() {
+  const boite = $("pdr-legend");
+  clear(boite);
+  const colores = state.resultats ? [...state.resultats.values()].filter((r) => r.couleur).length : 0;
+  boite.hidden = colores === 0;
+  if (boite.hidden) return;
+  boite.append(el("span", { class: "lg-titre", text: "Taux de livraison" }));
+  for (const p of echellePdr()) {
+    boite.append(el("span", { class: "lg-item" },
+      el("span", { class: "lg-rond", style: `background:${p.couleur}` }),
+      el("span", { text: p.label })));
+  }
 }
 
 // --- Exercices -----------------------------------------------------------------------------
@@ -1106,7 +1138,7 @@ function syncMap(fly = false) {
   const o = readOrigin();
   carte.setOrigin(o);
   if (o) carte.setZone(o.lat, o.lon, porteeDesEquipements());
-  carte.setNodes(state.topo?.nodes ?? [], state.selected);
+  carte.setNodes(state.topo?.nodes ?? [], state.selected, state.resultats);
   // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
   // encore la planète entière. La seconde compte autant que la première — c'est elle qui
   // fait que « la carte est centrée sur le lieu choisi » dès l'ouverture.

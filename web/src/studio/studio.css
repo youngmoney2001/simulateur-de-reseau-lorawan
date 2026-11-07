@@ -39,6 +39,17 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .metric .m-label { font-size:12px; color:var(--muted); }
 .metric .m-value { font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; text-align:right; }
 .metric .m-formula { grid-column:1 / -1; font-size:11px; line-height:1.3; color:var(--muted); }
+
+/* Légende du taux de livraison sur la carte : sans elle, un équipement rouge est une
+   alerte dont on ne sait pas ce qu'elle mesure. Sur fond clair, lisible par-dessus le globe. */
+.pdr-legend { position:absolute; right:10px; bottom:10px; z-index:2; margin:0;
+  display:flex; flex-direction:column; gap:3px; padding:6px 9px; border-radius:6px;
+  background:rgba(255,255,255,.94); border:1px solid var(--line); font-size:11px; color:var(--fg); }
+.pdr-legend[hidden] { display:none; }   /* display:flex écraserait hidden sinon */
+.pdr-legend .lg-titre { font-weight:600; }
+.pdr-legend .lg-item { display:flex; align-items:center; gap:6px; }
+.pdr-legend .lg-rond { width:10px; height:10px; border-radius:50%; flex:0 0 auto;
+  border:1px solid rgba(0,0,0,.4); }
 .flash { margin:8px 12px; padding:8px 12px; border-radius:6px; background:#fde8e6; color:var(--danger); }
 
 /* --- Écran de lancement --------------------------------------------------------------- */

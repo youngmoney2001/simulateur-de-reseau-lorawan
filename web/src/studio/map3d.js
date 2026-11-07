@@ -186,7 +186,7 @@ export function createMap3D(container, onPick) {
      * Affiche les équipements. `noeuds` porte x_m/y_m (mètres) ; la conversion en degrés
      * se fait ici, à partir de l'origine courante.
      */
-    setNodes(noeuds, selectionId = null) {
+    setNodes(noeuds, selectionId = null, resultats = null) {
       points.removeAll();
       labels.removeAll();
       affiches = noeuds ?? [];
@@ -202,9 +202,17 @@ export function createMap3D(container, onPick) {
         }
         const estCapteur = n.kind === "sensor";
         const selectionne = n.id === selectionId;
+        // Après un run, la couleur dit le **résultat** (taux de livraison), plus seulement
+        // le type : c'est là que se lit le comportement du réseau. Sans résultat pour cet
+        // équipement, on garde la couleur de type — un équipement non mesuré n'est pas un
+        // équipement en échec.
+        const r = resultats?.get(n.id);
+        const couleur = r?.couleur
+          ? Cesium.Color.fromCssColorString(r.couleur)
+          : COULEURS[n.kind] ?? COULEURS.sensor;
         points.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat),
-          color: COULEURS[n.kind] ?? COULEURS.sensor,
+          color: couleur,
           pixelSize: selectionne ? 20 : estCapteur ? 12 : 16,
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: selectionne ? 3 : 2,

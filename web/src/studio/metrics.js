@@ -313,3 +313,77 @@ export function pdrParDispositif(lignes = []) {
     received: l.received,
   }));
 }
+
+// --- Coloriage par résultat (phase L) -------------------------------------------------------
+//
+// La carte colorait chaque équipement selon son **type**. Après un run, elle doit colorer
+// selon son **résultat** : c'est là que se lit le comportement du réseau. La décision de
+// couleur vit ici, dans le module pur, où elle est testable sans Cesium ; la carte ne fait
+// que l'appliquer.
+
+/**
+ * Échelle du taux de livraison, du meilleur au pire.
+ *
+ * Paliers francs plutôt que dégradé continu : un dégradé suggère une précision que la
+ * mesure n'a pas, et rend deux équipements voisins indiscernables. Quatre étapes qu'on
+ * peut nommer dans une légende.
+ */
+export const ECHELLE_PDR = [
+  { min: 0.95, couleur: "#2ea043", label: "95 % et plus" },
+  { min: 0.80, couleur: "#9a6700", label: "de 80 à 95 %" },
+  { min: 0.50, couleur: "#bc4c00", label: "de 50 à 80 %" },
+  { min: 0.00, couleur: "#b42318", label: "moins de 50 %" },
+];
+
+/** Couleur d'un taux de livraison. `null` (non mesuré) : l'appelant garde sa couleur de type. */
+export function couleurPdr(pdr) {
+  if (!Number.isFinite(pdr)) return null;
+  for (const palier of ECHELLE_PDR) if (pdr >= palier.min) return palier.couleur;
+  return ECHELLE_PDR[ECHELLE_PDR.length - 1].couleur;
+}
+
+/** Légende de l'échelle, pour l'affichage. */
+export function echellePdr() {
+  return ECHELLE_PDR.map((p) => ({ couleur: p.couleur, label: p.label }));
+}
+
+/**
+ * Résultats par équipement de la topologie.
+ *
+ * Jointure par le nom du groupe : une session studio compile **un groupe par équipement**,
+ * nommé d'après l'identifiant du capteur (`study_compile.py`). Un run issu d'un scénario
+ * YAML, lui, a de vrais groupes sans équivalent dans la topologie : aucun équipement n'est
+ * alors coloré, plutôt que de colorer au hasard.
+ */
+export function resultatsParNoeud(lignes = [], noeuds = []) {
+  const parGroupe = new Map();
+  for (const l of lignes ?? []) {
+    if (l.group == null) continue;
+    const a = parGroupe.get(l.group)
+      ?? { sent: 0, received: 0, lostCollision: 0, lostSensitivity: 0, airtimeMax: 0, count: 0 };
+    a.sent += l.sent ?? 0;
+    a.received += l.received ?? 0;
+    a.lostCollision += l.lost_collision ?? 0;
+    a.lostSensitivity += l.lost_sensitivity ?? 0;
+    if (Number.isFinite(l.airtime_ns)) a.airtimeMax = Math.max(a.airtimeMax, l.airtime_ns);
+    a.count += 1;
+    parGroupe.set(l.group, a);
+  }
+  const out = new Map();
+  for (const n of noeuds ?? []) {
+    const a = parGroupe.get(n.id);
+    if (!a || a.count !== 1) continue;   // un seul dispositif par équipement, sinon pas de jointure
+    const pdr = ratio(a.received, a.sent);
+    out.set(n.id, {
+      pdr,
+      pdrText: pct(pdr),
+      couleur: couleurPdr(pdr),
+      sent: a.sent,
+      received: a.received,
+      lostCollision: a.lostCollision,
+      lostSensitivity: a.lostSensitivity,
+      airtimeNs: a.airtimeMax,
+    });
+  }
+  return out;
+}
