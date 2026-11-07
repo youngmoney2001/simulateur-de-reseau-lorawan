@@ -270,6 +270,29 @@ try {
     if (!rows.some((r) => r.includes("frontiere-nord") || r.includes("gw-nord"))) throw new Error(rows.join(" | "));
   });
 
+  // Indicateurs calculés : le bloc est rempli depuis les vrais compteurs du run. Une formule
+  // vide ou une valeur « — » signifierait un champ mal lu côté serveur — le module pur ne
+  // peut pas l'attraper, seul un run réel dans un navigateur le peut.
+  await step("indicateurs calculés : bloc rempli et formules affichées", async () => {
+    await obsTab("Simulation");
+    await page.waitForFunction(() => !document.getElementById("sim-metrics").hidden, { timeout: 30_000 });
+    const metriques = await page.$$eval(".metric", (blocs) => blocs.map((b) => ({
+      label: b.querySelector(".m-label")?.textContent ?? "",
+      valeur: b.querySelector(".m-value")?.textContent ?? "",
+      formule: b.querySelector(".m-formula")?.textContent ?? "",
+    })));
+    if (metriques.length < 8) throw new Error(`${metriques.length} indicateur(s), 8 attendus au minimum`);
+    for (const m of metriques) {
+      if (!m.label) throw new Error("indicateur sans libellé");
+      if (m.valeur === "—") throw new Error(`valeur non calculée : ${m.label}`);
+      if (m.formule.length < 20) throw new Error(`formule absente : ${m.label}`);
+    }
+    const libelles = metriques.map((m) => m.label);
+    // Les deux grandeurs d'occupation ne doivent pas être confondues (voir metrics.js).
+    if (!libelles.includes("Charge offerte")) throw new Error(libelles.join(" | "));
+    if (!libelles.includes("Occupation du canal")) throw new Error(libelles.join(" | "));
+  });
+
   await step("animation : lecteur chargé, horloge avance, trames dessinées, journal", async () => {
     await obsTab("Journal");
     await page.waitForFunction(() => document.querySelectorAll("#journal > li").length >= 1, { timeout: 60_000 });

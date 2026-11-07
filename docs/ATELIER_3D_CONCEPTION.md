@@ -22,7 +22,8 @@ L'utilisateur décrit son attente ainsi :
 | 3a | Pose par glisser-déposer | **fait (H)** | — |
 | 3b | Pose par coordonnées | **fait (H)** | — |
 | 4 | Fenêtres propres, illustrées, conformes | **fait (J)** | — |
-| 5 | Simulation et visualisation | **à faire (K, L)** | existe, mais séparé de la carte |
+| 5a | Indicateurs calculés | **fait (K)** | — |
+| 5b | Visualisation unifiée sur la carte | **à faire (L)** | les résultats sont dans un onglet, pas sur la carte |
 
 ## 2. Architecture
 
@@ -102,6 +103,77 @@ exécutions de CI perdues en un message lisible.
 plutôt que d'appeler `scene.pick`. C'est déterministe, ça marche quand le point est dessiné sans
 profondeur (`disableDepthTestDistance`), et ça ne casse pas si Cesium change la forme de ses
 objets de sélection d'une version à l'autre.
+
+## 4bis. Phase K — indicateurs calculés
+
+Module pur `web/src/studio/metrics.js` (ni DOM, ni Cesium, ni réseau), affiché sous la table
+des passerelles dans l'onglet Simulation.
+
+### Ce qui est affiché
+
+Onze indicateurs, tous dérivés des seuls compteurs du run (`summary.totals`, `summary.gateway`
+ou `summary.gateways[]`, lignes `devices`). Chaque bloc affiche **la formule qui le produit** :
+un nombre sans sa formule n'est pas vérifiable.
+
+| Indicateur | Formule | Ce qu'il apprend |
+|---|---|---|
+| Taux de livraison | reçues ÷ émises | part des trames arrivées au serveur |
+| Répartition des pertes | 4 causes, en parts de 100 % | *pourquoi* les trames sont perdues |
+| Collisions parmi les audibles | collisions ÷ trames audibles | une trame hors portée ne peut pas entrer en collision |
+| Charge offerte | Σ temps d'antenne ÷ fenêtre | charge ALOHA **G**, dépasse librement 1 |
+| Occupation du canal | union des intervalles ÷ fenêtre | temps d'antenne réellement pris, borné à 100 % |
+| Temps d'antenne moyen | Σ temps d'antenne ÷ émises | durée d'une trame sur les ondes |
+| Débit utile | reçues ÷ durée d'observation | trames livrées par seconde |
+| Simultanéité maximale | maximum sur la fenêtre | pics de concurrence |
+| Énergie par message | moyenne des dispositifs | coût d'un message, écoute comprise |
+| Énergie du run | Σ (énergie par message × émis) | coût total du scénario |
+| Courant moyen | moyenne des dispositifs | µA sur la période, veille comprise |
+
+Les trois derniers n'apparaissent qu'avec un profil énergie. Sans lui, ils sont **absents**,
+jamais affichés à zéro : un `0 J` fabriqué est indiscernable d'une mesure nulle.
+
+### Deux pièges que la mesure a écartés
+
+**Charge offerte ≠ occupation du canal.** `totals.airtime_ns` **cumule** les trames, y compris
+celles qui se recouvrent. Rapporté à la fenêtre d'observation, il donne la charge offerte d'un
+canal ALOHA — mesurée à **4,60** sur un run saturé de 40 dispositifs SF12 dont le PDR
+s'effondre à 5 %. Le publier comme « occupation » ferait lire « 460 % ». `busy_ns`, lui, est
+l'**union** des intervalles : son rapport est dans [0, 1]. Les deux sont affichés, séparément,
+et un test verrouille qu'ils ne sont pas le même champ.
+
+**Fenêtre et occupation : le maximum, jamais la somme.** Avec trois passerelles, sommer les
+`observation_ns` compterait trois fois la même horloge de run et diviserait le débit par trois.
+
+### Aucun verdict réglementaire
+
+La phase K **mesure**, elle ne prononce pas de conformité. Raisons, vérifiées :
+
+- `RunSummary` ne porte **pas** la région ; elle est portée par chaque groupe du scénario
+  (`GroupModel.region`, optionnelle), et les lignes de dispositifs du run ne la répètent pas.
+  Un verdict serait donc attribué à une région devinée.
+- `RegionProfile.duty_cycle_limit` renvoie `None` pour **cinq des huit régions** (US915, AU915,
+  AS923, KR920, IN865) : zéro sous-bande déclarée, aucune limite. EU868 renvoie 0,01 à 868,1 et
+  868,3 MHz ; RU864 et AS923JP ont deux sous-bandes.
+- `docs/REGULATORY_SOURCES.md` ne cite **aucune limite de duty cycle vérifiée pour EU868** : la
+  valeur 1 % vient du code, pas d'une source.
+
+Un test interdit l'apparition des mots « conforme », « non conforme », « limite légale » et
+« dépasse la limite » dans un libellé ou une formule d'indicateur.
+
+### Invariant qui fonde la répartition des pertes
+
+`émises = reçues + sensibilité + collision + passerelle occupée`, vérifié sur le moteur avant
+écriture du module : cinq configurations (chargée, saturée, hors portée, dispositif unique,
+deux SF) × une et trois passerelles = **dix mesures, dix concordances**. `repartitionPertes`
+signale une rupture (`coherent: false`) au lieu de la masquer.
+
+### Test
+
+`web/tests/metrics.test.mjs`, 22 tests, dont une **parité** sur une sortie réelle du serveur :
+`web/tests/fixtures/run-metrics.json` est la réponse brute de `GET /runs/{id}/summary` et
+`GET /runs/{id}/devices` sur un run à trois passerelles, deux groupes et profil énergie,
+régénérable par `web/scripts/capture-metrics-fixture.py`. Les valeurs attendues sont
+recalculées à la main — les reprendre du module en ferait une reformulation.
 
 ## 5. Difficultés connues
 

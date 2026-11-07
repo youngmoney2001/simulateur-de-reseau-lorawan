@@ -7,6 +7,7 @@ import {
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
+import { indicateursReseau, ventilationGroupes, ventilationTable } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -18,6 +19,9 @@ import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
+// Borne des lignes de dispositifs ramenées pour les indicateurs : au-delà, l'agrégation par
+// groupe cesse d'être lisible et le parcours cesse d'être instantané.
+const MAX_METRIC_DEVICES = 20_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
 
@@ -772,7 +776,11 @@ $("sim-form").addEventListener("submit", async (ev) => {
     refreshMapLink();
     const summary = await guard(() => state.client.summary(started.run_id));
     if (!summary) return;
-    renderResults(summary, started.links.map((l) => l.gateway));
+    // Les indicateurs calculés agrègent les lignes par dispositif : sans elles, seuls les
+    // totaux seraient affichés et la ventilation par groupe serait impossible.
+    const deviceRows = await guard(() => collectPages(
+      (cursor) => state.client.devicesPage(started.run_id, cursor), MAX_METRIC_DEVICES));
+    renderResults(summary, started.links.map((l) => l.gateway), deviceRows ?? []);
     await loadAnimation(started.run_id);
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
   } finally {
@@ -796,7 +804,7 @@ async function waitForRun(runId) {
   }
 }
 
-function renderResults(summary, linkedNames) {
+function renderResults(summary, linkedNames, deviceRows = []) {
   const table = $("sim-results");
   const tbody = table.querySelector("tbody");
   clear(tbody);
@@ -808,6 +816,36 @@ function renderResults(summary, linkedNames) {
       el("td", { text: r.mesh })));
   }
   table.hidden = rows.length === 0;
+  renderMetrics(summary, deviceRows);
+}
+
+// Indicateurs calculés à partir des seuls compteurs du run. Chaque bloc affiche la formule
+// qui le produit : le nombre reste vérifiable à la main sur les compteurs du tableau.
+function renderMetrics(summary, deviceRows) {
+  const liste = indicateursReseau(summary, deviceRows);
+  const boite = $("sim-metrics-list");
+  clear(boite);
+  for (const i of liste) {
+    boite.append(el("div", { class: "metric", title: i.hint },
+      el("span", { class: "m-label", text: i.label }),
+      el("span", { class: "m-value", text: i.text }),
+      el("span", { class: "m-formula", text: i.hint })));
+  }
+  $("sim-metrics").hidden = liste.length === 0;
+
+  const groupes = ventilationGroupes(deviceRows);
+  const table = $("sim-groups");
+  const thead = table.querySelector("thead");
+  const tbody = table.querySelector("tbody");
+  clear(thead);
+  clear(tbody);
+  const { entetes, lignes } = ventilationTable(groupes);
+  thead.append(el("tr", {}, ...entetes.map((h) => el("th", { text: h }))));
+  for (const cellules of lignes) {
+    tbody.append(el("tr", {}, ...cellules.map((v) => el("td", { text: String(v) }))));
+  }
+  // Un seul groupe : la table n'apprend rien que les totaux ne disent déjà.
+  table.hidden = groupes.length < 2;
 }
 
 // --- Exercices -----------------------------------------------------------------------------

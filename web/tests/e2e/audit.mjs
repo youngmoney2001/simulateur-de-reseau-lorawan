@@ -273,6 +273,26 @@ try {
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(400);
 
+  // Les indicateurs calculés ne sont rendus qu'après un run : sans cette étape, l'audit
+  // mesurerait une interface où le bloc n'existe pas, et le déclarerait sain faute de
+  // l'avoir vu. Le bloc reste affiché pendant toute la boucle de largeurs qui suit.
+  const cliqueOnglet = (texte) => page.evaluate((t) => {
+    const b = [...document.querySelectorAll(".tab")].find((e) => e.textContent.includes(t));
+    if (b) b.click();
+    return Boolean(b);
+  }, texte);
+  await cliqueOnglet("Simulation");
+  await page.$eval("#seed", (e) => { e.value = "7"; });
+  await page.click("#simulate");
+  await page.waitForFunction(
+    () => /terminé/.test(document.getElementById("sim-status")?.textContent ?? ""),
+    { timeout: 120_000 });
+  await page.waitForFunction(
+    () => document.querySelectorAll(".metric").length >= 1, { timeout: 30_000 });
+  const nbBlocs = await page.$$eval(".metric", (b) => b.length);
+  const groupesVisible = await page.$eval("#sim-groups", (t) => !t.hidden);
+  console.log(`Indicateurs : ${nbBlocs} bloc(s) · table par équipement ${groupesVisible ? "visible" : "masquée"}`);
+
   // 1040 est la largeur où le menu du haut disparaît et 1000 celle juste en dessous : le
   // défaut qu'on cherche à attraper est un en-tête qui déborde **entre** les seuils, donc
   // il faut mesurer de part et d'autre du repli, pas seulement largement au-dessus et
