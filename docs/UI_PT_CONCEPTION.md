@@ -296,6 +296,45 @@ développement : en cas d'échec, il est publié en commentaire de la pull reque
 lisible. Et le paquet déclarant `dependencies: []`, la CI doit installer l'extra `[test]` — sans
 quoi le serveur API échoue à l'import avant même que le navigateur ne démarre.
 
+### Captures d'écran : produites, mais illisibles par une machine
+
+Une étape enregistre treize états du studio — écran d'accueil, topologie à quatre équipements, les
+trois onglets d'une fenêtre, une console remplie, les quatre onglets d'observation, et deux
+largeurs étroites — puis les dépose dans la branche, l'hébergeur d'artefacts étant inaccessible.
+
+**Ces images n'ont jamais pu être examinées par l'outil lui-même** : la lecture d'un fichier image
+renvoie une absence de capacité de vision. Elles servent donc uniquement au lecteur humain, qui
+peut enfin juger du rendu sans rien installer. Aucune conclusion n'a été tirée d'une image.
+
+### Audit de mise en page : l'œil remplacé par des mesures
+
+Faute de pouvoir regarder, l'interface est **mesurée**. Le navigateur connaît la position et la
+taille réelles de chaque boîte ; un audit interroge donc en nombres ce qu'on chercherait
+visuellement, à quatre largeurs dont les deux paliers adaptatifs :
+
+| Famille recherchée | Résultat |
+|---|---|
+| Débordement horizontal | aucun aux quatre largeurs |
+| Texte tronqué par un débordement masqué | aucun |
+| Région attendue absente, invisible ou écrasée | aucune |
+| Contraste insuffisant (seuil 4,5) | **2 trouvés, puis 0 après correction** |
+
+Les deux défauts relevés étaient réels, et identiques aux quatre largeurs : le gris des textes
+secondaires ne donnait que **4,27** de contraste sur le fond des menus, et la poignée signalant
+qu'une fenêtre se déplace — seul indice de cette fonction — tombait à **1,54**, c'est-à-dire
+invisible. Corrigés en assombrissant le gris vers la teinte la plus claire qui passe sur les cinq
+fonds clairs de l'interface, et en colorant la poignée comme un texte secondaire. L'audit est
+ensuite redescendu à **0 problème**.
+
+Cette méthode ne remplace pas un jugement esthétique : elle ne dit rien de l'élégance, de
+l'équilibre ni de la ressemblance avec Packet Tracer. Elle garantit seulement l'absence de défauts
+mesurables.
+
+**Point de géométrie à connaître** : à 1180 px et en dessous, le panneau d'observation commence
+sous la ligne de flottaison (il démarre à y=1000 pour une fenêtre de 1000 px de haut). Il reste
+accessible en défilant, le corps de page acceptant le défilement depuis la phase F, mais il n'est
+pas visible d'emblée. C'est un choix, pas un défaut — à documenter si l'on préfère l'autre option.
+
 La phase C est la seule sensible : la console garde le focus et l'historique par équipement, et le
 passage d'un panneau fixe à une fenêtre flottante touche `renderConsole`, `renderDeviceInfo` et
 `renderSensorForm`.
