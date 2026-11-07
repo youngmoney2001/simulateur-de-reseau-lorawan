@@ -169,6 +169,11 @@ try {
     // soit une dizaine de mètres — l'épaisseur du trait sur la carte.
     if (Math.abs(Number(m[1]) - 4.051999) > 1e-4 || Math.abs(Number(m[2]) - 9.770600) > 1e-4)
       throw new Error(`aller-retour fautif : ${m[1]}, ${m[2]}`);
+    // La fenêtre est refermée : elle recouvre le plan, et l'étape suivante clique un nœud
+    // qui se trouve dessous — le clic atteindrait la fenêtre au lieu du nœud.
+    await page.click('.device-win[data-node-id="capt-1"] .close');
+    await page.waitForFunction(
+      () => !document.querySelector('.device-win[data-node-id="capt-1"]'), { timeout: 10_000 });
   });
 
   await step("identifiant invalide refusé côté studio", async () => {
