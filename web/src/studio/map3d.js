@@ -87,6 +87,14 @@ export function createMap3D(container, onPick) {
     console.warn("fond routier indisponible, le fond local suffit :", err);
   }
 
+  // Cesium émet cet événement quand sa boucle de rendu échoue et s'arrête. Sans lui, un globe
+  // vide ne se distingue pas d'un défaut de notre code : on saurait que rien n'est peint, pas
+  // pourquoi. La raison est exposée pour être lue par les mesures automatiques.
+  viewer.scene.renderError.addEventListener((scene, erreur) => {
+    window.__carteErreur = erreur instanceof Error ? erreur.message : String(erreur);
+    console.error("rendu de la carte arrêté :", erreur);
+  });
+
   const points = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   const labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
   let origine = { lat: 4.0511, lon: 9.7679 };

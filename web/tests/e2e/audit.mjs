@@ -233,12 +233,18 @@ try {
       toile: toile ? `${toile.width}x${toile.height}` : "aucune",
       // Lu même masqué : en cas d'échec de la carte, c'est là qu'est la raison du repli.
       indice: indice ? indice.textContent.replace(/\s+/g, " ").trim() : "",
+      // Taille d'affichage, distincte de la taille du tampon : un canevas peut être étiré
+      // par la CSS tout en restant peint en 300×150.
+      toileCss: toile ? `${toile.clientWidth}x${toile.clientHeight}` : "aucune",
+      // Raison d'arrêt du rendu, le cas échéant.
+      erreurRendu: window.__carteErreur ?? "",
     };
   });
   console.log(`WebGL : ${webgl.disponible ? "disponible" : "ABSENT"}` +
     (webgl.disponible ? ` (${webgl.fournisseur} / ${webgl.rendu})` : ""));
   console.log(`Carte 3D : vue active = ${cesium.vueActive} · zone ${cesium.zoneVisible ? "visible" : "masquée"}` +
-    ` · toile = ${cesium.toile}`);
+    ` · toile = ${cesium.toile} (affichée ${cesium.toileCss})`);
+  if (cesium.erreurRendu) console.log(`Carte 3D : rendu arrêté — ${cesium.erreurRendu}`);
   if (cesium.indice) console.log(`Carte 3D : ${cesium.indice}`);
 
   // La carte 3D est la vue par défaut : le plan, seul endroit où l'on peut viser un nœud,
