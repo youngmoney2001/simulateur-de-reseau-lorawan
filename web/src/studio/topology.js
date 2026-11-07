@@ -132,8 +132,12 @@ export function validateNewNodeGeo(form, origine) {
   const base = validateNewNode({ ...form, x_m: 0, y_m: 0 });
   if (!base.ok) return base;
 
-  const lat = num(form.lat);
-  const lon = num(form.lon);
+  // Aucune coordonnée saisie : l'équipement se pose à l'origine de la zone. C'est le cas
+  // le plus fréquent — on place d'abord, on ajuste ensuite — et refuser un champ vide
+  // obligerait à recopier des degrés qu'on vient de donner en choisissant la zone.
+  const vide = String(form.lat ?? "").trim() === "" && String(form.lon ?? "").trim() === "";
+  const lat = vide ? origine.lat : num(form.lat);
+  const lon = vide ? origine.lon : num(form.lon);
   if (!estLatitude(lat)) return bad("lat", "latitude : nombre attendu, entre −90 et 90");
   if (!estLongitude(lon)) return bad("lon", "longitude : nombre attendu, entre −180 et 180");
 

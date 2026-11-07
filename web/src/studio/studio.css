@@ -115,6 +115,10 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
   width:34px; height:24px; margin-right:6px; vertical-align:middle; }
 .tool-art .device-art { width:34px; height:24px; }
 .tool-label { vertical-align:middle; }
+/* Le geste de pose part d'un appui sur ces boutons : sans cela, le navigateur sélectionne
+   le texte de l'étiquette au lieu de laisser le glisser se dérouler. Bloquer la sélection
+   ici permet de ne pas appeler preventDefault sur pointerdown, ce qui casserait le clic. */
+.tool { user-select:none; -webkit-user-select:none; }
 .icon-server { background:#c9b5ff; border:1px solid #6e40c9; }
 .session-pick { flex-direction:row; align-items:center; gap:6px; margin-top:auto; padding-top:6px;
   border-top:1px solid var(--line); }

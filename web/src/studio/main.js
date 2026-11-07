@@ -1099,7 +1099,11 @@ function glisserDepuisPalette(ev, kind) {
   // si le geste a seulement avorté.
   const rien = { cible: null };
   if (ev.button !== 0) return Promise.resolve(rien);
-  ev.preventDefault();
+  // Pas de `preventDefault` ici, et c'est volontaire : sur un pointeur souris, empêcher le
+  // défaut du `pointerdown` peut supprimer le `click` qui suit, ce qui rendrait le bouton
+  // muet. Les deux voies restent alors disjointes d'elles-mêmes — un glisser relâche sur le
+  // canevas, donc le `click` vise un ancêtre commun et pas le bouton ; un simple clic
+  // relâche sur le bouton et l'atteint. La sélection de texte est bloquée en CSS à la place.
   const carte = state.map;
   if (!carte || state.view !== "map") return Promise.resolve(rien);
 

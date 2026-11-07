@@ -231,6 +231,27 @@ test("une coordonnée très lointaine est refusée au lieu de sortir de l'échel
   assert.match(r.message, /trop éloignée/);
 });
 
+test("des coordonnées vides posent l'équipement à l'origine", () => {
+  // Cas le plus courant : on identifie l'équipement et on le place plus tard, en le tirant
+  // sur la carte. Exiger des degrés ici obligerait à recopier l'origine qu'on vient de
+  // choisir — et c'est exactement ce qui a cassé l'ajout en une étape.
+  for (const vide of [{ lat: "", lon: "" }, { lat: "  ", lon: "  " }, { lat: null, lon: "" }]) {
+    const r = validateNewNodeGeo({ id: "n", kind: "sensor", ...vide }, ORIGINE);
+    assert.equal(r.ok, true, `refusé à tort : ${JSON.stringify(vide)}`);
+    assert.equal(r.node.x_m, 0);
+    assert.equal(r.node.y_m, 0);
+  }
+});
+
+test("une seule coordonnée fournie est refusée", () => {
+  // À moitié vide, ce n'est plus « je placerai plus tard » : c'est une saisie incomplète,
+  // et la dire complète poserait l'équipement à un endroit qui n'a pas été voulu.
+  for (const partiel of [{ lat: "4.0511", lon: "" }, { lat: "", lon: "9.7679" }]) {
+    const r = validateNewNodeGeo({ id: "n", kind: "sensor", ...partiel }, ORIGINE);
+    assert.equal(r.ok, false, `accepté à tort : ${JSON.stringify(partiel)}`);
+  }
+});
+
 test("les champs communs restent validés à l'identique", () => {
   // L'identifiant est refusé de la même manière que par `validateNewNode` : la variante
   // géographique ne doit pas ouvrir une brèche dans les règles communes.

@@ -97,13 +97,30 @@ jobs:
             const fs = require('fs');
             let texte = '';
             try { texte = fs.readFileSync('audit.log', 'utf8'); } catch (e) { texte = '(rapport introuvable)'; }
+            // Quand le studio a échoué dans le navigateur, son journal est la seule trace
+            // lisible : les journaux du runner sont hébergés hors de portée du réseau. On
+            // l'ajoute donc au rapport plutôt que de publier un audit vide de sens.
+            if ('${{ steps.e2e.outcome }}' === 'failure') {
+              let e2e = '';
+              try { e2e = fs.readFileSync('e2e.log', 'utf8'); } catch (e) { e2e = '(journal e2e introuvable)'; }
+              texte += '\n\n--- Journal du studio dans le navigateur (échec) ---\n\n' + e2e.slice(-20000);
+            }
             const corps = ['### Audit de mise en page du studio', '',
               'Job : `${{ github.run_id }}`', '', '```', texte.slice(-60000), '```'].join('\n');
-            const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', head: `${context.repo.owner}:${context.ref.replace('refs/heads/', '')}` });
-            for (const pr of prs.data) {
+            // Sur un événement `pull_request`, `context.ref` vaut `refs/pull/N/merge` :
+            // chercher la PR par cette branche ne trouve rien, et le commentaire partait
+            // dans le vide. Le numéro est alors directement dans la charge utile.
+            const numeros = [];
+            if (context.payload.pull_request?.number) numeros.push(context.payload.pull_request.number);
+            else {
+              const branche = context.ref.replace('refs/heads/', '');
+              const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', head: `${context.repo.owner}:${branche}` });
+              for (const pr of prs.data) numeros.push(pr.number);
+            }
+            for (const n of numeros) {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: pr.number, body: corps });
+                issue_number: n, body: corps });
             }
 
       # Le rendu n'est observable d'aucune autre manière depuis un poste sans affichage :
@@ -153,11 +170,17 @@ jobs:
             try { texte = fs.readFileSync('e2e.log', 'utf8'); } catch (e) { texte = '(journal introuvable)'; }
             const corps = ['### Échec du studio dans le navigateur', '',
               'Job : `${{ github.run_id }}`', '', '```', texte.slice(-60000), '```'].join('\n');
-            const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', head: `${context.repo.owner}:${context.ref.replace('refs/heads/', '')}` });
-            for (const pr of prs.data) {
+            const numeros = [];
+            if (context.payload.pull_request?.number) numeros.push(context.payload.pull_request.number);
+            else {
+              const branche = context.ref.replace('refs/heads/', '');
+              const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', head: `${context.repo.owner}:${branche}` });
+              for (const pr of prs.data) numeros.push(pr.number);
+            }
+            for (const n of numeros) {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: pr.number, body: corps });
+                issue_number: n, body: corps });
             }
 
   python:
