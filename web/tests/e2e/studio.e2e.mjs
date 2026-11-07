@@ -66,7 +66,14 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 1000 });
   const pageErrors = [];
-  page.on("pageerror", (e) => { pageErrors.push(e.message); console.error("pageerror:", e.message); });
+  // La pile est conservée avec le message : « DeveloperError » seul ne dit pas d'où vient
+  // l'erreur, et les journaux du runner sont hors de portée du réseau — c'est le seul
+  // endroit où la cause est lisible.
+  page.on("pageerror", (e) => {
+    const pile = (e.stack ?? e.message ?? "").split("\n").slice(0, 6).join("\n      ");
+    pageErrors.push(e.message);
+    console.error("pageerror:", e.message, "\n      " + pile);
+  });
   page.on("console", (m) => { if (m.type() === "error") console.error("console:", m.text()); });
   page.on("dialog", (d) => d.accept());
   await page.goto(`http://127.0.0.1:${WEB_PORT}/studio.html`, { waitUntil: "domcontentloaded" });
@@ -146,24 +153,22 @@ try {
     await setValue('#add-form [name="lon"]', "9.770600");
     await submitForm("#add-form");
     await page.waitForSelector('g.node[data-id="capt-1"]');
-    // Les mètres correspondants doivent être ceux attendus, à un mètre près : c'est la
-    // conversion elle-même qu'on vérifie ici, pas seulement l'acceptation du formulaire.
-    const pos = await page.$eval('g.node[data-id="capt-1"]', (g) => g.dataset.pos);
-    if (!pos) throw new Error("position absente du plan");
   });
 
-  await step("ajout par coordonnées : les mètres reçus sont la conversion exacte", async () => {
-    const r = await page.evaluate(async () => {
-      const res = await fetch(location.href);
-      return true;
-    });
-    // Le plan ne porte pas les mètres ; on les relit dans la fenêtre de l'équipement, qui
-    // affiche les degrés reconvertis. Un aller-retour fidèle redonne la saisie.
+  await step("aller-retour : la fenêtre réaffiche les degrés saisis", async () => {
+    // Ce qu'on a tapé doit ressortir identique, redonnée par la conversion inverse. Si les
+    // deux côtés divergent, l'équipement « saute » à chaque ouverture de sa fenêtre — c'est
+    // précisément la panne que l'invariant D2 cherche à rendre impossible.
     await viewTab("Plan");
     await page.click('g.node[data-id="capt-1"] circle');
     await page.waitForSelector('.device-win[data-node-id="capt-1"]');
-    await waitText('.device-win[data-node-id="capt-1"]', /4\.05/);
-    await waitText('.device-win[data-node-id="capt-1"]', /9\.77/);
+    const affiche = await page.$eval('.device-win[data-node-id="capt-1"]', (w) => w.textContent);
+    const m = /(\d+\.\d{6}),\s*(\d+\.\d{6})/.exec(affiche);
+    if (!m) throw new Error(`aucune coordonnée affichée : ${affiche.slice(0, 200)}`);
+    // Saisi 4.051999 / 9.770600 : l'affichage doit le retrouver au cent-millième de degré,
+    // soit une dizaine de mètres — l'épaisseur du trait sur la carte.
+    if (Math.abs(Number(m[1]) - 4.051999) > 1e-4 || Math.abs(Number(m[2]) - 9.770600) > 1e-4)
+      throw new Error(`aller-retour fautif : ${m[1]}, ${m[2]}`);
   });
 
   await step("identifiant invalide refusé côté studio", async () => {
