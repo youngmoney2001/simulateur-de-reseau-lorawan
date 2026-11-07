@@ -207,20 +207,6 @@ try {
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }
-  // La carte 3D est la vue par défaut : le plan, seul endroit où l'on peut viser un nœud,
-  // doit être affiché explicitement.
-  await page.evaluate(() => {
-    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
-    if (b) b.click();
-  });
-  await page.waitForFunction(() => {
-    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
-    return b?.classList.contains("active");
-  }, { timeout: 10_000 });
-  await page.click('g.node[data-id="capteur-a"] circle');
-  await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
-  await pause(400);
-
   // Sans WebGL, Cesium ne peut rien peindre : le globe reste une surface unie, ce qui n'est
   // pas un défaut de l'application mais une limite de l'environnement. On le mesure pour ne
   // pas attribuer à tort un globe vide à un défaut de code.
@@ -254,6 +240,20 @@ try {
   console.log(`Carte 3D : vue active = ${cesium.vueActive} · zone ${cesium.zoneVisible ? "visible" : "masquée"}` +
     ` · toile = ${cesium.toile}`);
   if (cesium.indice) console.log(`Carte 3D : ${cesium.indice}`);
+
+  // La carte 3D est la vue par défaut : le plan, seul endroit où l'on peut viser un nœud,
+  // doit être affiché explicitement.
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    if (b) b.click();
+  });
+  await page.waitForFunction(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    return b?.classList.contains("active");
+  }, { timeout: 10_000 });
+  await page.click('g.node[data-id="capteur-a"] circle');
+  await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
+  await pause(400);
 
   for (const largeur of [1400, 1180, 900, 760]) {
     await page.setViewport({ width: largeur, height: 1000 });
