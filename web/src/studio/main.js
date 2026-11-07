@@ -33,6 +33,7 @@ const state = {
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
+  mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
   view: "map",      // vue courante : carte 3D (defaut) ou plan 2D
 };
 
@@ -843,11 +844,14 @@ function ensureMap() {
     state.map = construireCarte();
   } catch (err) {
     state.mapFailed = true;
+    // La raison est conservée et affichée : un repli silencieux empêcherait de savoir si la
+    // carte est absente par limite de l'environnement ou par défaut de notre code.
+    state.mapError = err instanceof Error ? err.message : String(err);
     console.error("carte 3D indisponible :", err);
     if (state.view === "map") showView("plan");
     const note = $("map-hint");
     if (note) note.textContent =
-      "Carte 3D indisponible sur ce navigateur (WebGL requis). Le plan 2D reste utilisable.";
+      `Carte 3D indisponible : ${state.mapError}. Le plan 2D reste utilisable.`;
     return null;
   }
   return state.map;

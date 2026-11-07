@@ -239,17 +239,20 @@ try {
     const zone = document.querySelector("#cesium");
     const toile = zone?.querySelector("canvas");
     const onglet = [...document.querySelectorAll(".view-tab")].find((e) => e.classList.contains("active"));
+    const indice = document.querySelector("#map-hint");
     return {
       vueActive: onglet?.textContent.trim() ?? "aucune",
       zonePresente: Boolean(zone),
       zoneVisible: zone ? !zone.hidden : false,
       toile: toile ? `${toile.width}x${toile.height}` : "aucune",
+      indice: indice && !indice.hidden ? indice.textContent.replace(/\s+/g, " ").trim() : "",
     };
   });
   console.log(`WebGL : ${webgl.disponible ? "disponible" : "ABSENT"}` +
     (webgl.disponible ? ` (${webgl.fournisseur} / ${webgl.rendu})` : ""));
   console.log(`Carte 3D : vue active = ${cesium.vueActive} · zone ${cesium.zoneVisible ? "visible" : "masquée"}` +
     ` · toile = ${cesium.toile}`);
+  if (cesium.indice) console.log(`Carte 3D : ${cesium.indice}`);
 
   for (const largeur of [1400, 1180, 900, 760]) {
     await page.setViewport({ width: largeur, height: 1000 });
