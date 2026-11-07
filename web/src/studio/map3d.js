@@ -97,6 +97,11 @@ export function createMap3D(container, onPick) {
   // avant que la position ne soit envoyée au serveur. Sans lui, on lâche à l'aveugle.
   const fantome = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
 
+  // Repère de zone : l'ancre géographique du réseau. Elle était invisible, alors que c'est
+  // le point auquel tout est rattaché — on voyait les équipements sans voir ce qui les fixe
+  // au sol. On trace un cercle à l'échelle du réseau, et une croix au centre.
+  const zone = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+
   let origine = { lat: 4.0511, lon: 9.7679 };
 
   // Les équipements affichés, gardés pour retrouver lequel est sous le curseur. On les
@@ -293,6 +298,59 @@ export function createMap3D(container, onPick) {
       ignorerClicJusqua = Date.now() + Math.max(0, dureeMs);
     },
 
+    /**
+     * Trace l'ancre de la zone : un cercle à l'échelle du réseau et une croix au centre.
+     *
+     * @param {number} lat @param {number} lon
+     * @param {number} porteeM rayon représentant l'étendue du réseau, en mètres
+     */
+    setZone(lat, lon, porteeM = 300) {
+      zone.removeAll();
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const centre = Cesium.Cartesian3.fromDegrees(lon, lat);
+      const rayon = Math.max(60, porteeM);
+
+      // Le cercle : 96 segments, comme `coverage_ring` du serveur, pour rester rond même
+      // sur plusieurs kilomètres.
+      const anneau = [];
+      for (let i = 0; i <= 96; i++) {
+        const a = (i / 96) * Math.PI * 2;
+        const d = toLonLat(Math.cos(a) * rayon, Math.sin(a) * rayon, { lat, lon });
+        anneau.push(Cesium.Cartesian3.fromDegrees(d.lon, d.lat));
+      }
+      zone.add({
+        positions: anneau,
+        width: 2,
+        material: Cesium.Material.fromType("Color", {
+          color: Cesium.Color.fromCssColorString("#ffffff").withAlpha(0.55),
+        }),
+      });
+
+      // La croix : elle marque le point exact, que le cercle seul laisserait au centre d'un
+      // disque sans le désigner.
+      const b = Math.max(12, rayon * 0.06);
+      for (const [dx, dy] of [[b, 0], [-b, 0]]) {
+        const d = toLonLat(dx, dy, { lat, lon });
+        zone.add({
+          positions: [centre, Cesium.Cartesian3.fromDegrees(d.lon, d.lat)],
+          width: 3,
+          material: Cesium.Material.fromType("Color", {
+            color: Cesium.Color.fromCssColorString("#ff9f1c"),
+          }),
+        });
+      }
+      for (const [dx, dy] of [[0, b], [0, -b]]) {
+        const d = toLonLat(dx, dy, { lat, lon });
+        zone.add({
+          positions: [centre, Cesium.Cartesian3.fromDegrees(d.lon, d.lat)],
+          width: 3,
+          material: Cesium.Material.fromType("Color", {
+            color: Cesium.Color.fromCssColorString("#ff9f1c"),
+          }),
+        });
+      }
+    },
+
     /** À appeler quand la carte devient visible : elle n'a pas de taille quand elle est masquée. */
     resize() {
       recaler();
@@ -301,6 +359,7 @@ export function createMap3D(container, onPick) {
     destroy() {
       observateur?.disconnect();
       fantome.removeAll();
+      zone.removeAll();
       gestionnaire.destroy?.();
       viewer.destroy?.();
     },

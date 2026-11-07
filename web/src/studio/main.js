@@ -33,6 +33,7 @@ const state = {
   result: null,      // dernière notation
   drag: null,
   busy: false,
+  choixZone: false,  // le prochain clic sur la carte déplacera l'ancre de la zone
   events: [],        // evenements du run courant (inspecteur de trames)
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
@@ -917,16 +918,51 @@ function markTokenAutomatic() {
 // Le plan travaille en mètres, la carte 3D en latitude/longitude. Ce point d'ancrage est ce
 // qui permet de situer les résultats du studio ; sans lui, la carte retombe sur un exemple.
 const ORIGIN_KEY = "lsim-origin";
+
+/**
+ * Coordonnées de la zone, telles que saisies dans le champ unique.
+ *
+ * L'analyse est celle de `geo.js`, déjà éprouvée : elle accepte « 4.0511, 9.7679 »,
+ * « 4,0511 9,7679 », « 4.0511° N, 9.7679° E », avec ou sans espace après la virgule. Deux
+ * champs `number` séparés, comme c'était le cas, refusaient tout collage depuis une carte —
+ * alors que c'est ainsi qu'on relève un lieu.
+ *
+ * @returns {{lat: number, lon: number} | null} null si le champ est vide ou illisible
+ */
 function readOrigin() {
-  const lat = Number($("origin-lat").value);
-  const lon = Number($("origin-lon").value);
-  return Number.isFinite(lat) && Number.isFinite(lon)
-    && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 ? { lat, lon } : null;
+  return lireCoordonnees($("origin-coords").value);
 }
+
 function writeOrigin(o) {
   if (!o) return;
-  $("origin-lat").value = String(o.lat);
-  $("origin-lon").value = String(o.lon);
+  $("origin-coords").value = formaterCoordonnees(o.lat, o.lon);
+}
+
+/**
+ * Le champ est-il dans un état qui doit retenir l'attention ?
+ * Vide ou illisible, la zone est perdue : tous les équipements seraient alors ancrés
+ * nulle part. On le dit au lieu de laisser un champ rouge sans explication.
+ */
+function refreshOriginState() {
+  const etat = $("origin-state");
+  if (!etat) return;
+  const brut = $("origin-coords").value.trim();
+  if (!brut) {
+    etat.textContent = "aucune zone : cliquez sur la carte ou saisissez des coordonnées";
+    etat.classList.add("bad");
+    return;
+  }
+  const o = readOrigin();
+  if (!o) {
+    etat.textContent = "coordonnées illisibles : deux nombres attendus";
+    etat.classList.add("bad");
+    return;
+  }
+  const nb = state.topo?.nodes?.length ?? 0;
+  etat.textContent = nb
+    ? `zone ancrée ici · ${nb} équipement(s) suivent l'ancre`
+    : "zone ancrée ici";
+  etat.classList.remove("bad");
 }
 // Les coordonnées demandées sont relatives à l'origine de la zone : le dire évite de saisir
 // un lieu au hasard en croyant qu'il sera converti.
@@ -982,14 +1018,46 @@ function ensureMap() {
 
 function construireCarte() {
   return createMap3D($("cesium"), (lat, lon) => {
-    // Un clic pose l'origine de la zone : c'est le premier des deux moyens de la choisir.
-    writeOrigin({ lat: Math.round(lat * 1e5) / 1e5, lon: Math.round(lon * 1e5) / 1e5 });
-    sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(readOrigin()));
-    refreshMapLink();
-    syncMap();
-    $("map-hint").textContent =
-      `Origine : ${readOrigin().lat.toFixed(5)}, ${readOrigin().lon.toFixed(5)} — cliquez à nouveau pour la déplacer.`;
+    // Un clic ne déplace la zone que si le geste a été armé. Déplacer l'ancre déplace **tout
+    // le réseau** (décision D3) : un clic égaré, ou un clic pour simplement regarder,
+    // n'a pas à produire un tel effet. Le bouton « Choisir la zone » arme le coup suivant.
+    if (!state.choixZone) return;
+    desarmerChoixZone();
+    // Arrondi au mètre : au-delà, l'affichage donne une précision que la conversion
+    // mètres ↔ degrés ne porte pas réellement à cette échelle.
+    appliquerZone({ lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 });
+    const nb = state.topo?.nodes?.length ?? 0;
+    if (nb) {
+      // Le dire : c'est un changement lourd de conséquences, et il vient de se produire.
+      const note = $("map-hint");
+      if (note) note.textContent =
+        `Zone déplacée — ${nb} équipement(s) ont suivi, la géométrie du réseau est conservée.`;
+    }
   });
+}
+
+// --- Choisir la zone -------------------------------------------------------------------------
+// Le bouton arme le clic suivant. Sans cette étape, poser un équipement ou simplement
+// regarder la carte risquait de déplacer l'ancre, donc le réseau entier.
+
+function armerChoixZone() {
+  state.choixZone = true;
+  $("pick-origin").classList.add("active");
+  $("cesium").classList.add("choix-zone");
+  const hint = $("map-hint");
+  if (hint) hint.textContent = "Cliquez sur la carte à l'endroit où installer la zone — Échap pour annuler.";
+  document.addEventListener("keydown", toucheChoixZone);
+}
+
+function desarmerChoixZone() {
+  state.choixZone = false;
+  $("pick-origin").classList.remove("active");
+  $("cesium").classList.remove("choix-zone");
+  document.removeEventListener("keydown", toucheChoixZone);
+}
+
+function toucheChoixZone(ev) {
+  if (ev.key === "Escape") desarmerChoixZone();
 }
 
 // Aligne la carte sur l'état : origine, équipements, sélection.
@@ -999,6 +1067,7 @@ function syncMap(fly = false) {
   if (!carte) return;            // carte indisponible : le plan 2D a pris le relais
   const o = readOrigin();
   carte.setOrigin(o);
+  if (o) carte.setZone(o.lat, o.lon, porteeDesEquipements());
   carte.setNodes(state.topo?.nodes ?? [], state.selected);
   // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
   // encore la planète entière. La seconde compte autant que la première — c'est elle qui
@@ -1007,11 +1076,14 @@ function syncMap(fly = false) {
     state.mapNeedsFly = false;
     carte.flyToOrigin(porteeDesEquipements());
   }
-  // Les deux gestes de la phase H sont annoncés ici : sans ce rappel, rien n'indique que
-  // la palette se glisse sur la carte, et la pose se fait par le seul formulaire.
-  $("map-hint").textContent = (state.topo?.nodes?.length ?? 0) === 0
-    ? "Cliquez pour placer l'origine de la zone, ou glissez un équipement depuis la palette."
-    : `Origine : ${o.lat.toFixed(5)}, ${o.lon.toFixed(5)} · glissez un équipement depuis la palette pour le poser, tirez-le pour le déplacer.`;
+  // L'indice est réécrit à chaque synchronisation, sauf pendant un choix de zone en cours :
+  // il porte alors la consigne, qu'il ne faut pas effacer sous prétexte de rafraîchir.
+  if (state.choixZone) return;
+  const nb = state.topo?.nodes?.length ?? 0;
+  const lieu = o ? `${o.lat.toFixed(5)}, ${o.lon.toFixed(5)}` : "aucune zone";
+  $("map-hint").textContent = nb === 0
+    ? `Zone : ${lieu} — « Choisir la zone » pour cliquer ailleurs, ou glissez un équipement depuis la palette.`
+    : `Zone : ${lieu} · glissez un équipement depuis la palette pour le poser, tirez-le pour le déplacer.`;
 }
 
 // Encombrement du réseau, en mètres : sert à cadrer la caméra.
@@ -1438,18 +1510,44 @@ try {
   const o = JSON.parse(sessionStorage.getItem(ORIGIN_KEY) ?? "null");
   if (o && Number.isFinite(o.lat) && Number.isFinite(o.lon)) writeOrigin(o);
 } catch { /* valeur illisible : on garde le défaut */ }
-for (const id of ["origin-lat", "origin-lon"]) {
-  $(id).addEventListener("change", () => {
-    const o = readOrigin();
-    refreshAddHint();
-    if (o) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
-    refreshMapLink();
-    // L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu.
-    syncMap(true);
-  });
+// L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu (D3).
+function appliquerZone(o, { garder = true, voler = true } = {}) {
+  if (!o) return;
+  if (garder) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
+  refreshAddHint();
+  refreshOriginState();
+  refreshMapLink();
+  syncMap(voler);
 }
+
+$("origin-coords").addEventListener("change", () => {
+  const o = readOrigin();
+  refreshAddHint();
+  refreshOriginState();
+  if (!o) return;                      // saisie illisible : on ne déplace rien
+  appliquerZone(o);
+});
+// À la frappe aussi, pour que le message d'état suive sans attendre la sortie du champ.
+$("origin-coords").addEventListener("input", refreshOriginState);
+
+// Choisir la zone au clic : on arme le geste au lieu de laisser chaque clic déplacer l'ancre.
+$("pick-origin").addEventListener("click", () => {
+  if (state.choixZone) { desarmerChoixZone(); syncMap(); return; }
+  // La carte doit être visible pour qu'on puisse y cliquer.
+  if (state.view !== "map") showView("map");
+  armerChoixZone();
+});
+
+// Recentrer : après avoir exploré la carte, revenir sur la zone sans la déplacer.
+$("recenter").addEventListener("click", () => {
+  const o = readOrigin();
+  if (!o) return;
+  if (state.view !== "map") showView("map");
+  state.map?.flyToOrigin(porteeDesEquipements());
+});
 refreshMapLink();
 refreshAddHint();
+refreshOriginState();
 
 (async () => {
   // 1. jeton déjà saisi lors d'une visite précédente

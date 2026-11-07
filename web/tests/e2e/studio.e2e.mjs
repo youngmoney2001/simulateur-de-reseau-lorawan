@@ -235,6 +235,8 @@ try {
     return { x_m: n.x_m, y_m: n.y_m };
   };
 
+  const lireZone = () => page.$eval("#origin-coords", (i) => i.value);
+
   const compterEquipements = async () => {
     const sid = await page.$eval("#session-select", (s) => s.value);
     const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
@@ -344,6 +346,65 @@ try {
     if (nbApres <= nbAvant)
       throw new Error(`aucun équipement créé : ${nbAvant} -> ${nbApres}`);
     steps[steps.length - 1] = `ok   glisser depuis la palette : ${nbAvant} -> ${nbApres} équipement(s)`;
+  });
+
+  // Choix de la zone. Placé en fin de scénario : déplacer l'ancre déplace tout le réseau
+  // (décision D3), ce qui casserait les étapes de simulation écrites pour un réseau précis.
+  await step("choisir la zone : un clic non armé ne déplace pas l'ancre", async () => {
+    await viewTab("Carte");
+    await new Promise((r) => setTimeout(r, 2500));
+    const avant = await lireZone();
+    const canvas = await page.$("#cesium canvas");
+    const dst = await canvas.boundingBox();
+
+    // Déplacer l'ancre déplace **tout le réseau**. Un clic pour regarder, ou un clic
+    // égaré, ne doit donc rien produire : c'est la raison d'être du geste armé.
+    await page.mouse.click(dst.x + dst.width * 0.35, dst.y + dst.height * 0.42);
+    await new Promise((r) => setTimeout(r, 900));
+    const apresClicNu = await lireZone();
+    if (apresClicNu !== avant)
+      throw new Error(`un clic non armé a déplacé la zone : « ${avant} » -> « ${apresClicNu} »`);
+  });
+
+  await step("choisir la zone : le geste armé pose l'ancre au point cliqué", async () => {
+    const avant = await lireZone();
+    await page.click("#pick-origin");
+    await page.waitForFunction(
+      () => document.getElementById("pick-origin").classList.contains("active"),
+      { timeout: 10_000 });
+    const canvas = await page.$("#cesium canvas");
+    const dst = await canvas.boundingBox();
+    await page.mouse.click(dst.x + dst.width * 0.62, dst.y + dst.height * 0.58);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const apres = await lireZone();
+    if (apres === avant) throw new Error("le clic armé n'a pas déplacé la zone");
+    if (!/^-?\d+\.\d+,\s?-?\d+\.\d+$/.test(apres))
+      throw new Error(`zone écrite dans un format inattendu : « ${apres} »`);
+    // Le geste est à usage unique : il se désarme après le clic.
+    await page.waitForFunction(
+      () => !document.getElementById("pick-origin").classList.contains("active"),
+      { timeout: 10_000 });
+  });
+
+  await step("la zone se saisit en collant une paire de coordonnées", async () => {
+    // Le geste décrit par l'utilisateur : copier un point depuis une carte. Deux champs
+    // `number` séparés, comme c'était le cas, refusaient ce collage.
+    await setValue("#origin-coords", "4.060000, 9.780000");
+    await page.$eval("#origin-coords", (i) =>
+      i.dispatchEvent(new Event("change", { bubbles: true })));
+    await new Promise((r) => setTimeout(r, 800));
+    const lu = await lireZone();
+    if (!/^4\.060000,\s?9\.780000$/.test(lu))
+      throw new Error(`zone non retenue : « ${lu} »`);
+    // Et la forme française, avec la virgule décimale.
+    await setValue("#origin-coords", "4,0511 9,7679");
+    await page.$eval("#origin-coords", (i) =>
+      i.dispatchEvent(new Event("change", { bubbles: true })));
+    await new Promise((r) => setTimeout(r, 800));
+    const lu2 = await lireZone();
+    if (!/^4\.051100,\s?9\.767900$/.test(lu2))
+      throw new Error(`virgule décimale non traitée : « ${lu2} »`);
   });
 
   await step("suppression de la session", async () => {

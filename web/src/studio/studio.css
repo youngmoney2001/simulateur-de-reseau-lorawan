@@ -59,6 +59,26 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
   border:1px solid var(--menu-line); border-radius:4px; background:#fff; }
 .menubar a.applink:hover { background:#d9e0e9; }
 
+/* --- Choisir la zone ------------------------------------------------------------------ */
+/* L'ancre du réseau, saisie en un seul champ : on colle ce qu'une carte nous donne. */
+.origin { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.origin label { display:flex; align-items:center; gap:5px; }
+.origin input { font-size:12px; padding:3px 6px; font-variant-numeric:tabular-nums; }
+.origin #origin-state { font-size:11px; max-width:230px; }
+/* Le champ est illisible ou vide : le réseau serait ancré nulle part, il faut le dire. */
+.origin #origin-state.bad { color:#a40e26; font-weight:600; }
+
+/* Le geste armé se voit : le curseur dit qu'on s'apprête à poser quelque chose, et le
+   bouton reste enfoncé jusqu'au clic. Sans ce retour, rien n'indique qu'un clic va
+   déplacer l'ancre — donc tout le réseau. */
+.choix-zone canvas { cursor:crosshair; }
+/* Ces boutons sont dans la barre de menu, pas dans la barre verticale : `.tool` y
+   empilerait le texte sous une icône absente, en 10 px. */
+.zone-btn { font-size:12px; padding:3px 9px; border:1px solid var(--menu-line);
+  border-radius:4px; background:#fff; color:#3d4a58; cursor:pointer; }
+.zone-btn:hover { background:#d9e0e9; }
+.zone-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+
 /* --- Espace de travail : le plan domine ----------------------------------------------- */
 .workspace { flex:1 1 auto; display:flex; min-height:0; gap:0; }
 /* --- Vues : carte 3D et plan 2D ------------------------------------------------------- */
