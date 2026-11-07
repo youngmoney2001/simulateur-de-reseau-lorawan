@@ -272,11 +272,29 @@ Conséquence directe sur le défaut **D2** : la console n'a plus de hauteur plaf
 (`max-height: none`) et la fenêtre s'élargit à volonté. **Le caret d'erreur ne peut plus se
 décaler**, quelle que soit la taille de l'écran — ce que la colonne de 480 px ne garantissait pas.
 
-**Le test e2e a été mis à jour** pour cette structure à onglets et pour les fenêtres flottantes
-(sélection de l'onglet avant chaque étape, attente de `.device-win`). Il ne peut pas être exécuté
-ici — aucun navigateur n'est installé — et la CI ne lance aucun test web. Les phases A–E sont donc
-vérifiées par la syntaxe, le build, la résolution des identifiants et les 29 tests Node,
-**mais n'ont pas été vues dans un navigateur**.
+### Vérification dans un navigateur : acquise
+
+La dette du §8.7 de la spec est **levée**. Un job `web` a été ajouté à la CI : il compile le cœur,
+installe Chromium et exécute le test de bout en bout contre le vrai serveur API. **Les phases A–E
+sont donc désormais validées dans un navigateur réel**, plus seulement par le build.
+
+Le test couvre l'ensemble de la boucle : connexion, ajout d'équipements, rejet d'un identifiant
+invalide, configuration en ligne de commande avec erreur au caret, refus d'un SF hors bornes,
+glisser-déposer persisté côté API, simulation, animation (horloge, trames, journal), exercice
+(indice pénalisé, notation, tentatives) et suppression de session.
+
+**Dès son premier passage, ce test a trouvé trois défauts que rien d'autre ne pouvait voir** :
+
+| Défaut | Nature |
+|---|---|
+| `renderDeviceInfo(node)` appelé sans corps de fenêtre après chaque commande CLI | **Bug d'application** : cinq erreurs de page par série de cinq commandes |
+| Dix-huit sélecteurs désignant `#device-body`, renommé en phase E | Refactorisation incomplète |
+| Onglet cliqué sans préciser la fenêtre | Ambiguïté révélée par l'ouverture simultanée de deux fenêtres |
+
+Deux remarques d'exploitation. Le journal d'un job est hébergé hors de portée de l'outillage de
+développement : en cas d'échec, il est publié en commentaire de la pull request pour rester
+lisible. Et le paquet déclarant `dependencies: []`, la CI doit installer l'extra `[test]` — sans
+quoi le serveur API échoue à l'import avant même que le navigateur ne démarre.
 
 La phase C est la seule sensible : la console garde le focus et l'historique par équipement, et le
 passage d'un panneau fixe à une fenêtre flottante touche `renderConsole`, `renderDeviceInfo` et
