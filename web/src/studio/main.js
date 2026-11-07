@@ -12,6 +12,7 @@ import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
 // toute confusion entre les deux conversions.
 import { createMap3D, toMeters as degreesToMeters } from "./map3d.js";
+import { drawDevice, DEVICE_SPECS } from "./device-art.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -446,6 +447,9 @@ function cliAbsentMessage(kind) {
 }
 
 // Infos seules (rafraîchies après une commande sans reconstruire la console, qui garde le focus).
+// Vue physique de l'équipement : son illustration, puis le panneau de ce qu'il est
+// réellement. Rien n'est avancé ici qui ne soit simulé ; les ports et voyants décrivent le
+// matériel représenté, ils ne prétendent pas offrir des réglages inexistants.
 function renderDeviceInfo(node, body) {
   // La zone n'existe que dans l'onglet Physique. Ailleurs (CLI, Config), il n'y a rien à
   // rafraîchir : on sort au lieu de construire un bloc fantôme, ce qui arrive quand une
@@ -453,9 +457,50 @@ function renderDeviceInfo(node, body) {
   const info = body?.querySelector(".device-info");
   if (!info) return;
   clear(info);
+  const spec = DEVICE_SPECS[node.kind];
   const st = stateOf(node.id);
-  info.append(el("p", { class: "muted", text: `${KIND_LABEL[node.kind]} · x ${node.x_m} m · y ${node.y_m} m` }));
-  if (st) info.append(el("p", { class: "muted", text: `Nom d'hôte : ${st.hostname} · ${st.configured ? "configuré" : "non configuré"}${st.region ? " · " + st.region : ""}` }));
+
+  info.append(el("div", { class: "phys-top" },
+    el("div", { class: "phys-art" }, drawDevice(node.kind)),
+    el("div", { class: "phys-id" },
+      el("p", { class: "phys-role", text: spec?.role ?? KIND_LABEL[node.kind] }),
+      el("p", { class: "muted", text: `Identifiant : ${node.id}` }),
+      el("p", { class: "muted", text: `Type : ${KIND_LABEL[node.kind]}` }),
+    ),
+  ));
+
+  // État réellement connu du serveur, et rien de plus.
+  const etat = el("dl", { class: "phys-etat" });
+  const ligne = (titre, valeur) => {
+    etat.append(el("dt", { text: titre }), el("dd", { text: valeur }));
+  };
+  ligne("Position", `${node.x_m} m, ${node.y_m} m`);
+  if (st) {
+    ligne("Nom d'hôte", st.hostname);
+    ligne("Configuration", st.configured ? "configuré" : "non configuré");
+    if (st.region) ligne("Plan régional", st.region);
+  }
+  info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
+
+  // Ports, tels qu'illustrés : la description doit correspondre au dessin.
+  if (spec?.ports?.length) {
+    const liste = el("ul", { class: "phys-ports" });
+    for (const p of spec.ports) {
+      liste.append(el("li", {},
+        el("span", { class: "phys-nom", text: p.label }),
+        el("span", { class: "muted", text: p.note ?? "" })));
+    }
+    info.append(el("h3", { class: "phys-titre", text: "Connectique" }), liste);
+  }
+  if (spec?.leds?.length) {
+    const liste = el("ul", { class: "phys-ports" });
+    for (const l of spec.leds) {
+      liste.append(el("li", {},
+        el("span", { class: "phys-nom", text: l.label }),
+        el("span", { class: "muted", text: l.etat ?? "" })));
+    }
+    info.append(el("h3", { class: "phys-titre", text: "Voyants" }), liste);
+  }
 }
 
 function renderConsole(node, body) {
@@ -939,14 +984,16 @@ function selectObservationTab(name) {
 // L'onglet est propre à chaque fenêtre (voir syncDeviceTabs) : plus d'état global.
 
 // --- Palette d'équipements (bas à gauche) ----------------------------------------------------
+// Le dessin réel remplace l'icône CSS : la palette montre l'équipement tel qu'il apparaîtra,
+// ce qui la rend reconnaissable au lieu d'obliger à lire les étiquettes.
 const PALETTE = [
-  { cat: "Passerelles", icon: "icon-border", models: [
-      { kind: "border", label: "Passerelle frontière", icon: "icon-border" },
-      { kind: "relay",  label: "Passerelle relais",    icon: "icon-relay" } ] },
-  { cat: "Capteurs", icon: "icon-sensor", models: [
-      { kind: "sensor", label: "Capteur", icon: "icon-sensor" } ] },
-  { cat: "Serveur", icon: "icon-server", models: [
-      { kind: "server", label: "Serveur de réseau", icon: "icon-server" } ] },
+  { cat: "Passerelles", models: [
+      { kind: "border", label: "Passerelle frontière" },
+      { kind: "relay",  label: "Passerelle relais" } ] },
+  { cat: "Capteurs", models: [
+      { kind: "sensor", label: "Capteur" } ] },
+  { cat: "Serveur", models: [
+      { kind: "server", label: "Serveur de réseau" } ] },
 ];
 
 function renderPalette() {
@@ -958,7 +1005,8 @@ function renderPalette() {
       models.append(el("button", {
         type: "button", class: "tool", title: m.label,
         onclick: () => addFromPalette(m.kind),
-      }, el("span", { class: "device-icon " + m.icon }), document.createTextNode(m.label)));
+      }, el("span", { class: "tool-art" }, drawDevice(m.kind)),
+         el("span", { class: "tool-label", text: m.label })));
     }
     for (const b of cats.children) b.classList.toggle("active", b === active);
   };
@@ -966,7 +1014,8 @@ function renderPalette() {
     cats.append(el("button", {
       type: "button", class: "tool",
       onclick: () => draw(cat, cats.children[i]),
-    }, el("span", { class: "device-icon " + cat.icon }), document.createTextNode(cat.cat)));
+    }, el("span", { class: "tool-art" }, drawDevice(cat.models[0].kind)),
+       el("span", { class: "tool-label", text: cat.cat })));
   });
   if (cats.children.length) draw(PALETTE[0], cats.children[0]);
 }

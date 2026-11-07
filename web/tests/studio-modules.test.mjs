@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import { createClient, ApiError } from "../src/studio/api.js";
 import {
   planBounds, toScreen, toMeters, validateNewNode, validateSensor, sensorFormFrom,
-  gridStep, PLAN_MIN_SPAN_M,
+  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL,
 } from "../src/studio/topology.js";
+// Seules les données sont testées ici (le dessin exige le DOM). Ce sont elles qui engagent
+// la conformité de ce que l'interface annonce.
+import { DEVICE_SPECS, DEVICE_KINDS, hasArt } from "../src/studio/device-art.js";
 import { createHistory } from "../src/studio/console.js";
 import { gatewayRows, formatMs, scoreLine, criteriaRows } from "../src/studio/results.js";
 
@@ -85,6 +88,40 @@ test("le pas de grille reste un palier 1, 2 ou 5 et cadre entre 5 et 12 lignes",
   // Entrées dégénérées : jamais NaN, sinon le rendu produit des coordonnées invalides.
   for (const mauvais of [0, -5, NaN, Infinity]) {
     assert.ok(Number.isFinite(gridStep(mauvais)), `pas non fini pour ${mauvais}`);
+  }
+});
+
+test("chaque type d'équipement a une illustration et une description complète", () => {
+  // Un type sans illustration retomberait sur un dessin d'emprunt : on le refuse.
+  for (const kind of Object.keys(KIND_LABEL)) {
+    assert.ok(hasArt(kind), `${kind} n'a pas d'illustration propre`);
+    const s = DEVICE_SPECS[kind];
+    assert.ok(s, `${kind} n'a pas de description`);
+    assert.ok(s.role && s.role.length > 10, `${kind} : rôle trop vague`);
+    assert.ok(s.ports.length > 0, `${kind} : aucun port déclaré`);
+    assert.ok(s.leds.length > 0, `${kind} : aucun voyant déclaré`);
+    for (const p of s.ports) assert.ok(p.id && p.label, `${kind} : port incomplet`);
+    for (const l of s.leds) assert.ok(l.id && l.label, `${kind} : voyant incomplet`);
+  }
+  assert.deepEqual([...DEVICE_KINDS].sort(), Object.keys(KIND_LABEL).sort());
+});
+
+test("les fenêtres n'annoncent aucun réglage que le moteur ne simule pas", () => {
+  // Règle D6 de la conception : on peut montrer, jamais proposer à la saisie, ce qui n'est
+  // pas calculé. Ce test est la barrière qui empêche de glisser vers une interface décorative
+  // qui mentirait sur ses capacités.
+  const interdits = [/\bADR\b/i, /classe\s+[ABC]/i, /\bOTAA\b/i, /\bABP\b/i,
+    /\bcoding rate\b/i, /largeur de bande/i, /\bbandwidth\b/i];
+  for (const kind of DEVICE_KINDS) {
+    const s = DEVICE_SPECS[kind];
+    const champs = [s.role, ...s.ports.map((p) => `${p.label} ${p.note ?? ""}`),
+      ...s.leds.map((l) => `${l.label} ${l.etat ?? ""}`)];
+    for (const texte of champs) {
+      for (const motif of interdits) {
+        assert.ok(!motif.test(texte),
+          `${kind} annonce « ${texte} », qui n'est pas simulé par le moteur`);
+      }
+    }
   }
 });
 
