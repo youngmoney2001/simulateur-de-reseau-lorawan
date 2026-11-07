@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   core:
@@ -59,12 +60,33 @@ jobs:
       - name: Chromium
         run: cd web && npx puppeteer browsers install chrome
       - name: Studio dans un vrai navigateur
+        id: e2e
         run: |
           cd web
           CHROME=$(find "$HOME/.cache/puppeteer" -type f -name chrome -perm -u+x | head -1)
           if [ -z "$CHROME" ]; then echo "Chromium introuvable"; exit 1; fi
           echo "Chromium : $CHROME"
-          CHROME_PATH="$CHROME" node tests/e2e/studio.e2e.mjs
+          set -o pipefail
+          CHROME_PATH="$CHROME" node tests/e2e/studio.e2e.mjs 2>&1 | tee ../e2e.log
+
+      # Le journal du runner est hébergé hors de portée de l'outillage : on le publie sur la
+      # pull request pour qu'il reste lisible après l'exécution.
+      - name: Publier le journal du navigateur en cas d'échec
+        if: failure() && steps.e2e.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let texte = '';
+            try { texte = fs.readFileSync('e2e.log', 'utf8'); } catch (e) { texte = '(journal introuvable)'; }
+            const corps = ['### Échec du studio dans le navigateur', '',
+              'Job : `${{ github.run_id }}`', '', '```', texte.slice(-60000), '```'].join('\n');
+            const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', head: `${context.repo.owner}:${context.ref.replace('refs/heads/', '')}` });
+            for (const pr of prs.data) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body: corps });
+            }
 
   python:
     runs-on: ubuntu-24.04
