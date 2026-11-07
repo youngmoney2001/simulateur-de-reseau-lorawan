@@ -262,6 +262,7 @@ function openDeviceWindow(nodeId) {
       });
     }
     elWin.querySelector(".close").addEventListener("click", () => closeDeviceWindow(nodeId));
+    wireTabs(elWin.querySelector(".device-tabs"));
     makeWindowDraggable(elWin, elWin.querySelector(".device-win-head"));
     $("windows").append(elWin);
     placeWindow(w);
@@ -270,6 +271,9 @@ function openDeviceWindow(nodeId) {
   w.el.style.zIndex = String(++windowZ);
   state.selected = nodeId;
   renderDevice();
+  // Le clavier suit la fenêtre ouverte : on y place le focus sans voler celui d'une console
+  // en cours de saisie, sinon taper une commande deviendrait impossible.
+  if (!w.body.querySelector("input:focus")) w.el.querySelector(".device-tabs .dtab")?.focus();
 }
 
 function closeDeviceWindow(nodeId) {
@@ -789,6 +793,31 @@ function addFromPalette(kind) {
   f.requestSubmit();
 }
 
+// --- Accessibilité clavier -------------------------------------------------------------------
+// Les onglets suivent le motif ARIA « tablist » : les flèches parcourent les onglets, ce qui
+// évite de tabuler à travers chacun pour atteindre le suivant.
+function wireTabs(container) {
+  container.addEventListener("keydown", (ev) => {
+    const sens = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+    if (!sens) return;
+    const onglets = [...container.querySelectorAll('[role="tab"]')];
+    const i = onglets.indexOf(document.activeElement);
+    if (i < 0) return;
+    ev.preventDefault();
+    const suivant = onglets[(i + sens + onglets.length) % onglets.length];
+    suivant.focus();
+    suivant.click();
+  });
+}
+
+// Échap ferme la fenêtre d'équipement la plus récente : raccourci attendu d'une fenêtre.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || deviceWindows.size === 0) return;
+  const cible = ev.target.closest?.(".device-win");
+  const id = cible?.dataset.nodeId ?? [...deviceWindows.keys()].at(-1);
+  if (id && deviceWindows.has(id)) { closeDeviceWindow(id); ev.preventDefault(); }
+});
+
 // --- Barre d'état ---------------------------------------------------------------------------
 function setStatus(text) {
   $("status-left").textContent = text;
@@ -808,6 +837,7 @@ $("delete-session").addEventListener("click", deleteSession);
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
 for (const b of document.querySelectorAll(".tab"))
   b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
+wireTabs(document.querySelector(".tabs"));
 // Les onglets d'équipement et la fermeture sont câblés par fenêtre (openDeviceWindow).
 $("windows").addEventListener("pointerdown", (ev) => {
   const win = ev.target.closest(".device-win");

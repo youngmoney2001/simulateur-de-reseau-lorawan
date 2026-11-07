@@ -171,13 +171,27 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .journal-row ul { margin:2px 0 4px 16px; padding:0; color:#546e7a; }
 
 /* --- Adaptatif ------------------------------------------------------------------------ */
+/* Sous 1180 px, la barre d'outils passe sous le plan et la palette au-dessus de l'observation :
+   le plan garde la priorité, comme dans Packet Tracer où l'espace de travail domine. */
 @media (max-width:1180px) {
+  body { height:auto; min-height:100vh; }
   .workspace { flex-direction:column; }
   .toolbar { flex-direction:row; flex:0 0 auto; border-left:none; border-top:1px solid var(--menu-line);
     margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; }
-  .plan-area { margin:8px; min-height:300px; }
-  .bottom-dock { flex-direction:column; flex:0 0 auto; max-height:none; }
+  .tool { flex-direction:row; gap:4px; font-size:11px; white-space:nowrap; }
+  .plan-area { margin:8px; min-height:320px; }
+  .bottom-dock { flex-direction:column; flex:0 0 auto; }
   .palette { flex:0 0 auto; }
-  .observation { min-height:240px; }
-  .device { right:8px; width:min(420px,calc(100vw - 16px)); }
+  .observation { min-height:260px; }
+  .device-win { max-width:calc(100vw - 16px); }
+  .statusbar { position:sticky; bottom:0; }
+}
+
+/* Écran étroit : le menu se replie et la palette se réduit à l'essentiel. */
+@media (max-width:820px) {
+  .menubar { flex-wrap:wrap; gap:8px; }
+  .menu { display:none; }
+  .palette { flex:0 0 auto; }
+  .modes { grid-template-columns:1fr; }
+  .plan-area { min-height:260px; }
 }
