@@ -58,9 +58,23 @@ const mesurer = () => {
     const s = getComputedStyle(e);
     return s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity) !== 0;
   };
-  const nom = (e) => e.id ? "#" + e.id
-    : e.tagName.toLowerCase() + (e.className && typeof e.className === "string"
-        ? "." + e.className.trim().split(/\s+/).slice(0, 2).join(".") : "");
+  const nom = (e) => {
+    const cls = e.className && typeof e.className === "string"
+      ? "." + e.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+    return e.tagName.toLowerCase() + cls + (e.id ? "#" + e.id : "");
+  };
+  // Un élément sans classe ni identifiant est introuvable dans le code : on remonte alors
+  // ses ancêtres. C'est le cas des nœuds injectés par Cesium, dont on ne connaît pas la
+  // provenance sans ce chemin.
+  const chemin = (e) => {
+    const bouts = [];
+    let n = e;
+    while (n && n !== document.body && bouts.length < 4) {
+      bouts.unshift(nom(n));
+      n = n.parentElement;
+    }
+    return bouts.join(" > ");
+  };
 
   // Luminance relative, formule WCAG, à partir d'une couleur « rgb(r, g, b) ».
   const lum = (couleur) => {
@@ -161,10 +175,16 @@ const mesurer = () => {
   // 5. cibles trop petites : l'atelier se pilote à la souris et au doigt (glisser-déposer,
   //    clic sur un équipement). Une cible de moins de 20 px est un défaut mesurable, pas
   //    une préférence de confort — viser juste devient un jeu de hasard.
+  //   Garde de taille nulle indispensable : un enfant d'un conteneur masqué a lui-même un
+  //   `display` calculé qui n'est pas « none », donc `vu` le laisse passer, mais son rectangle
+  //   est 0×0 car rien ne le rend. Sans cette garde, 19 éléments non rendus (l'écran de
+  //   lancement replié, le plein écran de Cesium) étaientsignalés comme trop petits — de
+  //   fausses alertes noyant le seul défaut réel.
   for (const e of document.querySelectorAll("button, select, input, a[href], [role=tab]")) {
     if (!vu(e)) continue;
     if (e.disabled) continue;
     const r = e.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;      // non rendu, pas trop petit
     if (r.width < 20 || r.height < 20) {
       ajouter("cible-trop-petite", e, `${Math.round(r.width)}x${Math.round(r.height)} (seuil 20)`);
     }
@@ -175,9 +195,13 @@ const mesurer = () => {
   //    titre). Fréquent dès qu'une commande n'est plus qu'une icône.
   for (const e of document.querySelectorAll("button, a[href], [role=tab]")) {
     if (!vu(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;      // non rendu : rien à nommer
     const texte = (e.textContent ?? "").trim();
-    const nom = e.getAttribute("aria-label") || e.getAttribute("title") || "";
-    if (!texte && !nom) ajouter("commande-sans-nom", e, "ni texte, ni aria-label, ni titre");
+    const libelle = e.getAttribute("aria-label") || e.getAttribute("title") || "";
+    if (!texte && !libelle) {
+      ajouter("commande-sans-nom", e, `ni texte, ni aria-label, ni titre — ${chemin(e)}`);
+    }
   }
 
   // 7. régions attendues présentes, visibles et dimensionnées
