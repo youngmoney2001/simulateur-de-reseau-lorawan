@@ -69,6 +69,7 @@ from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
 )
+from lsim.frame_view import frames_for_run
 
 log = logging.getLogger("lsim.api")
 
@@ -669,14 +670,17 @@ class RunService:
                 or (mesh_lost_total is not None
                     and sum(r.get("lost_mesh", 0) for r in rows) != mesh_lost_total)):
             raise RuntimeError("compteurs par dispositif et totaux ne concordent pas")
+        _run_obj = mt if job.multi else tr
+        _vues = frames_for_run(_run_obj, scenario)
         events_out = []
-        for ev in events:
+        for _i, ev in enumerate(events):
             events_out.append(TraceEvent(
                 seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
                 gateway_index=ev.gateway_index, outcome=ev.outcome,
                 hops=[{"from_id": h.from_id, "to_id": h.to_id, "t_ns": h.t_ns,
                        "freq_hz": h.freq_hz, "dr": h.dr, "rssi_dbm": h.rssi_dbm,
                        "outcome": h.outcome} for h in ev.hops],
+                frame=(_vues[_i].couches() if _vues[_i] is not None else None),
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total)

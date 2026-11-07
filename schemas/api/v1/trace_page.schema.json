@@ -83,6 +83,19 @@
           "title": "Device Index",
           "type": "integer"
         },
+        "frame": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame"
+        },
         "gateway_index": {
           "default": 0,
           "minimum": 0,
