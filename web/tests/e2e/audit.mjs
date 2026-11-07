@@ -178,8 +178,11 @@ try {
   browser = await puppeteer.launch({ executablePath: chrome, headless: true,
     // WebGL logiciel : sans lui Cesium ne peut pas créer son contexte, et le studio
     // retomberait sur le plan 2D sans que ce soit un défaut de l'application.
-    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process",
-           "--enable-unsafe-swiftshader", "--use-gl=swiftshader", "--ignore-gpu-blocklist"] });
+    // Ni --single-process ni --no-zygote : Cesium lance des web workers pour charger ses
+    // tuiles, et ces deux options les empêchent de démarrer, ce qui fait échouer
+    // l'initialisation du Viewer.
+    args: ["--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader",
+           "--use-gl=swiftshader", "--ignore-gpu-blocklist"] });
   const page = await browser.newPage();
   page.on("dialog", (d) => d.accept());
   await page.setViewport({ width: 1400, height: 1000 });
