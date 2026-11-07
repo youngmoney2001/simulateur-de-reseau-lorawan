@@ -19,3 +19,6 @@ build_*/
 # Studio precompile (produit par scripts/package_studio.sh) : artefact de build, jamais versionne
 
 python/lsim/web_dist/
+
+# Environnement virtuel de developpement (jamais versionne : cree par python -m venv)
+pyenv/
