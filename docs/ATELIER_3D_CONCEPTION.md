@@ -79,6 +79,23 @@ capture : l'événement nous atteint avant le canevas, et `stopPropagation` l'em
   tombait à des milliers de kilomètres de l'origine. `syncMap` recadre donc à la première
   apparition, pas seulement quand l'ancre change.
 
+### La conversion a changé de signature sans ses appelants
+
+En créant `geo.js` j'ai pris l'origine en un objet `{lat, lon}`, là où l'ancienne forme la
+prenait en deux nombres. Les huit appelants passaient encore **quatre** arguments : le
+troisième, un nombre, servait d'origine, `origine.lat` valait `undefined`, et la conversion
+rendait `NaN` **sans rien dire**. Le `NaN` remontait ensuite par deux chemins : `setNodes` le
+donnait à Cesium, qui levait « normalized result is not a number » et interrompait le
+rafraîchissement de toute l'interface ; et la fenêtre d'équipement affichait « NaN, NaN ».
+
+Trois remèdes, pas un seul : appelants corrigés ; `geo.js` refuse une origine inexploitable
+par une `TypeError` qui la nomme ; `setNodes` ignore un équipement fautif au lieu de priver la
+carte du reste du réseau.
+
+**Leçon** : une fonction qui rend `NaN` quand on la nourrit mal est un défaut. Une fonction
+qui échoue en nommant la faute est un garde-fou. Choisir la seconde a transformé deux
+exécutions de CI perdues en un message lisible.
+
 ### Identifier l'équipement visé
 
 `nodeAt()` projette chaque équipement à l'écran et garde le plus proche dans un rayon de 22 px,
@@ -98,6 +115,18 @@ objets de sélection d'une version à l'autre.
   captures sont donc jugées par des **mesures** (`web/tests/e2e/audit.mjs`, comptage de teintes
   en PIL), jamais à l'œil.
 - **Le dépôt peut se réinitialiser entre les tours.** Voir §6.
+- **À fort grossissement, le fond local est flou.** La texture Natural Earth II fournie avec
+  Cesium est faite pour une vue planétaire : à 960 m d'altitude, elle n'a plus de détail et la
+  carte devient un aplat (mesuré : 73 % de pixels identiques dans la zone carte). Le fond
+  routier, précis à l'échelle d'une ville, est distant et **injoignable depuis la CI** — donc
+  invisible sur les captures. Chez l'utilisateur, qui a accès au réseau, la surcouche doit
+  charger et le rendu devrait être net ; cela reste à vérifier avec lui. En attendant, la
+  géométrie est bonne : les marqueurs d'équipement passent de 19 à 125 pixels visibles
+  après le cadrage sur la zone.
+- **Les journaux du runner sont hors de portée du réseau** (`results-receiver.actions.githubusercontent.com`). Le seul moyen de lire un échec est de le faire publier sur la PR par
+  le workflow lui-même. Sur un événement `pull_request`, `context.ref` vaut `refs/pull/N/merge`
+  : chercher la PR par branche ne trouvait rien, et le journal partait dans le vide. Le numéro
+  est pris dans la charge utile quand il y est.
 
 ## 6. Procédure si le dépôt se réinitialise
 
