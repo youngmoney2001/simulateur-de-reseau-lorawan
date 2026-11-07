@@ -92,3 +92,19 @@ class FormeDeLaTrame(unittest.TestCase):
     def test_mic(self) -> None:
         self.assertEqual(len(self.vue.mic), 4)
         self.assertNotEqual(self.vue.mic, b"\x00\x00\x00\x00")
+
+
+class ChiffrementParLeCoeur(unittest.TestCase):
+    """La charge est chiffree par le coeur C++, pas par ce module."""
+
+    def test_la_charge_claire_n_apparait_pas(self) -> None:
+        clair = b"SECRET1234"
+        wire = build_uplink_wire(derive_session(5, 5), fcnt32=0, payload=clair, fport=1)
+        self.assertNotIn(clair, wire)
+
+    def test_le_coeur_retrouve_la_charge(self) -> None:
+        session = derive_session(5, 5)
+        clair = b"SECRET1234"
+        wire = build_uplink_wire(session, fcnt32=9, payload=clair, fport=1)
+        ctx = security.UplinkContext(fcnt32=9, tx_dr=0, tx_ch=0)
+        self.assertEqual(security.open_uplink(wire, session.keys, ctx).payload, clair)
