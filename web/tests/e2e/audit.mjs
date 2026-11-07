@@ -221,6 +221,36 @@ try {
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(400);
 
+  // Sans WebGL, Cesium ne peut rien peindre : le globe reste une surface unie, ce qui n'est
+  // pas un défaut de l'application mais une limite de l'environnement. On le mesure pour ne
+  // pas attribuer à tort un globe vide à un défaut de code.
+  const webgl = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    const gl = c.getContext("webgl2") || c.getContext("webgl") || c.getContext("experimental-webgl");
+    if (!gl) return { disponible: false };
+    const infos = gl.getExtension("WEBGL_debug_renderer_info");
+    return {
+      disponible: true,
+      rendu: infos ? gl.getParameter(infos.UNMASKED_RENDERER_WEBGL) : "inconnu",
+      fournisseur: infos ? gl.getParameter(infos.UNMASKED_VENDOR_WEBGL) : "inconnu",
+    };
+  });
+  const cesium = await page.evaluate(() => {
+    const zone = document.querySelector("#cesium");
+    const toile = zone?.querySelector("canvas");
+    const onglet = [...document.querySelectorAll(".view-tab")].find((e) => e.classList.contains("active"));
+    return {
+      vueActive: onglet?.textContent.trim() ?? "aucune",
+      zonePresente: Boolean(zone),
+      zoneVisible: zone ? !zone.hidden : false,
+      toile: toile ? `${toile.width}x${toile.height}` : "aucune",
+    };
+  });
+  console.log(`WebGL : ${webgl.disponible ? "disponible" : "ABSENT"}` +
+    (webgl.disponible ? ` (${webgl.fournisseur} / ${webgl.rendu})` : ""));
+  console.log(`Carte 3D : vue active = ${cesium.vueActive} · zone ${cesium.zoneVisible ? "visible" : "masquée"}` +
+    ` · toile = ${cesium.toile}`);
+
   for (const largeur of [1400, 1180, 900, 760]) {
     await page.setViewport({ width: largeur, height: 1000 });
     await pause(700);
