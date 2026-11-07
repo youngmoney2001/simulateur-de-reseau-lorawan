@@ -73,6 +73,34 @@ jobs:
           set -o pipefail
           CHROME_PATH="$CHROME" node tests/e2e/studio.e2e.mjs 2>&1 | tee ../e2e.log
 
+      # L'image ne peut pas être examinée par une machine : on lui substitue des mesures.
+      # Le navigateur connaît la position et la taille réelles de chaque boîte, et répond donc
+      # en nombres aux questions qu'on se poserait à l'œil.
+      - name: Auditer la mise en page
+        id: audit
+        continue-on-error: true
+        run: |
+          cd web
+          CHROME=$(find "$HOME/.cache/puppeteer" -type f -name chrome -perm -u+x | head -1)
+          set -o pipefail
+          CHROME_PATH="$CHROME" node tests/e2e/audit.mjs 2>&1 | tee ../audit.log
+      - name: Publier l'audit de mise en page
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let texte = '';
+            try { texte = fs.readFileSync('audit.log', 'utf8'); } catch (e) { texte = '(rapport introuvable)'; }
+            const corps = ['### Audit de mise en page du studio', '',
+              'Job : `${{ github.run_id }}`', '', '```', texte.slice(-60000), '```'].join('\n');
+            const prs = await github.rest.pulls.list({ owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', head: `${context.repo.owner}:${context.ref.replace('refs/heads/', '')}` });
+            for (const pr of prs.data) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body: corps });
+            }
+
       # Le rendu n'est observable d'aucune autre manière depuis un poste sans affichage :
       # le navigateur de la CI est le seul endroit où l'interface est réellement peinte.
       - name: Capturer le rendu du studio
