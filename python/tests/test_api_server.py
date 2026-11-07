@@ -939,6 +939,7 @@ class TestStudioServi:
         secret.write_text("TOPSECRET", encoding="utf-8")
         dist = tmp_path / "dist"
         dist.mkdir()
+        (dist / "studio.html").write_text("<html>", encoding="utf-8")
         with _api_avec_studio(tmp_path, dist) as (brut, _):
             for chemin in ("/../secret.txt", "/%2e%2e/secret.txt", "//etc/passwd"):
                 status, corps = brut(chemin)

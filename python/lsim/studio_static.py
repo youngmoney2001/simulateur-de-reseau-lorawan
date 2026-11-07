@@ -33,20 +33,26 @@ TYPES_MIME = {
 
 
 def find_dist(explicit=None):
-    """Dossier du studio precompile, ou None sil introuvable.
+    """Dossier du studio precompile ; None si la decouverte n en trouve aucun.
 
-    Ne leve pas : le serveur doit pouvoir demarrer sans studio, en le signalant.
+    Un chemin impose (`explicit` ou `LSIM_STUDIO_DIST`) est **autoritaire** : il vient d une
+    demande de l utilisateur, on le sert ou on echoue. Jamais on ne lui substitue en silence un
+    autre dossier (arbitrage bbb3) : servir un studio que l utilisateur n a pas demande est
+    pire que ne rien servir, car le defaut passe inapercu.
+
+    Sans chemin impose, la decouverte est tolerante : le serveur doit pouvoir demarrer sans
+    studio, en le signalant.
     """
+    impose = explicit or os.environ.get("LSIM_STUDIO_DIST")
+    if impose:
+        cible = Path(impose)
+        if not (cible / "studio.html").is_file():
+            raise ValueError(
+                f"studio introuvable dans {cible} : aucun fichier studio.html. "
+                f"Compiler le studio (scripts/package_studio.sh) ou corriger le chemin.")
+        return cible.resolve()
     ici = Path(__file__).resolve().parent
-    candidats = []
-    if explicit:
-        candidats.append(Path(explicit))
-    env = os.environ.get("LSIM_STUDIO_DIST")
-    if env:
-        candidats.append(Path(env))
-    candidats.append(ici / "web_dist")
-    candidats.append(ici.parent.parent / "web" / "dist")
-    for c in candidats:
+    for c in (ici / "web_dist", ici.parent.parent / "web" / "dist"):
         try:
             if (c / "studio.html").is_file():
                 return c.resolve()

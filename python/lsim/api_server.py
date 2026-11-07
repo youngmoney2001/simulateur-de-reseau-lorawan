@@ -1066,7 +1066,7 @@ def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":mem
         study = StudyService(store=StudyStore(runs_db))
         return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
                          study=study, db_lock=lock,
-                         studio_root=(dist if dist is not None else find_dist()))
+                         studio_root=find_dist(dist))
     except BaseException:
         if lock is not None:
             lock.release()
@@ -1110,9 +1110,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("adresse non locale sans TLS : fournir --tls-cert et --tls-key")
     tls = make_tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
-                         rate_per_min=args.rate_per_minute, tls=tls,
-                         terrain_dir=args.terrain_catalog, dist=args.dist)
+    try:
+        server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
+                             rate_per_min=args.rate_per_minute, tls=tls,
+                             terrain_dir=args.terrain_catalog, dist=args.dist)
+    except ValueError as exc:
+        parser.error(str(exc))
     scheme = "https" if tls else "http"
     log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
     if server.studio_root is not None:

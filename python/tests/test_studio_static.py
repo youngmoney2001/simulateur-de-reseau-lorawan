@@ -55,15 +55,31 @@ class Service(unittest.TestCase):
 
 
 class Recherche(unittest.TestCase):
+    """Un chemin demande est autoritaire ; la decouverte seule est tolerante."""
 
-    def test_chemin_explicite_sans_studio_est_none(self):
+    def test_chemin_impose_sans_studio_echoue(self):
+        """Un chemin demande est servi ou refuse, jamais remplace en silence (bbb3)."""
         with tempfile.TemporaryDirectory() as d:
-            self.assertIsNone(find_dist(d))
+            with self.assertRaises(ValueError):
+                find_dist(d)
 
-    def test_chemin_explicite_avec_studio(self):
+    def test_le_message_nomme_le_chemin_refuse(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError) as ctx:
+                find_dist(d)
+        self.assertIn(str(Path(d)), str(ctx.exception))
+
+    def test_chemin_impose_avec_studio(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "studio.html").write_text("<html>", encoding="utf-8")
             self.assertEqual(find_dist(d), Path(d).resolve())
+
+    def test_decouverte_rend_un_studio_ou_rien(self):
+        """Sans chemin impose, la decouverte ne leve pas : elle rend un dossier qui porte
+        reellement le studio, ou None. Jamais un dossier sans studio.html."""
+        d = find_dist()
+        if d is not None:
+            self.assertTrue((d / "studio.html").is_file())
 
 
 class Types(unittest.TestCase):
