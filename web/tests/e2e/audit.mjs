@@ -176,7 +176,10 @@ try {
   await waitHttp(`http://127.0.0.1:${WEB_PORT}/studio.html`, vite);
 
   browser = await puppeteer.launch({ executablePath: chrome, headless: true,
-    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process"] });
+    // WebGL logiciel : sans lui Cesium ne peut pas créer son contexte, et le studio
+    // retomberait sur le plan 2D sans que ce soit un défaut de l'application.
+    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process",
+           "--enable-unsafe-swiftshader", "--use-gl=swiftshader", "--ignore-gpu-blocklist"] });
   const page = await browser.newPage();
   page.on("dialog", (d) => d.accept());
   await page.setViewport({ width: 1400, height: 1000 });

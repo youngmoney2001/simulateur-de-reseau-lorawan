@@ -58,7 +58,10 @@ try {
   await waitHttp(`http://127.0.0.1:${WEB_PORT}/studio.html`, vite);
 
   browser = await puppeteer.launch({ executablePath: chrome, headless: true,
-    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process"] });
+    // WebGL logiciel : sans lui Cesium ne peut pas créer son contexte, et le studio
+    // retomberait sur le plan 2D sans que ce soit un défaut de l'application.
+    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process",
+           "--enable-unsafe-swiftshader", "--use-gl=swiftshader", "--ignore-gpu-blocklist"] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 1000 });
   page.on("dialog", (d) => d.accept());
@@ -82,6 +85,17 @@ try {
   };
   const deviceTab = (label, nodeId) => clickTab(`.device-win[data-node-id="${nodeId}"] .dtab`, label);
   const obsTab = (label) => clickTab(".tab", label);
+  const viewTab = async (libelle) => {
+    await page.evaluate((txt) => {
+      const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes(txt));
+      if (!b) throw new Error(`vue introuvable : ${txt}`);
+      b.click();
+    }, libelle);
+    await page.waitForFunction((txt) => {
+      const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes(txt));
+      return b?.classList.contains("active");
+    }, { timeout: 10_000 }, libelle);
+  };
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // 1. écran d'accueil : choix du mode, avant toute connexion
@@ -106,10 +120,13 @@ try {
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }
-  await pause(500);
-  await shoot("studio-topologie");
+  await pause(3200);
+  await shoot("carte-3d");
 
-  // 3. fenêtre d'équipement : les trois onglets
+  // 3. fenêtre d'équipement : les trois onglets, sur le plan qui permet de viser un nœud
+  await viewTab("Plan");
+  await pause(400);
+  await shoot("studio-topologie");
   await page.click('g.node[data-id="capteur-a"] circle');
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(300);
@@ -125,6 +142,7 @@ try {
   await shoot("equipement-cli");
 
   // 4. une session de ligne de commande remplie, sur la passerelle
+  await viewTab("Plan");
   await page.click('g.node[data-id="gw-nord"] rect');
   await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
   await deviceTab("CLI", "gw-nord");

@@ -9,6 +9,9 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
+// `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
+// toute confusion entre les deux conversions.
+import { createMap3D, toMeters as degreesToMeters } from "./map3d.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -28,6 +31,9 @@ const state = {
   busy: false,
   events: [],        // evenements du run courant (inspecteur de trames)
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
+  map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
+  mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
+  view: "map",      // vue courante : carte 3D (defaut) ou plan 2D
 };
 
 // --- DOM helpers ---------------------------------------------------------------------------
@@ -151,7 +157,7 @@ async function deleteSession() {
   await refreshSessions();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else {
-    renderPlan();
+    refreshViews();
     renderDevice();
   }
 }
@@ -161,7 +167,7 @@ async function loadTopology() {
   if (!state.sid) return;
   const topo = await guard(() => state.client.topology(state.sid));
   if (topo) state.topo = topo;
-  renderPlan();
+  refreshViews();
   renderDevice();
 }
 
@@ -207,6 +213,13 @@ function nodeIcon(kind) {
   g.append(svgEl("path", { d: "M -7 -1 A 9 9 0 0 1 7 -1" }));
   g.append(svgEl("path", { d: "M -12 5 A 15 15 0 0 1 12 5" }));
   return g;
+}
+
+// Rafraîchit les deux vues. Un seul point de passage : la carte et le plan montrent les
+// mêmes équipements, ils ne peuvent donc pas être mis à jour séparément.
+function refreshViews() {
+  refreshViews();
+  syncMap();
 }
 
 function renderPlan() {
@@ -267,7 +280,7 @@ function startDrag(ev, nodeId) {
     const pos = toMeters(drag.last, state.bounds, W, H);
     const topo = await guard(() => state.client.moveNode(state.sid, nodeId, pos));
     if (topo) state.topo = topo;
-    renderPlan();
+    refreshViews();
     renderDevice();
   };
   $("plan").addEventListener("pointermove", onMove);
@@ -276,7 +289,7 @@ function startDrag(ev, nodeId) {
 
 function selectNode(nodeId) {
   openDeviceWindow(nodeId);
-  renderPlan();
+  refreshViews();
 }
 
 // --- Fenêtres d'équipement flottantes (phase E) -------------------------------------------
@@ -328,7 +341,7 @@ function closeDeviceWindow(nodeId) {
   deviceWindows.delete(nodeId);
   delete state.consoles[nodeId];
   if (state.selected === nodeId) state.selected = null;
-  renderPlan();
+  refreshViews();
 }
 
 // Disposition en cascade : chaque nouvelle fenêtre est décalée, sans sortir de l'écran.
@@ -480,7 +493,7 @@ function renderConsole(node, body) {
       const fresh = await guard(() => state.client.topology(state.sid));
       if (fresh && state.selected === node.id) {
         state.topo = fresh;
-        renderPlan();
+        refreshViews();
         // Le corps de la fenêtre est passé explicitement : renderDeviceInfo écrit dedans et ne
         // peut plus deviner un panneau unique. On ne rafraîchit que si la zone est toujours là —
         // la fenêtre a pu être refermée pendant l'aller-retour réseau.
@@ -537,7 +550,7 @@ function renderSensorForm(node, body) {
       const topo = await guard(() => state.client.setSensor(state.sid, node.id, checked.settings));
       if (topo) {
         state.topo = topo;
-        renderPlan();                       // le formulaire reste en place : il porte le message
+        refreshViews();                       // le formulaire reste en place : il porte le message
         message.textContent = "Réglages enregistrés.";
       }
     },
@@ -557,7 +570,7 @@ $("add-form").addEventListener("submit", async (ev) => {
     state.topo = topo;
     state.selected = checked.node.id;
     ev.target.reset();
-    renderPlan();
+    refreshViews();
     renderDevice();
     await refreshSessions();
   }
@@ -819,6 +832,80 @@ function refreshMapLink() {
   $("map-link").href = s ? `/index.html?${s}` : "/index.html";
 }
 
+// --- Vue carte 3D ---------------------------------------------------------------------------
+// La carte est la surface de travail ; le plan 2D reste la vue métrique de secours.
+function ensureMap() {
+  if (state.map) return state.map;
+  // Cesium exige WebGL. Un navigateur sans accélération, ou un environnement qui la refuse,
+  // doit continuer à fonctionner : on retombe alors sur le plan 2D au lieu de casser.
+  if (state.mapFailed) return null;
+  try {
+    state.map = construireCarte();
+  } catch (err) {
+    state.mapFailed = true;
+    console.error("carte 3D indisponible :", err);
+    if (state.view === "map") showView("plan");
+    const note = $("map-hint");
+    if (note) note.textContent =
+      "Carte 3D indisponible sur ce navigateur (WebGL requis). Le plan 2D reste utilisable.";
+    return null;
+  }
+  return state.map;
+}
+
+function construireCarte() {
+  return createMap3D($("cesium"), (lat, lon) => {
+    // Un clic pose l'origine de la zone : c'est le premier des deux moyens de la choisir.
+    writeOrigin({ lat: Math.round(lat * 1e5) / 1e5, lon: Math.round(lon * 1e5) / 1e5 });
+    sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(readOrigin()));
+    refreshMapLink();
+    syncMap();
+    $("map-hint").textContent =
+      `Origine : ${readOrigin().lat.toFixed(5)}, ${readOrigin().lon.toFixed(5)} — cliquez à nouveau pour la déplacer.`;
+  });
+}
+
+// Aligne la carte sur l'état : origine, équipements, sélection.
+function syncMap(fly = false) {
+  if (state.view !== "map") return;
+  const carte = ensureMap();
+  if (!carte) return;            // carte indisponible : le plan 2D a pris le relais
+  const o = readOrigin();
+  carte.setOrigin(o);
+  carte.setNodes(state.topo?.nodes ?? [], state.selected);
+  if (fly) carte.flyToOrigin(porteeDesEquipements());
+  $("map-hint").textContent = (state.topo?.nodes?.length ?? 0) === 0
+    ? "Cliquez sur la carte pour y placer l'origine de votre zone de test."
+    : `Origine : ${o.lat.toFixed(5)}, ${o.lon.toFixed(5)} — cliquez pour la déplacer.`;
+}
+
+// Encombrement du réseau, en mètres : sert à cadrer la caméra.
+function porteeDesEquipements() {
+  const ns = state.topo?.nodes ?? [];
+  if (!ns.length) return 300;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of ns) {
+    minX = Math.min(minX, n.x_m); maxX = Math.max(maxX, n.x_m);
+    minY = Math.min(minY, n.y_m); maxY = Math.max(maxY, n.y_m);
+  }
+  return Math.max(maxX - minX, maxY - minY, 60) * 1.4;
+}
+
+function showView(view) {
+  state.view = view;
+  const estCarte = view === "map";
+  $("cesium").hidden = !estCarte;
+  $("map-hint").hidden = !estCarte;
+  $("plan").parentElement.hidden = estCarte;
+  for (const b of document.querySelectorAll(".view-tab")) {
+    const actif = b.dataset.view === view;
+    b.classList.toggle("active", actif);
+    b.setAttribute("aria-selected", actif ? "true" : "false");
+  }
+  if (estCarte) syncMap(true);
+  else renderPlan();
+}
+
 function applyMode(mode) {
   const m = mode === "study" ? "study" : "design";
   sessionStorage.setItem("lsim-mode", m);
@@ -934,7 +1021,7 @@ $("windows").addEventListener("pointerdown", (ev) => {
   if (!win) return;
   for (const [id, w] of deviceWindows) w.el.classList.toggle("active", w.el === win);
   state.selected = win.dataset.nodeId;
-  renderPlan();
+  refreshViews();
 });
 
 // Choix du mode : sur l'écran de lancement, puis dans la barre du haut.
@@ -943,6 +1030,9 @@ for (const b of document.querySelectorAll(".mode-card"))
 $("mode-select").addEventListener("change", (ev) => applyMode(ev.target.value));
 
 renderPalette();
+for (const b of document.querySelectorAll(".view-tab")) {
+  b.addEventListener("click", () => showView(b.dataset.view));
+}
 applyMode(sessionStorage.getItem("lsim-mode") || "design");
 
 // Origine géographique : relue à l'ouverture, puis suivie à chaque modification.
@@ -955,6 +1045,8 @@ for (const id of ["origin-lat", "origin-lon"]) {
     const o = readOrigin();
     if (o) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
     refreshMapLink();
+    // L'ancre a bougé : les équipements gardent leur géométrie mais changent de lieu.
+    syncMap(true);
   });
 }
 refreshMapLink();

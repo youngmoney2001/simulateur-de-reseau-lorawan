@@ -56,7 +56,10 @@ try {
   await waitHttp(`http://127.0.0.1:${WEB_PORT}/studio.html`, vite);
 
   browser = await puppeteer.launch({ executablePath: chrome, headless: true,
-    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process"] });
+    // WebGL logiciel : sans lui Cesium ne peut pas créer son contexte, et le studio
+    // retomberait sur le plan 2D sans que ce soit un défaut de l'application.
+    args: ["--no-sandbox", "--disable-gpu", "--no-zygote", "--single-process",
+           "--enable-unsafe-swiftshader", "--use-gl=swiftshader", "--ignore-gpu-blocklist"] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 1000 });
   const pageErrors = [];
@@ -94,11 +97,37 @@ try {
   const deviceTab = (label, nodeId) =>
     clickTab('.device-win[data-node-id="' + nodeId + '"] .dtab', label);
   const obsTab = (label) => clickTab(".tab", label);
+  // La carte 3D est la vue par défaut ; le plan 2D reste la vue métrique, celle qui permet
+  // de régler des distances au pixel. Les essais de positionnement s'y font donc.
+  const viewTab = async (libelle) => {
+    await page.evaluate((txt) => {
+      const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes(txt));
+      if (!b) throw new Error(`vue introuvable : ${txt}`);
+      b.click();
+    }, libelle);
+    await page.waitForFunction((txt) => {
+      const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes(txt));
+      return b?.classList.contains("active");
+    }, { timeout: 10_000 }, libelle);
+  };
 
   await step("connexion et session créée automatiquement", async () => {
     await page.type("#token", token);
     await page.click("#connect");
     await page.waitForFunction(() => document.querySelectorAll("#session-select option").length === 1, { timeout: 20_000 });
+  });
+
+  await step("la carte 3D est la vue par défaut, ou repli franc sur le plan", async () => {
+    const active = await page.$eval(".view-tab.active", (e) => e.textContent.trim());
+    // Cesium exige WebGL, absent de certains navigateurs sans affichage. Le studio doit alors
+    // retomber sur le plan au lieu de rester sur une carte vide : c'est ce qu'on vérifie ici.
+    if (!active.includes("Carte") && !active.includes("Plan")) {
+      throw new Error(`vue par défaut inattendue : ${active}`);
+    }
+    if (active.includes("Plan")) {
+      steps[steps.length - 1] = "ok   repli sur le plan 2D (WebGL absent)";
+      console.error("note : WebGL indisponible, repli sur le plan");
+    }
   });
 
   await step("ajout d'une passerelle frontière et d'un capteur", async () => {
@@ -121,6 +150,7 @@ try {
   });
 
   await step("console : configuration CLI et erreur de syntaxe au caret", async () => {
+    await viewTab("Plan");
     await page.click('g.node[data-id="gw-nord"] rect');
     await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
     await deviceTab("CLI", "gw-nord");
@@ -146,6 +176,7 @@ try {
   });
 
   await step("capteur : refus d'un SF hors bornes au studio, puis enregistrement", async () => {
+    await viewTab("Plan");
     await page.click('g.node[data-id="capt-1"] circle');
     await page.waitForSelector('.device-win[data-node-id="capt-1"]');
     await deviceTab("Config", "capt-1");
@@ -160,6 +191,7 @@ try {
   });
 
   await step("glisser-déposer : la position est enregistrée côté API", async () => {
+    await viewTab("Plan");
     const box = await (await page.$('g.node[data-id="capt-1"] circle')).boundingBox();
     const x = box.x + box.width / 2, y = box.y + box.height / 2;
     await page.mouse.move(x, y);

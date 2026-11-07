@@ -66,10 +66,26 @@
     </header>
 
     <main class="workspace">
-      <!-- Plan : zone dominante, comme dans Packet Tracer. -->
-      <section class="plan-area">
-        <svg id="plan" viewBox="0 0 800 520" role="img" aria-label="Plan du réseau"></svg>
-        <p id="empty-plan" class="empty-plan" hidden>Aucun équipement : ajoutez une passerelle frontière, puis des capteurs.</p>
+      <!-- Deux vues d'un même réseau : la carte 3D, géographique, et le plan 2D, métrique.
+           La carte est la surface de travail, comme dans Packet Tracer ; le plan reste le
+           meilleur outil pour régler des distances précises. -->
+      <div class="views" role="tablist" aria-label="Vue du réseau">
+        <button type="button" class="view-tab active" data-view="map" role="tab"
+                aria-selected="true">Carte 3D</button>
+        <button type="button" class="view-tab" data-view="plan" role="tab"
+                aria-selected="false">Plan</button>
+      </div>
+
+      <section class="stage">
+        <div id="cesium" class="cesium-stage" aria-label="Carte 3D du réseau"></div>
+        <p id="map-hint" class="map-hint">
+          Cliquez sur la carte pour y placer l'origine de votre zone de test.
+        </p>
+
+        <section class="plan-area" hidden>
+          <svg id="plan" viewBox="0 0 800 520" role="img" aria-label="Plan du réseau"></svg>
+          <p id="empty-plan" class="empty-plan" hidden>Aucun équipement : ajoutez une passerelle frontière, puis des capteurs.</p>
+        </section>
       </section>
 
       <!-- Barre d'outils verticale à droite. -->
