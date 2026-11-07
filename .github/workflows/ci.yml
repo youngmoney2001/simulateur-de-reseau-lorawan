@@ -71,6 +71,24 @@ jobs:
           set -o pipefail
           CHROME_PATH="$CHROME" node tests/e2e/studio.e2e.mjs 2>&1 | tee ../e2e.log
 
+      # Le rendu n'est observable d'aucune autre manière depuis un poste sans affichage :
+      # le navigateur de la CI est le seul endroit où l'interface est réellement peinte.
+      - name: Capturer le rendu du studio
+        id: capture
+        continue-on-error: true
+        run: |
+          cd web
+          CHROME=$(find "$HOME/.cache/puppeteer" -type f -name chrome -perm -u+x | head -1)
+          set -o pipefail
+          CHROME_PATH="$CHROME" node tests/e2e/capture.mjs 2>&1 | tee ../capture.log
+      - name: Déposer les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-studio
+          path: captures/
+          if-no-files-found: ignore
+
       # Le journal du runner est hébergé hors de portée de l'outillage : on le publie sur la
       # pull request pour qu'il reste lisible après l'exécution.
       - name: Publier le journal du navigateur en cas d'échec

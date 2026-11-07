@@ -22,3 +22,6 @@ python/lsim/web_dist/
 
 # Environnement virtuel de developpement (jamais versionne : cree par python -m venv)
 pyenv/
+
+# Captures d'ecran du studio (produites par web/tests/e2e/capture.mjs en CI : artefacts de diagnostic)
+captures/
