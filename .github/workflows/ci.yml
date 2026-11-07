@@ -57,6 +57,11 @@ jobs:
         run: |
           python -m pip install "./python[test]"
           cd web && npm ci
+          # Les ressources Cesium (Workers, Assets, Widgets) sont copiées dans public/cesium
+          # par ce script. Rien d'autre ne le déclenche : les essais lancent Vite directement,
+          # sans passer par `npm run dev`. Sans ces fichiers, Cesium reçoit l'index du serveur
+          # de développement à la place de ses ressources, et son initialisation échoue.
+          npm run prepare-cesium
       - name: Modules purs du studio (sans navigateur)
         run: cd web && node --test tests/*.test.mjs
       # Le studio n'était jusqu'ici jamais exécuté dans un navigateur par la CI : les défauts
