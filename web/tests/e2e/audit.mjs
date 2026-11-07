@@ -273,7 +273,11 @@ try {
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(400);
 
-  for (const largeur of [1400, 1180, 900, 760]) {
+  // 1040 est la largeur où le menu du haut disparaît et 1000 celle juste en dessous : le
+  // défaut qu'on cherche à attraper est un en-tête qui déborde **entre** les seuils, donc
+  // il faut mesurer de part et d'autre du repli, pas seulement largement au-dessus et
+  // largement en dessous. C'est ainsi que six débordements à 900 px sont passés inaperçus.
+  for (const largeur of [1400, 1180, 1100, 1040, 1000, 900, 760]) {
     await page.setViewport({ width: largeur, height: 1000 });
     await pause(700);
     rapport.push({ largeur, ...(await page.evaluate(mesurer)) });

@@ -291,12 +291,25 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
   .observation { min-height:260px; }
   .device-win { max-width:calc(100vw - 16px); }
   .statusbar { position:sticky; bottom:0; }
+  /* L'en-tête porte les commandes de zone depuis la phase I. Sans repli possible, il
+     poussait « Carte des résultats » à 224 px hors de l'écran à 900 px de large : mesuré,
+     pas supposé. On le laisse passer à la ligne. */
+  .menubar { flex-wrap:wrap; row-gap:6px; }
+  .origin { flex-wrap:wrap; }
+  .origin #origin-state { max-width:100%; }
 }
 
-/* Écran étroit : le menu se replie et la palette se réduit à l'essentiel. */
-@media (max-width:820px) {
-  .menubar { flex-wrap:wrap; gap:8px; }
+/* Le menu du haut est décoratif — il n'ouvre rien et ne fait que nommer les modes. À
+   partir du moment où la place manque, il cède donc avant les commandes de zone, qui
+   servent au travail. Le seuil est monté de 820 à 1040 px parce que les commandes de
+   zone occupent la place que le menu prenait. */
+@media (max-width:1040px) {
   .menu { display:none; }
+}
+
+/* Écran étroit : la palette se réduit à l'essentiel. */
+@media (max-width:820px) {
+  .menubar { gap:8px; }
   .palette { flex:0 0 auto; }
   .modes { grid-template-columns:1fr; }
   .plan-area { min-height:260px; }
