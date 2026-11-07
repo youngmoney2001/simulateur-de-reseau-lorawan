@@ -908,8 +908,13 @@ function showView(view) {
     b.classList.toggle("active", actif);
     b.setAttribute("aria-selected", actif ? "true" : "false");
   }
-  if (estCarte) syncMap(true);
-  else renderPlan();
+  if (estCarte) {
+    syncMap(true);
+    // La carte n'a pas de dimensions tant qu'elle est masquée : la bascule doit la recaler.
+    state.map?.resize();
+  } else {
+    renderPlan();
+  }
 }
 
 function applyMode(mode) {

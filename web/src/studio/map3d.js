@@ -104,6 +104,18 @@ export function createMap3D(container, onPick) {
   const labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
   let origine = { lat: 4.0511, lon: 9.7679 };
 
+  // Cesium mesure son conteneur à la construction. S'il le fait avant que la mise en page
+  // soit stabilisée, il retient une hauteur trop faible et ses blocs internes, dimensionnés
+  // en pourcentage, s'effondrent les uns sur les autres : 640 puis 329 puis 156. Le canevas
+  // reste alors à sa taille par défaut de 300×150 et le globe n'est pas peint.
+  // On recale donc après une frame, puis à chaque changement de taille du conteneur.
+  const recaler = () => {
+    try { viewer.resize(); } catch { /* conteneur pas encore prêt : on retentera */ }
+  };
+  requestAnimationFrame(recaler);
+  const observateur = typeof ResizeObserver === "function" ? new ResizeObserver(recaler) : null;
+  observateur?.observe(container);
+
   // Un clic sur le globe : on lève la position géographique. Un clic dans le vide (ciel)
   // ne produit rien de exploitable et doit être ignoré silencieusement.
   const gestionnaire = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -177,7 +189,13 @@ export function createMap3D(container, onPick) {
       }
     },
 
+    /** À appeler quand la carte devient visible : elle n'a pas de taille quand elle est masquée. */
+    resize() {
+      recaler();
+    },
+
     destroy() {
+      observateur?.disconnect();
       gestionnaire.destroy?.();
       viewer.destroy?.();
     },
