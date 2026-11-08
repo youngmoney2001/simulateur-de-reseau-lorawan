@@ -183,6 +183,20 @@ observée, pas câblée — on ne la débranche pas.
 
 Rien n'est tracé avant un run : la topologie d'un réseau radio se mesure, elle ne se déclare pas.
 
+### Où elles sont tracées
+
+Sur **les deux vues**, à partir d'une seule source. `state.liaisonsObservees` est calculée une
+seule fois après le run ; le plan 2D (`renderLiaisons`) et la carte 3D (`carte.setLiaisons`) la
+consomment telle quelle. Si chacun recalculait de son côté, les deux vues pourraient diverger sans
+que rien ne le signale — et deux vues qui ne disent pas la même chose sont pires qu'une seule.
+
+Sur la carte 3D, le trait est porté à **40 m d'altitude**. À zéro, le relief et le fond de carte
+l'avalent dès qu'on zoome : le trait disparaît au moment précis où on se rapproche pour le lire.
+
+Une primitive Cesium n'existe pas dans le DOM. `window.__liaisonsCarte` compte les traits
+effectivement tracés ; il est remis à zéro à chaque tracé, et lu par le test e2e. Sans ce
+compteur, un trait jamais tracé ne se distinguerait pas d'un trait que personne ne regarde.
+
 ### Ce qui ne l'est pas, et pourquoi : une mesure, pas une prudence
 
 Les **liaisons radio** « capteur → passerelle » sont écartées, et la raison est chiffrée. Un
