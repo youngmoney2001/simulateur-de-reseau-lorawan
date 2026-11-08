@@ -71,6 +71,12 @@
         </label>
         <button type="button" id="recenter" class="zone-btn"
           title="Recentrer la carte sur la zone">Recentrer</button>
+        <!-- Le relief : le moteur le simule, l'atelier ne le montrait pas. La liste vient du
+             catalogue du serveur ; s'il est vide, on le dit au lieu de masquer le champ —
+             une capacité tue passe pour une capacité absente. -->
+        <label id="terrain-field" class="terrain" hidden>Relief
+          <select id="terrain-select"></select>
+        </label>
         <span id="origin-state" class="muted" role="status"></span>
       </span>
       <a class="applink" id="map-link" href="/index.html"

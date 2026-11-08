@@ -807,10 +807,14 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
     c_dls = (_CDownlinkRecord * max(total_messages, 1))()
     c_dl_count = ctypes.c_size_t(0)
     if environment is None:
-        c_env_ref, keep = None, []
+        c_env_ref, c_env_ptr, keep = None, None, []
     else:
         c_env_struct, keep = _c_environment(environment)
         c_env_ref = ctypes.byref(c_env_struct)
+        # `byref` ne vaut que comme argument direct d'un appel : rangé dans un champ de
+        # structure, il produit un `CArgObject` que ctypes refuse. Le champ exige un vrai
+        # pointeur — comme `prop` et `rule` plus bas, qui l'ont toujours eu.
+        c_env_ptr = ctypes.pointer(c_env_struct)
     if dl_ready_ns is not None and len(dl_ready_ns) != total_messages:
         raise ValueError("dl_ready_ns : une valeur par émission")
     if dl_ready_ns is None:
@@ -832,7 +836,7 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
         a.gateway_count = g_count
         a.prop = ctypes.pointer(c_prop)
         a.rule = ctypes.pointer(c_rule)
-        a.env = c_env_ref
+        a.env = c_env_ptr
         a.radios = c_radios
         a.radio_count = n_radios
         a.rx2 = c_rx2

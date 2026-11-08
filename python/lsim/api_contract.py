@@ -20,6 +20,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lsim import study_contract as _study_constants
 from lsim.plan import Plan, get_plan, plan_names
 from lsim.scenario import ScenarioModel
 
@@ -29,7 +30,9 @@ MAX_TRACE_EVENTS_PER_RUN = 200_000       # au-delà, le run est refusé (pas tro
 MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
 ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
-TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
+# Défini dans `study_contract`, couche basse : `api_contract` l'importe déjà, l'inverse
+# créerait un cycle.
+TERRAIN_ID_PATTERN = _study_constants.TERRAIN_ID_PATTERN
 
 RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[

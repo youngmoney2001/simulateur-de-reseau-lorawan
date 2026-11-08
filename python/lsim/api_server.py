@@ -60,13 +60,14 @@ from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
     CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
-    SessionCreate, SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
+    SessionCreate, SimulateOut, SimulateRequest, SimulationBind, SubmitRequest, TerrainChoice,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
 from lsim.studio_static import content_type, find_dist, resolve_asset
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
+from lsim.scenario import EnvironmentModel
 from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
@@ -411,7 +412,14 @@ def _build_scenario(model: Any, terrain: Optional[Terrain] = None) -> Scenario:
     """Scénario d'API. Avec relief, l'environnement doit être déclaré : son empreinte entre alors
     dans `scenario.sha256` (un même scénario avec un autre relief a un autre identifiant)."""
     if terrain is not None and model.environment is None:
-        model = type(model).model_validate({**model.model_dump(), "environment": {}})
+        # `model_copy` et non `model_validate({**model.model_dump(), ...})` : la revalidation
+        # par `model_dump` transforme les valeurs par defaut en champs **explicitement
+        # fournis**, et `gateway` en a une. La regle « gateway » ou « gateways », pas les deux,
+        # se lit sur les champs fournis : elle se declenchait alors pour tout scenario
+        # multi-passerelles. Le relief rendait donc la simulation impossible precisement
+        # dans le cas ou il a le plus d'interet — et personne ne l'avait jamais vu, faute
+        # d'avoir pu choisir un relief depuis l'atelier.
+        model = model.model_copy(update={"environment": EnvironmentModel()})
     env = None
     if model.environment is not None:
         env = _build_environment(model.environment, Path("."), model.propagation.frequency_hz)
@@ -981,6 +989,13 @@ class _Handler(BaseHTTPRequestHandler):
             r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/gateway|/position)?)?", rest)
         if m is not None:
             return self._nodes(method, study, owner, m.group(1), m.group(2), m.group(3))
+        m_terrain = re.fullmatch(r"sessions/([^/]+)/terrain", rest)
+        if m_terrain is not None and method == "POST":
+            req = self._parse_body(TerrainChoice)
+            # Le catalogue vient du service des runs : lui seul sait quels reliefs existent.
+            connus = svc.terrains.ids()
+            return 200, self._study(lambda: study.set_terrain(
+                owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
         if method == "POST" and rest == "sessions":
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))

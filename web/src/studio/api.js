@@ -55,6 +55,9 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     hint: (sid, exerciseId) => request("POST", `${s(sid)}/hints`, { exercise_id: exerciseId }),
     attempts: (sid) => request("GET", `${s(sid)}/attempts`),
     exercises: () => request("GET", "/api/v1/exercises"),
+    terrains: () => request("GET", "/api/v1/terrains"),
+    setTerrain: (sid, terrainId) =>
+      request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
     submit: (exerciseId, sid) =>
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),

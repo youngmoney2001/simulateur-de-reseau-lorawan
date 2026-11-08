@@ -30,6 +30,10 @@ const TOPO = {
 
 const ORIGINE = { lat: 4.0511, lon: 9.7679 };
 
+function topoAvecRelief(terrainId) {
+  return { ...TOPO, terrain_id: terrainId };
+}
+
 function ecrire(chantier) {
   return JSON.stringify(chantier);
 }
@@ -233,4 +237,22 @@ test("le nom de fichier est daté et porte un repère de session", () => {
 
 test("le nom de fichier tient sans session", () => {
   assert.match(nomFichier(null, new Date(2026, 2, 5)), /^chantier-session-\d{8}\.json$/);
+});
+
+// --- Relief ----------------------------------------------------------------------------------
+
+test("un chantier sans relief ecrit un terrain_id nul", () => {
+  const c = serialiserChantier({ topo: TOPO, origine: ORIGINE });
+  assert.equal(c.terrain_id, null);
+});
+
+test("le relief choisi fait partie du chantier : c'est le terrain, pas un decor", () => {
+  const c = serialiserChantier({ topo: topoAvecRelief("crete"), origine: ORIGINE });
+  assert.equal(c.terrain_id, "crete");
+  assert.equal(lireChantier(ecrire(c)).terrain_id, "crete");
+});
+
+test("un identifiant de relief invalide est refuse en le citant", () => {
+  refuse(ecrire({ format: FORMAT, version: VERSION, origine: null,
+    terrain_id: "../../etc/passwd", equipements: [] }), "../../etc/passwd");
 });

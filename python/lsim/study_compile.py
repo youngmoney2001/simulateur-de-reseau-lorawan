@@ -69,7 +69,8 @@ def _default_channel(region: str, sub_band: Optional[int]) -> int:
     return channels[min(sub_band_channels(sub_band))]
 
 
-def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int) -> Compiled:
+def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int,
+                    terrain_id: Optional[str] = None) -> Compiled:
     notes: list[str] = []
     gateways = [n for n in nodes if n.kind in ("relay", "border")]
     sensors = [n for n in nodes if n.kind == "sensor"]
@@ -202,6 +203,10 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
     notes.append(f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
                  "moyen est celui de ce matériel")
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
-    return Compiled(body={"scenario": scenario, "protocol": {},
-                          "energy_profile": ENERGY_PROFILE}, links=links, notes=notes)
+    body: dict = {"scenario": scenario, "protocol": {}, "energy_profile": ENERGY_PROFILE}
+    # Le relief n'entre dans le corps que s'il a ete choisi : une cle absente et une cle a
+    # `null` n'ont pas le meme sens cote serveur, et seul le choix doit se voir.
+    if terrain_id is not None:
+        body["terrain_id"] = terrain_id
+    return Compiled(body=body, links=links, notes=notes)
 

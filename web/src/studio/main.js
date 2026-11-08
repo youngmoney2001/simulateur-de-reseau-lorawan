@@ -56,6 +56,8 @@ const state = {
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
   capaciteMAh: null,    // l'autre terme est enonce par l'utilisateur, jamais devine ici
+  terrains: [],         // catalogue du serveur : vide la plupart du temps, et c'est un fait
+  terrainCharge: false, // le catalogue n'est demande qu'une fois, pas a chaque session
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
   view: "map",      // vue courante : carte 3D (defaut) ou plan 2D
 };
@@ -127,6 +129,8 @@ async function connect() {
   else await newSession(null);
   closeLaunch();
   setStatus(state.sessions.length ? "Session chargée" : "Nouvelle session");
+  // Après la session : le sélecteur de relief a besoin de la topologie pour se positionner.
+  await chargerTerrains();
 }
 
 function renderSessionChoices() {
@@ -212,6 +216,20 @@ async function chargerChantier(fichier) {
     const ok = await guard(() => state.client.setGateway(created.session_id, eq.id, eq.gateway));
     if (!ok) break;
   }
+  // Le relief vient du fichier, mais c'est le serveur qui décide s'il le connaît. Un chantier
+  // écrit ailleurs peut nommer un relief absent d'ici : on le signale au lieu de le taire,
+  // sinon le chantier semblerait ouvert alors qu'il tournera sans relief.
+  if (chantier.terrain_id) {
+    const connu = state.terrains.some((t) => t.id === chantier.terrain_id);
+    if (!connu) {
+      setStatus(`Chantier ouvert sans relief : « ${chantier.terrain_id} » est inconnu de ce `
+        + `serveur. Les équipements et la zone sont en place.`);
+    } else {
+      const t = await guard(() => state.client.setTerrain(created.session_id,
+        chantier.terrain_id));
+      if (t) state.topo = t;
+    }
+  }
   // La zone s'écrit avant de sélectionner la session, pas après : sinon la carte s'affiche
   // d'abord à l'ancre du chantier précédent, puis saute. Le saut est invisible sur un plan en
   // mètres, mais pas sur la carte 3D — et un saut qu'on voit ressemble à une hésitation.
@@ -288,6 +306,7 @@ async function loadTopology() {
   if (!state.sid) return;
   const topo = await guard(() => state.client.topology(state.sid));
   if (topo) state.topo = topo;
+  renderTerrains();
   refreshViews();
   renderDevice();
 }
@@ -1173,6 +1192,47 @@ function renderAutonomie() {
     + `${Math.round(state.courantMoyenUA)} µA, hors vieillissement et hors autodécharge`;
 }
 
+/**
+ * Le relief, et le fait qu'il puisse ne pas y en avoir.
+ *
+ * Le catalogue vient du serveur et il est vide la plupart du temps : aucun relief n'est
+ * livré avec le dépôt. Le champ est alors masqué — un sélecteur vide serait une promesse
+ * non tenue — mais le serveur ne dit pas « zéro relief disponible », il dit « zéro relief
+ * dans ce catalogue ». La nuance est celle qui sépare « pas configuré » de « pas possible »,
+ * et c'est le genre de distinction que l'atelier doit porter : sinon l'utilisateur conclut
+ * que le simulateur ne sait pas faire, quand c'est le serveur qui n'a rien à lui donner.
+ */
+async function chargerTerrains() {
+  if (state.terrainCharge) return;
+  state.terrainCharge = true;
+  const liste = await guard(() => state.client.terrains());
+  if (!liste) return;                       // l'erreur est déjà affichée ; on retentera plus tard
+  state.terrains = liste.items ?? [];
+  renderTerrains();
+}
+
+function renderTerrains() {
+  const champ = $("terrain-field");
+  const select = $("terrain-select");
+  if (!champ || !select) return;
+  champ.hidden = state.terrains.length === 0;
+  if (!state.terrains.length) return;
+  clear(select);
+  select.append(el("option", { value: "", text: "aucun (sans relief)" }));
+  for (const t of state.terrains) select.append(el("option", { value: t.id, text: t.id }));
+  select.value = state.topo?.terrain_id ?? "";
+}
+
+async function choisirTerrain(terrainId) {
+  if (!state.sid) return;
+  const vide = terrainId === "" ? null : terrainId;
+  const topo = await guard(() => state.client.setTerrain(state.sid, vide));
+  if (!topo) return;
+  state.topo = topo;
+  renderTerrains();
+  setStatus(vide ? `Relief « ${vide} » appliqué aux prochains runs` : "Relief retiré");
+}
+
 function renderMetrics(summary, deviceRows) {
   const liste = indicateursReseau(summary, deviceRows);
   const boite = $("sim-metrics-list");
@@ -1911,6 +1971,7 @@ $("connect").addEventListener("click", connect);
 $("session-select").addEventListener("change", (ev) => selectSession(ev.target.value));
 $("new-session").addEventListener("click", () => newSession(null));
 $("delete-session").addEventListener("click", deleteSession);
+$("terrain-select").addEventListener("change", (ev) => choisirTerrain(ev.target.value));
 $("save-chantier").addEventListener("click", sauvegarderChantier);
 $("load-chantier").addEventListener("click", () => $("chantier-file").click());
 // Vider la valeur après chaque lecture : sinon recharger le même fichier une deuxième fois

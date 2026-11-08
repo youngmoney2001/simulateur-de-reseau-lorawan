@@ -18,6 +18,9 @@ export const VERSION = 1;
 // un fichier qu'il refuserait donnerait une erreur incompréhensible à la fin du chargement.
 export const MAX_EQUIPEMENTS = 64;
 const MOTIF_ID = /^[a-z][a-z0-9-]{0,31}$/;
+// Même motif que le serveur (`TERRAIN_ID_PATTERN`) : un identifiant accepté ici et
+// refusé là-bas donnerait une erreur au moment du run, trop tard pour être comprise.
+const MOTIF_TERRAIN = /^[a-z0-9_-]{1,64}$/;
 const TYPES = ["sensor", "relay", "border", "server"];
 const REGIONS = ["EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"];
 
@@ -59,6 +62,7 @@ export function serialiserChantier({ topo, origine = null }) {
     format: FORMAT,
     version: VERSION,
     origine: origine ? { lat: origine.lat, lon: origine.lon } : null,
+    terrain_id: topo?.terrain_id ?? null,
     equipements,
   };
 }
@@ -110,6 +114,7 @@ export function lireChantier(texte) {
     format: FORMAT,
     version: VERSION,
     origine: lireOrigine(brut.origine),
+    terrain_id: lireTerrain(brut.terrain_id),
     equipements: brut.equipements.map(lireEquipement),
   };
 }
@@ -123,6 +128,19 @@ function lireOrigine(origine) {
       `origine géographique illisible (lat ${origine?.lat}, lon ${origine?.lon})`);
   }
   return { lat: origine.lat, lon: origine.lon };
+}
+
+/**
+ * Le relief est un identifiant du catalogue serveur, pas un chemin : un chantier s'échange,
+ * et un fichier ne doit jamais pouvoir désigner un fichier. Chargé sur un serveur qui ne
+ * connaît pas ce relief, le chantier est refusé — bruyamment, avant toute création.
+ */
+function lireTerrain(id) {
+  if (id === null || id === undefined) return null;
+  if (typeof id !== "string" || !MOTIF_TERRAIN.test(id)) {
+    throw new ChantierInvalide(`relief « ${id} » : identifiant invalide`);
+  }
+  return id;
 }
 
 function lireEquipement(eq, rang) {

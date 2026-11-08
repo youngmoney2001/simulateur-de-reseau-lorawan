@@ -462,3 +462,93 @@ def test_equipement_inconnu_et_404(api):
     sid = _session(api)
     status, body = _gateway(api, sid, "fantome", {"region": "EU868"})
     assert status == 404, body
+
+
+# --- Relief -----------------------------------------------------------------------------------
+#
+# Le relief etait une capacite entierement invisible : le moteur le simule, l'API le valide, et
+# rien ne permettait de le choisir. Ces tests portent le trajet, pas le calcul — le calcul est
+# du ressort du moteur et de `environment.py`.
+
+def _set_terrain(api, sid, terrain_id, token=None):
+    return api.call("POST", f"/api/v1/sessions/{sid}/terrain",
+                    {"terrain_id": terrain_id}, token=token or api.alice)
+
+
+@pytest.fixture()
+def api_relief(tmp_path):
+    """Serveur muni d'un catalogue : un relief `quartier`, et rien d'autre."""
+    from test_api_server import _make_api
+    import shutil
+    from pathlib import Path
+    catalog = tmp_path / "terrains"
+    catalog.mkdir()
+    # Un MNT minimal 2x2 : la grille doit etre complete et a pas carres (environment.py).
+    (catalog / "quartier.csv").write_text(
+        "x_m,y_m,z_m\n0,0,10\n0,100,12\n100,0,14\n100,100,16\n", encoding="utf-8")
+    with _make_api(tmp_path, terrain_dir=catalog) as a:
+        yield a
+
+
+def test_le_catalogue_est_expose(api_relief):
+    status, body = api_relief.call("GET", "/api/v1/terrains")
+    assert status == 200, body
+    assert [t["id"] for t in body["items"]] == ["quartier"]
+
+
+def test_le_relief_choisi_est_relu_dans_la_topologie(api_relief):
+    sid = _session(api_relief)
+    status, body = _set_terrain(api_relief, sid, "quartier")
+    assert status == 200, body
+    assert body["terrain_id"] == "quartier"
+    status, topo = api_relief.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert status == 200, topo
+    assert topo["terrain_id"] == "quartier"
+
+
+def test_un_relief_inconnu_est_refuse(api_relief):
+    sid = _session(api_relief)
+    status, body = _set_terrain(api_relief, sid, "massif-inexistant")
+    assert status == 422, body
+    assert body["field"] == "terrain_id"
+    # Refuse au moment du choix, pas au lancement du run : une erreur qui survient quand on
+    # simule laisse croire que tout le reste etait pret.
+    assert "catalogue" in body["message"]
+
+
+def test_sans_catalogue_aucun_relief_n_est_proposable(api):
+    status, body = api.call("GET", "/api/v1/terrains")
+    assert status == 200, body
+    assert body["items"] == []
+
+
+def test_sans_catalogue_le_choix_est_refuse_sans_etre_muet(api):
+    sid = _session(api)
+    status, body = _set_terrain(api, sid, "quartier")
+    assert status == 422, body
+    assert "catalogue" in body["message"]
+
+
+def test_retirer_le_relief_est_un_choix_et_non_une_erreur(api_relief):
+    sid = _session(api_relief)
+    _set_terrain(api_relief, sid, "quartier")
+    status, body = _set_terrain(api_relief, sid, None)
+    assert status == 200, body
+    # `None` veut dire « pas de relief choisi », pas « terrain plat ». La distinction doit
+    # rester lisible, sinon l'atelier afficherait « plat » la ou rien n'a ete decide.
+    assert body["terrain_id"] is None
+
+
+def test_le_relief_choisi_descend_jusquau_run(api_relief):
+    # Deux equipements seulement : le jeu `NODES` du banc porte un relais, dont le scenario
+    # exige une configuration mesh que ce test n'a pas a fournir.
+    simple = [{"id": "frontiere", "kind": "border", "name": "Frontiere", "x_m": 0, "y_m": 0},
+              {"id": "capteur-1", "kind": "sensor", "name": "Capteur", "x_m": 300, "y_m": 0}]
+    sid = _session(api_relief, nodes=simple)
+    _set_terrain(api_relief, sid, "quartier")
+    status, body = api_relief.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": 7})
+    assert status == 202, body
+    etat = _wait_done(api_relief, body["run_id"])
+    # Le relief est accepte par le serveur de runs : c'est la preuve qu'il a traverse
+    # la compilation et qu'il est resolvable dans le catalogue.
+    assert etat["state"] == "done", etat.get("problem")

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
@@ -195,6 +197,17 @@ class SessionTopology(_Strict):
     session_id: str = Field(pattern=SESSION_PATTERN)
     nodes: list[Node] = Field(max_length=MAX_NODES)
     states: list[NodeState] = Field(max_length=MAX_NODES)
+    # Relief appliqué aux runs de cette session. `None` : le relief n'a pas été choisi, ce qui
+    # n'est pas la même chose que « terrain plat » — le moteur ne simule rien de particulier,
+    # et l'atelier doit pouvoir dire laquelle des deux situations se présente.
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
+
+
+class TerrainChoice(_Strict):
+    """Choix du relief d'une session. Le client ne fournit jamais de chemin : le relief est
+    résolu dans le catalogue du serveur, et un identifiant inconnu est refusé."""
+
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
 
 
 class ExerciseSummary(_Strict):

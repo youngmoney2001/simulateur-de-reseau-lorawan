@@ -23,7 +23,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Container, Optional
 
 from lsim import study_cli, study_exercises
 from lsim.study_compile import CompileError, Compiled, compile_session
@@ -104,6 +104,7 @@ class _Study:
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
     run_id: Optional[str] = None
+    terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
     hints_revealed: dict = field(default_factory=dict)   # exercice -> nombre d'indices révélés
     attempts: deque = field(default_factory=lambda: deque(maxlen=MAX_ATTEMPTS))
     attempt_count: int = 0
@@ -117,6 +118,7 @@ def _encode(st: _Study) -> dict:
         "cli": {nid: _cli_to_dict(c) for nid, c in st.cli.items()},
         "reports": st.reports,
         "run_id": st.run_id,
+        "terrain_id": st.terrain_id,
         "hints_revealed": st.hints_revealed,
         "attempt_count": st.attempt_count,
         "compiled": {rid: [link.model_dump(mode="json") for link in links]
@@ -132,7 +134,8 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 reports=body["reports"], run_id=body["run_id"],
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
-                          for rid, links in body["compiled"].items()})
+                          for rid, links in body["compiled"].items()},
+                terrain_id=body.get("terrain_id"))
     st.attempts.extend(AttemptOut.model_validate(a) for a in attempts)
     return st
 
@@ -218,7 +221,8 @@ class StudyService:
                 region=cli.config.lora.region,
                 configured=cli.config != study_cli.new_session(node.id).config,
                 gateway=_gateway_state(node, cli)))
-        return SessionTopology(session_id=sid, nodes=nodes, states=states)
+        return SessionTopology(session_id=sid, nodes=nodes, states=states,
+                                terrain_id=st.terrain_id)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -372,9 +376,27 @@ class StudyService:
             nodes = list(st.nodes.values())
             configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
         try:
-            return compile_session(nodes, configs, seed)
+            return compile_session(nodes, configs, seed, terrain_id=st.terrain_id)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
+
+    def set_terrain(self, owner: str, sid: str, terrain_id: Optional[str],
+                    known: Container[str]) -> SessionTopology:
+        """Relief appliqué aux runs de la session.
+
+        `known` est l'ensemble des identifiants du catalogue serveur, injecté par l'appelant :
+        le service d'étude n'a pas à connaître le service des runs. Un relief inconnu est
+        refusé ici, et non au moment du run — une erreur au lancement d'une simulation
+        arrive trop tard, elle laisse croire que le reste est prêt.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            if terrain_id is not None and terrain_id not in known:
+                raise StudyError(422, "validation_error",
+                                 f"relief « {terrain_id} » inconnu du catalogue", "terrain_id")
+            st.terrain_id = terrain_id
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
 
     def record_simulation(self, owner: str, sid: str, run_id: str, links: list[dict]) -> None:
         """Mémorise les liaisons d'un run créé par `compile` (appelé après sa création)."""
