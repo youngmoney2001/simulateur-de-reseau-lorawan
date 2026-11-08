@@ -339,6 +339,10 @@ try {
     // La réserve n'est pas un détail : sans elle, le verdict est surinterprété.
     if (!note.texte.includes("moyennage")) throw new Error(note.texte);
     if (!note.texte.includes("ETSI") && !note.texte.includes("RP002")) throw new Error(note.texte);
+    // Et la réserve doit maintenant chiffrer la fenêtre du run, au lieu de dire seulement
+    // qu'elle « n'est pas forcément » celle du texte. Une durée énoncée se confronte ; une
+    // réserve générale laisse l'utilisateur sans moyen d'évaluer l'écart.
+    if (!/Mesuré sur \d/.test(note.texte)) throw new Error(note.texte);
   });
 
   await step("visualisation : équipements colorés par leur résultat, légende affichée", async () => {

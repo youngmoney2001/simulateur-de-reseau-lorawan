@@ -476,9 +476,12 @@ export function fenetreVerdictTexte(ns) {
       + `réglementaire (1 h chez ETSI). La comparaison est directe.`;
   }
   const rapport = (FENETRE_ETSI_S / Math.max(secondes, 1)).toFixed(0);
-  return `Mesuré sur ${duree}, quand le texte réglementaire moyenne sur 1 h (ETSI) — soit environ `
-    + `${rapport} fois plus long. Le verdict porte sur la fenêtre du run : sur une heure, `
-    + `l'occupation moyenne peut être plus basse comme plus haute.`;
+  // « Fenêtre de moyennage » et pas seulement « moyenne » : c'est le nom de la grandeur à
+  // laquelle on compare, et c'est le mot qui porte la réserve. L'énoncer au passage la
+  // affaiblirait ; la nommer rappelle qu'il s'agit d'un objet du texte réglementaire.
+  return `Mesuré sur ${duree}, quand la fenêtre de moyennage du texte réglementaire est de `
+    + `1 h (ETSI) — soit environ ${rapport} fois plus long. Le verdict porte sur la fenêtre `
+    + `du run : sur une heure, l'occupation moyenne peut être plus basse comme plus haute.`;
 }
 
 /**

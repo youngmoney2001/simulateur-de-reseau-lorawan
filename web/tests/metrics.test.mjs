@@ -491,6 +491,14 @@ test("un run plus long que l'heure reglementaire rend la comparaison directe", (
   assert.match(texte, /comparaison est directe/);
 });
 
+test("la fenetre de moyennage est nommee, pas sous-entendue", () => {
+  // Le mot porte la reserve : c'est la grandeur du texte a laquelle on compare. Le test
+  // d'integration le verifie aussi, et il s'est deja pris le verbe « moyenne » pour le nom.
+  assert.match(fenetreVerdictTexte(400 * NS), /moyennage/);
+  assert.match(fenetreVerdictTexte(9000 * NS), /moyennage/);
+  assert.match(fenetreVerdictTexte(null), /moyennage/);
+});
+
 test("la reserve generale ne s'affiche pas quand la fenetre est connue", () => {
   // L'ancienne phrase disait « qui n'est pas forcement » : elle laissait croire au pire sans
   // rien mesurer. Avec la fenetre, on ne l'emploie plus.
