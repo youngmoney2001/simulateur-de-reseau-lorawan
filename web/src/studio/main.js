@@ -8,7 +8,8 @@ import {
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
-  resultatsParNoeud, echellePdr, lignesResultat } from "./metrics.js";
+  resultatsParNoeud, echellePdr, lignesResultat,
+  limitesParGroupe, RESERVE_DUTY_CYCLE } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -880,13 +881,30 @@ function renderMetrics(summary, deviceRows) {
   const tbody = table.querySelector("tbody");
   clear(thead);
   clear(tbody);
-  const { entetes, lignes } = ventilationTable(groupes);
+  const limites = limitesParGroupe(summary);
+  const { entetes, lignes } = ventilationTable(groupes, limites);
   thead.append(el("tr", {}, ...entetes.map((h) => el("th", { text: h }))));
   for (const cellules of lignes) {
     tbody.append(el("tr", {}, ...cellules.map((v) => el("td", { text: String(v) }))));
   }
   // Un seul groupe : la table n'apprend rien que les totaux ne disent déjà.
   table.hidden = groupes.length < 2;
+
+  // La source d'une limite réglementaire fait partie de la limite : sans elle, « 1 % » est
+  // une opinion. On la cite une fois par région, avec la réserve sur la fenêtre de mesure —
+  // un verdict sans cette réserve serait surinterprété.
+  const note = $("sim-duty-note");
+  clear(note);
+  const sources = new Map();
+  for (const d of limites.values()) if (d.source) sources.set(d.region ?? "?", d.source);
+  if (sources.size) {
+    for (const [region, source] of sources) {
+      note.append(el("span", { class: "strong", text: `${region} — ` }),
+        document.createTextNode(source + " "));
+    }
+    note.append(el("span", { text: RESERVE_DUTY_CYCLE }));
+  }
+  note.hidden = sources.size === 0;
 }
 
 /**

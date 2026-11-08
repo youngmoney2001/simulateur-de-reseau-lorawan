@@ -1,5 +1,72 @@
 {
   "$defs": {
+    "DutyCycleOut": {
+      "additionalProperties": false,
+      "description": "Rapport cyclique d'un groupe : la limite réglementaire et sa source, pas le verdict.\n\nLe verdict est laissé à l'interface, et pour une raison mesurée : la limite se compare à une\noccupation **moyennée sur la fenêtre du texte réglementaire** (une heure chez ETSI), alors que\nle run s'observe sur sa propre fenêtre. Publier ici « conforme » ou « non conforme » donnerait\nà une comparaison de deux fenêtres différentes l'autorité du serveur. On publie donc la\nlimite, sa source, la fréquence et la région : les deux termes de la comparaison, rien de plus.\n\n`limit` est **absente** (clé retirée, convention `exclude_none` de l'API) quand le plan\nrégional ne déclare aucune sous-bande — cinq régions sur huit sont dans ce cas (US915,\nAU915, AS923, KR920, IN865). Ce n'est pas une limite permissive, c'est une limite absente :\nl'interface ne doit pas la traduire par « 100 % ».",
+      "properties": {
+        "channel_freq_hz": {
+          "exclusiveMinimum": 0,
+          "title": "Channel Freq Hz",
+          "type": "integer"
+        },
+        "eirp_dbm": {
+          "title": "Eirp Dbm",
+          "type": "number"
+        },
+        "group": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Group",
+          "type": "string"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "maximum": 1.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "maxLength": 16,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        }
+      },
+      "required": [
+        "group",
+        "channel_freq_hz",
+        "eirp_dbm"
+      ],
+      "title": "DutyCycleOut",
+      "type": "object"
+    },
     "GatewayLoadOut": {
       "additionalProperties": false,
       "properties": {
@@ -295,6 +362,22 @@
   "additionalProperties": false,
   "description": "Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent\ndepuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent).",
   "properties": {
+    "duty_cycle": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/DutyCycleOut"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duty Cycle"
+    },
     "energy_profile": {
       "anyOf": [
         {

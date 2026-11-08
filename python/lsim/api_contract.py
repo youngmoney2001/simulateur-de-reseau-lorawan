@@ -188,6 +188,31 @@ class GatewayReportOut(_Strict):
     mesh_inbound: Optional[list[MeshInboundOut]] = Field(default=None, max_length=64)
 
 
+class DutyCycleOut(_Strict):
+    """Rapport cyclique d'un groupe : la limite réglementaire et sa source, pas le verdict.
+
+    Le verdict est laissé à l'interface, et pour une raison mesurée : la limite se compare à une
+    occupation **moyennée sur la fenêtre du texte réglementaire** (une heure chez ETSI), alors que
+    le run s'observe sur sa propre fenêtre. Publier ici « conforme » ou « non conforme » donnerait
+    à une comparaison de deux fenêtres différentes l'autorité du serveur. On publie donc la
+    limite, sa source, la fréquence et la région : les deux termes de la comparaison, rien de plus.
+
+    `limit` est **absente** (clé retirée, convention `exclude_none` de l'API) quand le plan
+    régional ne déclare aucune sous-bande — cinq régions sur huit sont dans ce cas (US915,
+    AU915, AS923, KR920, IN865). Ce n'est pas une limite permissive, c'est une limite absente :
+    l'interface ne doit pas la traduire par « 100 % ».
+    """
+
+    group: str = Field(min_length=1, max_length=64)
+    region: Optional[str] = Field(default=None, max_length=16)
+    channel_freq_hz: int = Field(gt=0)
+    eirp_dbm: float
+    # None : aucune sous-bande déclarée pour cette fréquence dans ce plan.
+    limit: Optional[float] = Field(default=None, gt=0.0, le=1.0)
+    # Source officielle du plan régional ; absente seulement sans région déclarée.
+    source: Optional[str] = None
+
+
 class RunSummary(_Strict):
     """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
     depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
@@ -200,6 +225,9 @@ class RunSummary(_Strict):
     gateway: Optional[GatewayLoadOut] = None
     gateways: Optional[list[GatewayReportOut]] = Field(default=None, max_length=64)
     energy_profile: Optional[str] = None
+    # Rapport cyclique par groupe. Absent si aucun groupe ne déclare de région : c'est le
+    # cas de tout scénario écrit avant l'introduction du champ, dont l'empreinte ne bouge pas.
+    duty_cycle: Optional[list[DutyCycleOut]] = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":

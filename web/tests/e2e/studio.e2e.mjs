@@ -296,6 +296,37 @@ try {
   // Phase L : le résultat doit se lire sur la carte et sur le plan, pas seulement dans un
   // tableau. Un module pur peut vérifier l'échelle de couleurs ; seul un run réel dans un
   // navigateur vérifie que la couleur arrive jusqu'au pixel affiché.
+  // Verdict de rapport cyclique : la limite vient du serveur, la mesure du run. Le test
+  // vérifie que les deux se rencontrent dans la case, et que la source est citée —
+  // une limite sans source n'est qu'une opinion.
+  await step("rapport cyclique : limite, verdict et source affichés", async () => {
+    const enTetes = await page.$$eval("#sim-groups thead th", (th) => th.map((e) => e.textContent));
+    if (!enTetes.includes("Limite")) throw new Error(enTetes.join(" | "));
+    if (!enTetes.includes("Occupation")) throw new Error(enTetes.join(" | "));
+
+    const cases = await page.$$eval("#sim-groups tbody tr", (trs) => trs.map((tr) => {
+      const td = tr.querySelectorAll("td");
+      return { occupation: td[td.length - 2]?.textContent ?? "", limite: td[td.length - 1]?.textContent ?? "" };
+    }));
+    if (!cases.length) throw new Error("aucune ligne dans la table par équipement");
+    for (const c of cases) {
+      if (!/%/.test(c.occupation)) throw new Error(`occupation sans unité : ${c.occupation}`);
+      // Une limite absente doit rester « — » : jamais « 100 % », qui autoriserait tout.
+      if (c.limite !== "—" && !/%/.test(c.limite) && c.limite !== "aucune") {
+        throw new Error(`limite inattendue : ${c.limite}`);
+      }
+      if (/100(\.0+)? %/.test(c.limite)) throw new Error(`limite fabriquée : ${c.limite}`);
+    }
+
+    const note = await page.$eval("#sim-duty-note", (e) => ({
+      visible: !e.hidden, texte: e.textContent.replace(/\s+/g, " ").trim(),
+    }));
+    if (!note.visible) throw new Error("note de source masquée alors qu'une limite est affichée");
+    // La réserve n'est pas un détail : sans elle, le verdict est surinterprété.
+    if (!note.texte.includes("moyennage")) throw new Error(note.texte);
+    if (!note.texte.includes("ETSI") && !note.texte.includes("RP002")) throw new Error(note.texte);
+  });
+
   await step("visualisation : équipements colorés par leur résultat, légende affichée", async () => {
     const legende = await page.$eval("#pdr-legend", (e) => ({
       visible: !e.hidden,

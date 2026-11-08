@@ -25,6 +25,9 @@ import {
   ECHELLE_PDR,
   resultatsParNoeud,
   lignesResultat,
+  verdictDutyCycle,
+  limitesParGroupe,
+  RESERVE_DUTY_CYCLE,
 } from "../src/studio/metrics.js";
 
 const FIXTURE = JSON.parse(
@@ -148,15 +151,21 @@ test("chaque indicateur porte sa formule et une valeur exploitable", () => {
   }
 });
 
-test("aucun indicateur ne prononce de conformité réglementaire", () => {
-  // Cinq des huit régions du modèle n'ont aucune limite de rapport cyclique, et aucune
-  // limite EU868 n'est sourcée dans docs/REGULATORY_SOURCES.md : un verdict serait inventé.
+test("aucun indicateur réseau ne prononce de conformité réglementaire", () => {
+  // La garde porte sur les indicateurs **agrégés**, et c'est là sa raison d'être : un run peut
+  // mêler des groupes de régions, de fréquences et donc de limites différents. Un verdict
+  // unique au niveau du réseau n'aurait pas de référent. Le verdict légitime vit dans
+  // `ventilationTable`, groupe par groupe, à côté de la limite et de sa source.
+  //
+  // Précision après relecture : EU868 **est** sourcé et vérifié (ETSI EN 300 220-2 V3.2.1,
+  // PDF fournis ; sous-bandes K à QP, voir docs/REGULATORY_SOURCES.md). Ce qui n'est pas
+  // confirmé, c'est le duty cycle RU864 de 868,7–869,2 MHz, conservé à 0,1 % par prudence.
   const liste = [...indicateursReseau(summary, devices),
     ...summary.gateways.flatMap((g) => indicateursPasserelle(g))];
   for (const i of liste) {
     for (const mot of ["conforme", "non conforme", "limite légale", "dépasse la limite"]) {
       assert.ok(!`${i.label} ${i.hint}`.toLowerCase().includes(mot),
-        `verdict réglementaire sur « ${i.label} »`);
+        `verdict réglementaire sur un indicateur agrégé : « ${i.label} »`);
     }
   }
 });
@@ -219,7 +228,7 @@ test("table de ventilation : un équipement par groupe supprime la colonne inuti
   assert.equal(t.unParGroupe, true);
   assert.ok(!t.entetes.includes("Dispositifs"));
   assert.equal(t.entetes[0], "Équipement");
-  assert.deepEqual(t.lignes[0], ["capt-1", "SF9", 4, 3, "75.0 %", 0, 1, "0.500 %"]);
+  assert.deepEqual(t.lignes[0], ["capt-1", "SF9", 4, 3, "75.0 %", 0, 1, "0.500 %", "—"]);
 });
 
 test("table de ventilation : de vrais groupes gardent la colonne Dispositifs", () => {
@@ -346,4 +355,96 @@ test("lignes de résultat : absentes sans résultat, et sans fenêtre", () => {
     sent: 2, received: 1, lostSensitivity: 0, lostCollision: 1, airtimeNs: 5e8 }, null);
   assert.equal(l.lignes[0].valeur, "50.0 %");
   assert.equal(l.lignes[4].valeur, "—");
+});
+
+// --- Verdict de rapport cyclique ------------------------------------------------------------
+
+const LIMITES = limitesParGroupe(FIXTURE.summary);
+
+test("le fixture porte bien une limite EU868 sourcée", () => {
+  assert.equal(LIMITES.size, 2);
+  const d = LIMITES.get("capteurs-proches");
+  assert.equal(d.region, "EU868");
+  assert.equal(d.limit, 0.01);
+  assert.ok(d.source.includes("ETSI EN 300 220-2 V3.2.1"));
+});
+
+test("verdict : conforme quand la mesure passe sous la limite", () => {
+  // capteurs-proches : 0,014 % mesuré contre 1 % — marge 0,986 point.
+  const g = Object.fromEntries(
+    ventilationGroupes(FIXTURE.devices, FENETRE).map((x) => [x.name, x]));
+  const v = verdictDutyCycle(g["capteurs-proches"], LIMITES.get("capteurs-proches"));
+  assert.equal(v.verdict, "conforme");
+  assert.equal(v.conforme, true);
+  assert.equal(v.limite, 0.01);
+  assert.ok(v.marge > 0);
+  assert.match(v.verdictText, /^conforme, .* pt sous la limite$/);
+});
+
+test("verdict : dépassement franc, et marge exprimée en points", () => {
+  const v = verdictDutyCycle({ occupancyMax: 0.02 }, { region: "EU868", limit: 0.01 });
+  assert.equal(v.verdict, "depassement");
+  assert.equal(v.conforme, false);
+  // 2 % contre 1 % : un point de pourcentage, pas « le double » — l'unité compte près du seuil.
+  assert.ok(Math.abs(v.marge + 1) < 1e-12);
+  assert.match(v.verdictText, /^dépasse la limite de 1\.000 pt$/);
+});
+
+test("verdict : la borne est inclusive, un dépassement infime est un dépassement", () => {
+  assert.equal(verdictDutyCycle({ occupancyMax: 0.01 }, { limit: 0.01 }).verdict, "conforme");
+  assert.equal(verdictDutyCycle({ occupancyMax: 0.0101 }, { limit: 0.01 }).verdict, "depassement");
+});
+
+test("verdict : plan sans limite, ce n'est pas une limite à 100 %", () => {
+  // US915, AU915, AS923, KR920, IN865 n'ont aucune sous-bande. La clé `limit` est absente.
+  const v = verdictDutyCycle({ occupancyMax: 0.5 }, { region: "US915", channel_freq_hz: 903_900_000 });
+  assert.equal(v.verdict, "sans_limite");
+  assert.equal(v.limite, null);
+  assert.equal(v.conforme, null);          // ni conforme ni en faute : on ne sait pas
+  assert.notEqual(v.limiteText, "100 %");
+  assert.notEqual(v.limiteText, "100.000 %");
+});
+
+test("verdict : sans région, rien n'est deviné", () => {
+  const v = verdictDutyCycle({ occupancyMax: 0.9 }, undefined);
+  assert.equal(v.verdict, "sans_region");
+  assert.equal(v.conforme, null);
+});
+
+test("verdict : mesure absente", () => {
+  const v = verdictDutyCycle({ occupancyMax: null }, { region: "EU868", limit: 0.01 });
+  assert.equal(v.verdict, "non_mesure");
+  assert.equal(v.conforme, null);
+});
+
+test("la réserve accompagne le verdict et n'en est pas séparable", () => {
+  // La limite se compare à une occupation moyennée sur la fenêtre du texte réglementaire ;
+  // le run s'observe sur la sienne. Un verdict sans cette réserve serait surinterprété.
+  assert.ok(RESERVE_DUTY_CYCLE.includes("moyennage"));
+  assert.ok(RESERVE_DUTY_CYCLE.includes("fenêtre du run"));
+});
+
+test("jointure des limites : groupe inconnu, résumé vide", () => {
+  assert.equal(limitesParGroupe({}).size, 0);
+  assert.equal(limitesParGroupe(undefined).size, 0);
+  assert.equal(limitesParGroupe({ duty_cycle: [{ group: "a", limit: 0.01 }, { limit: 0.02 }] }).size, 1);
+});
+
+test("table de ventilation : la colonne Limite dit le verdict, pas seulement le nombre", () => {
+  const g = Object.fromEntries(
+    ventilationGroupes(FIXTURE.devices, FENETRE).map((x) => [x.name, x]));
+  const t = ventilationTable([g["capteurs-proches"], g["capteurs-lointains"]], LIMITES);
+  // Dix colonnes annoncées, dix cellules : une table désalignée se voit ici.
+  for (const ligne of t.lignes) assert.equal(ligne.length, t.entetes.length);
+  const limite = t.lignes[0].at(-1);
+  assert.match(limite, /^1\.000 % · conforme$/);
+});
+
+test("table de ventilation : sans limite publiée, la case reste vide et non à 100 %", () => {
+  const g = Object.fromEntries(
+    ventilationGroupes(FIXTURE.devices, FENETRE).map((x) => [x.name, x]));
+  const t = ventilationTable([g["capteurs-proches"]], new Map());
+  const limite = t.lignes[0].at(-1);
+  assert.equal(limite, "—");
+  assert.notEqual(limite, "100 %");
 });

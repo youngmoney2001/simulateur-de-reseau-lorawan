@@ -293,14 +293,23 @@ export function ventilationGroupes(lignes = [], fenetreNs = null) {
  * d'après l'identifiant du capteur) : la colonne « Dispositifs » y vaudrait 1 sur chaque ligne.
  * Un scénario YAML, lui, produit de vrais groupes. La table s'adapte aux deux.
  */
-export function ventilationTable(groupes = []) {
+export function ventilationTable(groupes = [], limites = null) {
+  // `limites` : Map groupe -> ligne DutyCycleOut du run. Sans elle, la colonne « Limite »
+  // reste à « — » : une limite absente n'est pas une limite permissive.
   const unParGroupe = groupes.length > 0 && groupes.every((g) => g.count === 1);
   const entetes = unParGroupe
-    ? ["Équipement", "SF", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation"]
-    : ["Groupe", "SF", "Dispositifs", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation"];
-  const lignes = groupes.map((g) => (unParGroupe
-    ? [g.name, g.spreadingFactor, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, g.occupancyMaxText]
-    : [g.name, g.spreadingFactor, g.count, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, g.occupancyMaxText]));
+    ? ["Équipement", "SF", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation", "Limite"]
+    : ["Groupe", "SF", "Dispositifs", "Émises", "Reçues", "PDR", "Sensibilité", "Collision", "Occupation", "Limite"];
+  const lignes = groupes.map((g) => {
+    const v = verdictDutyCycle(g, limites?.get(g.name));
+    const limite = v.verdict === "sans_limite" ? "aucune"
+      : v.verdict === "sans_region" ? "—"
+      : `${v.limiteText} · ${v.conforme ? "conforme" : `+${Math.abs(v.marge).toFixed(3)} pt`}`;
+    const fin = [g.occupancyMaxText, limite];
+    return unParGroupe
+      ? [g.name, g.spreadingFactor, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, ...fin]
+      : [g.name, g.spreadingFactor, g.count, g.sent, g.received, g.pdrText, g.lostSensitivity, g.lostCollision, ...fin];
+  });
   return { entetes, lignes, unParGroupe };
 }
 
@@ -408,4 +417,65 @@ export function lignesResultat(resultat, fenetreNs = null) {
       { titre: "Occupation", valeur: pct(occupation, 3) },
     ],
   };
+}
+
+// --- Verdict de rapport cyclique ------------------------------------------------------------
+//
+// Le serveur publie la limite et sa source ; la comparaison se fait ici, sur la mesure.
+// `info` est la ligne `DutyCycleOut` du groupe (absente si le groupe ne déclare pas de région,
+// sans clé `limit` si le plan n'en définit aucune).
+
+/** Le verdict est rendu, mais la réserve qui va avec ne l'est jamais : elle fait partie du verdict. */
+export const RESERVE_DUTY_CYCLE =
+  "Mesuré sur la fenêtre du run, qui n'est pas forcément la fenêtre de moyennage du texte "
+  + "réglementaire (une heure chez ETSI).";
+
+/**
+ * Compare l'occupation mesurée d'un groupe à la limite de son plan régional.
+ *
+ * Quatre issues, et elles ne se confondent pas :
+ *  - `sans_region` : le groupe ne déclare pas de région. Aucune limite n'est devinable.
+ *  - `sans_limite` : le plan est connu mais ne borne pas (US915, AU915, AS923, KR920, IN865).
+ *    Ce n'est **pas** une limite à 100 % : l'afficher ainsi permettrait de dépasser sans alerte.
+ *  - `conforme` / `depassement` : comparaison des deux nombres.
+ */
+export function verdictDutyCycle(groupe, info) {
+  const mesure = groupe?.occupancyMax ?? null;
+  if (!info) {
+    return { verdict: "sans_region", mesure, limite: null, limiteText: "—",
+      verdictText: "région non déclarée", source: null, region: null, freqMhz: null,
+      conforme: null, marge: null };
+  }
+  const limite = Number.isFinite(info.limit) ? info.limit : null;
+  const freqMhz = Number.isFinite(info.channel_freq_hz) ? info.channel_freq_hz / 1e6 : null;
+  const commun = {
+    mesure, limite, source: info.source ?? null, region: info.region ?? null, freqMhz,
+    limiteText: limite == null ? "aucune" : pct(limite, 3),
+  };
+  if (limite == null) {
+    return { ...commun, verdict: "sans_limite", verdictText: "plan sans limite",
+      conforme: null, marge: null };
+  }
+  if (mesure == null) {
+    return { ...commun, verdict: "non_mesure", verdictText: "non mesuré",
+      conforme: null, marge: null };
+  }
+  // Marge en points de pourcentage : « 0,149 pt sous la limite » parle mieux que deux
+  // pourcentages qu'il faut soustraire de tête — surtout près du seuil.
+  const marge = (limite - mesure) * 100;
+  const conforme = mesure <= limite;
+  return {
+    ...commun, conforme, marge,
+    verdict: conforme ? "conforme" : "depassement",
+    verdictText: conforme
+      ? `conforme, ${Math.abs(marge).toFixed(3)} pt sous la limite`
+      : `dépasse la limite de ${Math.abs(marge).toFixed(3)} pt`,
+  };
+}
+
+/** Associe chaque ligne de groupe à l'éventuelle limite de son plan (jointure par le nom). */
+export function limitesParGroupe(summary) {
+  const out = new Map();
+  for (const d of summary?.duty_cycle ?? []) if (d?.group != null) out.set(d.group, d);
+  return out;
 }

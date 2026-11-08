@@ -144,21 +144,41 @@ et un test verrouille qu'ils ne sont pas le même champ.
 **Fenêtre et occupation : le maximum, jamais la somme.** Avec trois passerelles, sommer les
 `observation_ns` compterait trois fois la même horloge de run et diviserait le débit par trois.
 
-### Aucun verdict réglementaire
+### Verdict de rapport cyclique
 
-La phase K **mesure**, elle ne prononce pas de conformité. Raisons, vérifiées :
+Le verdict est rendu, mais **la réserve qui va avec ne l'est jamais** : elle fait partie du
+verdict. Le serveur publie la limite et sa source ; l'interface fait la comparaison et affiche
+les deux ensemble.
 
-- `RunSummary` ne porte **pas** la région ; elle est portée par chaque groupe du scénario
-  (`GroupModel.region`, optionnelle), et les lignes de dispositifs du run ne la répètent pas.
-  Un verdict serait donc attribué à une région devinée.
-- `RegionProfile.duty_cycle_limit` renvoie `None` pour **cinq des huit régions** (US915, AU915,
-  AS923, KR920, IN865) : zéro sous-bande déclarée, aucune limite. EU868 renvoie 0,01 à 868,1 et
-  868,3 MHz ; RU864 et AS923JP ont deux sous-bandes.
-- `docs/REGULATORY_SOURCES.md` ne cite **aucune limite de duty cycle vérifiée pour EU868** : la
-  valeur 1 % vient du code, pas d'une source.
+La limite n'est **pas** une constante par région — c'est ce qui rendait un verdict hâtif faux.
+Mesuré sur le modèle :
 
-Un test interdit l'apparition des mots « conforme », « non conforme », « limite légale » et
-« dépasse la limite » dans un libellé ou une formule d'indicateur.
+| Région | Fréquence | Limite |
+|---|---|---|
+| EU868 | 868,1 MHz | **1 %** (sous-bande M) |
+| EU868 | 869,525 MHz | **0,1 %** (sous-bande N) |
+| EU868 | 863,5 MHz | **0,1 %** (sous-bande K) |
+| RU864 | 868,9 MHz | 0,1 % |
+| US915 | 903,9 MHz | **aucune** — zéro sous-bande |
+
+Cinq régions sur huit (US915, AU915, AS923, KR920, IN865) n'ont **aucune** sous-bande. La case
+reste alors « aucune », jamais « 100 % » : afficher 100 % autoriserait n'importe quel débit sans
+jamais alerter. Un test l'interdit.
+
+**Pourquoi la réserve est indissociable** : la limite réglementaire s'applique à une occupation
+*moyennée sur la fenêtre du texte* (une heure chez ETSI). Le run s'observe sur sa propre fenêtre.
+Comparer les deux sans le dire reviendrait à donner à une approximation l'autorité d'une mesure.
+La note sous la table cite donc la source **et** la réserve.
+
+**État des sources, relu** (`docs/REGULATORY_SOURCES.md`) : EU868 est marqué **« Vérifié (PDF
+fournis) »** pour ses sous-bandes K à QP — la limite est solidement sourcée. Ce qui ne l'est pas,
+c'est le duty cycle RU864 de 868,7–869,2 MHz : le texte consolidé 2023 indique « 10 % ou LBT »
+mais sous condition « stations de base », et la valeur retenue est 0,1 % **par prudence**. Une
+précédente version de ce document affirmait le contraire pour EU868 : c'était une lecture par
+généralisation depuis la ligne RU864, et c'était faux.
+
+Sortie serveur : `RunSummary.duty_cycle` (une ligne par groupe déclarant une région), schéma
+régénéré. Sans région, le champ est absent — un scénario antérieur garde son résumé inchangé.
 
 ### Invariant qui fonde la répartition des pertes
 

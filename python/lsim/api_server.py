@@ -50,7 +50,8 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
-    DevicePage, DeviceRowOut, GatewayLoadOut, GatewayReportOut, Problem, RunCreate, RunStatus,
+    DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
+    RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
     ValidateResponse, list_regions,
 )
@@ -427,6 +428,35 @@ def _scenario_for(model: Any, terrain_id: Optional[str], catalog: TerrainCatalog
         raise ApiError(422, "validation_error", str(exc)) from None
 
 
+def _duty_cycle_out(scenario: Scenario) -> Optional[list[dict[str, Any]]]:
+    """Limites de rapport cyclique, une ligne par groupe **qui déclare une région**.
+
+    Sans région, le plan est inconnu : publier une limite reviendrait à la deviner. Aucun
+    groupe n'en déclarant, le champ est absent — un scénario antérieur garde ainsi son
+    résumé inchangé.
+    """
+    from lsim.regions import PROFILES
+
+    rows = []
+    for g in scenario.model.groups:
+        if g.region is None:
+            continue
+        profil = PROFILES.get(g.region)
+        if profil is None:                        # région inconnue : ne rien inventer
+            continue
+        try:
+            limite = profil.duty_cycle_limit(g.channel_freq_hz, g.tx_power_dbm)
+        except ValueError:
+            # Fréquence ou PIRE hors plan : le scénario a déjà été validé en amont, mais un
+            # plan dont les sous-bandes ne couvrent pas la fréquence ne doit pas faire échouer
+            # le run. On publie la ligne sans limite plutôt que de lever.
+            limite = None
+        rows.append(DutyCycleOut(group=g.name, region=g.region,
+                                 channel_freq_hz=g.channel_freq_hz, eirp_dbm=g.tx_power_dbm,
+                                 limit=limite, source=profil.source).model_dump(exclude_none=True))
+    return rows or None
+
+
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None) -> dict[str, Any]:
     body = dict(
@@ -437,6 +467,7 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
                       lost_gateway_busy=totals.lost_gateway_busy, lost_mesh=lost_mesh).model_dump(),
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
+        duty_cycle=_duty_cycle_out(scenario),
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(

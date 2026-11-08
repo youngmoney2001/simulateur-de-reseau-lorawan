@@ -1,8 +1,8 @@
 {
-  "run_id": "nRW9VuJiTjgvIDDSLbstIg",
+  "run_id": "FCfs1Scg95mbi54y-lHKiQ",
   "summary": {
-    "run_id": "nRW9VuJiTjgvIDDSLbstIg",
-    "scenario_sha256": "93499678cbec19bd9fc96d60b01355882e0f88d47688353fe3866c299fe068b0",
+    "run_id": "FCfs1Scg95mbi54y-lHKiQ",
+    "scenario_sha256": "d2b3e7df31d5a0562073866bd70d1e4193b580d527ba37e8d300cd1193b600d1",
     "seed": 7,
     "totals": {
       "sent": 172,
@@ -21,7 +21,7 @@
         "lost_collision": 30,
         "lost_gateway_busy": 0,
         "audible_frames": 172,
-        "busy_ns": 134229210100,
+        "busy_ns": 133981914100,
         "peak_concurrent": 3,
         "observation_ns": 1742526688314,
         "latency_samples": 122,
@@ -35,7 +35,7 @@
         "lost_collision": 20,
         "lost_gateway_busy": 0,
         "audible_frames": 172,
-        "busy_ns": 134229210100,
+        "busy_ns": 133981914100,
         "peak_concurrent": 3,
         "observation_ns": 1742526688314,
         "latency_samples": 20,
@@ -49,7 +49,7 @@
         "lost_collision": 30,
         "lost_gateway_busy": 0,
         "audible_frames": 172,
-        "busy_ns": 134229210100,
+        "busy_ns": 133981914100,
         "peak_concurrent": 3,
         "observation_ns": 1742526688314,
         "latency_samples": 10,
@@ -57,7 +57,25 @@
         "latency_p95_ms": 1482.752
       }
     ],
-    "energy_profile": "rak4631"
+    "energy_profile": "rak4631",
+    "duty_cycle": [
+      {
+        "group": "capteurs-proches",
+        "region": "EU868",
+        "channel_freq_hz": 868100000,
+        "eirp_dbm": 14.0,
+        "limit": 0.01,
+        "source": "ETSI EN 300 220-2 V3.2.1 (2018-06), tableau des sous-bandes K à Q ; LoRaWAN Regional Parameters RP002-1.0.0 (2019), §2.4.2 (canaux par défaut), §2.4.3 (PIRE, ERP = EIRP - 2,15 dB) et §2.4.8 (RX2 869,525 MHz)"
+      },
+      {
+        "group": "capteurs-lointains",
+        "region": "EU868",
+        "channel_freq_hz": 868100000,
+        "eirp_dbm": 14.0,
+        "limit": 0.01,
+        "source": "ETSI EN 300 220-2 V3.2.1 (2018-06), tableau des sous-bandes K à Q ; LoRaWAN Regional Parameters RP002-1.0.0 (2019), §2.4.2 (canaux par défaut), §2.4.3 (PIRE, ERP = EIRP - 2,15 dB) et §2.4.8 (RX2 869,525 MHz)"
+      }
+    ]
   },
   "devices": [
     {

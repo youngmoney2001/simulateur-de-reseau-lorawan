@@ -45,11 +45,15 @@ SCENARIO = {
         {"name": "capteurs-proches", "count": 12,
          "placement": {"type": "disk", "radius_m": 800, "center_x_m": 300, "center_y_m": 200},
          "spreading_factor": 7, "payload_bytes": 12, "tx_power_dbm": 14,
-         "period_s": 300, "messages": 6, "start_spread_s": 300},
+         "period_s": 300, "messages": 6, "start_spread_s": 300,
+         # Sans région, le run ne publierait aucune limite de rapport cyclique et le
+         # verdict ne serait pas exercé. 868,1 MHz en EU868 : sous-bande M, limite 1 %.
+         "region": "EU868", "channel_freq_hz": 868_100_000},
         {"name": "capteurs-lointains", "count": 10,
          "placement": {"type": "disk", "radius_m": 2500, "center_x_m": 400, "center_y_m": 0},
          "spreading_factor": 12, "payload_bytes": 24, "tx_power_dbm": 14,
-         "period_s": 60, "messages": 10, "start_spread_s": 60},
+         "period_s": 60, "messages": 10, "start_spread_s": 60,
+         "region": "EU868", "channel_freq_hz": 868_100_000},
     ],
 }
 
