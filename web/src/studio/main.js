@@ -580,9 +580,9 @@ function renderGatewayConfig(node, body) {
       }
     },
   }, grid, el("div", { class: "sensor-actions" },
-    el("button", { type: "submit", class: "primary", text: "Enregistrer" })));
+    el("button", { type: "submit", class: "primary", text: "Enregistrer" })), message);
 
-  body.append(form, message);
+  body.append(form);
 
   // Le renvoi vers le CLI : ce qui reste, où le trouver, et pourquoi ce n'est pas ici.
   body.append(el("details", { class: "gw-avance" },
