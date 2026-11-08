@@ -462,6 +462,66 @@ try {
     if (st2.sub_band !== null) throw new Error(`sous-bande conservée : ${st2.sub_band}`);
   });
 
+  // Liaisons mesh observées : un relais qui a livré des trames à la frontière. C'est la seule
+  // partie de la topologie que le plan puisse tracer sans inventer — voir `liaisons.js` pour
+  // ce qu'on refuse de dessiner, et pourquoi.
+  //
+  // Session dédiée : un relais de plus ferait dérailler les étapes de simulation et
+  // d'exercice, écrites pour un réseau précis.
+  await step("liaisons mesh : le plan trace ce que le relais a livré", async () => {
+    await page.click("#new-session");
+    await page.waitForFunction(() => !document.querySelector('g.node'), { timeout: 20_000 });
+
+    await setValue('#add-form [name="id"]', "gw-mesh");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="gw-mesh"]');
+
+    await setValue('#add-form [name="id"]', "relais-mesh");
+    await page.select('#add-form [name="kind"]', "relay");
+    await setValue('#add-form [name="lat"]', "4.051100");
+    await setValue('#add-form [name="lon"]', "9.781424");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="relais-mesh"]');
+
+    await setValue('#add-form [name="id"]', "capt-mesh");
+    await page.select('#add-form [name="kind"]', "sensor");
+    await setValue('#add-form [name="lat"]', "4.052899");
+    await setValue('#add-form [name="lon"]', "9.782325");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="capt-mesh"]');
+
+    // Sans dispersion des départs, deux capteurs émettraient à la même seconde. Ici un seul
+    // capteur suffit, mais sans `start_spread_s` ses trames se chevaucheraient.
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-mesh"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-mesh"]');
+    await deviceTab("Config", "capt-mesh");
+    await page.waitForSelector('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]');
+    await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]', "4");
+    await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="start_spread_s"]', "30");
+    await submitForm('.device-win[data-node-id="capt-mesh"] form');
+    await waitText('.device-win[data-node-id="capt-mesh"] form', /enregistrés/);
+
+    await obsTab("Simulation");
+    await setValue("#seed", "7");
+    await page.click("#simulate");
+    await waitText("#sim-status", /terminé/, 120_000);
+
+    // Le trait n'existe qu'après un run : la topologie radio se mesure, elle ne se déclare pas.
+    await viewTab("Plan");
+    await page.waitForSelector("#plan .liens line.lien-mesh", { timeout: 20_000 });
+    const etiquettes = await page.$$eval("#plan .liens .lien-etiquette",
+      (t) => t.map((e) => e.textContent));
+    if (!etiquettes.length) throw new Error("liaison tracée sans son chiffre");
+    for (const t of etiquettes) {
+      if (!/trames? relayée/.test(t)) throw new Error(`étiquette : ${t}`);
+    }
+    // Le trait relie le relais à la frontière, et pas l'inverse : le sens compte.
+    const bouts = await page.$$eval("#plan .liens line.lien-mesh",
+      (ls) => ls.map((l) => ({ x1: +l.getAttribute("x1"), x2: +l.getAttribute("x2") })));
+    if (!bouts.length) throw new Error("aucun trait");
+  });
+
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {
     await obsTab("Exercice");
     await page.select("#exercise-start", "eu868-passerelle");

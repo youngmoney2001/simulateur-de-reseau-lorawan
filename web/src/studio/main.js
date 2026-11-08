@@ -21,6 +21,7 @@ import { createMap3D, toMeters as degreesToMeters, toLonLat as metresVersDegres 
 // Conversion et lecture des coordonnées, sans dépendance : mêmes fonctions que la carte.
 import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
+import { liaisonsMesh, cumulerLiaisons, etiquetteLiaison } from "./liaisons.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 // Borne des lignes de dispositifs ramenées pour les indicateurs : au-delà, l'agrégation par
@@ -47,6 +48,8 @@ const state = {
   deviceRows: [],    // lignes par dispositif du dernier run : matiere des indicateurs
   resultats: null,   // Map node_id -> resultat : la carte colore par la, plus par type
   fenetreNs: null,   // fenetre d observation du dernier run : denominators des taux
+  liens: [],         // GatewayLink[] du dernier run : equipement <-> passerelle du run
+  passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
@@ -248,6 +251,9 @@ function renderPlan() {
   const bounds = planBounds(nodes);
   state.bounds = bounds;
   svg.append(renderGrid(bounds));
+  // Les liaisons se tracent **sous** les équipements : un trait qui passe par-dessus une
+  // icône la masque, et l'icône est ce qu'on vient lire.
+  svg.append(renderLiaisons(nodes, bounds));
   for (const n of nodes) {
     const p = toScreen(n, bounds, W, H);
     const g = svgEl("g", { class: `node${state.selected === n.id ? " selected" : ""}`, "data-id": n.id, transform: `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})` });
@@ -270,6 +276,33 @@ function renderPlan() {
     svg.append(g);
   }
   player.refresh();   // le rendu du plan supprime la couche d'animation : on la remet
+}
+
+// Liaisons observées sur le plan. Elles n'existent qu'après un run : la topologie d'un réseau
+// radio ne se déclare pas, elle se mesure. Avant le run, le plan ne montre aucun trait — et
+// c'est voulu, voir le commentaire de `liaisons.js` sur ce qu'on refuse de tracer.
+function renderLiaisons(nodes, bounds) {
+  const couche = svgEl("g", { class: "liens" });
+  if (!state.passerelles?.length) return couche;
+  const ids = nodes.map((n) => n.id);
+  const liaisons = cumulerLiaisons(
+    liaisonsMesh({ passerelles: state.passerelles, liens: state.liens, noeuds: ids }));
+  if (!liaisons.length) return couche;
+  const parId = new Map(nodes.map((n) => [n.id, n]));
+  for (const l of liaisons) {
+    const a = parId.get(l.de), b = parId.get(l.vers);
+    if (!a || !b) continue;
+    const p = toScreen(a, bounds, W, H), q = toScreen(b, bounds, W, H);
+    couche.append(svgEl("line", { class: "lien lien-mesh", x1: p.x.toFixed(1), y1: p.y.toFixed(1),
+      x2: q.x.toFixed(1), y2: q.y.toFixed(1) }));
+    // Le chiffre au milieu du trait : une liaison sans son nombre n'apprend rien qu'une
+    // couleur ne dirait deja.
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    const texte = svgEl("text", { class: "lien-etiquette", x: mx.toFixed(1), y: (my - 5).toFixed(1) });
+    texte.textContent = etiquetteLiaison(l);
+    couche.append(texte);
+  }
+  return couche;
 }
 
 function svgPoint(ev) {
@@ -943,6 +976,11 @@ $("sim-form").addEventListener("submit", async (ev) => {
     state.deviceRows = deviceRows ?? [];
     state.resultats = resultatsParNoeud(state.deviceRows, state.topo?.nodes ?? []);
     state.fenetreNs = fenetreObservationNs(summary);
+    // Deux choses que le plan doit retenir pour tracer les liaisons : la correspondance
+    // equipement <-> passerelle, et le rapport de chaque passerelle. Sans elles, le plan
+    // montrerait des equipements sans jamais dire qui parle a qui.
+    state.liens = started.links ?? [];
+    state.passerelles = summary.gateways ?? null;
     renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
     renderLegend();
     renderDevice();             // la fenêtre ouverte chiffre le résultat

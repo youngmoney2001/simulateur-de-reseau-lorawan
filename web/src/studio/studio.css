@@ -285,6 +285,14 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .sensor-form { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .field-error { outline:2px solid var(--danger); }
 
+/* --- Liaisons observées sur le plan --------------------------------------------------- */
+/* Un trait tireté, jamais plein : la liaison est observee, pas cablee. Le plein laisserait
+   croire a un lien pose de main d'homme, qu'on pourrait debrancher. */
+.liens line.lien-mesh { stroke:#6b4fbb; stroke-width:2; stroke-dasharray:7 4;
+  stroke-linecap:round; opacity:.85; }
+.liens .lien-etiquette { font-size:11px; fill:#4a3a86; text-anchor:middle;
+  paint-order:stroke; stroke:var(--canvas, #fff); stroke-width:3px; stroke-linejoin:round; }
+
 /* --- Fenêtre de configuration passerelle ---------------------------------------------- */
 /* Deux sections plutôt qu'une grille plate : la radio et le relais ne se règlent pas
    ensemble, et un apprenant qui cherche « mode relay » doit le trouver sous « Relais ». */
