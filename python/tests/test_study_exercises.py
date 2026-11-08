@@ -386,3 +386,53 @@ def test_relais_bande_large_needs_the_bandwidth_and_the_observed_link(api, mesh_
     _cli(api, sid, "relais-1", "conf t", "int mesh 0", "bandwidth 1625", "end")
     _, body = _submit(api, "relais-bande-large", sid)
     assert _points(body)["bande"] is True and body["score"] == 30
+
+
+# --- Les exercices doivent se terminer dans l'atelier, pas seulement au clavier -----------------
+
+def _fenetre(api, sid, node, payload):
+    """Réglages passerelle posés depuis la fenêtre de configuration de l'atelier 3D."""
+    return api.call("POST", f"/api/v1/sessions/{sid}/nodes/{node}/gateway", payload,
+                    token=api.alice)
+
+
+# Les quatre exercices dont les réglages n'existaient qu'au CLI. `attendus` : les critères de
+# configuration, ceux-là mêmes qu'on ne pouvait pas atteindre sans ouvrir la console.
+CAS_FENETRE = (
+    ("us915-sous-bande", "frontiere", {"region": "US915", "sub_band": 2},
+     ("region", "sous-bande")),
+    ("au915-sous-bande", "frontiere", {"region": "AU915", "sub_band": 5},
+     ("region", "sous-bande")),
+    ("relais-deux-sauts", "relais-1", {"mesh_mode": "relay", "mesh_max_hops": 2},
+     ("mode", "sauts")),
+    ("relais-bande-large", "relais-1",
+     {"mesh_mode": "relay", "mesh_bandwidth_khz": "1625"}, ("mode", "bande")),
+)
+
+
+@pytest.mark.parametrize(("exercice", "noeud", "reglages", "attendus"), CAS_FENETRE)
+def test_les_reglages_de_la_fenetre_font_passser_les_criteres(api, exercice, noeud,
+                                                              reglages, attendus):
+    """L'écart que la fenêtre ferme : sans elle, ces réglages n'existaient qu'au CLI."""
+    _, out = _session(api, exercise=exercice)
+    sid = out["session_id"]
+    status, body = _fenetre(api, sid, noeud, reglages)
+    assert status == 200, body
+    _, body = _submit(api, exercice, sid)
+    points = _points(body)
+    for critere in attendus:
+        assert points[critere] is True, (exercice, critere, points)
+
+
+def test_exercice_sous_bande_au_maximum_avec_la_fenetre_et_le_run(api, run_frontiere):
+    """Le même exercice qu'en CLI, mené jusqu'au score complet, sans toucher au clavier."""
+    _, out = _session(api, exercise="us915-sous-bande")
+    sid = out["session_id"]
+    status, _ = _fenetre(api, sid, "frontiere", {"region": "US915", "sub_band": 2})
+    assert status == 200
+    status, _ = api.call("POST", f"/api/v1/sessions/{sid}/simulation",
+                         {"run_id": run_frontiere,
+                          "links": [{"node_id": "frontiere", "gateway": "frontiere"}]})
+    assert status == 200
+    _, body = _submit(api, "us915-sous-bande", sid)
+    assert body["score"] == body["max_score"] == 30

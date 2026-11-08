@@ -59,8 +59,8 @@ from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
-    CliRequest, GatewayLink, HintRequest, Node, Position, SensorSettings, SessionCreate,
-    SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
+    CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
+    SessionCreate, SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
@@ -977,7 +977,8 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and rest == "runs":
             return 202, svc.create(owner, self._json_body())
         study: StudyService = self.server.study  # type: ignore[attr-defined]
-        m = re.fullmatch(r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/position)?)?", rest)
+        m = re.fullmatch(
+            r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/gateway|/position)?)?", rest)
         if m is not None:
             return self._nodes(method, study, owner, m.group(1), m.group(2), m.group(3))
         if method == "POST" and rest == "sessions":
@@ -1043,21 +1044,27 @@ class _Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "not_found", "route inconnue")
 
     def _nodes(self, method: str, study: StudyService, owner: str, sid: str,
-               node_id: Optional[str], sensor: Optional[str]) -> tuple[int, Optional[dict[str, Any]]]:
+               node_id: Optional[str], sub: Optional[str]) -> tuple[int, Optional[dict[str, Any]]]:
+        # `sub` est la sous-route après l'identifiant d'équipement, pas « un capteur » :
+        # l'ancien nom laissait croire que `/gateway` n'avait pas sa place ici.
         if node_id is None:
             if method == "POST":
                 req = self._parse_body(Node)
                 return 201, self._study(lambda: study.add_node(owner, sid, req)).model_dump()
             raise ApiError(404, "not_found", "route inconnue")
-        if sensor == "/position" and method == "POST":
+        if sub == "/position" and method == "POST":
             req = self._parse_body(Position)
             return 200, self._study(
                 lambda: study.move_node(owner, sid, node_id, req)).model_dump()
-        if sensor is not None and method == "POST":      # remplace les réglages (pas de PUT)
+        if sub == "/gateway" and method == "POST":     # réglages passerelle de l'atelier 3D
+            req = self._parse_body(GatewaySettings)
+            return 200, self._study(
+                lambda: study.set_gateway(owner, sid, node_id, req)).model_dump()
+        if sub == "/sensor" and method == "POST":     # remplace les réglages (pas de PUT)
             req = self._parse_body(SensorSettings)
             return 200, self._study(
                 lambda: study.set_sensor(owner, sid, node_id, req)).model_dump()
-        if sensor is None and method == "DELETE":
+        if sub is None and method == "DELETE":
             self._study(lambda: study.remove_node(owner, sid, node_id))
             return 204, None
         raise ApiError(404, "not_found", "route inconnue")

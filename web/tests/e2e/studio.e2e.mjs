@@ -517,6 +517,65 @@ try {
       throw new Error(`virgule décimale non traitée : « ${lu2} »`);
   });
 
+  // Fenêtre de configuration passerelle : les réglages que les exercices réclament, sans
+  // passer par le clavier. Le point décisif n'est pas que la fenêtre enregistre, c'est que
+  // le CLI relise la même chose — deux chemins, une seule configuration.
+  await step("passerelle : sous-bande, relais et puissance réglés depuis la fenêtre", async () => {
+    await viewTab("Plan");
+    await page.click('g.node[data-id="gw-nord"] rect');
+    await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
+    await deviceTab("Config", "gw-nord");
+    const sel = (n) => `.device-win[data-node-id="gw-nord"] [name="${n}"]`;
+    await page.waitForSelector(sel("region"));
+
+    // Une sous-bande hors US915/AU915 n'a pas de sens : le champ est désactivé, et la
+    // raison est écrite à côté — « désactivé » sans raison fait perdre une heure.
+    const desactivee = await page.$eval(sel("sub_band"), (e) => e.disabled);
+    if (!desactivee) throw new Error("sous-bande active alors qu'aucun plan à sous-bande n'est choisi");
+
+    const attendu = await page.$eval('.device-win[data-node-id="gw-nord"] .gw-aide-bloc',
+      (e) => e.textContent);
+    if (!/US915 et AU915/.test(attendu)) throw new Error(`aide absente : ${attendu}`);
+
+    await setValue(sel("region"), "US915");
+    await page.waitForFunction((q) => !document.querySelector(q).disabled, {}, sel("sub_band"));
+    // Le renvoi vers le CLI doit nommer ce qui reste, sinon il ne renseigne pas.
+    const avance = await page.$eval('.device-win[data-node-id="gw-nord"] .gw-avance',
+      (e) => e.textContent);
+    for (const mot of ["antenne", "fréquence", "étalement"]) {
+      if (!avance.includes(mot)) throw new Error(`renvoi incomplet : ${avance}`);
+    }
+
+    await setValue(sel("sub_band"), "2");
+    await setValue(sel("tx_power_dbm"), "20");
+    await setValue(sel("mesh_mode"), "relay");
+    await setValue(sel("mesh_max_hops"), "2");
+    await setValue(sel("mesh_bandwidth_khz"), "1625");
+    await submitForm('.device-win[data-node-id="gw-nord"] form');
+    await waitText('.device-win[data-node-id="gw-nord"] form', /enregistrés/);
+
+    // Vérifié côté serveur : la fenêtre n'est pas un état parallèle à celui du CLI.
+    const sid = await page.$eval("#session-select", (s) => s.value);
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const st = (await res.json()).states.find((x) => x.node_id === "gw-nord").gateway;
+    for (const [cle, val] of [["region", "US915"], ["sub_band", 2],
+      ["tx_power_dbm", 20], ["mesh_mode", "relay"], ["mesh_max_hops", 2],
+      ["mesh_bandwidth_khz", "1625"]]) {
+      if (st[cle] !== val) throw new Error(`${cle} : ${st[cle]} au lieu de ${val}`);
+    }
+
+    // Changer de plan hors sous-bandes doit l'effacer, pas la garder en cache.
+    await setValue(sel("region"), "EU868");
+    await submitForm('.device-win[data-node-id="gw-nord"] form');
+    await waitText('.device-win[data-node-id="gw-nord"] form', /enregistrés/);
+    await page.waitForFunction((q) => document.querySelector(q).disabled, {}, sel("sub_band"));
+    const res2 = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const st2 = (await res2.json()).states.find((x) => x.node_id === "gw-nord").gateway;
+    if (st2.sub_band !== null) throw new Error(`sous-bande conservée : ${st2.sub_band}`);
+  });
+
   await step("suppression de la session", async () => {
     const before = await page.$$eval("#session-select option", (o) => o.length);
     await page.click("#delete-session");

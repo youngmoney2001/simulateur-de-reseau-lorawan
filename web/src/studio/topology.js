@@ -190,6 +190,73 @@ export function validateSensor(form) {
   return { ok: true, settings: out };
 }
 
+// --- Réglages passerelle exposés dans l'atelier ----------------------------------------------
+// Mêmes bornes que le CLI (`study_cli.COMMANDS`) : un réglage refusé dans la fenêtre l'est
+// aussi dans la console, avec le même mot. Les deux chemins écrivent la même configuration.
+
+// Une sous-bande n'existe que sur ces deux plans. Ailleurs, le champ est sans objet — et non
+// pas « à zéro », qui serait une valeur trompeuse.
+export const REGIONS_A_SOUS_BANDE = ["US915", "AU915"];
+export const SOUS_BANDES = [1, 2, 3, 4, 5, 6, 7, 8];
+export const BANDES_MESH_KHZ = ["203", "406", "812", "1625"];
+export const MODES_MESH = ["relay", "border"];
+export const GATEWAY_LIMITS = {
+  tx_power_dbm: [-10, 30],
+  mesh_max_hops: [1, 8],
+};
+
+// Ce qui reste au CLI, et que la fenêtre doit dire plutôt que de le faire disparaître.
+export const AVANCE_EN_CLI = [
+  "gain d'antenne",
+  "fréquence",
+  "facteur d'étalement du mesh",
+  "arrêt d'interface",
+];
+
+/**
+ * Formulaire passerelle -> corps de `POST /nodes/{id}/gateway`.
+ * Un champ vide emporte « ne pas toucher » : la fenêtre n'affiche pas l'antenne, elle ne
+ * doit donc pas pouvoir l'effacer. Seuls les champs renseignés sont envoyés.
+ */
+export function validateGateway(form) {
+  const out = {};
+  if (form.region) {
+    if (!REGIONS.includes(form.region)) return bad("region", "plan régional inconnu");
+    out.region = form.region;
+  }
+  const region = out.region ?? form.region_actuelle ?? null;
+  if (form.sub_band !== "" && form.sub_band != null) {
+    if (!REGIONS_A_SOUS_BANDE.includes(region)) {
+      return bad("sub_band", "sous-bande : région US915 ou AU915 requise");
+    }
+    const v = num(form.sub_band);
+    if (!Number.isFinite(v) || !SOUS_BANDES.includes(Math.trunc(v))) {
+      return bad("sub_band", "sous-bande : entre 1 et 8");
+    }
+    out.sub_band = Math.trunc(v);
+  }
+  for (const [key, [lo, hi]] of Object.entries(GATEWAY_LIMITS)) {
+    if (form[key] === "" || form[key] == null) continue;
+    const v = num(form[key]);
+    if (!Number.isFinite(v) || v < lo || v > hi) {
+      return bad(key, `${key} : entre ${lo} et ${hi}`);
+    }
+    out[key] = key === "mesh_max_hops" ? Math.trunc(v) : v;
+  }
+  if (form.mesh_mode) {
+    if (!MODES_MESH.includes(form.mesh_mode)) return bad("mesh_mode", "mode de relais inconnu");
+    out.mesh_mode = form.mesh_mode;
+  }
+  if (form.mesh_bandwidth_khz) {
+    if (!BANDES_MESH_KHZ.includes(form.mesh_bandwidth_khz)) {
+      return bad("mesh_bandwidth_khz",
+        `bande : ${BANDES_MESH_KHZ.join(", ")} kHz`);
+    }
+    out.mesh_bandwidth_khz = form.mesh_bandwidth_khz;
+  }
+  return { ok: true, settings: out };
+}
+
 export function nodeCaption(node) {
   return `${node.name} (${node.id})`;
 }

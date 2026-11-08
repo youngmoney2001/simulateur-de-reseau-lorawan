@@ -46,6 +46,8 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     removeNode: (sid, nodeId) => request("DELETE", `${s(sid)}/nodes/${enc(nodeId)}`),
     setSensor: (sid, nodeId, settings) =>
       request("POST", `${s(sid)}/nodes/${enc(nodeId)}/sensor`, settings),
+    setGateway: (sid, nodeId, settings) =>
+      request("POST", `${s(sid)}/nodes/${enc(nodeId)}/gateway`, settings),
     moveNode: (sid, nodeId, pos) => request("POST", `${s(sid)}/nodes/${enc(nodeId)}/position`, pos),
     cli: (sid, nodeId, command) => request("POST", `${s(sid)}/cli`, { node_id: nodeId, command }),
     simulate: (sid, seed) => request("POST", `${s(sid)}/simulate`, { seed }),

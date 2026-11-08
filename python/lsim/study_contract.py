@@ -47,6 +47,30 @@ class SensorSettings(_Strict):
     channel_freq_hz: Optional[int] = Field(None, ge=137_000_000, le=3_000_000_000)
 
 
+MeshBandwidth = Literal["203", "406", "812", "1625"]      # comme `MeshModel` (scénario)
+
+
+class GatewaySettings(_Strict):
+    """Réglages d'une passerelle exposés dans l'atelier 3D.
+
+    Ce n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur
+    d'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit
+    explicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux
+    que réclament les exercices, les autres relèvent du dépannage.
+
+    Les bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans
+    la fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent
+    au même endroit (`Session.config`), ils ne peuvent pas diverger.
+    """
+
+    region: Optional[Region] = None
+    sub_band: Optional[int] = Field(None, ge=1, le=8)      # US915 / AU915 seulement
+    tx_power_dbm: Optional[float] = Field(None, ge=-10.0, le=30.0)
+    mesh_mode: Optional[Literal["relay", "border"]] = None
+    mesh_max_hops: Optional[int] = Field(None, ge=1, le=8)
+    mesh_bandwidth_khz: Optional[MeshBandwidth] = None
+
+
 class Node(_Strict):
     id: str = Field(pattern=ID_PATTERN)
     kind: NodeKind
@@ -102,6 +126,9 @@ class NodeState(_Strict):
     region: Optional[str] = Field(default=None, max_length=16)
     configured: bool
     keys: Optional[Literal["******"]] = None
+    # Réglages exposés dans la fenêtre de configuration, relus tels qu'ils sont.
+    # `None` sur un capteur ou un serveur : rien à exposer, pas « réglages par défaut ».
+    gateway: Optional[GatewaySettings] = None
 
 
 class GatewayLink(_Strict):

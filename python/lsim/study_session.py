@@ -29,8 +29,9 @@ from lsim import study_cli, study_exercises
 from lsim.study_compile import CompileError, Compiled, compile_session
 from lsim.study_contract import (
     MAX_NODES, AttemptList, AttemptOut, CliError, CliRequest, CliResponse, CriterionResult,
-    GatewayLink, HintOut, Node, NodeState, Position, SensorSettings, SessionCreate, SessionList,
-    SessionOut, SessionSummary, SessionTopology, SimulationBind, SimulationBound, SubmitResult,
+    GatewayLink, GatewaySettings, HintOut, Node, NodeState, Position, SensorSettings,
+    SessionCreate, SessionList, SessionOut, SessionSummary, SessionTopology, SimulationBind,
+    SimulationBound, SubmitResult,
 )
 from lsim.study_store import StudyStore
 
@@ -215,7 +216,8 @@ class StudyService:
             states.append(NodeState(
                 node_id=node.id, hostname=cli.config.hostname,
                 region=cli.config.lora.region,
-                configured=cli.config != study_cli.new_session(node.id).config))
+                configured=cli.config != study_cli.new_session(node.id).config,
+                gateway=_gateway_state(node, cli)))
         return SessionTopology(session_id=sid, nodes=nodes, states=states)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
@@ -287,6 +289,52 @@ class StudyService:
                 raise StudyError(422, "validation_error", "réglages capteur : équipement non capteur",
                                  "node_id")
             st.nodes[node_id] = node.model_copy(update={"sensor": settings})
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
+
+    def set_gateway(self, owner: str, sid: str, node_id: str,
+                    settings: GatewaySettings) -> SessionTopology:
+        """Réglages passerelle depuis l'atelier 3D.
+
+        Écrit dans `Session.config`, c'est-à-dire **la même configuration que le CLI** : un
+        réglage posé dans la fenêtre apparaît dans `show running-config`, et réciproquement.
+        Les deux chemins ne divergent pas parce qu'il n'y a qu'un seul état.
+
+        Seuls les champs présents sont appliqués : une fenêtre qui n'affiche pas l'antenne ne
+        doit pas pouvoir l'effacer.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            node = st.nodes.get(node_id)
+            if node is None:
+                raise StudyError(404, "not_found", "équipement inconnu dans cette session")
+            if node.kind not in CLI_NODE_KINDS:
+                raise StudyError(422, "validation_error",
+                                 "réglages passerelle : équipement sans interface configurable",
+                                 "node_id")
+            cfg = st.cli[node_id].config
+            # Une sous-bande n'existe que sur US915 / AU915 : même refus, mêmes mots que le
+            # CLI, pour que l'apprenant n'ait pas deux vérités selon le chemin emprunté.
+            # La région retenue est celle du payload si elle y est, sinon celle déjà posée :
+            # c'est ce qui permet d'écrire la sous-bande après la région en deux envois.
+            region = settings.region if settings.region is not None else cfg.lora.region
+            if settings.sub_band is not None and region not in study_cli.SUB_BAND_REGIONS:
+                raise StudyError(422, "validation_error",
+                                 "sous-bande : région US915 ou AU915 requise", "sub_band")
+            if settings.region is not None:
+                cfg.lora.region = settings.region
+                if settings.region not in study_cli.SUB_BAND_REGIONS:
+                    cfg.lora.sub_band = None   # la sous-bande n'a plus de sens hors US915/AU915
+            if settings.sub_band is not None:
+                cfg.lora.sub_band = settings.sub_band
+            if settings.tx_power_dbm is not None:
+                cfg.lora.tx_power_dbm = settings.tx_power_dbm
+            if settings.mesh_mode is not None:
+                cfg.mesh.mode = settings.mesh_mode
+            if settings.mesh_max_hops is not None:
+                cfg.mesh.max_hops = settings.mesh_max_hops
+            if settings.mesh_bandwidth_khz is not None:
+                cfg.mesh.bandwidth_khz = settings.mesh_bandwidth_khz
             self._save(sid, st)
             return self._topology_locked(sid, st)
 
@@ -453,3 +501,19 @@ class StudyService:
             st = self._get_locked(owner, sid)
             items = list(st.attempts)
         return AttemptList(items=items)
+
+
+def _gateway_state(node: Any, cli: Any) -> Optional["GatewaySettings"]:
+    """Réglages exposés d'un équipement, relus depuis la configuration du CLI.
+
+    `None` pour un capteur ou un serveur : ils n'ont pas d'interface configurable, ce qui
+    n'est pas la même chose que « configuré par défaut ». La fenêtre s'appuie sur cette
+    distinction pour ne pas afficher de formulaire vide là où il n'y a rien à régler.
+    """
+    if node.kind not in CLI_NODE_KINDS:
+        return None
+    return GatewaySettings(
+        region=cli.config.lora.region, sub_band=cli.config.lora.sub_band,
+        tx_power_dbm=cli.config.lora.tx_power_dbm, mesh_mode=cli.config.mesh.mode,
+        mesh_max_hops=cli.config.mesh.max_hops,
+        mesh_bandwidth_khz=cli.config.mesh.bandwidth_khz)

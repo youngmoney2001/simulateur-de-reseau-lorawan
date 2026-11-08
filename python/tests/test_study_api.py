@@ -347,3 +347,118 @@ def test_empty_session_creation_is_allowed_and_nodes_are_per_session(api):
     assert topo["nodes"] == []
     _, topo = api.call("GET", f"/api/v1/sessions/{second['session_id']}/topology")
     assert len(topo["nodes"]) == 3
+
+
+# --- Réglages passerelle depuis l'atelier (POST /nodes/{id}/gateway) -----------------------------
+
+def _gateway(api, sid, node, payload, token=None):
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{node}/gateway",
+                            payload, token=token or api.alice)
+    if status == 200:
+        SessionTopology.model_validate(body)
+    return status, body
+
+
+def _etat(api, sid, node):
+    """Réglages exposés d'un équipement, tels que la fenêtre les relit."""
+    status, body = api.call("GET", f"/api/v1/sessions/{sid}/topology", token=api.alice)
+    assert status == 200, body
+    return next(s for s in body["states"] if s["node_id"] == node)["gateway"]
+
+
+def test_reglages_passreelle_sous_bande_requires_a_sub_band_region(api):
+    sid = _session(api)
+    # Le refus doit être le même que celui du CLI, y compris le champ fautif.
+    status, body = _gateway(api, sid, "frontiere", {"sub_band": 2})
+    assert status == 422, body
+    assert body["field"] == "sub_band"
+    assert "US915" in body["message"]
+
+
+def test_reglages_passreelle_sous_bande_sur_us915(api):
+    sid = _session(api)
+    _gateway(api, sid, "frontiere", {"region": "US915"})
+    status, _ = _gateway(api, sid, "frontiere", {"sub_band": 2})
+    assert status == 200
+    assert _etat(api, sid, "frontiere")["sub_band"] == 2
+
+
+def test_changer_de_region_hors_sous_bandes_efface_la_sous_bande(api):
+    """Une sous-bande sur EU868 n'a pas de sens : elle ne survit pas au changement."""
+    sid = _session(api)
+    _gateway(api, sid, "frontiere", {"region": "US915", "sub_band": 2})
+    assert _etat(api, sid, "frontiere")["sub_band"] == 2
+    _gateway(api, sid, "frontiere", {"region": "EU868"})
+    assert _etat(api, sid, "frontiere")["sub_band"] is None
+
+
+def test_la_fenetre_et_le_cli_partagent_le_meme_etat(api):
+    """Deux chemins, une seule configuration : ce que la fenêtre pose, le CLI le lit."""
+    sid = _session(api)
+    _gateway(api, sid, "frontiere", {"region": "US915", "tx_power_dbm": 20.0})
+    # `show running-config` est une commande de mode privilégié : sans `enable`, la sortie
+    # est vide et le test passerait à tort sur une configuration jamais écrite.
+    body = _run_lines(api, sid, "frontiere", ["enable", "show running-config"])
+    assert "US915" in body["output"]
+    assert "tx-power 20" in body["output"]
+
+
+def test_ce_que_le_cli_poser_la_fenetre_le_relit(api):
+    """Et réciproquement : la fenêtre n'est pas un état parallèle."""
+    sid = _session(api)
+    # `region` et `sub-band` sont des commandes d'interface : sans `interface lora 0`,
+    # elles n'existent pas et le test mesurerait autre chose que ce qu'il prétend.
+    _run_lines(api, sid, "frontiere",
+               ["enable", "configure terminal", "interface lora 0", "region AU915",
+                "sub-band 5", "end"])
+    etat = _etat(api, sid, "frontiere")
+    assert etat["region"] == "AU915"
+    assert etat["sub_band"] == 5
+
+
+def test_relais_mode_sauts_et_bande(api):
+    sid = _session(api)
+    status, body = _gateway(api, sid, "relais-1",
+                            {"mesh_mode": "relay", "mesh_max_hops": 2,
+                             "mesh_bandwidth_khz": "1625"})
+    assert status == 200, body
+    etat = _etat(api, sid, "relais-1")
+    assert etat["mesh_mode"] == "relay"
+    assert etat["mesh_max_hops"] == 2
+    assert etat["mesh_bandwidth_khz"] == "1625"
+
+
+def test_les_bornes_sont_cellles_du_cli(api):
+    """Un réglage refusé dans la fenêtre l'est aussi dans la console : mêmes bornes."""
+    sid = _session(api)
+    for payload, champ in [({"sub_band": 9}, "sub_band"),
+                           ({"tx_power_dbm": 31.0}, "tx_power_dbm"),
+                           ({"mesh_max_hops": 0}, "mesh_max_hops"),
+                           ({"mesh_bandwidth_khz": "500"}, "mesh_bandwidth_khz"),
+                           ({"mesh_mode": "pont"}, "mesh_mode")]:
+        status, body = _gateway(api, sid, "frontiere", payload)
+        assert status == 422, (payload, body)
+        assert body["field"] == champ, (payload, body)
+
+
+def test_un_champ_absent_n_efface_pas_le_reglage_en_place(api):
+    """La fenêtre n'affiche pas l'antenne : elle ne doit pas pouvoir l'effacer."""
+    sid = _session(api)
+    _run_lines(api, sid, "frontiere",
+               ["enable", "configure terminal", "interface lora 0", "antenna gain 7", "end"])
+    _gateway(api, sid, "frontiere", {"region": "EU868"})
+    body = _run_lines(api, sid, "frontiere", ["enable", "show running-config"])
+    assert "antenna gain 7" in body["output"]
+
+
+def test_reglages_passreelle_refuses_sur_un_capteur(api):
+    sid = _session(api)
+    status, body = _gateway(api, sid, "capteur-1", {"region": "EU868"})
+    assert status == 422, body
+    assert body["field"] == "node_id"
+
+
+def test_equipement_inconnu_et_404(api):
+    sid = _session(api)
+    status, body = _gateway(api, sid, "fantome", {"region": "EU868"})
+    assert status == 404, body

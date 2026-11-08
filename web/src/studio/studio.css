@@ -285,6 +285,24 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .sensor-form { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .field-error { outline:2px solid var(--danger); }
 
+/* --- Fenêtre de configuration passerelle ---------------------------------------------- */
+/* Deux sections plutôt qu'une grille plate : la radio et le relais ne se règlent pas
+   ensemble, et un apprenant qui cherche « mode relay » doit le trouver sous « Relais ». */
+.gateway-form { display:grid; gap:10px; }
+.gateway-form .gw-section { display:grid; grid-template-columns:1fr 1fr; gap:6px;
+  border:1px solid var(--line); border-radius:4px; padding:6px 8px 8px; }
+.gateway-form .gw-section legend { font-size:.82em; text-transform:uppercase;
+  letter-spacing:.04em; color:var(--muted); padding:0 4px; }
+.gw-champ { display:flex; flex-direction:column; gap:2px; font-size:.9em; min-width:0; }
+.gw-champ select, .gw-champ input { width:100%; min-width:0; }
+/* L'aide sous le champ, pas dans une infobulle : elle explique un refus, elle doit être lue. */
+.gw-aide { font-size:.78em; color:var(--muted); }
+.gw-aide-bloc { grid-column:1 / -1; margin:0; }
+.gw-champ.gw-desactive { opacity:.55; }
+.gw-avance { margin-top:8px; font-size:.88em; }
+.gw-avance summary { cursor:pointer; color:var(--muted); }
+.sensor-actions { grid-column:1 / -1; display:flex; gap:6px; margin-top:4px; }
+
 /* --- Animation des trames (player.js) ------------------------------------------------- */
 .anim-ok { stroke:#2e7d32; fill:#2e7d32; }
 .anim-lost { stroke:#c62828; fill:#c62828; }

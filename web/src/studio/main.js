@@ -4,6 +4,8 @@ import { createClient, ApiError } from "./api.js";
 import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
+  validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
+  GATEWAY_LIMITS, AVANCE_EN_CLI,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
@@ -453,20 +455,138 @@ function renderDevice() {
   }
 }
 
-// Onglet Config des passerelles et du serveur : l'etat reel, et ou le changer.
-// Il n existe pas d endpoint de configuration hors CLI : on ne pretend pas le contraire.
+// Deux champs en séquence (liste déroulante + libellé), dans l'ordre de lecture français.
+function champListe(nom, label, options, valeur, aide) {
+  const select = el("select", { name: nom });
+  for (const o of options) {
+    select.append(el("option", {
+      value: o.value, text: o.text, selected: String(valeur ?? "") === o.value ? "selected" : undefined,
+    }));
+  }
+  const bloc = el("label", { class: "gw-champ" }, label, select);
+  if (aide) bloc.append(el("span", { class: "gw-aide", text: aide }));
+  return bloc;
+}
+
+function champNombre(nom, label, bornes, valeur, step = "1") {
+  const [lo, hi] = bornes;
+  const input = el("input", {
+    type: "number", name: nom, min: lo, max: hi, step,
+    value: valeur === null || valeur === undefined ? "" : valeur,
+  });
+  return el("label", { class: "gw-champ" }, label, input,
+    el("span", { class: "gw-aide", text: `${lo} à ${hi}` }));
+}
+
+function sectionChamps(titre, ...champs) {
+  return el("fieldset", { class: "gw-section" },
+    el("legend", { text: titre }), ...champs);
+}
+
+// Onglet Config d'une passerelle : les réglages que les exercices réclament, et rien de plus.
+// Le reste reste au CLI, mais la fenêtre le *dit* et le nomme : taire l'existence d'un réglage
+// serait plus grave que de ne pas l'exposer, l'apprenant chercherait un champ qui n'existe pas.
 function renderGatewayConfig(node, body) {
   const st = stateOf(node.id);
-  body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
-  body.append(el("p", { class: "muted", text: `Nom d'hôte : ${st?.hostname ?? node.id}` }));
-  body.append(el("p", { class: "muted", text: `Région : ${st?.region ?? "non configurée"}` }));
-  body.append(el("p", { class: "muted", text: `État : ${st?.configured ? "configuré" : "non configuré"}` }));
-  if (CLI_KINDS.includes(node.kind)) {
+  if (!CLI_KINDS.includes(node.kind)) {
+    body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
     body.append(el("p", { class: "no-cli",
-      text: "La configuration des passerelles se fait en ligne de commande, comme sur un équipement réel. Ouvrez l'onglet CLI." }));
-  } else {
-    body.append(el("p", { class: "no-cli", text: "Serveur de réseau : pas de configuration dans cette version." }));
+      text: "Serveur de réseau : pas de configuration dans cette version." }));
+    return;
   }
+
+  const g = st?.gateway ?? {};
+  const fields = {};
+  const grid = el("div", { class: "gateway-form" });
+
+  const region = champListe("region", "Plan régional",
+    [{ value: "", text: "non configuré" },
+      ...REGIONS.map((r) => ({ value: r, text: r }))],
+    g.region);
+  fields.region = region.querySelector("select");
+
+  const sousBande = champListe("sub_band", "Sous-bande",
+    [{ value: "", text: "aucune" },
+      ...SOUS_BANDES.map((n) => ({ value: String(n), text: String(n) }))],
+    g.sub_band ?? "");
+  fields.sub_band = sousBande.querySelector("select");
+
+  const puissance = champNombre("tx_power_dbm", "Puissance TX (dBm)",
+    GATEWAY_LIMITS.tx_power_dbm, g.tx_power_dbm, "0.5");
+  fields.tx_power_dbm = puissance.querySelector("input");
+
+  // La sous-bande n'existe que sur US915 / AU915. On l'explique plutôt que de laisser un champ
+  // muet : « désactivé » sans raison est le genre de silence qui fait perdre une heure.
+  const aideSousBande = el("p", { class: "gw-aide gw-aide-bloc", text: "" });
+  const appliquerSousBande = () => {
+    const ok = REGIONS_A_SOUS_BANDE.includes(fields.region.value);
+    fields.sub_band.disabled = !ok;
+    sousBande.classList.toggle("gw-desactive", !ok);
+    aideSousBande.textContent = ok
+      ? "Une sous-bande groupe 8 canaux à 125 kHz et un canal à 500 kHz."
+      : "La sous-bande n'existe que sur US915 et AU915 : choisissez l'un de ces plans.";
+  };
+  fields.region.addEventListener("change", appliquerSousBande);
+
+  grid.append(sectionChamps("Radio LoRa", region, sousBande, aideSousBande, puissance));
+
+  // Un seul jeu de champs, référencé deux fois : `fields` pour la lecture, le DOM pour
+  // l'affichage. Les créer deux fois donnait des valeurs lues hors du formulaire.
+  const modeMesh = champListe("mesh_mode", "Mode",
+    [{ value: "", text: "non configuré" },
+      { value: "relay", text: "relay — relayer vers la frontière" },
+      { value: "border", text: "border — passerelle frontière" }],
+    g.mesh_mode);
+  const sautsMesh = champNombre("mesh_max_hops", "Sauts max",
+    GATEWAY_LIMITS.mesh_max_hops, g.mesh_max_hops);
+  const bandeMesh = champListe("mesh_bandwidth_khz", "Bande passante (kHz)",
+    [{ value: "", text: "non configuré" },
+      ...BANDES_MESH_KHZ.map((b) => ({ value: b, text: b }))],
+    g.mesh_bandwidth_khz);
+  fields.mesh_mode = modeMesh.querySelector("select");
+  fields.mesh_max_hops = sautsMesh.querySelector("input");
+  fields.mesh_bandwidth_khz = bandeMesh.querySelector("select");
+
+  grid.append(sectionChamps("Relais (mesh)",
+    modeMesh, sautsMesh, bandeMesh,
+    el("p", { class: "gw-aide gw-aide-bloc",
+      text: "Une bande plus large raccourcit l'émission mais réduit la portée." })));
+
+  const message = el("p", { class: "muted", text: "" });
+  const form = el("form", {
+    novalidate: "",   // les messages sont ceux du studio, pas ceux du navigateur
+    onsubmit: async (ev) => {
+      ev.preventDefault();
+      const raw = { region_actuelle: g.region ?? null };
+      for (const [k, input] of Object.entries(fields)) {
+        input.classList.remove("field-error");
+        raw[k] = input.value;
+      }
+      const checked = validateGateway(raw);
+      if (!checked.ok) {
+        fields[checked.field]?.classList.add("field-error");
+        message.textContent = checked.message;
+        return;
+      }
+      const topo = await guard(() => state.client.setGateway(state.sid, node.id, checked.settings));
+      if (topo) {
+        state.topo = topo;
+        refreshViews();
+        message.textContent = "Réglages enregistrés.";
+      }
+    },
+  }, grid, el("div", { class: "sensor-actions" },
+    el("button", { type: "submit", class: "primary", text: "Enregistrer" })));
+
+  body.append(form, message);
+
+  // Le renvoi vers le CLI : ce qui reste, où le trouver, et pourquoi ce n'est pas ici.
+  body.append(el("details", { class: "gw-avance" },
+    el("summary", { text: "Réglages avancés" }),
+    el("p", { class: "muted",
+      text: `${AVANCE_EN_CLI.join(", ")} : ces réglages restent en ligne de commande, ` +
+        "comme sur un équipement réel. Ouvrez l'onglet Console." })));
+  appliquerSousBande();
 }
 
 // Pourquoi cet equipement n a pas de console, au lieu de masquer l onglet.
