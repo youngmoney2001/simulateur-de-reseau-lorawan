@@ -436,6 +436,24 @@
       "title": "Run Id",
       "type": "string"
     },
+    "rx_matrix": {
+      "anyOf": [
+        {
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rx Matrix"
+    },
     "scenario_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Scenario Sha256",

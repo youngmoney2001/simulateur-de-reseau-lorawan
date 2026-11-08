@@ -23,6 +23,13 @@ export { EARTH_RADIUS_M, toLonLat, toMeters };
 // de widgets, sinon Cesium cherche ses ressources sur un serveur distant.
 window.CESIUM_BASE_URL = "/cesium/";
 
+// Deux natures de liaisons, deux teintes, et le trait reste tireté dans les deux cas :
+// une liaison observée n'est pas un câble, qu'elle soit un acheminement ou une portée.
+const STYLE_LIAISON = {
+  mesh: { couleur: "#6b4fbb", largeur: 3, clair: "#e9e4fb", sombre: "#2a1d55" },
+  radio: { couleur: "#0f9b8e", largeur: 2, clair: "#dff6f1", sombre: "#06332c" },
+};
+
 const BASEMAP_CREDIT =
   "Basemap : Esri, HERE, Garmin, © OpenStreetMap contributors, et partenaires SIG";
 
@@ -259,10 +266,11 @@ export function createMap3D(container, onPick) {
      * @param {number} [tolerancePx]
      */
     /**
-     * Trace les liaisons observées (relais -> frontière) entre les équipements affichés.
+     * Trace les liaisons observées entre les équipements affichés : relais -> frontière
+     * (genre « mesh ») et capteur -> passerelle (genre « radio »).
      *
-     * @param liaisonsObservees [{ de, vers, livrees }] en identifiants d'équipements
-     * @param etiquette (optionnel) texte posé au milieu du trait
+     *
+     * @param liaisonsObservees [{ de, vers, genre, compte }] en identifiants d'équipements
      *
      * Une liaison dont un bout est absent ou inexploitable est sautée : la carte préfère
      * un trait manquant à un trait faux, et à une erreur anonyme de Cesium qui
@@ -285,11 +293,15 @@ export function createMap3D(container, onPick) {
         const hauteur = 40;
         const p = Cesium.Cartesian3.fromDegrees(bouts.de.lon, bouts.de.lat, hauteur);
         const q = Cesium.Cartesian3.fromDegrees(bouts.vers.lon, bouts.vers.lat, hauteur);
+        // Deux natures, deux couleurs : un relais vers une frontière est un acheminement,
+        // un capteur vers une passerelle est une portée. Les peindre pareil ferait lire
+        // « ce capteur est raccordé » la où il est seulement entendu.
+        const style = STYLE_LIAISON[l.genre] ?? STYLE_LIAISON.mesh;
         liaisons.add({
           positions: [p, q],
-          width: 3,
+          width: style.largeur,
           material: Cesium.Material.fromType("PolylineDash", {
-            color: Cesium.Color.fromCssColorString("#6b4fbb").withAlpha(0.9),
+            color: Cesium.Color.fromCssColorString(style.couleur).withAlpha(0.9),
             gapColor: Cesium.Color.TRANSPARENT,
             dashLength: 18,
           }),
@@ -300,8 +312,8 @@ export function createMap3D(container, onPick) {
           position: milieu,
           text: etiquetteLiaison(l),
           font: "600 12px system-ui, sans-serif",
-          fillColor: Cesium.Color.fromCssColorString("#e9e4fb"),
-          outlineColor: Cesium.Color.fromCssColorString("#2a1d55"),
+          fillColor: Cesium.Color.fromCssColorString(style.clair),
+          outlineColor: Cesium.Color.fromCssColorString(style.sombre),
           outlineWidth: 3,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,

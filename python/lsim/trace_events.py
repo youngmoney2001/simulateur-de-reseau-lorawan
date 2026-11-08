@@ -1431,6 +1431,11 @@ class MultiTraceRun:
     lost_mesh: Optional[int] = None
     lost_mesh_by_device: Optional[tuple[int, ...]] = None
     mesh_loads: Optional[tuple[Optional[MeshLoad], ...]] = None  # `gateway_names` ; None sans mesh
+    # Réceptions par couple (dispositif, passerelle) : `rx_matrix[d][g]` trames décodées par la
+    # passerelle `g` pour le dispositif `d`. C'est la seule grandeur qui dise « qui a entendu
+    # qui » : l'événement servi ne porte que `gateway_index`, c'est-à-dire la **meilleure**
+    # passerelle, et tracer depuis là dessinerait un trait là où trois passerelles ont décodé.
+    rx_matrix: Optional[tuple[tuple[int, ...], ...]] = None
 
 
 def _finite_or_none(x: float) -> Optional[float]:
@@ -1557,6 +1562,33 @@ def _direct_deliverer(decoded_mask: int, models, border: str) -> Optional[int]:
         if not models[g].mesh:
             return g
     return None
+
+
+def _rx_matrix(trace, n_devices: int, n_gateways: int) -> Optional[tuple[tuple[int, ...], ...]]:
+    """Réceptions par couple (dispositif, passerelle), depuis le masque de décodage.
+
+    Une seule passe sur la trace : la construire par couple coûterait `dispositifs × passerelles`
+    parcours, ce qui se paie sur les gros scénarios.
+
+    Le masque dit « a décodé », pas « a entendu » : c'est la granularité à laquelle une liaison
+    radio est significative. Une trame reçue par trois passerelles compte trois fois — une fois
+    par liaison, et non une fois pour la trame.
+    """
+    if not trace or n_devices <= 0 or n_gateways <= 0:
+        return None
+    matrice = [[0] * n_gateways for _ in range(n_devices)]
+    for r in trace:
+        masque = r.decoded_mask
+        if not masque:
+            continue
+        ligne = matrice[r.device_index]
+        g = 0
+        while masque:
+            if masque & 1:
+                ligne[g] += 1
+            masque >>= 1
+            g += 1
+    return tuple(tuple(l) for l in matrice)
 
 
 def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
@@ -1751,11 +1783,13 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
         for k, (t, _order, kind, d, g, hops, outcome) in enumerate(pending)
     )
     net = result.network
+    rx = _rx_matrix(result.trace, len(devices), len(names))
     if mesh is None:
         totals = Counters(net.sent, net.received, net.lost_sensitivity, net.lost_collision,
                           net.airtime_ns, net.lost_gateway_busy)
         return MultiTraceRun(per_device=result.per_device, totals=totals,
-                             per_gateway=result.per_gateway, gateway_names=names, events=events)
+                             per_gateway=result.per_gateway, gateway_names=names, events=events,
+                             rx_matrix=rx)
     # Mesh : remises au LNS par dispositif ; le reste des trames décodées est « lost_mesh ».
     per_device, lost_by_device = [], []
     for d, c in enumerate(result.per_device):
@@ -1772,7 +1806,7 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                          per_gateway=result.per_gateway, gateway_names=names, events=events,
                          lost_mesh=net.received - received,
                          lost_mesh_by_device=tuple(lost_by_device),
-                         mesh_loads=_mesh_loads(models, mesh))
+                         mesh_loads=_mesh_loads(models, mesh), rx_matrix=rx)
 
 
 # Descentes reçues par le dispositif (ce qui consomme sa réception).

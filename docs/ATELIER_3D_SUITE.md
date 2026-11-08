@@ -165,21 +165,26 @@ exercices s'écrivent contre l'interface qui les résout).
 
 ---
 
-## 3. Liaisons mesh tracées sur le plan — **livré** ; les liaisons radio restent ouvertes
+## 3. Liaisons observées sur les deux vues — **mesh et radio, livrés**
 
 La phase L colore chaque équipement selon son taux de livraison et affiche ses chiffres au clic.
-Elle ne **trace pas les liaisons**. Packet Tracer, lui, matérialise les câbles : on voit qui parle
-à qui avant même de lancer quoi que ce soit.
+Elle ne **traçait pas les liaisons**. Packet Tracer, lui, matérialise les câbles : on voit qui
+parle à qui avant même de lancer quoi que ce soit.
 
-Le relais rend ce manque plus sensible qu'ailleurs : la topologie relais → frontière → serveur est
-invisible à l'écran, alors que le moteur la connaît. La matière est donc disponible ; c'est le
-tracé qui manquait.
+Le relais rendait ce manque plus sensible qu'ailleurs : la topologie relais → frontière → serveur
+était invisible à l'écran, alors que le moteur la connaît. La matière était disponible ; c'est le
+tracé qui manquait. Il est livré, pour les **deux** natures de liaisons.
 
 ### Ce qui est tracé
 
 Les **liaisons mesh observées** : un relais qui a livré des trames à la frontière. Un trait
-tireté, avec son chiffre au milieu (« 8 trames relayées »). Tireté et non plein : la liaison est
-observée, pas câblée — on ne la débranche pas.
+tireté, avec son chiffre au milieu (« 8 trames relayées »).
+
+Les **liaisons radio observées** : une passerelle qui a **décodé** des trames d'un capteur. Même
+trait tireté, même chiffre (« 5 trames décodées »), une teinte distincte.
+
+Tireté et non plein, dans les deux cas : la liaison est observée, pas câblée — on ne la débranche
+pas.
 
 Rien n'est tracé avant un run : la topologie d'un réseau radio se mesure, elle ne se déclare pas.
 
@@ -197,49 +202,82 @@ Une primitive Cesium n'existe pas dans le DOM. `window.__liaisonsCarte` compte l
 effectivement tracés ; il est remis à zéro à chaque tracé, et lu par le test e2e. Sans ce
 compteur, un trait jamais tracé ne se distinguerait pas d'un trait que personne ne regarde.
 
-### Liaisons radio : la donnée existe, elle n'est pas exposée — mesuré, pas supposé
+### Liaisons radio : livrées, et la leçon de la section est une correction
 
-`MultiTxRecord.decoded_mask` est un masque d'entier 64 bits : **bit _g_ = la passerelle _g_ a
-décodé la trame**. C'est exactement la donnée qu'il faudrait pour tracer les liaisons radio
-capteur → passerelle. Elle n'est **pas** exposée : `trace_events.py` ne s'en sert que pour
-désigner celle qui remet la trame, et l'événement servi ne porte que `gateway_index`, c'est-à-dire
-la meilleure passerelle. Tracer à partir de ce qu'on sert aujourd'hui dessinerait un trait par
-trame là où plusieurs passerelles ont entendu : **faux, pas imprécis**.
+La section s'ouvrait sur « la donnée existe, elle n'est pas exposée », et désignait `with_trace`
+comme l'obstacle. **Les deux affirmations étaient fausses, et une exécution les a défaites** —
+c'est le fait que cette section doit porter, plus que le tracé lui-même.
 
-Deux obstacles à lever, mesurés tous les deux :
+Ce qui était faux, précisément :
 
-`with_trace` n'est demandé que `si mesh_cfg is not None` — sans relais, la trace est vide et le
-masque n'est jamais calculé. La demander partout coûte un tampon de `MAX_TRACE_RECORDS`
-(200 000) et **fait échouer** les runs qui dépassent cette borne : la généraliser régresserait
-les gros scénarios.
+| Affirmation de la version précédente | Ce que l'exécution a montré |
+|---|---|
+| `with_trace` n'est demandé qu'avec un relais ; sans mesh, la trace est vide | `build_multi_trace` appelle `simulate_multi_downlinks` **sans** `with_trace`, et obtient pourtant une trace de 5 enregistrements. La borne `MAX_TRACE_RECORDS` (200 000) ne concerne pas cette voie. |
+| Le masque n'est jamais calculé | `decoded_mask == 0b111` sur **chacune** des 5 trames, trois passerelles : les trois ont décodé. |
+| La matrice n'existe pas dans l'API | Elle n'était pas **exposée**. Elle était calculée, et disponible sans surcoût. |
 
-Il faut donc soit un compteur natif par couple (capteur, passerelle), soit une trace demandée
-sous condition de taille. À décider avant d'écrire quoi que ce soit côté atelier.
+La leçon, et elle vaut pour le reste du chantier : une conclusion tirée d'une lecture de code,
+même soigneuse, n'est pas une mesure. Celle-ci a tenu plusieurs tranches sur la seule foi d'un
+`grep`, alors qu'une sonde de six lignes la défaisait.
 
-### Ce qui ne l'est pas, et pourquoi : une mesure, pas une prudence
+### Ce qui est livré
 
-Les **liaisons radio** « capteur → passerelle » sont écartées, et la raison est chiffrée. Un
-événement de trace porte `gateway_index = best_gateway` : la meilleure passerelle **de la trame**,
-une seule. Or, mesuré sur un run à deux passerelles et six capteurs :
+`MultiTxRecord.decoded_mask` est un masque 64 bits : **bit _g_ = la passerelle _g_ a décodé la
+trame**. `trace_events.py` le réduisait à une seule passerelle pour désigner qui remet la trame ;
+il produit désormais, en une passe, la matrice des réceptions par couple (dispositif, passerelle) :
+
+| Étage | Ce qu'il fait |
+|---|---|
+| `trace_events._rx_matrix` | Une passe sur la trace, pas une double boucle dispositifs × passerelles. |
+| `MultiTraceRun.rx_matrix` | Matrice portée par le résultat, sur **les deux voies** (avec et sans mesh). |
+| `RunSummary.rx_matrix` | Publiée par l'API, avec `gateways` comme ordre des colonnes. |
+
+Pourquoi c'était nécessaire, chiffré : trois passerelles en triangle autour d'un capteur, mesuré.
 
 | Source | Ce qu'elle dit |
 |---|---|
-| Événements de trace | chaque trame attribuée à **une** passerelle |
-| Compteurs par passerelle | **les deux** passerelles ont reçu les 24 trames |
+| Événements de trace (`gateway_index`) | chaque trame attribuée à **une** passerelle, toujours `gw-ouest` |
+| `decoded_mask` | **les trois** passerelles ont décodé les 5 trames |
 
-Tracer d'après les événements affirmerait « ce capteur n'est entendu que par gw-nord », ce qui est
-faux, et masquerait la **macro-diversité** — une propriété que LoRaWAN cultive précisément. La
-matrice par couple (capteur, passerelle) n'existe pas dans l'API. On ne peut donc pas tracer
-juste, et tracer faux serait pire que ne pas tracer.
+Tracer d'après les événements aurait affirmé « ce capteur n'est entendu que par gw-ouest », ce qui
+est faux, et aurait masqué la **macro-diversité** — une propriété que LoRaWAN cultive précisément.
+La carte aurait été fausse d'un **facteur trois**, pas imprécise.
 
-La porte de sortie est connue : exposer l'ensemble des passerelles ayant décodé chaque trame
-(`decoded_mask`, déjà calculé côté moteur). C'est un ajout de contrat, pas une supposition.
+### Ce que le trait veut dire
+
+Une trame décodée par trois passerelles compte **trois liaisons**. Le masque dit « a décodé », pas
+« a entendu » : c'est la granularité à laquelle une liaison radio est significative, et c'est
+celle que l'étiquette annonce — « 5 trames décodées », pas « 5 trames relayées ». Confondre les
+deux ferait lire un relais là où il n'y a qu'une portée.
+
+Deux natures, deux teintes, sur les deux vues : **violet** pour un acheminement mesh (relais →
+frontière), **sarcelle** pour une portée radio (capteur → passerelle), plus fine. Les peindre
+pareil ferait lire « ce capteur est raccordé » là où il est seulement entendu. Et le trait reste
+**tireté** dans les deux cas : une liaison observée n'est pas un câble.
+
+Un couple à zéro n'est pas tracé : il n'a pas été observé. Un bout inconnu n'est pas tracé : pas
+de trait dans le vide. Ce sont les mêmes règles que le mesh, et elles sont testées.
+
+### Vérifié par quoi
+
+La matrice est confrontée à un compteur **indépendant** : chaque colonne sommée doit retrouver
+`audible_frames` de cette passerelle, tenu par le cœur. Mesuré sur deux passerelles et deux
+capteurs à 6 trames : 12 = 12, 12 = 12. Une matrice qui dériverait se verrait.
+
+Côté Python, 4 tests ; côté web, 8. La forme est garantie par le contrat, pas par une convention :
+une colonne par passerelle, ou pas de matrice (`rx_matrix` sans `gateways` est refusé, et une ligne
+de travers lève). Sans ce validateur, des traits décalés d'un cran seraient invisibles sur la
+carte — et donc impossibles à corriger.
+
+Un écueil rencontré, et il mérite d'être noté : la matrice restait `None` alors que la fonction
+directe renvoyait la bonne valeur. La cause était un **retour anticipé** — la voie sans mesh
+sortait avant le `return` que j'avais modifié. Le symptôme ressemblait à une panne de moteur ;
+c'était une ligne plus haut dans le fichier.
 
 ### Ce qui reste
 
-- Les liaisons radio, donc, dès que la donnée par couple existe.
-- Le tracé sur la **carte 3D** : aujourd'hui seule la vue Plan 2D les porte.
-- L'audit de mise en page ne voit pas ces traits : sa session n'a pas de relais.
+- L'audit de mise en page ne voit pas encore les traits radio : sa session déclenche un run, mais
+  le contrôle se fait aujourd'hui par les tests unitaires, pas par l'œil de l'audit.
 
 ---
 

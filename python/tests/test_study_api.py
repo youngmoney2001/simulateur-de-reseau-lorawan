@@ -552,3 +552,131 @@ def test_le_relief_choisi_descend_jusquau_run(api_relief):
     # Le relief est accepte par le serveur de runs : c'est la preuve qu'il a traverse
     # la compilation et qu'il est resolvable dans le catalogue.
     assert etat["state"] == "done", etat.get("problem")
+
+
+# --- Liaisons radio : la matrice des réceptions ---------------------------------------------
+#
+# Ces tests existent pour une raison précise : une conclusion précédente affirmait que la
+# matrice par couple (capteur, passerelle) n'existait pas, faute de quoi les liaisons radio
+# ne pouvaient pas être tracées. Elle était fausse, et c'est une exécution qui l'a montré,
+# pas une relecture. On la fixe ici pour qu'une régression ne puisse pas la réintroduire.
+
+def _scenario_compile(nodes, capteurs, seed=7):
+    """Scénario compilé depuis une session réelle : la voie que prend le studio.
+
+    On passe par `StudyService.compile`, pas par un scénario écrit à la main : ce sont les
+    réglages d'équipement de la session qui font la topologie du run, et les inventer
+    ici testerait autre chose que ce que l'atelier trace.
+    """
+    from lsim.api_server import _scenario_for, TerrainCatalog
+    from lsim.api_contract import RunCreate
+    from lsim.study_contract import Node, SensorSettings, SessionCreate
+
+    svc = StudyService()
+    sid = svc.create("alice", SessionCreate(nodes=[Node(**n) for n in nodes])).session_id
+    for nid, reglages in capteurs.items():
+        svc.set_sensor("alice", sid, nid, SensorSettings(**reglages))
+    req = RunCreate.model_validate(svc.compile("alice", sid, seed).body)
+    return _scenario_for(req.scenario, req.terrain_id, TerrainCatalog(None))
+
+
+def test_rx_matrix_compte_chaque_decodeuse():
+    """Trois passerelles autour d'un capteur : chacune décode, la matrice le dit trois fois.
+
+    Les événements de trace, eux, ne citent que la **meilleure** passerelle. S'en servir pour
+    tracer les liaisons dessinerait un trait là où trois passerelles ont décodé — une carte
+    fausse d'un facteur trois, pas une carte imprécise.
+    """
+    from lsim.trace_events import build_multi_trace
+
+    sc = _scenario_compile(
+        [{"id": "gw-ouest", "kind": "border", "name": "Ouest", "x_m": -1200, "y_m": 0},
+         {"id": "gw-est", "kind": "border", "name": "Est", "x_m": 1200, "y_m": 0},
+         {"id": "gw-nord", "kind": "border", "name": "Nord", "x_m": 0, "y_m": 1600},
+         {"id": "capt-1", "kind": "sensor", "name": "Capteur", "x_m": 0, "y_m": 0}],
+        {"capt-1": {"period_s": 60.0, "messages": 5, "start_spread_s": 10.0,
+                    "spreading_factor": 7}})
+
+    mt = build_multi_trace(sc)
+    assert mt.rx_matrix is not None, "la matrice doit être servie, y compris sans mesh"
+    assert len(mt.rx_matrix) == 1, "un capteur, une ligne"
+    ligne = mt.rx_matrix[0]
+    assert len(ligne) == 3, "trois passerelles, trois colonnes"
+    assert all(n >= 1 for n in ligne), (
+        f"les trois passerelles encadrent le capteur : {ligne} devrait être non nul partout")
+    # Et pourtant les événements ne citent qu'une seule passerelle : c'est tout le sujet.
+    citees = {e.gateway_index for e in mt.events if e.gateway_index is not None}
+    assert len(citees) == 1, (
+        f"les événements ne portent que la meilleure passerelle ({citees}) : "
+        "tracer d'après eux masquerait la macro-diversité")
+
+
+def test_rx_matrix_concorde_avec_les_compteurs_par_passerelle():
+    """Chaque colonne sommée retrouve `audible_frames` : la matrice ne dérive pas.
+
+    `audible_frames` est un compteur indépendant, tenu par le cœur. Si la matrice et lui
+    se contredisent, c'est que l'une des deux lectures est fausse.
+    """
+    from lsim.trace_events import build_multi_trace
+
+    sc = _scenario_compile(
+        [{"id": "gw-ouest", "kind": "border", "name": "Ouest", "x_m": -1200, "y_m": 0},
+         {"id": "gw-est", "kind": "border", "name": "Est", "x_m": 1200, "y_m": 0},
+         {"id": "capt-1", "kind": "sensor", "name": "Proche", "x_m": 0, "y_m": 0},
+         {"id": "capt-2", "kind": "sensor", "name": "Lointain", "x_m": 900, "y_m": 400}],
+        {"capt-1": {"period_s": 60.0, "messages": 6, "start_spread_s": 10.0,
+                    "spreading_factor": 7},
+         "capt-2": {"period_s": 60.0, "messages": 6, "start_spread_s": 10.0,
+                    "spreading_factor": 7}})
+
+    mt = build_multi_trace(sc)
+    assert mt.rx_matrix is not None
+    assert len(mt.rx_matrix) == 2, "un capteur, une ligne"
+    for g, nom in enumerate(mt.gateway_names):
+        somme = sum(ligne[g] for ligne in mt.rx_matrix)
+        audible = mt.per_gateway[g].audible_frames
+        assert somme == audible, (
+            f"{nom} : la matrice compte {somme} réceptions, le compteur en annonce {audible}")
+
+
+def _resume_multi_passerelles(api, messages=3, count=6):
+    """Un run à deux passerelles, et son résumé."""
+    d = _scenario(count=count, messages=messages)
+    d.pop("gateway")
+    d["gateways"] = [{"name": "gw-ouest", "x_m": -800, "y_m": 0, "antenna_gain_dbi": 2.15},
+                     {"name": "gw-est", "x_m": 800, "y_m": 0, "antenna_gain_dbi": 2.15}]
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 202, created
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    status, summary = api.call("GET", f"/api/v1/runs/{created['run_id']}/summary")
+    assert status == 200, summary
+    return summary
+
+
+def test_run_mono_passerelle_ne_publie_pas_de_matrice(api):
+    """Une seule colonne ne dirait rien de plus que le PDR : le champ est absent."""
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": _scenario(count=6, messages=3)})
+    assert status == 202, created
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    status, summary = api.call("GET", f"/api/v1/runs/{created['run_id']}/summary")
+    assert status == 200, summary
+    assert summary.get("gateways") is None, "ce run est mono-passerelle"
+    assert summary.get("rx_matrix") is None, (
+        "sans `gateways`, une matrice à une colonne ne dirait rien de plus que le PDR")
+
+
+def test_run_multi_passerelles_publie_une_matrice_lisible(api):
+    """Le résumé publie la matrice, indexée comme `gateways` : c'est le contrat du tracé."""
+    summary = _resume_multi_passerelles(api)
+    rx = summary.get("rx_matrix")
+    assert rx is not None, "un run multi-passerelles publie sa matrice"
+    assert len(rx) == 6, "une ligne par dispositif"
+    colonnes = {len(ligne) for ligne in rx}
+    assert colonnes == {2}, (
+        "une colonne par passerelle : l'ordre est celui de `gateways`, rien d'autre")
+    # Et la somme d'une colonne retrouve le compteur de cette passerelle.
+    for g, gw in enumerate(summary["gateways"]):
+        somme = sum(ligne[g] for ligne in rx)
+        assert somme == gw["audible_frames"], (
+            f"{gw['name']} : la matrice compte {somme} réceptions, "
+            f"le compteur en annonce {gw['audible_frames']}")

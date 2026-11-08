@@ -3,17 +3,21 @@
 // Ce module est volontairement étroit, et l'étroitesse est le sujet.
 //
 // Une liaison n'est dessinée que si le run l'a **observée** :
-//   - « mesh » : un relais a livré des trames à une frontière (`mesh_inbound` du résumé).
+//   - « mesh »  : un relais a livré des trames à une frontière (`mesh_inbound` du résumé) ;
+//   - « radio » : une passerelle a décodé des trames d'un capteur (`rx_matrix` du résumé).
 //
-// Les liaisons radio « capteur → passerelle » ne sont **pas** tracées, et c'est une décision
-// mesurée, pas un report. Un événement de trace porte `gateway_index = best_gateway` : la
-// meilleure passerelle de la trame, une seule, alors que plusieurs peuvent l'avoir décodée.
-// Vérifié sur un run à deux passerelles et six capteurs : les événements attribuent chaque
-// trame à une seule passerelle, quand les compteurs montrent que **les deux** ont reçu les
-// vingt-quatre. Tracer d'après les événements dessinerait « ce capteur n'est entendu que par
-// gw-nord », ce qui est faux — et qui masque la macro-diversité, une propriété que LoRaWAN
-// cultive précisément. La matrice par couple (capteur, passerelle) n'existe pas dans l'API :
-// on ne peut donc pas tracer juste, et tracer faux serait pire que ne pas tracer.
+// Les liaisons radio ont longtemps été écartées, et pour une raison mesurée : un événement de
+// trace porte `gateway_index = best_gateway`, la **meilleure** passerelle de la trame, une
+// seule, alors que plusieurs peuvent l'avoir décodée. Vérifié sur un run à trois passerelles :
+// les événements attribuent chaque trame à `gw-ouest` quand trois passerelles les ont toutes
+// décodées. Tracer d'après les événements dessinerait « ce capteur n'est entendu que par
+// gw-ouest », ce qui est faux — et masque la macro-diversité, une propriété que LoRaWAN
+// cultive précisément.
+//
+// Ce qui manquait n'était pas une précaution, c'était la donnée. Le moteur calcule
+// `decoded_mask` (bit g : la passerelle g a décodé) ; il n'était pas exposé. L'API publie
+// désormais `rx_matrix`, et la liaison radio se trace — vérifiée contre `audible_frames`,
+// compteur indépendant.
 //
 // Dès qu'une liaison est tracée, elle porte son chiffre : un trait sans nombre n'apprend rien
 // qu'une couleur ne dirait déjà.
@@ -49,11 +53,57 @@ export function liaisonsMesh({ passerelles = [], liens = [], noeuds = null } = {
       const de = versSession(entrant.from_gateway);
       if (de === vers) continue;                        // un équipement ne se relaie pas lui-même
       if (connus && (!connus.has(de) || !connus.has(vers))) continue;
-      out.push({ de, vers, livrees: entrant.delivered });
+      out.push({ de, vers, genre: "mesh", compte: entrant.delivered });
     }
   }
   // Ordre décroissant : sur un plan chargé, les liaisons qui comptent se voient d'abord.
-  return out.sort((a, b) => b.livrees - a.livrees || (a.de < b.de ? -1 : 1));
+  return out.sort((a, b) => b.compte - a.compte || (a.de < b.de ? -1 : 1));
+}
+
+/**
+ * Liaisons radio observées : une passerelle qui a **décodé** des trames d'un capteur.
+ *
+ * `rx_matrix[d][g]` compte les trames décodées par la passerelle `g` pour le dispositif `d`.
+ * Deux correspondances à faire, et elles ne sont pas interchangeables :
+ *   - les colonnes suivent l'ordre de `summary.gateways`, pas un ordre alphabétique ;
+ *   - les dispositifs suivent `device_index`, et le nom du groupe est l'identifiant du
+ *     capteur (`study_compile.py` nomme un groupe par capteur, un dispositif chacun).
+ *
+ * Le masque dit « a décodé », pas « a entendu » : c'est la granularité à laquelle une liaison
+ * radio est significative. Une trame décodée par trois passerelles compte trois liaisons.
+ *
+ * @returns [{ de, vers, genre, compte }], les mieux fournies d'abord.
+ */
+export function liaisonsRadio({ rxMatrix = null, gateways = [], deviceRows = [], liens = [],
+                                noeuds = null } = {}) {
+  if (!Array.isArray(rxMatrix) || rxMatrix.length === 0) return [];
+  const connus = noeuds === null ? null : new Set(noeuds);
+  const parNomDuRun = new Map(liens.map((l) => [l.gateway, l.node_id]));
+  const versSession = (nom) => parNomDuRun.get(nom) ?? nom;
+  // Colonnes dans l'ordre de `gateways` : c'est celui que le serveur garantit, et c'est le
+  // seul. Reconstruire cet ordre depuis les noms le perdrait.
+  const colonnes = gateways.map((g) => versSession(g?.name));
+
+  const out = [];
+  for (let d = 0; d < rxMatrix.length; d += 1) {
+    const ligne = rxMatrix[d];
+    if (!Array.isArray(ligne)) continue;
+    // Au-delà de `MAX_METRIC_DEVICES`, les lignes par dispositif ne sont pas rapatriées : la
+    // matrice peut alors compter plus de lignes que `deviceRows`. Un dispositif qu'on ne sait
+    // pas nommer ne se trace pas — on préfère un trait absent à un trait posé au hasard.
+    const de = deviceRows[d]?.group ?? null;
+    if (!de) continue;
+    for (let g = 0; g < ligne.length && g < colonnes.length; g += 1) {
+      const compte = ligne[g];
+      // Rien décodé, rien observé : le dessiner promettrait une portée que le run n'a pas vue.
+      if (!(compte >= 1)) continue;
+      const vers = colonnes[g];
+      if (!vers || de === vers) continue;
+      if (connus && (!connus.has(de) || !connus.has(vers))) continue;
+      out.push({ de, vers, genre: "radio", compte });
+    }
+  }
+  return out.sort((a, b) => b.compte - a.compte || (a.de < b.de ? -1 : 1));
 }
 
 /** Une seule ligne par couple : le run peut compter plusieurs sens, la carte n'en montre qu'un. */
@@ -61,12 +111,15 @@ export function cumulerLiaisons(liaisons = []) {
   const parCouple = new Map();
   for (const l of liaisons) {
     // Le couple est orienté : relais -> frontière. On ne fusionne pas l'aller et le retour.
-    const cle = `${l.de}\u0000${l.vers}`;
+    // Le genre entre dans la clé : un relais peut être capteur sur une autre session, et deux
+    // liaisons de nature différente ne s'additionnent pas — « 3 relayées + 5 décodées » n'est
+    // un total de rien.
+    const cle = `${l.genre}\u0000${l.de}\u0000${l.vers}`;
     const avant = parCouple.get(cle);
-    if (avant) avant.livrees += l.livrees;
+    if (avant) avant.compte += l.compte;
     else parCouple.set(cle, { ...l });
   }
-  return [...parCouple.values()].sort((a, b) => b.livrees - a.livrees || (a.de < b.de ? -1 : 1));
+  return [...parCouple.values()].sort((a, b) => b.compte - a.compte || (a.de < b.de ? -1 : 1));
 }
 
 /**
@@ -90,8 +143,12 @@ export function boutsLiaison(liaison, noeuds, origine) {
 /**
  * Ce qu'on écrit sur le trait. Un chiffre seul ne dit pas ce qu'il compte : « 12 » pourrait
  * être des trames, des sauts ou des décibels.
+ *
+ * Et le verbe doit suivre la nature du lien : une trame décodée n'est pas une trame relayée.
+ * Les confondre ferait croire à un relais là où il n'y a qu'une portée.
  */
 export function etiquetteLiaison(liaison) {
-  const n = liaison?.livrees ?? 0;
+  const n = liaison?.compte ?? 0;
+  if (liaison?.genre === "radio") return n >= 2 ? `${n} trames décodées` : "1 trame décodée";
   return n >= 2 ? `${n} trames relayées` : "1 trame relayée";
 }

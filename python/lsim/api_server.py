@@ -466,7 +466,8 @@ def _duty_cycle_out(scenario: Scenario) -> Optional[list[dict[str, Any]]]:
 
 
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
-                 energy_profile: Optional[str], lost_mesh: Optional[int] = None) -> dict[str, Any]:
+                 energy_profile: Optional[str], lost_mesh: Optional[int] = None,
+                 rx_matrix=None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -476,6 +477,7 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
         duty_cycle=_duty_cycle_out(scenario),
+        rx_matrix=rx_matrix,
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(
@@ -723,7 +725,8 @@ class RunService:
                 frame=(_vues[_i].couches() if _vues[_i] is not None else None),
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
-                               job.energy_profile, mesh_lost_total)
+                               job.energy_profile, mesh_lost_total,
+                               mt.rx_matrix if job.multi else None)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {

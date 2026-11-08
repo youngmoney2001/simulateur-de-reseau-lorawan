@@ -313,6 +313,10 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
    croire a un lien pose de main d'homme, qu'on pourrait debrancher. */
 .liens line.lien-mesh { stroke:#6b4fbb; stroke-width:2; stroke-dasharray:7 4;
   stroke-linecap:round; opacity:.85; }
+/* Le trait radio est plus fin : une portée se superpose souvent à d'autres, et un trait
+   aussi épais qu'un acheminement finirait par couvrir le plan. */
+.liens line.lien-radio { stroke:#0f9b8e; stroke-width:1.5; stroke-dasharray:3 4;
+  stroke-linecap:round; opacity:.8; }
 .liens .lien-etiquette { font-size:11px; fill:#4a3a86; text-anchor:middle;
   paint-order:stroke; stroke:var(--canvas, #fff); stroke-width:3px; stroke-linejoin:round; }
 

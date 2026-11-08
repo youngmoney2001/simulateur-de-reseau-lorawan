@@ -21,7 +21,8 @@ import { createMap3D, toMeters as degreesToMeters, toLonLat as metresVersDegres 
 // Conversion et lecture des coordonnées, sans dépendance : mêmes fonctions que la carte.
 import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
-import { liaisonsMesh, cumulerLiaisons, etiquetteLiaison } from "./liaisons.js";
+import { liaisonsMesh, liaisonsRadio, cumulerLiaisons, etiquetteLiaison }
+  from "./liaisons.js";
 import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
@@ -51,6 +52,7 @@ const state = {
   fenetreNs: null,   // fenetre d observation du dernier run : denominators des taux
   liens: [],         // GatewayLink[] du dernier run : equipement <-> passerelle du run
   passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
+  rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
@@ -278,6 +280,7 @@ async function selectSession(sid) {
   // session afficherait le reseau d'un autre chantier, le temps d'un clic.
   state.liens = [];
   state.passerelles = null;
+  state.rxMatrix = null;
   state.liaisonsObservees = [];
   renderSessionChoices();
   await loadTopology();
@@ -399,12 +402,29 @@ function renderPlan() {
 }
 
 // Liaisons observées, calculées une fois : le plan 2D et la carte 3D tracent le même résultat.
+/**
+ * Les deux natures de liaisons, calculées une seule fois.
+ *
+ * Le plan et la carte consomment le même tableau : si chacun recalculait, ils pourraient
+ * diverger sans que rien ne le signale — et deux vues qui ne disent pas la même chose sont
+ * pires qu'une seule.
+ */
 function calculerLiaisons() {
-  return cumulerLiaisons(liaisonsMesh({
-    passerelles: state.passerelles ?? [],
-    liens: state.liens,
-    noeuds: (state.topo?.nodes ?? []).map((n) => n.id),
-  }));
+  const noeuds = (state.topo?.nodes ?? []).map((n) => n.id);
+  return cumulerLiaisons([
+    ...liaisonsMesh({
+      passerelles: state.passerelles ?? [],
+      liens: state.liens,
+      noeuds,
+    }),
+    ...liaisonsRadio({
+      rxMatrix: state.rxMatrix,
+      gateways: state.passerelles ?? [],
+      deviceRows: state.deviceRows,
+      liens: state.liens,
+      noeuds,
+    }),
+  ]);
 }
 
 // Liaisons observées sur le plan. Elles n'existent qu'après un run : la topologie d'un réseau
@@ -420,8 +440,10 @@ function renderLiaisons(nodes, bounds) {
     const a = parId.get(l.de), b = parId.get(l.vers);
     if (!a || !b) continue;
     const p = toScreen(a, bounds, W, H), q = toScreen(b, bounds, W, H);
-    couche.append(svgEl("line", { class: "lien lien-mesh", x1: p.x.toFixed(1), y1: p.y.toFixed(1),
-      x2: q.x.toFixed(1), y2: q.y.toFixed(1) }));
+    // La classe suit la nature du lien : le plan et la carte doivent raconter la même
+    // chose, sinon l'utilisateur lit deux réseaux différents selon la vue.
+    couche.append(svgEl("line", { class: `lien lien-${l.genre === "radio" ? "radio" : "mesh"}`,
+      x1: p.x.toFixed(1), y1: p.y.toFixed(1), x2: q.x.toFixed(1), y2: q.y.toFixed(1) }));
     // Le chiffre au milieu du trait : une liaison sans son nombre n'apprend rien qu'une
     // couleur ne dirait deja.
     const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
@@ -1073,6 +1095,7 @@ function renderSimulationIdle() {
   $("sim-results").hidden = true;
   // Le retrait des traits se fait au prochain rendu (`refreshViews`), qui suit de toute
   // façon : appeler `syncMap` ici tracerait avec la topologie de la session précédente.
+  state.rxMatrix = null;
   state.liaisonsObservees = [];
 }
 
@@ -1111,6 +1134,7 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // montrerait des equipements sans jamais dire qui parle a qui.
     state.liens = started.links ?? [];
     state.passerelles = summary.gateways ?? null;
+    state.rxMatrix = summary.rx_matrix ?? null;
     // Un seul calcul pour les deux vues : si le plan et la carte le refaisaient chacun,
     // ils pourraient diverger sans que rien ne le signale.
     state.liaisonsObservees = calculerLiaisons();

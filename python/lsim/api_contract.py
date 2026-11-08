@@ -231,11 +231,43 @@ class RunSummary(_Strict):
     # Rapport cyclique par groupe. Absent si aucun groupe ne déclare de région : c'est le
     # cas de tout scénario écrit avant l'introduction du champ, dont l'empreinte ne bouge pas.
     duty_cycle: Optional[list[DutyCycleOut]] = Field(default=None, max_length=64)
+    # Réceptions par couple (dispositif, passerelle) : `rx_matrix[d][g]` trames décodées par la
+    # passerelle `g` pour le dispositif `d`, l'ordre des colonnes étant celui de `gateways`.
+    #
+    # C'est la seule grandeur publiée qui dise « qui a entendu qui ». L'événement servi ne
+    # porte que la **meilleure** passerelle : s'en servir pour tracer les liaisons radio
+    # dessinerait un trait là où trois passerelles ont décodé.
+    #
+    # Dispositifs dans l'ordre de `GET /runs/{id}/devices` (`device_index`), passerelles dans
+    # celui de `gateways` — deux ordres que rien ne garantit égaux, d'où leur mention ici.
+    # Absent sur un run mono-passerelle : l'unique colonne ne dirait rien de plus que le PDR.
+    # Une ligne par dispositif (jusqu'à `MAX_DEVICES`), une colonne par passerelle
+    # (jusqu'à `MAX_GATEWAYS`) : borner les lignes à 64 casserait tout run un peu peuplé.
+    rx_matrix: Optional[list[list[int]]] = None
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":
         if (self.gateway is None) == (self.gateways is None):
             raise ValueError("exactement un de gateway ou gateways")
+        return self
+
+    @model_validator(mode="after")
+    def _rx_matrix_carree(self) -> "RunSummary":
+        """Une colonne par passerelle, ou pas de matrice du tout.
+
+        Le tracé lit `rx_matrix[d][g]` à l'aveugle, en supposant qu'il y a autant de colonnes
+        que de passerelles. Laisser passer une matrice bancale produirait des traits décalés
+        d'un cran — une erreur impossible à voir sur la carte, et donc impossible à corriger.
+        """
+        if self.rx_matrix is None:
+            return self
+        if self.gateways is None:
+            raise ValueError("rx_matrix sans gateways : une colonne unique ne dirait rien de plus")
+        attendu = len(self.gateways)
+        for d, ligne in enumerate(self.rx_matrix):
+            if len(ligne) != attendu:
+                raise ValueError(
+                    f"rx_matrix[{d}] : {len(ligne)} colonnes pour {attendu} passerelles")
         return self
 
 
