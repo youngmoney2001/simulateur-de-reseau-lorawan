@@ -165,15 +165,48 @@ exercices s'écrivent contre l'interface qui les résout).
 
 ---
 
-## 3. Liaisons tracées sur la carte — ouvert depuis la phase L
+## 3. Liaisons mesh tracées sur le plan — **livré** ; les liaisons radio restent ouvertes
 
 La phase L colore chaque équipement selon son taux de livraison et affiche ses chiffres au clic.
 Elle ne **trace pas les liaisons**. Packet Tracer, lui, matérialise les câbles : on voit qui parle
 à qui avant même de lancer quoi que ce soit.
 
 Le relais rend ce manque plus sensible qu'ailleurs : la topologie relais → frontière → serveur est
-invisible à l'écran, alors que le moteur la connaît (`event.hops`, déjà lu par `animation.js` pour
-l'inspecteur). La matière est donc disponible ; c'est le tracé qui manque.
+invisible à l'écran, alors que le moteur la connaît. La matière est donc disponible ; c'est le
+tracé qui manquait.
+
+### Ce qui est tracé
+
+Les **liaisons mesh observées** : un relais qui a livré des trames à la frontière. Un trait
+tireté, avec son chiffre au milieu (« 8 trames relayées »). Tireté et non plein : la liaison est
+observée, pas câblée — on ne la débranche pas.
+
+Rien n'est tracé avant un run : la topologie d'un réseau radio se mesure, elle ne se déclare pas.
+
+### Ce qui ne l'est pas, et pourquoi : une mesure, pas une prudence
+
+Les **liaisons radio** « capteur → passerelle » sont écartées, et la raison est chiffrée. Un
+événement de trace porte `gateway_index = best_gateway` : la meilleure passerelle **de la trame**,
+une seule. Or, mesuré sur un run à deux passerelles et six capteurs :
+
+| Source | Ce qu'elle dit |
+|---|---|
+| Événements de trace | chaque trame attribuée à **une** passerelle |
+| Compteurs par passerelle | **les deux** passerelles ont reçu les 24 trames |
+
+Tracer d'après les événements affirmerait « ce capteur n'est entendu que par gw-nord », ce qui est
+faux, et masquerait la **macro-diversité** — une propriété que LoRaWAN cultive précisément. La
+matrice par couple (capteur, passerelle) n'existe pas dans l'API. On ne peut donc pas tracer
+juste, et tracer faux serait pire que ne pas tracer.
+
+La porte de sortie est connue : exposer l'ensemble des passerelles ayant décodé chaque trame
+(`decoded_mask`, déjà calculé côté moteur). C'est un ajout de contrat, pas une supposition.
+
+### Ce qui reste
+
+- Les liaisons radio, donc, dès que la donnée par couple existe.
+- Le tracé sur la **carte 3D** : aujourd'hui seule la vue Plan 2D les porte.
+- L'audit de mise en page ne voit pas ces traits : sa session n'a pas de relais.
 
 ---
 
