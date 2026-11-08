@@ -264,10 +264,24 @@ La matrice est confrontée à un compteur **indépendant** : chaque colonne somm
 `audible_frames` de cette passerelle, tenu par le cœur. Mesuré sur deux passerelles et deux
 capteurs à 6 trames : 12 = 12, 12 = 12. Une matrice qui dériverait se verrait.
 
-Côté Python, 4 tests ; côté web, 8. La forme est garantie par le contrat, pas par une convention :
+Côté Python, 4 tests ; côté web, 12. La forme est garantie par le contrat, pas par une convention :
 une colonne par passerelle, ou pas de matrice (`rx_matrix` sans `gateways` est refusé, et une ligne
 de travers lève). Sans ce validateur, des traits décalés d'un cran seraient invisibles sur la
 carte — et donc impossibles à corriger.
+
+La composition des deux natures (`liaisonsObservees`) est une fonction pure, sans accès à `state` :
+elle se vérifie donc **sans navigateur**. La vue n'a plus qu'à lui passer cinq entrées. C'est ce
+qui ferme le trou entre « la matrice est servie » et « le trait est dessiné » — le seul chaînon
+que les tests d'atelier ne pouvaient pas atteindre autrement.
+
+Un test a d'ailleurs été corrigé par l'exécution : j'avais écrit trois passerelles pour deux
+colonnes, et la fonction a attribué les colonnes dans l'ordre déclaré. Le code avait raison et
+l'attente avait tort — c'est précisément la propriété que le tracé doit garantir.
+
+Ce que l'audit de mise en page ne voit toujours pas : sa session n'a **qu'une** passerelle, donc
+`rx_matrix` n'est pas publiée et aucun trait radio n'apparaît. Le lui ajouter changerait la
+topologie que l'audit mesure, donc sa ligne de base ; c'est une décision à prendre à part, pas un
+effet de bord de cette tranche.
 
 Un écueil rencontré, et il mérite d'être noté : la matrice restait `None` alors que la fonction
 directe renvoyait la bonne valeur. La cause était un **retour anticipé** — la voie sans mesh
@@ -276,8 +290,9 @@ c'était une ligne plus haut dans le fichier.
 
 ### Ce qui reste
 
-- L'audit de mise en page ne voit pas encore les traits radio : sa session déclenche un run, mais
-  le contrôle se fait aujourd'hui par les tests unitaires, pas par l'œil de l'audit.
+- Donner une seconde passerelle à la session de l'audit de mise en page, pour que les liaisons
+  radio y soient mesurées dans un vrai navigateur. Cela déplace sa ligne de base : à faire
+  sciemment, pas en passant.
 
 ---
 

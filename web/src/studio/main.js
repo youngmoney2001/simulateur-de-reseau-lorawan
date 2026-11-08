@@ -21,8 +21,7 @@ import { createMap3D, toMeters as degreesToMeters, toLonLat as metresVersDegres 
 // Conversion et lecture des coordonnées, sans dépendance : mêmes fonctions que la carte.
 import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
-import { liaisonsMesh, liaisonsRadio, cumulerLiaisons, etiquetteLiaison }
-  from "./liaisons.js";
+import { liaisonsObservees, etiquetteLiaison } from "./liaisons.js";
 import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
@@ -408,23 +407,18 @@ function renderPlan() {
  * Le plan et la carte consomment le même tableau : si chacun recalculait, ils pourraient
  * diverger sans que rien ne le signale — et deux vues qui ne disent pas la même chose sont
  * pires qu'une seule.
+ *
+ * Le calcul lui-même vit dans `liaisons.js`, sans `state` : il est donc vérifiable hors
+ * navigateur. Il ne reste ici que l'assemblage des entrées.
  */
 function calculerLiaisons() {
-  const noeuds = (state.topo?.nodes ?? []).map((n) => n.id);
-  return cumulerLiaisons([
-    ...liaisonsMesh({
-      passerelles: state.passerelles ?? [],
-      liens: state.liens,
-      noeuds,
-    }),
-    ...liaisonsRadio({
-      rxMatrix: state.rxMatrix,
-      gateways: state.passerelles ?? [],
-      deviceRows: state.deviceRows,
-      liens: state.liens,
-      noeuds,
-    }),
-  ]);
+  return liaisonsObservees({
+    passerelles: state.passerelles ?? [],
+    liens: state.liens,
+    noeuds: (state.topo?.nodes ?? []).map((n) => n.id),
+    rxMatrix: state.rxMatrix,
+    deviceRows: state.deviceRows,
+  });
 }
 
 // Liaisons observées sur le plan. Elles n'existent qu'après un run : la topologie d'un réseau

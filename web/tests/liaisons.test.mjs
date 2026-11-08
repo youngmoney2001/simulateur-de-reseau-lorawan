@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { liaisonsMesh, liaisonsRadio, cumulerLiaisons, etiquetteLiaison }
-  from "../src/studio/liaisons.js";
+import { liaisonsMesh, liaisonsRadio, liaisonsObservees, cumulerLiaisons,
+  etiquetteLiaison } from "../src/studio/liaisons.js";
 
 const LIENS = [
   { node_id: "frontiere", gateway: "frontiere" },
@@ -196,4 +196,53 @@ test("cumuler ne mélange pas les natures : « relayées + décodées » n'est u
   assert.equal(cumul.length, 2);
   assert.equal(cumul.find((x) => x.genre === "radio").compte, 5);
   assert.equal(cumul.find((x) => x.genre === "mesh").compte, 7);
+});
+
+// --- La composition : ce que la vue assemble, sans navigateur ------------------------------------
+//
+// `calculerLiaisons` de main.js ne fait qu'assembler cinq entrées ; le calcul est cette fonction.
+// La tester ici ferme le trou entre « la matrice est servie » et « le trait est dessiné », sans
+// avoir besoin de Chromium.
+
+test("les deux natures se cumulent dans un seul tableau", () => {
+  const l = liaisonsObservees({
+    passerelles: [{ name: "frontiere", mesh_inbound: [{ from_gateway: "relais-1", delivered: 8 }] },
+      { name: "gw-ouest" }, { name: "gw-est" }],
+    liens: LIENS,
+    noeuds: ["frontiere", "relais-1", "gw-ouest", "gw-est", "capt-1"],
+    rxMatrix: [[5, 3, 0]],
+    deviceRows: [{ device_index: 0, group: "capt-1" }],
+  });
+  // Colonnes dans l'ordre de `gateways` — frontière, ouest, est — et la troisième à zéro
+  // ne se trace pas. C'est tout le contrat du tracé qui se joue sur cet ordre.
+  assert.deepEqual(l.map((x) => `${x.genre}:${x.de}->${x.vers}:${x.compte}`), [
+    "mesh:relais-1->frontiere:8", "radio:capt-1->frontiere:5", "radio:capt-1->gw-ouest:3",
+  ]);
+});
+
+test("sans matrice, la composition ne rend que le mesh", () => {
+  const l = liaisonsObservees({
+    passerelles: [{ name: "frontiere", mesh_inbound: [{ from_gateway: "relais-1", delivered: 8 }] }],
+    liens: LIENS, noeuds: ["frontiere", "relais-1"],
+    rxMatrix: null, deviceRows: [],
+  });
+  assert.deepEqual(l, [{ de: "relais-1", vers: "frontiere", genre: "mesh", compte: 8 }]);
+});
+
+test("sans mesh ni matrice, la composition rend une liste vide", () => {
+  // Un run sans relais, sur une session à une seule passerelle : rien à tracer, et surtout
+  // pas d'erreur — c'est le cas de la session de l'audit de mise en page.
+  assert.deepEqual(liaisonsObservees({ passerelles: [{ name: "gw-nord" }], liens: [],
+    noeuds: ["gw-nord"], rxMatrix: null, deviceRows: [] }), []);
+  assert.deepEqual(liaisonsObservees(), []);
+});
+
+test("des entrées vides rendent une liste vide : un run partiel ne casse pas la vue", () => {
+  // La vue passe toujours des tableaux (`state.liens ?? []` et consorts) : ce qu'on vérifie
+  // ici, c'est l'absence de clé, pas `null` à la place d'un tableau — cas qui n'arrive pas
+  // et qu'on n'a donc aucune raison de prétendre couvrir.
+  for (const entrees of [{}, { rxMatrix: null }, { passerelles: [] }, { deviceRows: [] },
+    { liens: [] }, { noeuds: [] }]) {
+    assert.deepEqual(liaisonsObservees(entrees), []);
+  }
 });

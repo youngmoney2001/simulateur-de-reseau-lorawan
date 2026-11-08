@@ -123,6 +123,23 @@ export function cumulerLiaisons(liaisons = []) {
 }
 
 /**
+ * Les liaisons observées d'un run, toutes natures confondues, prêtes à tracer.
+ *
+ * Fonction pure, sans accès à `state` : c'est ce qui permet de la vérifier hors navigateur.
+ * Le calcul complet — les deux natures, leur cumul, leur ordre — se teste donc sans Chromium,
+ * et seule l'affectation des cinq entrées reste du ressort de la vue.
+ *
+ * @returns [{ de, vers, genre, compte }], les mieux fournies d'abord.
+ */
+export function liaisonsObservees({ passerelles = [], liens = [], noeuds = null,
+                                    rxMatrix = null, deviceRows = [] } = {}) {
+  return cumulerLiaisons([
+    ...liaisonsMesh({ passerelles, liens, noeuds }),
+    ...liaisonsRadio({ rxMatrix, gateways: passerelles, deviceRows, liens, noeuds }),
+  ]);
+}
+
+/**
  * Bouts géographiques d'une liaison, en degrés, prêts pour la carte 3D.
  *
  * @param noeuds Map id -> { x_m, y_m } (le plan et la carte partagent ces mètres).
