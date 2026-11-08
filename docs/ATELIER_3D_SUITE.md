@@ -20,7 +20,7 @@ concerne la **profondeur** de chaque étape, pas leur existence.
 
 ---
 
-## 1. La fenêtre passerelle est presque vide alors que onze réglages existent
+## 1. ~~La fenêtre passerelle est presque vide~~ — **arbitrage tranché, en cours depuis cette tranche**
 
 **C'est l'écart le plus grave, et il est chiffrable.**
 
@@ -73,7 +73,35 @@ Trois issues, à trancher :
    la fenêtre passerelle cesse de faire croire qu'elle configure.
 3. **Réduire le contenu** aux exercices qui se terminent dans l'atelier (3 sur 7 aujourd'hui).
 
-Je ne choisirai pas seul : ce point décide de la forme que prend la suite.
+### Décision : ouvrir la fenêtre, progressivement
+
+Arbitrage rendu : **ouvrir la fenêtre**, exposer d'abord ce que les exercices réclament, garder
+le reste au CLI **avec un renvoi visible**, et **ne pas réduire les exercices** — adapter
+l'interface aux quatre qui doivent se terminer dans l'atelier.
+
+Ce que la fenêtre expose désormais, en deux sections :
+
+| Section | Réglages |
+|---|---|
+| **Radio LoRa** | plan régional, sous-bande, puissance TX |
+| **Relais (mesh)** | mode, sauts max, bande passante |
+
+Ce qui reste au CLI, et que le bloc « Réglages avancés » **nomme** : gain d'antenne, fréquence,
+facteur d'étalement du mesh, arrêt d'interface.
+
+**La fenêtre et le CLI écrivent la même configuration.** Ce n'est pas un état parallèle : ce que
+la fenêtre pose apparaît dans `show running-config`, et réciproquement. Les deux sens sont
+testés. Sans cette propriété, un même équipement aurait deux vérités selon le chemin emprunté.
+
+Deux détails qui comptent plus que leur taille :
+
+- **La sous-bande est désactivée hors US915 et AU915, avec la raison écrite à côté.** Un champ
+  muet ou grisé sans explication est le genre de silence qui fait perdre une heure.
+- **Un champ vide emporte « ne pas toucher ».** La fenêtre n'affiche pas l'antenne ; elle ne doit
+  donc pas pouvoir l'effacer.
+
+La région a été exposée en plus de la demande, parce que deux des quatre exercices l'exigent :
+une sous-bande sans plan régional n'a pas de sens, et le CLI refuse déjà cette combinaison.
 
 ---
 
