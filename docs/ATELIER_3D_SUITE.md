@@ -224,7 +224,7 @@ La porte de sortie est connue : exposer l'ensemble des passerelles ayant décod�
 
 ---
 
-## 4. Sauvegarde et chargement d'un chantier — **ouvert, conception arrêtée**
+## 4. Sauvegarde et chargement d'un chantier — **livré**
 
 Vérifié : `grep -rn "download\|save\|export" web/src/studio/main.js` ne renvoie que la
 restauration du **jeton** en `sessionStorage`. Les sessions vivent côté serveur, indexées par
@@ -259,6 +259,26 @@ est mauvais.
 **La validation est stricte et précède tout.** Un format inconnu est refusé avant la création de
 quoi que ce soit. Un chantier à moitié chargé est pire qu'un chantier refusé : il a l'air
 correct et ne l'est pas.
+
+### Ce que le test vérifie
+
+Le refus est la partie la plus testée du module, et c'est voulu : un chantier accepté à tort
+produit une session à moitié construite, qui a l'air correcte et ne l'est pas. La charge de la
+preuve est du côté de l'acceptation.
+
+Le test de bout en bout **recharge un chantier écrit pour l'occasion**, et non le fichier qu'il
+vient de recevoir. Recharger ce qu'on a produit soi-même prouverait l'aller-retour, pas l'import.
+
+### Deux pièges rencontrés
+
+Une lecture unique après une action asynchrone est une supposition. L'étape lisait le plan juste
+après l'import : elle obtenait les équipements de la session précédente, et son propre message
+d'erreur affichait déjà le bon chiffre — évalué une seconde fois, une fois le rendu fini. On
+attend désormais le plan, puis la zone.
+
+La zone était écrite après la sélection de la session, donc après le rendu : la carte s'affichait
+à l'ancre du chantier précédent puis sautait. Invisible sur un plan en mètres, pas sur la carte
+3D — et un saut qu'on voit ressemble à une hésitation.
 
 ### Le nom d'hôte
 
