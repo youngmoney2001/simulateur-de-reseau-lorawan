@@ -709,10 +709,23 @@ try {
     await page.waitForFunction(
       (n) => document.querySelectorAll("#session-select option").length > n,
       { timeout: 20_000 }, sessionsAvant);
-    if (await lireEffectif() !== 2) throw new Error(`equipements apres chargement : ${await lireEffectif()}`);
+    // On attend le plan, on ne le lit pas. La session neuve existe avant que sa topologie
+    // soit chargee : une lecture immediate renvoie les equipements de la session precedente,
+    // et le test echoue sur un chiffre qui est deja le bon quand le message l'affiche.
+    await page.waitForFunction(
+      () => document.querySelectorAll("#plan g.node").length === 2, { timeout: 20_000 })
+      .catch(async () => {
+        throw new Error(`equipements apres chargement : ${await lireEffectif()}, 2 attendus`);
+      });
     // La zone vient du fichier, pas de la session precedente : c'est la preuve du trajet.
-    const zone = await lireZone();
-    if (!/^3\.848000/.test(zone)) throw new Error(`zone non reprise du fichier : « ${zone} »`);
+    // Elle est ecrite apres le chargement de la topologie, donc apres le rendu du plan —
+    // il faut l'attendre elle aussi, et non la lire au passage.
+    await page.waitForFunction(
+      () => /^3\.848000/.test(document.getElementById("origin-coords")?.value ?? ""),
+      { timeout: 20_000 })
+      .catch(async () => {
+        throw new Error(`zone non reprise du fichier : « ${await lireZone()} »`);
+      });
   });
 
   await step("un fichier qui n'est pas un chantier est refuse sans rien creer", async () => {

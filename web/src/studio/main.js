@@ -210,9 +210,12 @@ async function chargerChantier(fichier) {
     const ok = await guard(() => state.client.setGateway(created.session_id, eq.id, eq.gateway));
     if (!ok) break;
   }
+  // La zone s'écrit avant de sélectionner la session, pas après : sinon la carte s'affiche
+  // d'abord à l'ancre du chantier précédent, puis saute. Le saut est invisible sur un plan en
+  // mètres, mais pas sur la carte 3D — et un saut qu'on voit ressemble à une hésitation.
+  if (chantier.origine) writeOrigin(chantier.origine);
   await refreshSessions();
   await selectSession(created.session_id);
-  if (chantier.origine) writeOrigin(chantier.origine);
   setStatus(`Chantier ouvert : ${chantier.equipements.length} équipement(s), session neuve`);
   await restaurerNomsHotes(created.session_id, chantier.equipements);
 }
