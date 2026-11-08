@@ -405,6 +405,19 @@ try {
     { nom: "équipement · Physique", action: () => cliquerTexte(".dtab", "Physique") },
     { nom: "équipement · Config", action: () => cliquerTexte(".dtab", "Config") },
     { nom: "équipement · CLI", action: () => cliquerTexte(".dtab", "CLI") },
+    // La fenêtre passerelle a son propre formulaire depuis qu'on l'a ouverte, et l'audit
+    // ne mesure ici que celle d'un capteur : la nouvelle fenêtre serait la seule partie de
+    // l'interface jamais passée au gabarit. On ferme donc le capteur et on ouvre la
+    // passerelle — le formulaire le plus dense de l'atelier.
+    { nom: "passerelle · Config", action: async () => {
+      await page.evaluate(() => {
+        document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
+      });
+      await pause(300);
+      await page.click('g.node[data-id="gw-nord"] rect');
+      await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
+      return cliquerTexte('.device-win[data-node-id="gw-nord"] .dtab', "Config");
+    } },
   ];
   for (const largeur of [1400, 900]) {
     await page.setViewport({ width: largeur, height: 1000 });
