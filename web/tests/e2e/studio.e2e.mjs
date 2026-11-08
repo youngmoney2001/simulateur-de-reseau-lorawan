@@ -421,7 +421,9 @@ try {
       (e) => e.textContent);
     if (!/US915 et AU915/.test(attendu)) throw new Error(`aide absente : ${attendu}`);
 
-    await setValue(sel("region"), "US915");
+    // `page.select` et non `setValue` : poser `.value` en JS ne déclenche pas `change`, et
+    // c'est le changement de plan qui arme la sous-bande. Un vrai geste, pas une affectation.
+    await page.select(sel("region"), "US915");
     await page.waitForFunction((q) => !document.querySelector(q).disabled, {}, sel("sub_band"));
     // Le renvoi vers le CLI doit nommer ce qui reste, sinon il ne renseigne pas.
     const avance = await page.$eval('.device-win[data-node-id="gw-nord"] .gw-avance',
@@ -430,11 +432,11 @@ try {
       if (!avance.includes(mot)) throw new Error(`renvoi incomplet : ${avance}`);
     }
 
-    await setValue(sel("sub_band"), "2");
+    await page.select(sel("sub_band"), "2");
     await setValue(sel("tx_power_dbm"), "20");
-    await setValue(sel("mesh_mode"), "relay");
+    await page.select(sel("mesh_mode"), "relay");
     await setValue(sel("mesh_max_hops"), "2");
-    await setValue(sel("mesh_bandwidth_khz"), "1625");
+    await page.select(sel("mesh_bandwidth_khz"), "1625");
     await submitForm('.device-win[data-node-id="gw-nord"] form');
     await waitText('.device-win[data-node-id="gw-nord"] form', /enregistrés/);
 
@@ -450,7 +452,7 @@ try {
     }
 
     // Changer de plan hors sous-bandes doit l'effacer, pas la garder en cache.
-    await setValue(sel("region"), "EU868");
+    await page.select(sel("region"), "EU868");
     await submitForm('.device-win[data-node-id="gw-nord"] form');
     await waitText('.device-win[data-node-id="gw-nord"] form', /enregistrés/);
     await page.waitForFunction((q) => document.querySelector(q).disabled, {}, sel("sub_band"));

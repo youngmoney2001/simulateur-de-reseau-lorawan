@@ -525,6 +525,10 @@ function renderGatewayConfig(node, body) {
     aideSousBande.textContent = ok
       ? "Une sous-bande groupe 8 canaux à 125 kHz et un canal à 500 kHz."
       : "La sous-bande n'existe que sur US915 et AU915 : choisissez l'un de ces plans.";
+    // Quitter un plan à sous-bandes l'efface côté serveur : la fenêtre doit montrer la même
+    // chose. Afficher « 2 » alors que le réglage est parti ferait croire à un enregistrement
+    // qui n'a pas eu lieu.
+    if (!ok) fields.sub_band.value = "";
   };
   fields.region.addEventListener("change", appliquerSousBande);
 
