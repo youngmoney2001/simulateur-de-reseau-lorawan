@@ -278,10 +278,20 @@ Un test a d'ailleurs été corrigé par l'exécution : j'avais écrit trois pass
 colonnes, et la fonction a attribué les colonnes dans l'ordre déclaré. Le code avait raison et
 l'attente avait tort — c'est précisément la propriété que le tracé doit garantir.
 
-Ce que l'audit de mise en page ne voit toujours pas : sa session n'a **qu'une** passerelle, donc
-`rx_matrix` n'est pas publiée et aucun trait radio n'apparaît. Le lui ajouter changerait la
-topologie que l'audit mesure, donc sa ligne de base ; c'est une décision à prendre à part, pas un
-effet de bord de cette tranche.
+L'étape e2e « liaisons mesh » les voit, et pour une raison qui n'allait pas de soi : sa session a
+une frontière **et** un relais, donc deux passerelles, donc `rx_matrix` est publiée. Vérifié avant
+d'écrire l'assertion : la session compile bien deux passerelles, et la matrice vaut `((4, 4),)` —
+les 4 trames du capteur décodées par les deux.
+
+Cette étape exigeait que chaque étiquette dise « trames relayées », ce qui était juste quand seul
+le mesh se traçait. Elle est passée **au rouge** sur les liaisons radio, et elle avait raison.
+L'assertion est désormais par nature : chaque étiquette porte le verbe du lien qu'elle chiffre, et
+les deux natures doivent être présentes. Elle échoue si la matrice n'atteint pas le plan — c'est la
+mesure en navigateur réel qui manquait.
+
+Ce que l'audit de mise en page, lui, ne voit toujours pas : sa session n'a **qu'une** passerelle,
+donc aucun trait radio. Le lui ajouter changerait la topologie qu'il mesure, donc sa ligne de base.
+À faire sciemment, pas en passant.
 
 Un écueil rencontré, et il mérite d'être noté : la matrice restait `None` alors que la fonction
 directe renvoyait la bonne valeur. La cause était un **retour anticipé** — la voie sans mesh
@@ -291,7 +301,7 @@ c'était une ligne plus haut dans le fichier.
 ### Ce qui reste
 
 - Donner une seconde passerelle à la session de l'audit de mise en page, pour que les liaisons
-  radio y soient mesurées dans un vrai navigateur. Cela déplace sa ligne de base : à faire
+  radio y soient mesurées autrement que par l'étape e2e. Cela déplace sa ligne de base : à faire
   sciemment, pas en passant.
 
 ---
