@@ -197,6 +197,25 @@ Une primitive Cesium n'existe pas dans le DOM. `window.__liaisonsCarte` compte l
 effectivement tracés ; il est remis à zéro à chaque tracé, et lu par le test e2e. Sans ce
 compteur, un trait jamais tracé ne se distinguerait pas d'un trait que personne ne regarde.
 
+### Liaisons radio : la donnée existe, elle n'est pas exposée — mesuré, pas supposé
+
+`MultiTxRecord.decoded_mask` est un masque d'entier 64 bits : **bit _g_ = la passerelle _g_ a
+décodé la trame**. C'est exactement la donnée qu'il faudrait pour tracer les liaisons radio
+capteur → passerelle. Elle n'est **pas** exposée : `trace_events.py` ne s'en sert que pour
+désigner celle qui remet la trame, et l'événement servi ne porte que `gateway_index`, c'est-à-dire
+la meilleure passerelle. Tracer à partir de ce qu'on sert aujourd'hui dessinerait un trait par
+trame là où plusieurs passerelles ont entendu : **faux, pas imprécis**.
+
+Deux obstacles à lever, mesurés tous les deux :
+
+`with_trace` n'est demandé que `si mesh_cfg is not None` — sans relais, la trace est vide et le
+masque n'est jamais calculé. La demander partout coûte un tampon de `MAX_TRACE_RECORDS`
+(200 000) et **fait échouer** les runs qui dépassent cette borne : la généraliser régresserait
+les gros scénarios.
+
+Il faut donc soit un compteur natif par couple (capteur, passerelle), soit une trace demandée
+sous condition de taille. À décider avant d'écrire quoi que ce soit côté atelier.
+
 ### Ce qui ne l'est pas, et pourquoi : une mesure, pas une prudence
 
 Les **liaisons radio** « capteur → passerelle » sont écartées, et la raison est chiffrée. Un
@@ -330,7 +349,7 @@ limite est dite — une pile ne rend pas ce que le calcul promet.
 
 ---
 
-## 6. Relief : dans le moteur et dans l'API, pas dans l'atelier
+## 6. Relief — **livré** : choisissable depuis l'atelier, et sa voie réparée
 
 Le serveur résout un `terrain_id` dans un catalogue (`--terrain-catalog`, fichiers `<id>.csv`),
 l'API le valide (« relief inconnu du catalogue »), `environment.py` le simule. Mais :
@@ -338,10 +357,40 @@ l'API le valide (« relief inconnu du catalogue »), `environment.py` le simule.
 - aucun catalogue n'est livré (pas de dossier `terrains/` dans le dépôt) ;
 - `grep -rn "terrain\|relief\|elevation" web/src/studio/` ne renvoie **rien** d'exploitable.
 
-Le relief est donc une capacité **entièrement invisible** : elle change la propagation, et
-l'apprenant ne peut ni la voir ni la choisir. C'est d'autant plus dommage que l'atelier permet
-justement de choisir une zone géographique réelle — le relief serait la suite naturelle de ce
-choix.
+Le relief était donc une capacité **entièrement invisible** : elle change la propagation, et
+l'apprenant ne pouvait ni la voir ni la choisir. C'est d'autant plus dommage que l'atelier permet
+justement de choisir une zone géographique réelle — le relief en est la suite naturelle.
+
+### Ce qui est en place
+
+Le relief appartient à la session (`POST /sessions/{sid}/terrain`), descend dans le corps compilé,
+et voyage avec le chantier. L'atelier propose ceux que le serveur déclare, et **masque le champ
+quand le catalogue est vide** : aucun relief n'est livré avec le dépôt, et c'est un fait à dire —
+un sélecteur vide serait une promesse non tenue. Un serveur sans catalogue ne dit pas « le
+simulateur ne sait pas faire », il dit « je n'ai rien à charger ». La nuance compte : sinon
+l'utilisateur conclut à une limite du moteur quand c'est le serveur qui est vide.
+
+### Deux défauts trouvés en rendant la voie praticable
+
+Ils n'étaient pas latents par chance : **personne n'avait jamais pu emprunter cette voie.**
+C'est la leçon de cette tranche — une capacité que rien ne permet d'exercer n'est pas une
+capacité à moitié finie, c'est une capacité non testée.
+
+`_build_scenario` reconstruisait le modèle par `model_validate({**model.model_dump(), ...})`.
+Or `model_dump` transforme les valeurs par défaut en champs **explicitement fournis**, et
+`gateway` en a une ; la règle « `gateway` ou `gateways`, pas les deux » se lit sur les champs
+fournis. Le relief disqualifiait donc tout scénario multi-passerelles — précisément le cas où
+il a le plus d'intérêt. Corrigé par `model_copy`, qui préserve ce qui a été fourni.
+
+`simulate_multi_downlinks` rangeait un `ctypes.byref()` dans un champ de structure. `byref` ne
+vaut que comme argument direct d'un appel et produit là un `CArgObject` que ctypes refuse ;
+`prop` et `rule`, dans la même structure, ont toujours utilisé `ctypes.pointer`. Le run échouait
+avec un relief, en signalant « échec du calcul » sans plus de précision.
+
+### Preuve qu'il agit, et pas seulement qu'il est accepté
+
+Avec une crête de 400 m entre le capteur et la passerelle : **0/1** reçue, perdue en sensibilité.
+Sans elle : **1/1**. Accepter un paramètre ne prouve pas qu'il fait quelque chose.
 
 ---
 
