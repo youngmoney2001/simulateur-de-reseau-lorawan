@@ -111,6 +111,17 @@
         <div class="tool-sep"></div>
         <button type="button" class="tool" id="new-session" title="Nouvelle session"><span>&#43;</span>Nouvelle</button>
         <button type="button" class="tool danger" id="delete-session" title="Supprimer la session"><span>&#10005;</span>Supprimer</button>
+        <div class="tool-sep"></div>
+        <!-- Sauvegarder et charger un chantier : l'équivalent du `.pkt`. Le champ de fichier
+             reste invisible, le bouton « Charger » l'actionne — un champ de fichier brut au
+             milieu d'une barre d'outils n'a rien à y faire. -->
+        <button type="button" class="tool" id="save-chantier"
+          title="Enregistrer le chantier (équipements, réglages, zone) dans un fichier">
+          <span>&#8681;</span>Sauvegarder</button>
+        <button type="button" class="tool" id="load-chantier"
+          title="Ouvrir un chantier depuis un fichier, dans une session neuve">
+          <span>&#8679;</span>Charger</button>
+        <input type="file" id="chantier-file" accept="application/json,.json" hidden />
       </aside>
     </main>
 

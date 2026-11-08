@@ -224,7 +224,7 @@ La porte de sortie est connue : exposer l'ensemble des passerelles ayant décod�
 
 ---
 
-## 4. Aucune sauvegarde ni chargement d'un chantier
+## 4. Sauvegarde et chargement d'un chantier — **ouvert, conception arrêtée**
 
 Vérifié : `grep -rn "download\|save\|export" web/src/studio/main.js` ne renvoie que la
 restauration du **jeton** en `sessionStorage`. Les sessions vivent côté serveur, indexées par
@@ -234,7 +234,38 @@ Conséquence : pas d'équivalent du `.pkt`. On ne peut ni enregistrer une topolo
 reprendre, ni l'échanger, ni en rendre une variante. C'est l'affordance la plus élémentaire de
 Packet Tracer et le meilleur support pédagogique qui soit (« voici le fichier, corrigez-le »).
 
-Le serveur a déjà `export.py` — à vérifier : ce qu'il exporte aujourd'hui.
+`export.py` n'y répond pas : il exporte les **résultats** d'un run en Parquet, pas le chantier.
+
+### Ce que contient le fichier
+
+Tout est déjà dans `GET /sessions/{sid}/topology`, sans toucher au serveur : `nodes[]` porte
+l'identifiant, le type, le nom, la position en mètres **et** les réglages capteur ; `states[]`
+porte les réglages passerelle. S'y ajoute l'origine géographique, qui vit dans le studio.
+
+### Quatre décisions
+
+**Les positions sont en mètres, avec l'origine à côté.** C'est l'invariant D3 : changer de zone
+déplace les équipements. Des latitudes absolues figeraient le chantier au lieu où il a été
+construit et casseraient cette règle. C'est aussi D2 : les degrés à l'affichage, les mètres dans
+le fichier et au moteur.
+
+**Aucune clé dans le fichier.** `NodeState.keys` ne vaut jamais que `« ****** »`. Un chantier
+s'échange par courriel ; il ne doit rien contenir qu'on ne puisse montrer.
+
+**Charger crée une session neuve**, elle n'écrase pas la session courante. On ouvre un fichier
+dans un nouvel atelier, comme Packet Tracer. C'est réversible : rien n'est perdu si le fichier
+est mauvais.
+
+**La validation est stricte et précède tout.** Un format inconnu est refusé avant la création de
+quoi que ce soit. Un chantier à moitié chargé est pire qu'un chantier refusé : il a l'air
+correct et ne l'est pas.
+
+### Le nom d'hôte
+
+`new_session(id)` pose `hostname = id`. Le cas courant — personne ne renomme — est donc restauré
+gratuitement. Renommer passe par le CLI (`configure terminal`, puis `hostname`), trois allers-
+retours par équipement ; on ne les fait **que** si le nom diffère de l'identifiant, et un échec
+est signalé, pas avalé.
 
 ---
 

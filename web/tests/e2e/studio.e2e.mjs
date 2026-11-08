@@ -2,7 +2,7 @@
 // Prérequis : CHROME_PATH (binaire Chromium), LSIM_LIBRARY (bibliothèque native), PYTHON (interpréteur
 // avec lsim importable via PYTHONPATH=python/). Lancer : `npm run test:e2e` depuis web/.
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,6 +236,20 @@ try {
   };
 
   const lireZone = () => page.$eval("#origin-coords", (i) => i.value);
+  // Combien d'équipements le plan montre-t-il ? C'est la lecture la plus proche de ce que
+  // voit l'utilisateur, et elle ne dépend pas du format d'une étiquette.
+  const lireEffectif = () => page.$$eval("#plan g.node", (n) => n.length);
+  // Un téléchargement n'arrive pas instantanément, et `.crdownload` n'est pas encore le
+  // fichier : on attend la disparition du suffixe plutôt qu'une durée arbitraire.
+  const attendreFichier = async (dossier, motif, timeoutMs = 20_000) => {
+    const echeance = Date.now() + timeoutMs;
+    while (Date.now() < echeance) {
+      const trouve = readdirSync(dossier).find((f) => motif.test(f));
+      if (trouve) return trouve;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`aucun fichier ${motif} dans ${dossier} : ${readdirSync(dossier).join(", ")}`);
+  };
 
   const compterEquipements = async () => {
     const sid = await page.$eval("#session-select", (s) => s.value);
@@ -649,6 +663,72 @@ try {
     const lu2 = await lireZone();
     if (!/^4\.051100,\s?9\.767900$/.test(lu2))
       throw new Error(`virgule décimale non traitée : « ${lu2} »`);
+  });
+
+  await step("le chantier s'enregistre dans un fichier, et se recharge", async () => {
+    // Le telechargement est redirige vers un dossier connu : sans cela Chrome le refuse en
+    // headless et le test verifierait un bouton, pas un fichier.
+    const cdp = await page.createCDPSession();
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: work });
+    const avant = await lireEffectif();
+    if (avant < 1) throw new Error("aucun equipement a enregistrer : le test n'a rien a verifier");
+
+    await page.click("#save-chantier");
+    const fichier = await attendreFichier(work, /^chantier-.*\.json$/);
+    const texte = readFileSync(join(work, fichier), "utf8");
+    const chantier = JSON.parse(texte);
+    if (chantier.format !== "lsim-chantier") throw new Error(`format inattendu : ${chantier.format}`);
+    if (!Array.isArray(chantier.equipements) || chantier.equipements.length !== avant)
+      throw new Error(`${chantier.equipements?.length} equipements dans le fichier, ${avant} a l'ecran`);
+    if (!chantier.origine || !Number.isFinite(chantier.origine.lat))
+      throw new Error("origine absente du fichier");
+    // Une cle ne doit jamais atteindre le fichier, meme masquee.
+    if (texte.includes("******")) throw new Error("le fichier contient des cles masquees");
+    // Les positions sont en metres : c'est l'invariant D2, les degres ne s'affichent qu'a l'ecran.
+    for (const eq of chantier.equipements)
+      if (!Number.isFinite(eq.x_m) || !Number.isFinite(eq.y_m))
+        throw new Error(`position non metrique pour ${eq.id}`);
+
+    // Rechargement avec un chantier ecrit pour l'occasion, et non le fichier qu'on vient de
+    // recevoir : recharger ce qu'on a produit soi-meme prouverait l'aller-retour, pas
+    // l'import. Un chantier venu d'ailleurs est le seul cas qui compte.
+    const recharge = {
+      format: chantier.format, version: chantier.version, origine: { lat: 3.848, lon: 11.502 },
+      equipements: [
+        { id: "import-gw", kind: "border", name: "Import frontiere", x_m: 0, y_m: 0,
+          gateway: { region: "EU868", tx_power_dbm: 14, mesh_mode: "relay", mesh_max_hops: 3 } },
+        { id: "import-capt", kind: "sensor", name: "Import capteur", x_m: 250, y_m: -80,
+          sensor: { spreading_factor: 9, payload_bytes: 12, tx_power_dbm: 14,
+                    period_s: 300, messages: 6, start_spread_s: 30 } },
+      ],
+    };
+    const chemin = join(work, "a-recharger.json");
+    writeFileSync(chemin, JSON.stringify(recharge, null, 2));
+    const sessionsAvant = await page.$$eval("#session-select option", (o) => o.length);
+    await (await page.$("#chantier-file")).uploadFile(chemin);
+    await page.waitForFunction(
+      (n) => document.querySelectorAll("#session-select option").length > n,
+      { timeout: 20_000 }, sessionsAvant);
+    if (await lireEffectif() !== 2) throw new Error(`equipements apres chargement : ${await lireEffectif()}`);
+    // La zone vient du fichier, pas de la session precedente : c'est la preuve du trajet.
+    const zone = await lireZone();
+    if (!/^3\.848000/.test(zone)) throw new Error(`zone non reprise du fichier : « ${zone} »`);
+  });
+
+  await step("un fichier qui n'est pas un chantier est refuse sans rien creer", async () => {
+    const mauvais = join(work, "pas-un-chantier.json");
+    writeFileSync(mauvais, JSON.stringify({ hello: "world" }));
+    const sessionsAvant = await page.$$eval("#session-select option", (o) => o.length);
+    await (await page.$("#chantier-file")).uploadFile(mauvais);
+    await page.waitForFunction(
+      () => /chantier|ne contient pas/i.test(document.getElementById("flash")?.textContent ?? ""),
+      { timeout: 20_000 });
+    const flash = await textOf("#flash");
+    if (!/ne contient pas un chantier/i.test(flash))
+      throw new Error(`message inattendu : « ${flash} »`);
+    // Rien n'a du etre cree : c'est tout l'objet de valider avant d'agir.
+    const apres = await page.$$eval("#session-select option", (o) => o.length);
+    if (apres !== sessionsAvant) throw new Error(`${apres} sessions, ${sessionsAvant} attendues`);
   });
 
   await step("suppression de la session", async () => {

@@ -22,6 +22,7 @@ import { createMap3D, toMeters as degreesToMeters, toLonLat as metresVersDegres 
 import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
 import { liaisonsMesh, cumulerLiaisons, etiquetteLiaison } from "./liaisons.js";
+import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 // Borne des lignes de dispositifs ramenées pour les indicateurs : au-delà, l'agrégation par
@@ -148,6 +149,95 @@ async function newSession(exerciseId) {
   state.result = null;
   await refreshSessions();
   await selectSession(created.session_id);
+}
+
+// --- Chantier : enregistrer et ouvrir -------------------------------------------------------
+//
+// L'équivalent du `.pkt`. Un chantier n'est pas un résultat de simulation : un run se relance,
+// un chantier se reprend. C'est ce qui permet de dire « voici le fichier, corrigez-le ».
+
+async function sauvegarderChantier() {
+  if (!state.sid) return showError(new Error("aucune session à enregistrer"));
+  const chantier = serialiserChantier({ topo: state.topo, origine: readOrigin() });
+  if (!chantier.equipements.length) {
+    setStatus("Rien à enregistrer : cette session n'a aucun équipement");
+    return;
+  }
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(chantier, null, 2)], { type: "application/json" }));
+  const lien = el("a", { href: url, download: nomFichier(state.sid) });
+  document.body.append(lien);
+  lien.click();
+  lien.remove();
+  // Révoquer tout de suite peut annuler le téléchargement : on laisse le tour de boucle.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  const manque = chantier.origine ? "" : " (sans zone géographique)";
+  setStatus(`Chantier enregistré : ${chantier.equipements.length} équipement(s)${manque}`);
+}
+
+async function chargerChantier(fichier) {
+  const texte = await fichier.text().catch(() => null);
+  if (texte === null) return showError(new Error(`fichier « ${fichier.name} » illisible`));
+  // La validation passe avant toute création. Un chantier refusé coûte un message ; un
+  // chantier à moitié chargé a l'air correct et ne l'est pas.
+  let chantier;
+  try {
+    chantier = lireChantier(texte);
+  } catch (err) {
+    if (err instanceof ChantierInvalide) {
+      showError(new Error(`« ${fichier.name} » : ${err.message}`));
+      return;
+    }
+    throw err;
+  }
+  if (!chantier.equipements.length) {
+    setStatus(`« ${fichier.name} » ne contient aucun équipement`);
+    return;
+  }
+  // Les positions et les réglages capteur partent dans la création : un seul appel, donc un
+  // seul moment où la session peut être refusée.
+  const noeuds = chantier.equipements.map((eq) => ({
+    id: eq.id, kind: eq.kind, name: eq.name, x_m: eq.x_m, y_m: eq.y_m,
+    ...(eq.sensor ? { sensor: eq.sensor } : {}),
+  }));
+  const created = await guard(() => state.client.createSession({ nodes: noeuds }));
+  if (!created) return;
+  state.result = null;
+  // Les réglages passerelle passent par le même point d'écriture que la fenêtre de
+  // configuration : le fichier n'a pas son propre chemin vers le serveur.
+  for (const eq of chantier.equipements) {
+    if (!eq.gateway) continue;
+    const ok = await guard(() => state.client.setGateway(created.session_id, eq.id, eq.gateway));
+    if (!ok) break;
+  }
+  await refreshSessions();
+  await selectSession(created.session_id);
+  if (chantier.origine) writeOrigin(chantier.origine);
+  setStatus(`Chantier ouvert : ${chantier.equipements.length} équipement(s), session neuve`);
+  await restaurerNomsHotes(created.session_id, chantier.equipements);
+}
+
+/**
+ * Le nom d'hôte vaut l'identifiant par défaut (`new_session`) : rien à faire dans le cas
+ * courant. On ne joue les trois commandes du CLI que pour un équipement réellement renommé,
+ * et un échec est signalé au lieu d'être avalé — sinon le chantier reviendrait rebaptisé
+ * sans que rien ne le dise.
+ */
+async function restaurerNomsHotes(sid, equipements) {
+  const renommes = equipements.filter((eq) => eq.hostname && eq.hostname !== eq.id);
+  if (!renommes.length) return;
+  const rates = [];
+  for (const eq of renommes) {
+    let ok = true;
+    for (const commande of ["enable", "configure terminal", `hostname ${eq.hostname}`]) {
+      const res = await guard(() => state.client.cli(sid, eq.id, commande));
+      if (!res || res.error) { ok = false; break; }
+    }
+    if (!ok) rates.push(eq.id);
+  }
+  if (rates.length) {
+    setStatus(`Chantier ouvert, mais nom d'hôte non restauré sur : ${rates.join(", ")}`);
+  }
 }
 
 async function refreshSessions() {
@@ -1765,6 +1855,16 @@ $("connect").addEventListener("click", connect);
 $("session-select").addEventListener("change", (ev) => selectSession(ev.target.value));
 $("new-session").addEventListener("click", () => newSession(null));
 $("delete-session").addEventListener("click", deleteSession);
+$("save-chantier").addEventListener("click", sauvegarderChantier);
+$("load-chantier").addEventListener("click", () => $("chantier-file").click());
+// Vider la valeur après chaque lecture : sinon recharger le même fichier une deuxième fois
+// ne déclenche rien, le navigateur croyant que rien n'a changé. Le piège est connu et coûte
+// « le bouton ne marche plus » à qui l'ignore.
+$("chantier-file").addEventListener("change", async (ev) => {
+  const fichier = ev.target.files?.[0];
+  ev.target.value = "";
+  if (fichier) await chargerChantier(fichier);
+});
 
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
 for (const b of document.querySelectorAll(".tab"))
