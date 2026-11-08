@@ -40,6 +40,16 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .metric .m-value { font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; text-align:right; }
 .metric .m-formula { grid-column:1 / -1; font-size:11px; line-height:1.3; color:var(--muted); }
 
+/* L'autonomie se lit sur une seule ligne, sous les indicateurs : c'est une consequence du
+   courant moyen, pas un indicateur de plus. Le resultat est a cote du champ qui le produit,
+   pas en dessous — sinon on perd de vue que le chiffre depend de ce qu'on vient de saisir. */
+.autonomie { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px;
+  padding:6px 8px; margin-top:4px; border-left:2px solid var(--accent); background:#fff; }
+.autonomie label { font-size:12px; color:var(--muted); display:flex; align-items:baseline; gap:4px; }
+.autonomie input { font:inherit; font-size:12px; width:5.5em; padding:2px 4px;
+  border:1px solid var(--line); border-radius:3px; font-variant-numeric:tabular-nums; }
+.autonomie output { font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
+
 /* Légende du taux de livraison sur la carte : sans elle, un équipement rouge est une
    alerte dont on ne sait pas ce qu'elle mesure. Sur fond clair, lisible par-dessus le globe. */
 .pdr-legend { position:absolute; right:10px; bottom:10px; z-index:2; margin:0;

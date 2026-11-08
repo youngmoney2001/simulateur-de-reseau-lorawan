@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lsim.channel_mask import sub_band_channels
+from lsim.energy import profile as energy_profile_by_name
+from lsim.energy_report import ENERGY_PROFILES
 from lsim.gateway_profiles import get_profile, software_status
 from lsim.plan import get_plan
 from lsim.study_cli import SUB_BAND_REGIONS, GatewayConfig
@@ -36,6 +38,11 @@ DEFAULT_REGION = "EU868"
 DEFAULT_SUB_BAND = 1
 MESH_PROFILE = "rak5146-rak5148"  # relais : accès sous-GHz + lien mesh 2,4 GHz (gateway_profiles)
 MESH_DEFAULTS = {"spreading_factor": 9, "bandwidth_khz": 203, "max_hops": 8}   # défauts de MeshModel
+# Profil d'énergie des capteurs. Sans lui, le scénario ne calcule aucune énergie et le courant
+# moyen reste à `None` : la mesure existe dans le moteur mais n'était jamais demandée. Le choix
+# du matériel est un choix de modélisation, il est donc déclaré dans les notes plutôt que tu.
+ENERGY_PROFILE = "rak4631"
+
 NOT_MODELLED = ("puissance d'émission des passerelles d'accès", "sensibilité des récepteurs : décalage uniforme "
                 "par profil en réception montante (decalage-uniforme-v1, non calibré), descente et mesh inchangés",
                 "fréquence réglée sur les passerelles",
@@ -189,6 +196,12 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
             notes.append(f"relais : profil {MESH_PROFILE} ({software_status(prof)}) : compatibilité "
                          "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
     notes.append("non modélisés (ignorés) : " + ", ".join(NOT_MODELLED))
+    # Le courant moyen est calculé sur ce matériel, pas sur celui de l'utilisateur. Le dire
+    # évite qu'un chiffre de consommation passe pour une mesure de son propre capteur.
+    nom = energy_profile_by_name(ENERGY_PROFILES[ENERGY_PROFILE]).name
+    notes.append(f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
+                 "moyen est celui de ce matériel")
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
-    return Compiled(body={"scenario": scenario, "protocol": {}}, links=links, notes=notes)
+    return Compiled(body={"scenario": scenario, "protocol": {},
+                          "energy_profile": ENERGY_PROFILE}, links=links, notes=notes)
 

@@ -11,7 +11,7 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, fenetreVerdictTexte } from "./metrics.js";
+  limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -54,6 +54,8 @@ const state = {
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
+  courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
+  capaciteMAh: null,    // l'autre terme est enonce par l'utilisateur, jamais devine ici
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
   view: "map",      // vue courante : carte 3D (defaut) ou plan 2D
 };
@@ -1137,6 +1139,40 @@ function renderResults(summary, linkedNames, deviceRows = []) {
 
 // Indicateurs calculés à partir des seuls compteurs du run. Chaque bloc affiche la formule
 // qui le produit : le nombre reste vérifiable à la main sur les compteurs du tableau.
+/**
+ * L'autonomie, à partir du courant simulé et de la capacité énoncée.
+ *
+ * Trois états, et ils ne se confondent pas. Sans capacité saisie : rien n'est affiché — un
+ * « — » à côté d'un champ vide dirait « autonomie nulle » à qui lit vite. Capacité illisible :
+ * on le dit, plutôt que de calculer sur une conversion forcée. Les deux présents : le chiffre,
+ * avec de quoi le refaire.
+ */
+function renderAutonomie() {
+  const brut = $("battery-mah").value.trim().replace(",", ".");
+  const out = $("autonomie-out");
+  if (!brut) {
+    state.capaciteMAh = null;
+    out.textContent = "";
+    return;
+  }
+  const mAh = Number(brut);
+  if (!Number.isFinite(mAh) || mAh <= 0) {
+    state.capaciteMAh = null;
+    out.textContent = `« ${brut} » n'est pas une capacité`;
+    return;
+  }
+  state.capaciteMAh = mAh;
+  const ans = autonomieAns(mAh, state.courantMoyenUA);
+  if (ans == null) {
+    out.textContent = "courant moyen non simulé";
+    return;
+  }
+  // Les deux termes sont rappelés : une autonomie sans son courant ni sa capacité ne se
+  // vérifie pas. Et la limite est dite — une pile ne rend pas ce que le calcul promet.
+  out.textContent = `${autonomieTexte(ans)} — ${mAh} mAh à `
+    + `${Math.round(state.courantMoyenUA)} µA, hors vieillissement et hors autodécharge`;
+}
+
 function renderMetrics(summary, deviceRows) {
   const liste = indicateursReseau(summary, deviceRows);
   const boite = $("sim-metrics-list");
@@ -1148,6 +1184,20 @@ function renderMetrics(summary, deviceRows) {
       el("span", { class: "m-formula", text: i.hint })));
   }
   $("sim-metrics").hidden = liste.length === 0;
+
+  // L'autonomie n'apparait que si le courant moyen a ete simule : sans lui, un champ de
+  // capacite inviterait a calculer quelque chose a partir de rien.
+  // La valeur est reprise de l'indicateur deja calcule, pas recalculee : deux chemins vers
+  // le meme chiffre finiraient par diverger sans que rien ne le signale.
+  const courant = liste.find((i) => i.id === "courant")?.value ?? null;
+  state.courantMoyenUA = courant;
+  $("sim-autonomie").hidden = courant == null;
+  if (courant != null) {
+    const champ = $("battery-mah");
+    champ.value = state.capaciteMAh ?? "";
+    champ.oninput = renderAutonomie;
+    renderAutonomie();
+  }
 
   const groupes = ventilationGroupes(deviceRows, fenetreObservationNs(summary));
   const table = $("sim-groups");

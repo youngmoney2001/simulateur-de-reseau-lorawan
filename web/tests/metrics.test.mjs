@@ -13,6 +13,8 @@ import {
   somme,
   moyenne,
   fenetreObservationNs,
+  autonomieAns,
+  autonomieTexte,
   dureeTexte,
   fenetreVerdictTexte,
   FENETRE_ETSI_S,
@@ -516,4 +518,66 @@ test("sans fenetre connue, on retombe sur la reserve", () => {
 test("un run exactement a l'heure est traite comme couvrant la fenetre", () => {
   assert.match(fenetreVerdictTexte(FENETRE_ETSI_S * NS), /comparaison est directe/);
   assert.match(fenetreVerdictTexte((FENETRE_ETSI_S - 1) * NS), /fois plus long/);
+});
+
+// --- Autonomie ------------------------------------------------------------------------------
+//
+// Le simulateur fournit le courant moyen ; la capacite est celle de la pile que l'utilisateur
+// enonce. Ni un cote ni l'autre n'invente une grandeur, et c'est ce qui distingue ce calcul
+// d'une estimation. La fonction doit donc rester muette des qu'un terme manque : un chiffre
+// d'autonomie sorti de rien aurait l'air mesure.
+
+test("l'autonomie se calcule depuis un courant simule et une capacite enoncee", () => {
+  // 51,96 uA est le courant moyen mesure sur un run reel (rak4631, SF9, periode 300 s).
+  const ans = autonomieAns(2400, 51.96274176);
+  assert.ok(Math.abs(ans - 5.27) < 0.01, `attendu ~5,27 ans, obtenu ${ans}`);
+});
+
+test("l'autonomie est proportionnelle a la capacite", () => {
+  assert.ok(Math.abs(autonomieAns(4800, 52) - 2 * autonomieAns(2400, 52)) < 1e-9);
+});
+
+test("l'autonomie est inversement proportionnelle au courant", () => {
+  assert.ok(Math.abs(autonomieAns(2400, 104) - autonomieAns(2400, 52) / 2) < 1e-9);
+});
+
+test("sans capacite, il n'y a pas d'autonomie : pas de pile devinee", () => {
+  assert.equal(autonomieAns(null, 52), null);
+  assert.equal(autonomieAns(0, 52), null);
+  assert.equal(autonomieAns(-5, 52), null);
+  assert.equal(autonomieAns(NaN, 52), null);
+});
+
+test("sans courant simule, il n'y a pas d'autonomie", () => {
+  assert.equal(autonomieAns(2400, null), null);
+  assert.equal(autonomieAns(2400, 0), null);
+  assert.equal(autonomieAns(2400, -1), null);
+});
+
+test("une capacite a virgule est acceptee, c'est une grandeur reelle", () => {
+  assert.ok(autonomieAns(2400.5, 52) > 0);
+});
+
+test("sous un an, on dit les mois : une division de tete epargnee", () => {
+  // 0,5 an = 6 mois. « 0,5 an » obligerait a convertir pour sentir la duree.
+  assert.equal(autonomieTexte(0.5), "6 mois");
+  // Un an s'accorde au singulier : « 1,0 ans » se lit comme une faute et distrait du chiffre.
+  assert.equal(autonomieTexte(1), "1,0 an");
+  // Sous deux, le francais reste au singulier : « 1,5 ans » est une faute, pas un usage.
+  assert.equal(autonomieTexte(1.5), "1,5 an");
+  assert.equal(autonomieTexte(2.4), "2,4 ans");
+});
+
+test("sous un mois, on dit les jours", () => {
+  assert.equal(autonomieTexte(0.02), "7 jours");
+});
+
+test("au-dela de dix ans, on arrondit : la decimale n'y veut rien dire", () => {
+  assert.equal(autonomieTexte(12.4), "12 ans");
+});
+
+test("une autonomie non calculable ne s'affiche pas", () => {
+  assert.equal(autonomieTexte(null), null);
+  assert.equal(autonomieTexte(0), null);
+  assert.equal(autonomieTexte(-3), null);
 });

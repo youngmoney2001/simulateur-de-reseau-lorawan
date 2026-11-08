@@ -180,6 +180,18 @@
           <div id="sim-metrics" hidden>
             <h3>Indicateurs calculés</h3>
             <div id="sim-metrics-list" class="metrics"></div>
+            <!-- L'autonomie se calcule à partir du courant moyen simulé et d'une capacité que
+                 l'utilisateur énonce. Le simulateur ne connaît pas la pile : la deviner
+                 produirait un chiffre d'autonomie qui a l'air mesuré et ne l'est pas. Le champ
+                 est vide par défaut, et l'autonomie reste tue tant qu'il l'est. -->
+            <div id="sim-autonomie" class="autonomie" hidden>
+              <label for="battery-mah">Capacité de la pile
+                <input id="battery-mah" type="text" inputmode="numeric" size="6"
+                  placeholder="2400" autocomplete="off" />
+                mAh
+              </label>
+              <output id="autonomie-out" for="battery-mah"></output>
+            </div>
           </div>
           <table id="sim-groups" hidden>
             <thead></thead>

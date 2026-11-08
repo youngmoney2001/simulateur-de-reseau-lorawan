@@ -305,6 +305,39 @@ try {
     // Les deux grandeurs d'occupation ne doivent pas être confondues (voir metrics.js).
     if (!libelles.includes("Charge offerte")) throw new Error(libelles.join(" | "));
     if (!libelles.includes("Occupation du canal")) throw new Error(libelles.join(" | "));
+    // Le courant moyen n'apparaissait jamais : la compilation ne demandait aucun profil
+    // d'energie, et la mesure restait a `None` cote serveur. Sa presence est le vrai test.
+    if (!libelles.includes("Courant moyen")) throw new Error(libelles.join(" | "));
+  });
+
+  await step("autonomie : le courant est simule, la capacite est enoncee", async () => {
+    await obsTab("Simulation");
+    await page.waitForFunction(() => !document.getElementById("sim-autonomie").hidden,
+      { timeout: 20_000 });
+    // Sans capacite saisie, rien n'est affiche. Un « — » a cote d'un champ vide dirait
+    // « autonomie nulle » a qui lit vite.
+    const vide = await textOf("#autonomie-out");
+    if (vide.trim()) throw new Error(`autonomie affichee sans capacite : « ${vide} »`);
+
+    await setValue("#battery-mah", "2400");
+    await page.$eval("#battery-mah", (i) => i.dispatchEvent(new Event("input", { bubbles: true })));
+    await page.waitForFunction(
+      () => /an|mois|jour/.test(document.getElementById("autonomie-out")?.textContent ?? ""),
+      { timeout: 10_000 });
+    const texte = await textOf("#autonomie-out");
+    // Les deux termes sont rappeles : une autonomie sans son courant ni sa capacite ne se
+    // verifie pas. Et la limite est dite, une pile ne rend pas ce que le calcul promet.
+    for (const attendu of ["2400", "µA", "hors vieillissement"])
+      if (!texte.includes(attendu)) throw new Error(`« ${texte} » sans « ${attendu} »`);
+
+    // Une saisie illisible est nommee, pas convertie de force.
+    await setValue("#battery-mah", "beaucoup");
+    await page.$eval("#battery-mah", (i) => i.dispatchEvent(new Event("input", { bubbles: true })));
+    await page.waitForFunction(
+      () => /n'est pas une capacit/.test(document.getElementById("autonomie-out")?.textContent ?? ""),
+      { timeout: 10_000 });
+    await setValue("#battery-mah", "");
+    await page.$eval("#battery-mah", (i) => i.dispatchEvent(new Event("input", { bubbles: true })));
   });
 
   // Phase L : le résultat doit se lire sur la carte et sur le plan, pas seulement dans un

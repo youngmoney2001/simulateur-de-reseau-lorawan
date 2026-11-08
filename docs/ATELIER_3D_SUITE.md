@@ -289,14 +289,44 @@ est signalé, pas avalé.
 
 ---
 
-## 5. Autonomie : pas calculable en l'état
+## 5. Autonomie — **livrée** : le courant est simulé, la capacité est énoncée
 
 Mesuré antérieurement : les profils d'énergie (`energy.py`, `energy_report.py`) n'ont **ni
 capacité de batterie ni `mAh`**. L'autonomie en années, qui est la question numéro un d'un
 déploiement LoRaWAN, ne se déduit pas des grandeurs simulées.
 
-Il manque donc soit un champ de capacité dans les profils, soit — plus honnête — l'absence
-d'affichage d'autonomie doit rester explicite plutôt que d'être estimée.
+**Le diagnostic était inexact, et la cause était ailleurs.** Vérifié de nouveau : les profils
+n'ont effectivement ni `mAh` ni capacité — mais ils n'en ont pas besoin. `energy.py` calcule un
+**courant moyen** (`average_current_ua`, en µA), et c'est le seul terme que la simulation peut
+mesurer. L'autre terme est la pile que l'utilisateur a choisie, que lui seul connaît.
+
+Le vrai défaut : la compilation ne demandait **aucun profil d'énergie**. `RunCreate` accepte
+bien `energy_profile`, mais `compile_session` ne le renseignait jamais. La mesure existait dans
+le moteur et restait à `None` — l'indicateur « Courant moyen » de l'atelier était donc
+structurellement vide, sans que rien ne le signale.
+
+### Ce qui est en place
+
+`compile_session` pose `energy_profile = "rak4631"` et le **déclare** dans les notes de
+compilation : « énergie des capteurs : profil rak4631 (RAK4631 nRF52840 + SX1262) — le courant
+moyen est celui de ce matériel ». Appliquer la consommation d'un module réel à « un capteur »
+est un choix de modélisation ; il se dit, il ne se tait pas.
+
+L'atelier affiche alors le courant moyen, et un champ « Capacité de la pile » laisse
+l'utilisateur énoncer la sienne. Sur un run réel (SF9, période 300 s) : **51,96 µA**, soit
+**5,3 ans** sur 2400 mAh.
+
+### Pourquoi ce n'est pas une estimation
+
+Le simulateur fournit le courant, l'utilisateur fournit la capacité, la division est de
+l'arithmétique : aucun des deux côtés n'invente une grandeur. C'est ce qui distingue ce calcul
+d'une estimation — et c'est pourquoi le champ reste **vide** plutôt que prérempli. Une pile
+devinée produirait un chiffre d'autonomie qui a l'air mesuré et ne l'est pas.
+
+Trois états, et ils ne se confondent pas : sans capacité saisie, rien n'est affiché (un « — »
+à côté d'un champ vide dirait « autonomie nulle » à qui lit vite) ; capacité illisible, on le
+nomme au lieu de convertir de force ; les deux présents, les deux termes sont rappelés et la
+limite est dite — une pile ne rend pas ce que le calcul promet.
 
 ---
 

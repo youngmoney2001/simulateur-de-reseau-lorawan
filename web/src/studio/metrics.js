@@ -431,6 +431,39 @@ export const RESERVE_DUTY_CYCLE =
   + "réglementaire (une heure chez ETSI).";
 
 /**
+ * Autonomie en années, depuis une capacité énoncée et un courant moyen simulé.
+ *
+ * Le simulateur fournit le courant (`average_current_ua`) ; la capacité est celle de la pile
+ * que l'utilisateur a choisie, et lui seul la connaît. La division est de l'arithmétique :
+ * ni un côté ni l'autre n'invente une grandeur. C'est ce qui distingue ce calcul d'une
+ * estimation — et c'est pourquoi le champ reste vide plutôt que prérempli.
+ *
+ * @param {number|null} capaciteMAh capacité de la pile, en milliampères-heures
+ * @param {number|null} courantMoyenUA courant moyen simulé, en microampères
+ * @returns {number|null} années, ou `null` si l'un des deux termes manque.
+ */
+export function autonomieAns(capaciteMAh, courantMoyenUA) {
+  if (!Number.isFinite(capaciteMAh) || capaciteMAh <= 0) return null;
+  if (!Number.isFinite(courantMoyenUA) || courantMoyenUA <= 0) return null;
+  return (capaciteMAh * 1000) / courantMoyenUA / (24 * 365);
+}
+
+/**
+ * Autonomie lisible. En dessous d'un an, on dit les mois : « 0,4 an » demande une division
+ * de tête que « 5 mois » épargne, et c'est justement le cas d'un capteur mal réglé.
+ */
+export function autonomieTexte(ans) {
+  if (!Number.isFinite(ans) || ans <= 0) return null;
+  if (ans < 1) {
+    const mois = Math.round(ans * 12);
+    return mois >= 1 ? `${mois} mois` : `${Math.max(1, Math.round(ans * 365))} jours`;
+  }
+  // « 1,0 ans » est un mauvais accord, et la décimale ne veut rien dire au-delà de dix ans.
+  if (ans >= 10) return `${Math.round(ans)} ans`;
+  return `${ans.toFixed(1).replace(".", ",")} ${ans < 2 ? "an" : "ans"}`;
+}
+
+/**
  * Fenêtre de moyennage du texte réglementaire, en secondes : une heure chez ETSI.
  *
  * Ce n'est pas une constante de l'interface, c'est une grandeur du texte qu'on cite. Elle est
