@@ -11,7 +11,7 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, RESERVE_DUTY_CYCLE } from "./metrics.js";
+  limitesParGroupe, fenetreVerdictTexte } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -1176,7 +1176,10 @@ function renderMetrics(summary, deviceRows) {
       note.append(el("span", { class: "strong", text: `${region} — ` }),
         document.createTextNode(source + " "));
     }
-    note.append(el("span", { text: RESERVE_DUTY_CYCLE }));
+    // La fenêtre réelle du run, et non la réserve générale. Dire « la fenêtre du run n'est pas
+    // forcément celle du texte » laissait l'utilisateur sans moyen d'évaluer l'écart ; dire
+    // « mesuré sur 6 min 40 s, quand le texte moyenne sur 1 h » le lui donne.
+    note.append(el("span", { text: fenetreVerdictTexte(fenetreObservationNs(summary)) }));
   }
   note.hidden = sources.size === 0;
 }

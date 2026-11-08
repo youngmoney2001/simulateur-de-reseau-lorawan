@@ -315,7 +315,7 @@ choix.
 
 ---
 
-## 7. Le verdict réglementaire : sa limite actuelle
+## 7. Le verdict réglementaire — **fenêtre de mesure affichée** ; la comparaison reste à deux fenêtres
 
 Le verdict livré cette tranche compare l'occupation **mesurée sur la fenêtre du run** à une limite
 définie sur une **fenêtre de moyennage réglementaire** (une heure chez ETSI). La réserve est
@@ -325,8 +325,26 @@ Deux voies pour la rendre exacte :
 
 - **Allonger le run** jusqu'à la fenêtre réglementaire — coûteux, mais la simulation est déjà
   hors ligne ;
-- **Afficher la fenêtre de mesure à côté du verdict**, et laisser l'utilisateur juger de
-  l'écart — ce qui suppose d'exposer la durée du run en clair là où le verdict s'affiche.
+- **Afficher la fenêtre de mesure à côté du verdict** — **retenue et livrée**. L'utilisateur
+  juge de l'écart, ce qui suppose d'exposer la durée du run en clair là où le verdict
+  s'affiche.
+
+### Ce qui est affiché
+
+La fenêtre réelle du run, mesurée (`observation_ns`, la plus longue des passerelles), remplace
+la réserve générale. Sur un run de trois équipements à `period_s=60, messages=10`, la note est
+devenue :
+
+> Mesuré sur 9 min 4 s, quand le texte réglementaire moyenne sur 1 h (ETSI) — soit environ
+> 7 fois plus long. Le verdict porte sur la fenêtre du run : sur une heure, l'occupation
+> moyenne peut être plus basse comme plus haute.
+
+Le rapport est chiffré (« 7 fois ») et non suggéré (« plus court ») : un rapport donne la
+sentence de la fenêtre, un adjectif ne permet pas de juger.
+
+Quand le run couvre l'heure réglementaire, la phrase le dit et la comparaison devient directe.
+Afficher la réserve dans ce cas décrédibiliserait un verdict valide — c'est le défaut symétrique
+de celui qu'on corrige.
 
 À noter : le verdict est rendu **par groupe**, ce qui est correct (la limite s'applique par
 émetteur, et c'est le maximum du groupe qui est affiché, jamais la moyenne).

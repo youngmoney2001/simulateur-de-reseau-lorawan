@@ -13,6 +13,9 @@ import {
   somme,
   moyenne,
   fenetreObservationNs,
+  dureeTexte,
+  fenetreVerdictTexte,
+  FENETRE_ETSI_S,
   occupationNs,
   indicateursReseau,
   repartitionPertes,
@@ -447,4 +450,62 @@ test("table de ventilation : sans limite publiée, la case reste vide et non à 
   const limite = t.lignes[0].at(-1);
   assert.equal(limite, "—");
   assert.notEqual(limite, "100 %");
+});
+
+// --- Fenetre de mesure, dite a cote du verdict ----------------------------------------------
+//
+// Le verdict compare une occupation mesuree sur la fenetre du run a une limite moyennee sur
+// celle du texte reglementaire. Afficher l'ecart entre les deux fenetres ne corrige pas la
+// comparaison, mais rend son interpretable : c'est tout l'objet de ces fonctions.
+
+const NS = 1e9;
+
+test("une duree se lit dans l'unite ou l'on parle d'une fenetre", () => {
+  assert.equal(dureeTexte(40 * NS), "40 s");
+  assert.equal(dureeTexte(400 * NS), "6 min 40 s");
+  assert.equal(dureeTexte(3600 * NS), "1 h");
+  assert.equal(dureeTexte(9000 * NS), "2 h 30 min");
+});
+
+test("une duree nulle ou non finie n'est pas une duree", () => {
+  assert.equal(dureeTexte(0), null);
+  assert.equal(dureeTexte(-5 * NS), null);
+  assert.equal(dureeTexte(NaN), null);
+  assert.equal(dureeTexte(null), null);
+});
+
+test("la fenetre du run est nommee, pas sous-entendue", () => {
+  const texte = fenetreVerdictTexte(400 * NS);
+  assert.match(texte, /6 min 40 s/);
+});
+
+test("l'ecart avec l'heure reglementaire est chiffre, pas suggere", () => {
+  // « 9 fois plus long » : 3600 / 400. Un rapport donne sent la fenetre ; « plus court »
+  // ne permettrait pas de juger.
+  assert.match(fenetreVerdictTexte(400 * NS), /9 fois plus long/);
+});
+
+test("un run plus long que l'heure reglementaire rend la comparaison directe", () => {
+  const texte = fenetreVerdictTexte(9000 * NS);
+  assert.match(texte, /2 h 30 min/);
+  assert.match(texte, /comparaison est directe/);
+});
+
+test("la reserve generale ne s'affiche pas quand la fenetre est connue", () => {
+  // L'ancienne phrase disait « qui n'est pas forcement » : elle laissait croire au pire sans
+  // rien mesurer. Avec la fenetre, on ne l'emploie plus.
+  assert.doesNotMatch(fenetreVerdictTexte(400 * NS), /n'est pas forcement/);
+  assert.doesNotMatch(fenetreVerdictTexte(9000 * NS), /n'est pas forcement/);
+});
+
+test("sans fenetre connue, on retombe sur la reserve", () => {
+  // Mieux vaut une reserve qu'un silence : le verdict resterait surinterprete sans rien dire.
+  const texte = fenetreVerdictTexte(null);
+  assert.match(texte, /fenêtre du run/);
+  assert.match(texte, /réglementaire/);
+});
+
+test("un run exactement a l'heure est traite comme couvrant la fenetre", () => {
+  assert.match(fenetreVerdictTexte(FENETRE_ETSI_S * NS), /comparaison est directe/);
+  assert.match(fenetreVerdictTexte((FENETRE_ETSI_S - 1) * NS), /fois plus long/);
 });

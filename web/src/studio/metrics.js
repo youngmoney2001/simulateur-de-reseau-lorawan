@@ -431,6 +431,57 @@ export const RESERVE_DUTY_CYCLE =
   + "réglementaire (une heure chez ETSI).";
 
 /**
+ * Fenêtre de moyennage du texte réglementaire, en secondes : une heure chez ETSI.
+ *
+ * Ce n'est pas une constante de l'interface, c'est une grandeur du texte qu'on cite. Elle est
+ * nommée ici pour que la phrase qui la compare ne la répète pas de mémoire.
+ */
+export const FENETRE_ETSI_S = 3600;
+
+/**
+ * Durée lisible, depuis des nanosecondes. « 6 min 40 s » se confronte à une limite mieux que
+ * « 400 s » ou que « 4,0e+11 ns » : c'est l'unité dans laquelle on parle d'une fenêtre.
+ */
+export function dureeTexte(ns) {
+  if (!Number.isFinite(ns) || ns <= 0) return null;
+  const total = Math.round(ns / 1e9);
+  const h = Math.floor(total / 3600);
+  const min = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return min > 0 ? `${h} h ${min} min` : `${h} h`;
+  if (min > 0) return s > 0 ? `${min} min ${s} s` : `${min} min`;
+  return `${s} s`;
+}
+
+/**
+ * La fenêtre de mesure, dite à côté du verdict — pas à sa place.
+ *
+ * Le verdict compare une occupation **mesurée sur la fenêtre du run** à une limite **moyennée
+ * sur la fenêtre du texte réglementaire**. Comparer deux fenêtres différentes sans le dire est
+ * ce qui rendait le verdict surinterprétable. On ne corrige pas la comparaison : on affiche
+ * l'écart entre les deux fenêtres, et l'utilisateur juge.
+ *
+ * Cas où la fenêtre du run couvre l'heure réglementaire : la comparaison devient directe, et
+ * il faut le dire aussi — sinon la réserve affichée à tort décrédibilise un verdict valide.
+ *
+ * @param {number|null} ns fenêtre d'observation du run, en nanosecondes
+ * @returns {string} une phrase complète, jamais vide.
+ */
+export function fenetreVerdictTexte(ns) {
+  const duree = dureeTexte(ns);
+  if (duree === null) return RESERVE_DUTY_CYCLE;
+  const secondes = Math.round(ns / 1e9);
+  if (secondes >= FENETRE_ETSI_S) {
+    return `Mesuré sur ${duree} : la fenêtre du run couvre la fenêtre de moyennage du texte `
+      + `réglementaire (1 h chez ETSI). La comparaison est directe.`;
+  }
+  const rapport = (FENETRE_ETSI_S / Math.max(secondes, 1)).toFixed(0);
+  return `Mesuré sur ${duree}, quand le texte réglementaire moyenne sur 1 h (ETSI) — soit environ `
+    + `${rapport} fois plus long. Le verdict porte sur la fenêtre du run : sur une heure, `
+    + `l'occupation moyenne peut être plus basse comme plus haute.`;
+}
+
+/**
  * Compare l'occupation mesurée d'un groupe à la limite de son plan régional.
  *
  * Quatre issues, et elles ne se confondent pas :
