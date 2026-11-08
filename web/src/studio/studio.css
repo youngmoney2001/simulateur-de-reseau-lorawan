@@ -317,8 +317,10 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
    aussi épais qu'un acheminement finirait par couvrir le plan. */
 .liens line.lien-radio { stroke:#0f9b8e; stroke-width:1.5; stroke-dasharray:3 4;
   stroke-linecap:round; opacity:.8; }
-.liens .lien-etiquette { font-size:11px; fill:#4a3a86; text-anchor:middle;
+.liens .lien-etiquette { font-size:11px; text-anchor:middle;
   paint-order:stroke; stroke:var(--canvas, #fff); stroke-width:3px; stroke-linejoin:round; }
+.liens .lien-etiquette-mesh { fill:#4a3a86; }
+.liens .lien-etiquette-radio { fill:#0a6b60; }
 
 /* --- Fenêtre de configuration passerelle ---------------------------------------------- */
 /* Deux sections plutôt qu'une grille plate : la radio et le relais ne se règlent pas

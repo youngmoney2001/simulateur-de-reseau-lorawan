@@ -441,7 +441,11 @@ function renderLiaisons(nodes, bounds) {
     // Le chiffre au milieu du trait : une liaison sans son nombre n'apprend rien qu'une
     // couleur ne dirait deja.
     const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
-    const texte = svgEl("text", { class: "lien-etiquette", x: mx.toFixed(1), y: (my - 5).toFixed(1) });
+    // L'étiquette prend la teinte du trait qu'elle chiffre : sur un plan où deux natures se
+    // croisent, un nombre sans couleur ne dit pas à quel lien il appartient.
+    const sens = l.genre === "radio" ? "radio" : "mesh";
+    const texte = svgEl("text", { class: `lien-etiquette lien-etiquette-${sens}`,
+      x: mx.toFixed(1), y: (my - 5).toFixed(1) });
     texte.textContent = etiquetteLiaison(l);
     couche.append(texte);
   }

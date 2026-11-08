@@ -561,11 +561,31 @@ try {
     // Le trait n'existe qu'après un run : la topologie radio se mesure, elle ne se déclare pas.
     await viewTab("Plan");
     await page.waitForSelector("#plan .liens line.lien-mesh", { timeout: 20_000 });
-    const etiquettes = await page.$$eval("#plan .liens .lien-etiquette",
-      (t) => t.map((e) => e.textContent));
-    if (!etiquettes.length) throw new Error("liaison tracée sans son chiffre");
-    for (const t of etiquettes) {
-      if (!/trames? relayée/.test(t)) throw new Error(`étiquette : ${t}`);
+    // Deux natures de liaisons désormais, et la session en produit les deux : le relais
+    // remet des trames à la frontière (mesh), et les deux passerelles décodent celles du
+    // capteur (radio). Les confondre était exactement le défaut que l'étiquette prévient.
+    const paires = await page.$$eval("#plan .liens > *", (es) => {
+      const out = [];
+      for (let i = 0; i < es.length; i += 1) {
+        const e = es[i];
+        const nom = e.tagName.toLowerCase();
+        if (nom !== "line") continue;
+        const genre = e.classList.contains("lien-radio") ? "radio" : "mesh";
+        out.push({ genre, texte: es[i + 1]?.tagName.toLowerCase() === "text"
+          ? es[i + 1].textContent : null });
+      }
+      return out;
+    });
+    if (!paires.length) throw new Error("aucun trait");
+    if (!paires.some((x) => x.genre === "mesh")) throw new Error("aucune liaison mesh tracée");
+    if (!paires.some((x) => x.genre === "radio")) throw new Error(
+      `aucune liaison radio tracée (${JSON.stringify(paires)}) : la matrice des réceptions `
+      + "n'atteint pas le plan");
+    for (const { genre, texte } of paires) {
+      if (!texte) throw new Error(`liaison ${genre} tracée sans son chiffre`);
+      const attendu = genre === "radio" ? /^\d+ trames? décodée/ : /^\d+ trames? relayée/;
+      if (!attendu.test(texte)) throw new Error(
+        `étiquette ${genre} : « ${texte} » — le verbe doit dire ce que le lien compte`);
     }
     // Le trait relie le relais à la frontière, et pas l'inverse : le sens compte.
     const bouts = await page.$$eval("#plan .liens line.lien-mesh",
