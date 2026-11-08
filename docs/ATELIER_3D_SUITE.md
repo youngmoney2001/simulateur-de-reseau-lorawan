@@ -103,6 +103,35 @@ Deux détails qui comptent plus que leur taille :
 La région a été exposée en plus de la demande, parce que deux des quatre exercices l'exigent :
 une sous-bande sans plan régional n'a pas de sens, et le CLI refuse déjà cette combinaison.
 
+### Vérifié, et comment
+
+Le test décisif n'est pas que la fenêtre enregistre, c'est que **les quatre exercices passent
+leurs critères de configuration sans ouvrir la console** — et que `us915-sous-bande` atteigne
+30/30 une fois le run lié. C'était l'écart à fermer ; il est fermé et prouvé par l'évaluation
+elle-même, pas par une assertion sur un formulaire.
+
+Trois échecs de CI en route, tous instructifs :
+
+1. L'étape e2e visait un équipement disparu : je l'avais placée avant la suppression de la
+   session, sans voir que l'étape « exercice » démarre une **session neuve**. Après elle,
+   `gw-nord` n'existe plus. Le sélecteur était juste, l'emplacement ne l'était pas.
+2. `setValue` pose `.value` en JS sans déclencher `change` : la sous-bande restait désactivée.
+   Ce n'est pas un défaut d'interface — un vrai geste sur une liste déroulante déclenche
+   l'événement — mais le test doit employer `page.select`.
+3. Le message « Réglages enregistrés. » était frère du formulaire au lieu d'en être le dernier
+   enfant. J'avais réinventé une disposition au lieu de recopier celle du capteur.
+
+Un quatrième défaut, trouvé en examinant le deuxième, que la CI n'avait pas encore rencontré :
+quitter un plan à sous-bandes l'efface côté serveur, mais la fenêtre continuait d'afficher « 2 ».
+Afficher un réglage qui n'est plus fait croire à un enregistrement qui n'a pas eu lieu.
+
+**Mesure de la fenêtre** : l'audit balaie les onglets d'une fenêtre d'équipement, mais n'ouvrait
+que celle d'un capteur — le formulaire passerelle n'était donc jamais passé au gabarit, et « la
+CI est verte » n'aurait voulu dire que « aucune assertion n'a échoué ». Un état
+« passerelle · Config » a été ajouté. Résultat : **430 × 517 px, 0 problème, aucun défilement
+horizontal**, à 1400 px comme à 900 px. 517 px est la hauteur naturelle du contenu, sous la
+borne CSS de 760 px : le formulaire tient sans être rogné.
+
 ---
 
 ## 2. Le contenu : 7 exercices, et un moteur qui en simule bien plus
