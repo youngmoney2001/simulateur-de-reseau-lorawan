@@ -527,6 +527,10 @@ try {
     await viewTab("Carte");
     await page.waitForFunction(() => document.querySelector("#cesium canvas"), { timeout: 30_000 });
     await page.waitForFunction(() => (window.__liaisonsCarte ?? 0) >= 1, { timeout: 30_000 });
+    // On rend la vue qu'on a trouvée. Les étapes suivantes ont été écrites pour le plan, et
+    // l'étape exercice en particulier : la laisser sur la carte, c'est changer les conditions
+    // d'un test qui n'a rien demandé. Une étape ne doit pas modifier l'état qu'elle emprunte.
+    await viewTab("Plan");
   });
 
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {
