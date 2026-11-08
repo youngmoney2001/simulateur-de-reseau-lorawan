@@ -89,3 +89,40 @@ test("l'étiquette nomme ce qu'elle compte", () => {
   // Un chiffre seul ne dit pas ce qu'il compte : « 12 » pourrait être des sauts.
   assert.match(etiquetteLiaison({ livrees: 12 }), /trames/);
 });
+
+// --- Bouts géographiques : la même liaison, sur la carte 3D ------------------------------------
+
+import { boutsLiaison } from "../src/studio/liaisons.js";
+
+const ORIGINE = { lat: 4.0511, lon: 9.7679 };
+
+test("les bouts d'une liaison sont convertis en degrés", () => {
+  const noeuds = new Map([
+    ["frontiere", { x_m: 0, y_m: 0 }],
+    ["relais-1", { x_m: 1500, y_m: 0 }],
+  ]);
+  const b = boutsLiaison({ de: "relais-1", vers: "frontiere" }, noeuds, ORIGINE);
+  assert.ok(b);
+  // Le relais est à l'est : sa longitude dépasse celle de la frontière, pas l'inverse.
+  assert.ok(b.de.lon > b.vers.lon);
+  assert.ok(Math.abs(b.vers.lon - ORIGINE.lon) < 1e-9);
+});
+
+test("une liaison dont un bout manque n'est pas traçable : pas de trait dans le vide", () => {
+  const noeuds = new Map([["frontiere", { x_m: 0, y_m: 0 }]]);
+  assert.equal(boutsLiaison({ de: "relais-1", vers: "frontiere" }, noeuds, ORIGINE), null);
+  assert.equal(boutsLiaison({ de: "frontiere", vers: "relais-1" }, noeuds, ORIGINE), null);
+});
+
+test("une position inexploitable n'est pas tracée : un trait absent vaut mieux qu'un trait faux", () => {
+  const noeuds = new Map([
+    ["frontiere", { x_m: 0, y_m: 0 }],
+    ["casse", { x_m: NaN, y_m: 0 }],
+  ]);
+  assert.equal(boutsLiaison({ de: "casse", vers: "frontiere" }, noeuds, ORIGINE), null);
+});
+
+test("sans nœuds du tout, rien n'est tracé plutôt que de lever", () => {
+  assert.equal(boutsLiaison({ de: "a", vers: "b" }, null, ORIGINE), null);
+  assert.equal(boutsLiaison({ de: "a", vers: "b" }, new Map(), ORIGINE), null);
+});

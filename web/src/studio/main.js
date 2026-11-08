@@ -50,6 +50,7 @@ const state = {
   fenetreNs: null,   // fenetre d observation du dernier run : denominators des taux
   liens: [],         // GatewayLink[] du dernier run : equipement <-> passerelle du run
   passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
+  liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   mapError: null,    // raison du repli, affichée : un repli muet cacherait un défaut
@@ -160,6 +161,11 @@ async function selectSession(sid) {
   state.selected = null;
   state.result = null;
   state.consoles = {};
+  // Les liaisons observees appartiennent au run d'une session : les garder en changeant de
+  // session afficherait le reseau d'un autre chantier, le temps d'un clic.
+  state.liens = [];
+  state.passerelles = null;
+  state.liaisonsObservees = [];
   renderSessionChoices();
   await loadTopology();
   const meta = state.sessions.find((s) => s.session_id === sid);
@@ -278,15 +284,22 @@ function renderPlan() {
   player.refresh();   // le rendu du plan supprime la couche d'animation : on la remet
 }
 
+// Liaisons observées, calculées une fois : le plan 2D et la carte 3D tracent le même résultat.
+function calculerLiaisons() {
+  return cumulerLiaisons(liaisonsMesh({
+    passerelles: state.passerelles ?? [],
+    liens: state.liens,
+    noeuds: (state.topo?.nodes ?? []).map((n) => n.id),
+  }));
+}
+
 // Liaisons observées sur le plan. Elles n'existent qu'après un run : la topologie d'un réseau
 // radio ne se déclare pas, elle se mesure. Avant le run, le plan ne montre aucun trait — et
 // c'est voulu, voir le commentaire de `liaisons.js` sur ce qu'on refuse de tracer.
 function renderLiaisons(nodes, bounds) {
   const couche = svgEl("g", { class: "liens" });
   if (!state.passerelles?.length) return couche;
-  const ids = nodes.map((n) => n.id);
-  const liaisons = cumulerLiaisons(
-    liaisonsMesh({ passerelles: state.passerelles, liens: state.liens, noeuds: ids }));
+  const liaisons = state.liaisonsObservees ?? [];
   if (!liaisons.length) return couche;
   const parId = new Map(nodes.map((n) => [n.id, n]));
   for (const l of liaisons) {
@@ -944,6 +957,9 @@ function renderSimulationIdle() {
   $("sim-status").textContent = "";
   clear($("sim-notes"));
   $("sim-results").hidden = true;
+  // Le retrait des traits se fait au prochain rendu (`refreshViews`), qui suit de toute
+  // façon : appeler `syncMap` ici tracerait avec la topologie de la session précédente.
+  state.liaisonsObservees = [];
 }
 
 $("sim-form").addEventListener("submit", async (ev) => {
@@ -981,6 +997,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // montrerait des equipements sans jamais dire qui parle a qui.
     state.liens = started.links ?? [];
     state.passerelles = summary.gateways ?? null;
+    // Un seul calcul pour les deux vues : si le plan et la carte le refaisaient chacun,
+    // ils pourraient diverger sans que rien ne le signale.
+    state.liaisonsObservees = calculerLiaisons();
     renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
     renderLegend();
     renderDevice();             // la fenêtre ouverte chiffre le résultat
@@ -1349,6 +1368,9 @@ function syncMap(fly = false) {
   carte.setOrigin(o);
   if (o) carte.setZone(o.lat, o.lon, porteeDesEquipements());
   carte.setNodes(state.topo?.nodes ?? [], state.selected, state.resultats);
+  // Mêmes liaisons sur les deux vues : le plan les trace, la carte aussi. Elles n'existent
+  // qu'après un run — la topologie d'un réseau radio se mesure, elle ne se déclare pas.
+  carte.setLiaisons(state.liaisonsObservees ?? [], state.topo?.nodes ?? []);
   // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
   // encore la planète entière. La seconde compte autant que la première — c'est elle qui
   // fait que « la carte est centrée sur le lieu choisi » dès l'ouverture.

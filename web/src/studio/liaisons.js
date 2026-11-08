@@ -18,6 +18,8 @@
 // Dès qu'une liaison est tracée, elle porte son chiffre : un trait sans nombre n'apprend rien
 // qu'une couleur ne dirait déjà.
 
+import { metresVersDegres as toLonLat } from "./geo.js";
+
 /**
  * Liaisons mesh observées, en identifiants d'équipements de la session.
  *
@@ -65,6 +67,24 @@ export function cumulerLiaisons(liaisons = []) {
     else parCouple.set(cle, { ...l });
   }
   return [...parCouple.values()].sort((a, b) => b.livrees - a.livrees || (a.de < b.de ? -1 : 1));
+}
+
+/**
+ * Bouts géographiques d'une liaison, en degrés, prêts pour la carte 3D.
+ *
+ * @param noeuds Map id -> { x_m, y_m } (le plan et la carte partagent ces mètres).
+ * @returns null quand la liaison n'est pas traçable : bout inconnu, ou position
+ *          inexploitable. La carte préfère un trait absent à un trait faux — et à une
+ *          erreur anonyme de Cesium qui interromprait le tracé du reste du réseau.
+ */
+export function boutsLiaison(liaison, noeuds, origine) {
+  const a = noeuds?.get(liaison?.de);
+  const b = noeuds?.get(liaison?.vers);
+  if (!a || !b) return null;
+  const de = toLonLat(a.x_m, a.y_m, origine);
+  const vers = toLonLat(b.x_m, b.y_m, origine);
+  const finis = [de.lat, de.lon, vers.lat, vers.lon].every(Number.isFinite);
+  return finis ? { de, vers } : null;
 }
 
 /**

@@ -520,6 +520,13 @@ try {
     const bouts = await page.$$eval("#plan .liens line.lien-mesh",
       (ls) => ls.map((l) => ({ x1: +l.getAttribute("x1"), x2: +l.getAttribute("x2") })));
     if (!bouts.length) throw new Error("aucun trait");
+
+    // La carte 3D porte les mêmes liaisons. Une primitive Cesium n'existe pas dans le DOM :
+    // on lit le compte exposé, faute de quoi un trait jamais tracé ne se distinguerait pas
+    // d'un trait que personne ne regarde.
+    await viewTab("Carte");
+    await page.waitForFunction(() => document.querySelector("#cesium canvas"), { timeout: 30_000 });
+    await page.waitForFunction(() => (window.__liaisonsCarte ?? 0) >= 1, { timeout: 30_000 });
   });
 
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {

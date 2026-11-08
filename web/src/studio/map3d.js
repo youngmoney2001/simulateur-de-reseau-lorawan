@@ -13,6 +13,9 @@ import {
   metresVersDegres as toLonLat,
   degresVersMetres as toMeters,
 } from "./geo.js";
+// Le calcul des liaisons vit dans `liaisons.js`, sans dépendance à Cesium : il est donc
+// vérifiable hors navigateur, ce qu'un calcul enfoui dans cette carte ne serait pas.
+import { boutsLiaison, etiquetteLiaison } from "./liaisons.js";
 
 export { EARTH_RADIUS_M, toLonLat, toMeters };
 
@@ -96,6 +99,11 @@ export function createMap3D(container, onPick) {
   // Repère fantôme : il montre où l'équipement atterrira pendant qu'on le fait glisser,
   // avant que la position ne soit envoyée au serveur. Sans lui, on lâche à l'aveugle.
   const fantome = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+
+  // Liaisons observées. Tiretées, jamais pleines : une liaison radio se mesure, elle ne se
+  // câble pas — le plein laisserait croire à un lien qu'on pourrait débrancher.
+  const liaisons = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+  const etiquettesLiens = viewer.scene.primitives.add(new Cesium.LabelCollection());
 
   // Repère de zone : l'ancre géographique du réseau. Elle était invisible, alors que c'est
   // le point auquel tout est rattaché — on voyait les équipements sans voir ce qui les fixe
@@ -250,6 +258,60 @@ export function createMap3D(container, onPick) {
      * @param {{x: number, y: number}} position pixels CSS relatifs au canevas
      * @param {number} [tolerancePx]
      */
+    /**
+     * Trace les liaisons observées (relais -> frontière) entre les équipements affichés.
+     *
+     * @param liaisonsObservees [{ de, vers, livrees }] en identifiants d'équipements
+     * @param etiquette (optionnel) texte posé au milieu du trait
+     *
+     * Une liaison dont un bout est absent ou inexploitable est sautée : la carte préfère
+     * un trait manquant à un trait faux, et à une erreur anonyme de Cesium qui
+     * interromprait le tracé du reste du réseau.
+     */
+    setLiaisons(liaisonsObservees = [], noeuds = []) {
+      liaisons.removeAll();
+      etiquettesLiens.removeAll();
+      // Une primitive Cesium n'existe pas dans le DOM : rien ne peut la compter de
+      // l'extérieur. On expose donc le compte, comme `window.__carteErreur` expose la raison
+      // d'un rendu arrêté — sans cela, un trait jamais tracé ne se distinguerait pas d'un
+      // trait que personne ne regarde.
+      window.__liaisonsCarte = 0;
+      const parId = new Map((noeuds ?? []).map((n) => [n.id, n]));
+      for (const l of liaisonsObservees) {
+        const bouts = boutsLiaison(l, parId, origine);
+        if (!bouts) continue;
+        // Légèrement au-dessus du sol : à l'altitude zéro, le relief et le fond de carte
+        // avalent le trait dès qu'on zoome un peu.
+        const hauteur = 40;
+        const p = Cesium.Cartesian3.fromDegrees(bouts.de.lon, bouts.de.lat, hauteur);
+        const q = Cesium.Cartesian3.fromDegrees(bouts.vers.lon, bouts.vers.lat, hauteur);
+        liaisons.add({
+          positions: [p, q],
+          width: 3,
+          material: Cesium.Material.fromType("PolylineDash", {
+            color: Cesium.Color.fromCssColorString("#6b4fbb").withAlpha(0.9),
+            gapColor: Cesium.Color.TRANSPARENT,
+            dashLength: 18,
+          }),
+        });
+        const milieu = Cesium.Cartesian3.fromDegrees(
+          (bouts.de.lon + bouts.vers.lon) / 2, (bouts.de.lat + bouts.vers.lat) / 2, hauteur);
+        etiquettesLiens.add({
+          position: milieu,
+          text: etiquetteLiaison(l),
+          font: "600 12px system-ui, sans-serif",
+          fillColor: Cesium.Color.fromCssColorString("#e9e4fb"),
+          outlineColor: Cesium.Color.fromCssColorString("#2a1d55"),
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -6),
+          disableDepthTestDistance: 0,
+        });
+        window.__liaisonsCarte += 1;
+      }
+    },
+
     nodeAt(position, tolerancePx = 22) {
       if (!position) return null;
       const scene = viewer.scene;
@@ -280,7 +342,10 @@ export function createMap3D(container, onPick) {
     nodeScreenPositions() {
       const out = [];
       for (const n of affiches) {
-        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine.lat, origine.lon);
+        // `toLonLat` prend { lat, lon }, pas deux nombres : passer `origine.lat, origine.lon`
+        // faisait lever « origine inexploitable » à chaque appel. La fonction n'était pas
+        // appelée, donc le défaut ne se voyait pas — un piège plutôt qu'une panne.
+        const { lon, lat } = toLonLat(n.x_m, n.y_m, origine);
         const e = Cesium.SceneTransforms.worldToWindowCoordinates(
           viewer.scene, Cesium.Cartesian3.fromDegrees(lon, lat));
         if (e) out.push({ id: n.id, x: e.x, y: e.y });
