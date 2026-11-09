@@ -716,6 +716,7 @@ class RunService:
         mesh_lost_total: Optional[int] = None
         mesh_lost_by_device: Optional[tuple[int, ...]] = None
         sf_finaux: dict[int, int] = {}
+        puissances: dict[int, Any] = {}          # boucle fermée seulement : DevicePower
         if job.multi:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
@@ -740,6 +741,10 @@ class RunService:
             # où l'ADR est simulé : le SF final n'a de sens que là. Sur la voie multi il reste
             # absent, plutôt que de recopier le SF initial en laissant croire à une observation.
             sf_finaux = _sf_final_par_dispositif(tr.records)
+            # Puissance appliquée par l'ADR : même source, même garde. Vide hors boucle
+            # fermée, donc les champs restent absents plutôt que de recopier l'index de
+            # départ en laissant croire à une décision du serveur.
+            puissances = dict(tr.device_power or {})
         self._set(run_id, 0.7)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
@@ -758,6 +763,9 @@ class RunService:
                 device_index=i, group=group_of[i], index_in_group=index_in_group[i],
                 x_m=dev.x_m, y_m=dev.y_m, spreading_factor=dev.spreading_factor,
                 final_spreading_factor=sf_finaux.get(i),
+                power_index=(puissances[i].first_index if i in puissances else None),
+                final_power_index=(puissances[i].last_index if i in puissances else None),
+                power_step_db=(puissances[i].step_db if i in puissances else None),
                 sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
                 lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),

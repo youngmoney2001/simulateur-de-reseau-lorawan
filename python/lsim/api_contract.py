@@ -154,6 +154,17 @@ class DeviceRowOut(_Strict):
     # où l'ADR n'est de toute façon pas simulé) : un champ absent plutôt qu'une valeur qui
     # recopierait `spreading_factor` en laissant croire à une observation.
     final_spreading_factor: Optional[int] = Field(default=None, ge=5, le=12)
+    # Puissance d'émission **appliquée** par la boucle fermée, en indices de puissance.
+    # Même règle que le débit : ces champs n'existent que si le run les a observés, donc
+    # absents hors ADR, plutôt que recopiés en laissant croire à une observation.
+    #
+    # La réduction affichable est `(final_power_index - power_index) * power_step_db`
+    # décibels. C'est une **réduction**, jamais une puissance absolue : la base est la
+    # puissance configurée du dispositif, et non la PIRE du plan (mesuré : un capteur réglé
+    # sur 14 dBm émet le RSSI de 14 dBm à l'index 0, pas celui de 16 dBm).
+    power_index: Optional[int] = Field(default=None, ge=0, le=15)
+    final_power_index: Optional[int] = Field(default=None, ge=0, le=15)
+    power_step_db: Optional[float] = Field(default=None, gt=0, le=10)
     sent: int = Field(ge=0)
     received: int = Field(ge=0)
     lost_sensitivity: int = Field(ge=0)

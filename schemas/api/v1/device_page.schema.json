@@ -37,6 +37,20 @@
           "default": null,
           "title": "Energy Per Message J"
         },
+        "final_power_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Power Index"
+        },
         "final_spreading_factor": {
           "anyOf": [
             {
@@ -83,6 +97,34 @@
           "minimum": 0,
           "title": "Lost Sensitivity",
           "type": "integer"
+        },
+        "power_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power Index"
+        },
+        "power_step_db": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power Step Db"
         },
         "received": {
           "minimum": 0,

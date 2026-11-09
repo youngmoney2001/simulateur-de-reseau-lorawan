@@ -409,6 +409,48 @@ def test_final_spreading_factor_says_what_the_server_left_the_device_at(api):
     assert min(finaux) < 12, finaux                     # au moins un terminal a été fait monter
 
 
+def test_power_index_says_what_the_server_did_to_the_transmit_power(api):
+    """La puissance que le serveur a fait appliquer, observée — jamais recopiée.
+
+    Même règle que le SF final, et pour la même raison : l'index de puissance n'existe que
+    si la boucle fermée l'a réellement décidé. Hors ADR, le champ est absent plutôt que de
+    recopier l'index de départ, ce qui laisserait croire à une décision du serveur.
+
+    La réduction affichable est `(final - départ) × pas` : une **réduction** en décibels, et
+    non une puissance absolue. La base du calcul est la puissance configurée du dispositif,
+    pas la PIRE du plan — un capteur réglé sur 14 dBm émet le RSSI de 14 dBm à l'index 0.
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test puissance", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _puissances(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [(x.get("power_index"), x.get("final_power_index"), x.get("power_step_db"))
+                for x in page["items"]]
+
+    # --- Sans ADR : le moteur ne commande aucune puissance, les champs restent absents -----
+    for ligne in _puissances({**base, "gateway": {"x_m": 0, "y_m": 0}}):
+        assert ligne == (None, None, None), ligne
+
+    # --- Avec ADR : le serveur commande, et la trace porte ce qui a été appliqué -----------
+    lignes = _puissances({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert len(lignes) == 3
+    for depart, fin, pas in lignes:
+        assert depart is not None and fin is not None and pas is not None, lignes
+        assert pas > 0
+    # Au moins un terminal a été fait baisser : c'est le sens d'un ADR sur un lien qui le permet.
+    reductions = [(fin - depart) * pas for depart, fin, pas in lignes]
+    assert max(reductions) > 0, (lignes, reductions)
+
+
 def test_events_are_ordered_paginated_and_hops_are_bounded(finished_run):
     call, rid = finished_run["call"], finished_run["run_id"]
     seqs, kinds, cursor = [], set(), 0

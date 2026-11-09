@@ -628,6 +628,62 @@ test("un run sans changement donne un bilan vide, pas un bilan nul", () => {
   assert.deepEqual(bilanAdr([], [{ id: "c1" }]), []);
 });
 
+// --- Idem pour la puissance : l'autre moitié de la commande -------------------------------------
+//
+// Le serveur décide le débit **et** la puissance. Ne montre que le débit, et l'atelier tait
+// le versant autonomie : −14 dB, c'est l'essentiel de ce que l'ADR apporte à une pile.
+
+test("une baisse de puissance seul suffit à retenir le dispositif", () => {
+  // Débit inchangé : le terminal reste au SF7, mais le serveur lui a retiré 14 dB.
+  const rows = [{ device_index: 0, group: "c1", spreading_factor: 7, final_spreading_factor: 7,
+                  power_index: 0, final_power_index: 7, power_step_db: 2 }];
+  const bilan = bilanAdr(rows, []);
+  assert.equal(bilan.length, 1, "une baisse de puissance sans changement de SF doit se voir");
+  assert.equal(bilan[0].puissance.reductionDb, 14);
+  assert.equal(bilan[0].debitObserve, true);
+  assert.equal(bilan[0].baisse, false);
+  assert.equal(bilan[0].hausse, false);
+});
+
+test("la réduction vaut l'écart d'indices multiplié par le pas du plan", () => {
+  const rows = [{ device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: 7,
+                  power_index: 1, final_power_index: 4, power_step_db: 2 }];
+  const bilan = bilanAdr(rows, []);
+  assert.equal(bilan[0].puissance.reductionDb, 6);        // (4 - 1) × 2 dB
+  assert.equal(bilan[0].puissance.indexDepart, 1);
+  assert.equal(bilan[0].puissance.indexFin, 4);
+});
+
+test("une hausse de puissance donne une réduction négative, pas une valeur cachée", () => {
+  // Le serveur remonte la puissance : margin insuffisante. Le signe doit le dire.
+  const rows = [{ device_index: 0, group: "c1", spreading_factor: 9, final_spreading_factor: 9,
+                  power_index: 5, final_power_index: 2, power_step_db: 2 }];
+  assert.equal(bilanAdr(rows, [])[0].puissance.reductionDb, -6);
+});
+
+test("un seul terme de puissance manquant et le bilan n'en parle pas", () => {
+  // Mieux vaut ne rien dire qu'annoncer une réduction calculée sur un pas inconnu.
+  const complet = { device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: 7 };
+  const cas = [
+    { ...complet, power_index: 0, final_power_index: 7 },                 // pas de pas
+    { ...complet, power_index: 0, power_step_db: 2 },                     // pas d'indice final
+    { ...complet, final_power_index: 7, power_step_db: 2 },               // pas d'indiceinitial
+    { ...complet, power_index: 0, final_power_index: 7, power_step_db: 0 },  // pas nul : division
+    { ...complet, power_index: null, final_power_index: 7, power_step_db: 2 },
+  ];
+  for (const rows of cas) {
+    const bilan = bilanAdr([rows], []);
+    assert.equal(bilan.length, 1, "le changement de débit reste annoncé");
+    assert.equal(bilan[0].puissance, null);
+  }
+});
+
+test("ni débit ni puissance : le dispositif n'entre pas dans le bilan", () => {
+  const rows = [{ device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: 12,
+                  power_index: 3, final_power_index: 3, power_step_db: 2 }];
+  assert.deepEqual(bilanAdr(rows, []), []);
+});
+
 // --- Jointure OTAA et trames confirmées -------------------------------------------------------
 //
 // Les nombres de ce bloc sont ceux qu'on lirait à l'œil dans une trace. Le seul piège est de

@@ -376,17 +376,39 @@ export function bilanAdr(deviceRows = [], nodes = []) {
     const depart = l.spreading_factor;
     const fin = l.final_spreading_factor;
     // `final_spreading_factor` absent : le run n'observe pas la fin (voie multi-passerelles).
-    if (!Number.isFinite(depart) || !Number.isFinite(fin) || fin === depart) continue;
+    const debitObserve = Number.isFinite(depart) && Number.isFinite(fin);
+    const debitChange = debitObserve && fin !== depart;
+    const puissance = puissanceAppliquee(l);
+    // Deux décisions du serveur, pas une : le débit **et** la puissance. Un terminal dont
+    // seul le débit a bougé doit être montré ; l'inverse aussi. Les ignorer séparément
+    // reviendrait à taire la moitié de ce que le serveur a commandé.
+    if (!debitChange && !(puissance && puissance.reductionDb !== 0)) continue;
     changes.push({
       deviceIndex: l.device_index ?? null,
       nom: nomDuDispositif(l, noms),
-      depart,
-      fin,
-      baisse: fin < depart,        // SF plus bas = débit plus rapide = plus près ou meilleur lien
-      hausse: fin > depart,
+      depart: debitObserve ? depart : null,
+      fin: debitObserve ? fin : null,
+      debitObserve,
+      baisse: debitObserve && fin < depart,  // SF plus bas = débit plus rapide = meilleur lien
+      hausse: debitObserve && fin > depart,
+      puissance,
     });
   }
   return changes;
+}
+
+/**
+ * Puissance d'émission appliquée par la boucle fermée, en décibels **retirés**.
+ *
+ * `null` dès qu'il manque un terme : mieux vaut ne rien dire qu'annoncer une réduction
+ * calculée sur un pas inconnu. Et c'est une réduction, jamais une puissance absolue — la
+ * base est celle du dispositif, pas la PIRE du plan, donc « 14 dBm → 0 dBm » ne se lit
+ * pas dans ces champs.
+ */
+function puissanceAppliquee(ligne) {
+  const a = ligne.power_index, b = ligne.final_power_index, pas = ligne.power_step_db;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(pas) || pas <= 0) return null;
+  return { indexDepart: a, indexFin: b, reductionDb: (b - a) * pas };
 }
 
 /** Nom lisible d'un dispositif : son groupe, sinon son index. */

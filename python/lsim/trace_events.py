@@ -41,7 +41,7 @@ import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
 from lsim.lora import RadioConfig, time_on_air_ns
@@ -209,6 +209,32 @@ class ProtocolEvent:
 
 
 @dataclass(frozen=True)
+class DevicePower:
+    """Puissance d'émission d'un dispositif, telle que la boucle fermée l'a **appliquée**.
+
+    `first_index` / `last_index` : index de puissance du premier et du dernier uplink. Un
+    index plus haut est une puissance plus basse (`adr.cpp` : l'index monte tant qu'il
+    reste de la marge). `step_db` est le pas du plan régional.
+
+    La réduction vaut donc `(last_index - first_index) * step_db` décibels. C'est une
+    **réduction**, et non une puissance absolue : la base est la puissance configurée du
+    dispositif, pas la PIRE du plan — mesuré à 300 m, un capteur réglé sur 14 dBm émet à
+    l'index 0 le RSSI de 14 dBm, et non celui de 16 dBm. Afficher « 16 dBm → 2 dBm »
+    serait donc faux de 2 dB au départ, et le bas de l'échelle descend sous le minimum
+    régional (0 dBm mesuré pour l'index 7 en EU868, dont le plan s'arrête à 2 dBm).
+    """
+
+    first_index: int
+    last_index: int
+    step_db: float
+
+    @property
+    def reduction_db(self) -> float:
+        """Décibels retirés entre le premier et le dernier uplink (négatif si hausse)."""
+        return (self.last_index - self.first_index) * self.step_db
+
+
+@dataclass(frozen=True)
 class TraceRun:
     per_device: tuple[Counters, ...]
     totals: Counters
@@ -221,6 +247,10 @@ class TraceRun:
     mac_bytes: Optional[MacByteAccounting] = None  # octets réservés / émis / confirmés
     # Retransmissions seulement (None sinon) : détail des essais, des ACK et des doublons.
     retransmissions: Optional[object] = None
+    # Boucle fermée seulement : puissance d'émission appliquée, par dispositif. Absente
+    # ailleurs — le chemin historique ne décide d'aucune puissance, et recopier l'index de
+    # départ ferait croire à une observation là où le moteur n'a rien commandé.
+    device_power: Optional[Mapping[int, DevicePower]] = None
 
 
 @dataclass(frozen=True)
@@ -1208,17 +1238,34 @@ def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propa
     )
     check_closed_loop(scenario, options)
     schedule = _schedule_of(scenario)
+    regions = loop_regions(scenario, group_of)
     out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
-                               loop_regions(scenario, group_of), loop_options(scenario, options),
+                               regions, loop_options(scenario, options),
                                mac=mac_slots(schedule, devices))
     records = tuple(
         TxRecord(u.device, u.start_ns, u.end_ns, u.spreading_factor, u.rssi_dbm,
                  OUTCOME_CODES[u.outcome])
         for u in out.uplinks)
+    # Puissance appliquée, un relevé par dispositif. `u.power_index` existe sur chaque
+    # uplink de la boucle fermée : il était simplement jeté à la ligne ci-dessus, si bien
+    # que l'atelier montrait le débit commandé par le serveur sans jamais dire qu'il avait
+    # aussi baissé la puissance — le versant « autonomie » de la même décision.
+    # Le pas est lu par dispositif : un plan par passerelle, et non une moyenne qui
+    # donnerait une réduction en décibels n'appartenant à aucun des deux.
+    puissances: dict[int, DevicePower] = {}
+    for u in out.uplinks:
+        connue = puissances.get(u.device)
+        pas_db = regions[u.device].power_step_tenth_db / 10.0 if u.device < len(regions) else None
+        if pas_db is None:
+            continue
+        puissances[u.device] = DevicePower(
+            first_index=connue.first_index if connue is not None else u.power_index,
+            last_index=u.power_index, step_db=pas_db)
     events = _closed_loop_events(out, radios, options, schedule)
     return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
                     events=events, gateway_tx=out.busy, mac_queue=out.mac_queue,
-                    mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks))
+                    mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks),
+                    device_power=puissances or None)
 
 
 def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOptions,

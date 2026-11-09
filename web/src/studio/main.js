@@ -1270,6 +1270,14 @@ function renderBilanProtocole() {
  * laisserait croire que la question a été traitée et qu'elle n'a rien donné — alors que la
  * réponse est « pas de changement observé », et qu'elle mérite son propre mot.
  */
+/** Écart de puissance lisible : « 14 dB », pas « 14.000000000000002 dB ».
+ *  Le pas du plan vaut 2 dB et l'index est entier, mais le produit flottant ne l'est pas
+ *  toujours — et un utilisateur qui lit « 13.999999 dB » doute de la mesure à tort. */
+function formaterDb(valeur) {
+  const arrondi = Math.round(valeur * 10) / 10;
+  return `${Number.isInteger(arrondi) ? arrondi : arrondi.toFixed(1)} dB`;
+}
+
 function renderAdrBilan(deviceRows = []) {
   const bloc = $("adr-bilan");
   const liste = $("adr-bilan-liste");
@@ -1282,20 +1290,36 @@ function renderAdrBilan(deviceRows = []) {
     return;
   }
   for (const c of changes) {
-    const sens = c.baisse
-      ? "débit plus rapide : le lien le permettait"
-      : "débit plus lent : la marge de liaison était insuffisante";
-    liste.append(el("li", { text: `${c.nom} : SF${c.depart} → SF${c.fin} — ${sens}` }));
+    // Les deux décisions du serveur sont nommées séparément : dire « le débit a changé »
+    // quand il a aussi retiré 14 dB taît le versant autonomie de la même commande.
+    const parties = [];
+    if (c.debitObserve && c.depart !== c.fin) {
+      const sens = c.baisse
+        ? "débit plus rapide : le lien le permettait"
+        : "débit plus lent : la marge de liaison était insuffisante";
+      parties.push(`SF${c.depart} → SF${c.fin} — ${sens}`);
+    }
+    if (c.puissance && c.puissance.reductionDb !== 0) {
+      const dB = Math.abs(c.puissance.reductionDb);
+      const texte = c.puissance.reductionDb > 0
+        ? `puissance réduite de ${formaterDb(dB)}`
+        : `puissance augmentée de ${formaterDb(dB)}`;
+      // Une réduction, et non « X dBm → Y dBm » : la base du calcul est la puissance du
+      // dispositif, pas la PIRE du plan, et le bas de l'échelle descend sous le minimum
+      // régional. Afficher des dBm absolus donnerait un chiffre qu'aucun terminal n'a émis.
+      parties.push(`${texte} — elle aussi décidée par le serveur`);
+    }
+    liste.append(el("li", { text: `${c.nom} : ${parties.join(" ; ")}` }));
   }
   // Combien n'ont pas bougé : sans ce chiffre, trois changements sur trente passeraient
   // pour une décision générale du serveur.
   const observes = deviceRows.filter((l) => Number.isFinite(l.final_spreading_factor)).length;
   const inchanges = observes - changes.length;
   aide.textContent = inchanges > 0
-    ? `${changes.length} dispositif(s) sur ${observes} observés ont changé de débit. `
-      + `${inchanges} sont restés au SF de départ : l'ADR agit à chaque uplink reçu, `
-      + `il faut plusieurs messages avant qu'une commande parte.`
-    : `Les ${observes} dispositifs observés ont changé de débit.`;
+    ? `${changes.length} dispositif(s) sur ${observes} observés ont changé de débit ou de `
+      + `puissance. ${inchanges} sont restés à leur réglage de départ : l'ADR agit à chaque `
+      + `uplink reçu, il faut plusieurs messages avant qu'une commande parte.`
+    : `Les ${observes} dispositifs observés ont changé de débit ou de puissance.`;
   bloc.hidden = false;
 }
 

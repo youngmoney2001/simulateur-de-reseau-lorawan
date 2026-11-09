@@ -47,3 +47,51 @@ def test_invalid_duty_cycle_exponent_is_refused_by_core():
     with pytest.raises(StatusError):
         simulate_closed_loop(devices, Gateway(), Propagation(), None, [_radio()], [EU_REGION],
                              LoopOptions(duty_cycle=True, duty_cycle_exponent=16))
+
+
+# --- Puissance appliquée, et la convention qui l'exprime -----------------------------------------
+
+def test_device_power_reduction_is_a_drop_not_an_absolute_level():
+    """`reduction_db` est un écart, signé, jamais une puissance absolue.
+
+    Un index plus haut est une puissance plus basse (`adr.cpp` : l'index monte tant qu'il
+    reste de la marge). Une hausse donne donc une réduction **négative** — la cacher derrière
+    une valeur absolue ferait perdre le sens de la commande.
+    """
+    from lsim.trace_events import DevicePower
+
+    baisse = DevicePower(first_index=0, last_index=7, step_db=2.0)
+    assert baisse.reduction_db == 14.0          # 7 crans de 2 dB retirés
+    hausse = DevicePower(first_index=5, last_index=2, step_db=2.0)
+    assert hausse.reduction_db == -6.0          # le serveur a rendu de la puissance
+    assert DevicePower(first_index=3, last_index=3, step_db=2.0).reduction_db == 0.0
+
+
+def _scenario_adr(mac=None):
+    from lsim.scenario import Scenario, ScenarioModel
+    raw = {"schema_version": 1, "name": "puissance", "seed": 1,
+           "gateway": {"x_m": 0, "y_m": 0},
+           "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+           "groups": [{"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+                       "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+                       "period_s": 60, "messages": 130, "start_spread_s": 20,
+                       "region": "EU868"}]}
+    if mac is not None:
+        raw["mac"] = mac
+    return Scenario(ScenarioModel.model_validate(raw))
+
+
+def test_adr_trace_carries_the_power_the_loop_applied():
+    """Sans ADR, rien ne décide de puissance : le champ est absent, pas recopié."""
+    from lsim.trace_events import build_trace
+
+    sans = build_trace(_scenario_adr())
+    assert sans.device_power is None, (
+        "hors boucle fermée, annoncer une puissance ferait croire à une décision du serveur")
+
+    avec = build_trace(_scenario_adr(mac={"link_adr": True}))
+    assert avec.device_power is not None and len(avec.device_power) == 3
+    for p in avec.device_power.values():
+        assert p.step_db > 0
+    assert max(p.reduction_db for p in avec.device_power.values()) > 0, (
+        "sur un lien qui le permet, le serveur doit avoir retiré de la puissance")

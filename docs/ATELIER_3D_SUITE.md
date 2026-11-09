@@ -353,10 +353,37 @@ jamais arrivées au serveur, **pas** des acquittements perdus en vol.
 
 ### Ce qui reste
 
-- **L'ABI v3 et ses terminaux.** `simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`
-  (DR final, puissance, masques de canaux) — l'état complet du terminal, pas seulement son SF.
-  Elle n'est câblée dans aucune voie de production : l'atelier tourne en ABI v2. La brancher
-  permettrait de montrer la puissance d'émission et les canaux, pas seulement le débit.
+- **Les masques de canaux.** `simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`,
+  dont `dr_masks` et `enabled` — les canaux que le serveur a laissés au terminal. Ils ne sont
+  câblés dans aucune voie de production, et l'ABI v2 ne les porte pas : les montrer passerait
+  par la v3, que l'arbitrage **D1** isole (un seul module de liaison, aucun import ailleurs).
+
+### La puissance d'émission — **livrée par l'ABI v2, sans toucher à D1**
+
+La même question que pour le débit, posée à la puissance : le serveur a-t-il commandé une
+baisse, et a-t-elle été **appliquée** ?
+
+Elle l'est, et la mesure le prouve : sur un capteur à 300 m réglé sur 14 dBm, quarante messages
+avec ADR font passer l'index de puissance de 0 à 7, et le RSSI suit exactement — **−84,10 dBm
+puis −98,10 dBm, soit 14 dB** pour un pas de 2 dB. La commande n'est donc pas un état calculé
+pour la forme : elle change la physique du run.
+
+Reste à ne pas la chiffrer de travers. Deux pièges, tous deux mesurés :
+
+- **Ce n'est pas une puissance absolue.** L'index 0 n'est pas la PIRE du plan (16 dBm en
+  EU868) : la base est la **puissance configurée du dispositif**. Un capteur réglé sur 14 dBm
+  émet, à l'index 0, le RSSI de 14 dBm — trois configurations à 5, 10 et 16 dBm donnent
+  −93,10, −88,10 et −82,10 dBm, l'index restant à 0 dans les trois cas. Afficher
+  « 16 dBm → 2 dBm » serait faux de 2 dB au départ.
+- **Le bas de l'échelle descend sous le minimum régional.** L'index 7 sur un capteur à 14 dBm
+  donne 0 dBm, alors que le plan EU868 s'arrête à 2 dBm. Le moteur ne borne pas : c'est un
+  écart de fidélité à garder en vue, pas une conformité à revendiquer.
+
+L'encadré annonce donc une **réduction** — « puissance réduite de 14 dB » — et jamais des dBm
+absolus qu'aucun terminal n'a émis. `DeviceRowOut` porte `power_index`, `final_power_index` et
+`power_step_db`, absents hors boucle fermée comme l'est `final_spreading_factor` ; le bilan
+retient un dispositif dont le débit **ou** la puissance a changé, pour ne pas taire l'un quand
+l'autre bouge.
 
 ---
 
