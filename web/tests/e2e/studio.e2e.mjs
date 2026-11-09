@@ -604,10 +604,20 @@ try {
     await setValue("#seed", "7");
     const runAvant = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
     await page.click("#simulate");
-    await page.waitForFunction((avant) => {
-      const t = document.getElementById("sim-status").textContent;
-      return t.includes("terminé") && (!avant || !t.includes(avant));
-    }, { timeout: 120_000 }, runAvant);
+    try {
+      await page.waitForFunction((avant) => {
+        const t = document.getElementById("sim-status").textContent;
+        return t.includes("terminé") && (!avant || !t.includes(avant));
+      }, { timeout: 120_000 }, runAvant);
+    } catch (err) {
+      // Un run qui n'aboutit pas a deux visages, et ils ne se ressemblent pas : il a échoué
+      // (le statut le dit) ou il n'est jamais parti (le statut est celui d'avant, et le
+      // bouton le dit). On publie les deux plutôt qu'une attente expirée.
+      throw new Error(`run ${runAvant} non remplacé\nstatut : ${await textOf("#sim-status")}\n`
+        + `bouton : ${JSON.stringify(await page.$eval("#simulate", (b) => ({ d: b.disabled })))}\n`
+        + `notes : ${await textOf("#sim-notes")}\n`
+        + `refus HTTP : ${refus.slice(-5).join("\n  ") || "aucun"}`);
+    }
     try {
       await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
         { timeout: 20_000 });
