@@ -213,10 +213,48 @@ Deux chantiers, d'ampleur très différente :
 
 1. **Jointure et trames confirmées** : ouvrir une surface de réglage de scénario, la brancher sur
    `study_compile`, écrire les exercices. Mécanismes déjà simulés et déjà acceptés par le schéma.
-2. **ADR** : exige un choix d'architecture — étendre l'ADR aux scénarios multi-passerelles, ou
-   permettre à l'atelier de produire un scénario à passerelle unique (ce qui couperait les
-   liaisons radio du §3 et la matrice des réceptions, qui reposent sur `gateways`). Ce n'est pas
-   un complément du chantier 1, c'en est un autre.
+2. **ADR** : exige un choix d'architecture. Ce n'est pas un complément du chantier 1, c'en est
+   un autre.
+
+### Décision : réutiliser la boucle validée, pas en inventer une
+
+Deux voies, et la mesure tranche entre elles.
+
+**Étendre l'ADR au multi-passerelles.** `simulate_multi_downlinks` — le chemin de calcul de
+l'atelier — n'a **aucun** paramètre `mac` : la boucle MAC n'y existe pas. L'y ajouter ne serait
+pas un branchement, ce serait écrire de la physique : l'ADR décide sur l'historique de SNR des
+vingt dernières trames, et avec trois passerelles qui décodent la même trame, il faudrait décider
+quel SNR compte — le meilleur ? la médiane ? par passerelle ? Aucune de ces réponses n'est dans
+le moteur, et les inventer ferait passer une invention pour une simulation.
+
+**Produire un scénario à passerelle unique.** La boucle fermée existe, elle est testée, et elle
+n'accepte qu'**une** passerelle : `args.gateway = ctypes.pointer(c_gw)`, un seul `GatewayLoad` —
+la contrainte est dans l'ABI, pas dans un validateur prudent. Vérifié à l'exécution : un
+scénario mono avec `mac.link_adr` et un plan régional produit des `mac_request` portant
+`outcome: 'LinkADRReq'`, et aucun sans. Le mécanisme tourne ; il manquait le chemin.
+
+La décision suit : **on réutilise la boucle validée**. Une session peut donc produire deux
+formes de scénario, et le choix est porté par la session, comme le relief :
+
+| Session | Scénario | Ce qui marche |
+|---|---|---|
+| plusieurs passerelles, ou un relais | `gateways` | relais, latence, matrice des réceptions (§3) |
+| une seule passerelle **et** ADR demandé | `gateway` + `mac` | boucle ADR, `LinkADRReq` |
+
+**Le coût est réel et il est dit**, pas compensé : sur un run ADR, les liaisons radio du §3
+disparaissent (`rx_matrix` n'est publié que sur `gateways`) et le relais ne peut pas être
+simulé. C'est acceptable parce qu'à passerelle unique une matrice à une colonne ne dirait rien
+de plus que le PDR — raison déjà écrite dans le contrat — et parce que l'ADR exige de toute
+façon l'absence de mesh.
+
+Deux conditions d'usage, chacune avec sa raison affichée, comme la sous-bande du §1 :
+- **une seule passerelle** — sinon l'ADR est refusé par le schéma ;
+- **un plan régional** — sans lui, `mac_loop.py` lève « LinkADR exige un plan régional ».
+  Vérifié : un scénario ADR sans `region` échoue le run, il ne le dégrade pas silencieusement.
+
+Ce que l'atelier doit montrer, et c'est le but de l'exercice : **le débit a changé, et pourquoi**.
+La trace porte `mac_request` / `LinkADRReq` ; c'est cette trace que l'exercice interrogera, pas
+une affirmation sur un formulaire.
 
 ---
 

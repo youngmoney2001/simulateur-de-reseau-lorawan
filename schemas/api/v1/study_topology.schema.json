@@ -316,6 +316,21 @@
   },
   "additionalProperties": false,
   "properties": {
+    "adr": {
+      "default": false,
+      "title": "Adr",
+      "type": "boolean"
+    },
+    "adr_possible": {
+      "default": false,
+      "title": "Adr Possible",
+      "type": "boolean"
+    },
+    "adr_raison": {
+      "default": "",
+      "title": "Adr Raison",
+      "type": "string"
+    },
     "nodes": {
       "items": {
         "$ref": "#/$defs/Node"

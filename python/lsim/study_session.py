@@ -105,10 +105,23 @@ class _Study:
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
     run_id: Optional[str] = None
     terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
+    # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
+    # le vouloir sans qu'il soit possible, et la raison est alors affichée, pas tue.
+    adr: bool = False
     hints_revealed: dict = field(default_factory=dict)   # exercice -> nombre d'indices révélés
     attempts: deque = field(default_factory=lambda: deque(maxlen=MAX_ATTEMPTS))
     attempt_count: int = 0
     compiled: dict = field(default_factory=dict)    # run_id -> [GatewayLink] (compilation)
+
+
+def _adr_etat(st: _Study) -> tuple[bool, str]:
+    """L'ADR est-il simulable sur cette session, et sinon pourquoi.
+
+    Sorti de `compile_session` pour être lisible **avant** le run : l'atelier grise le réglage
+    avec sa raison au lieu de laisser l'utilisateur compiler pour découvrir le refus.
+    """
+    from lsim.study_compile import adr_possible
+    return adr_possible(list(st.nodes.values()), {nid: c.config for nid, c in st.cli.items()})
 
 
 def _encode(st: _Study) -> dict:
@@ -119,6 +132,7 @@ def _encode(st: _Study) -> dict:
         "reports": st.reports,
         "run_id": st.run_id,
         "terrain_id": st.terrain_id,
+        "adr": st.adr,
         "hints_revealed": st.hints_revealed,
         "attempt_count": st.attempt_count,
         "compiled": {rid: [link.model_dump(mode="json") for link in links]
@@ -135,7 +149,7 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
                           for rid, links in body["compiled"].items()},
-                terrain_id=body.get("terrain_id"))
+                terrain_id=body.get("terrain_id"), adr=body.get("adr", False))
     st.attempts.extend(AttemptOut.model_validate(a) for a in attempts)
     return st
 
@@ -221,8 +235,10 @@ class StudyService:
                 region=cli.config.lora.region,
                 configured=cli.config != study_cli.new_session(node.id).config,
                 gateway=_gateway_state(node, cli)))
+        ok, raison = _adr_etat(st)
         return SessionTopology(session_id=sid, nodes=nodes, states=states,
-                                terrain_id=st.terrain_id)
+                                terrain_id=st.terrain_id, adr=st.adr,
+                                adr_possible=ok, adr_raison=raison)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -376,9 +392,23 @@ class StudyService:
             nodes = list(st.nodes.values())
             configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
         try:
-            return compile_session(nodes, configs, seed, terrain_id=st.terrain_id)
+            return compile_session(nodes, configs, seed, terrain_id=st.terrain_id,
+                                        adr=st.adr)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
+
+    def set_adr(self, owner: str, sid: str, adr: bool) -> SessionTopology:
+        """Active ou désactive l'ADR du serveur.
+
+        Le souhait est toujours enregistré, même quand la topologie ne le permet pas : la
+        session garde l'intention et la raison est affichée. Effacer le souhait au motif qu'il
+        n'est pas réalisable ferait perdre à l'utilisateur ce qu'il voulait faire, sans rien lui
+        apprendre de plus.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            st.adr = bool(adr)
+            return self._topology_locked(sid, st)
 
     def set_terrain(self, owner: str, sid: str, terrain_id: Optional[str],
                     known: Container[str]) -> SessionTopology:

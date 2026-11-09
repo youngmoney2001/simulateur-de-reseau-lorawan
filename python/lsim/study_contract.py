@@ -201,6 +201,22 @@ class SessionTopology(_Strict):
     # n'est pas la même chose que « terrain plat » — le moteur ne simule rien de particulier,
     # et l'atelier doit pouvoir dire laquelle des deux situations se présente.
     terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
+    # ADR du serveur (LinkADRReq) : demande de l'utilisateur, et ce qu'il en est.
+    # `adr` dit ce qui est **demandé**, `adr_possible` et `adr_raison` ce que la session peut.
+    # Les porter séparément évite qu'une session qui veut l'ADR se présente comme le simulant.
+    adr: bool = False
+    adr_possible: bool = False
+    adr_raison: str = ""
+
+
+class AdrChoice(_Strict):
+    """Demande d'activation de l'ADR du serveur sur une session.
+
+    Le client n'indique que son souhait : c'est le serveur qui sait si la topologie le permet
+    (une seule passerelle, pas de relais, un plan régional), et qui dit pourquoi sinon.
+    """
+
+    adr: bool = False
 
 
 class TerrainChoice(_Strict):

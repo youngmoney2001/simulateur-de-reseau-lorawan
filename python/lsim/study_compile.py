@@ -69,8 +69,45 @@ def _default_channel(region: str, sub_band: Optional[int]) -> int:
     return channels[min(sub_band_channels(sub_band))]
 
 
+def adr_possible(nodes: list[Node], configs: dict[str, GatewayConfig]) -> tuple[bool, str]:
+    """L'ADR peut-il être simulé sur cette session ? Et sinon, pourquoi.
+
+    Le couple (booléen, raison) est renvoyé tel quel à l'atelier : un réglage grisé sans
+    explication est le genre de silence qui fait perdre une heure — la leçon du §1, où la
+    sous-bande désactivée dit pourquoi elle l'est.
+
+    Les trois conditions ne sont pas des précautions, ce sont des refus du schéma ou du moteur,
+    chacun vérifié par exécution :
+      - plusieurs passerelles : `mac.link_adr` est refusé (scenario.py) ;
+      - un relais : la boucle fermée porte un seul `GatewayLoad`, le mesh est exclu ;
+      - aucun plan régional : `mac_loop.py` lève « LinkADR exige un plan régional ».
+    """
+    gateways = [n for n in nodes if n.kind in ("relay", "border")]
+    actives = [n for n in gateways if not configs[n.id].lora.shutdown]
+    # Le relais est nommé d'abord : un relais **est** une passerelle pour le moteur, donc le
+    # contrôle de comptage l'attraperait aussi — mais « 2 passerelles actives » laisserait
+    # l'utilisateur chercher une seconde frontière qu'il n'a pas posée.
+    relays = [n for n in actives if n.kind == "relay"]
+    if relays:
+        return False, ("l'ADR n'est pas simulé sur un réseau à relais "
+                       f"({', '.join(n.id for n in relays)})")
+    if len(actives) != 1:
+        return False, (f"l'ADR n'est simulé qu'à passerelle unique "
+                       f"({len(actives)} passerelles actives ici)")
+    if configs[actives[0].id].lora.region is None:
+        return False, "l'ADR exige un plan régional : réglez-le sur la passerelle"
+    return True, ""
+
+
 def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int,
-                    terrain_id: Optional[str] = None) -> Compiled:
+                    terrain_id: Optional[str] = None, adr: bool = False) -> Compiled:
+    """Compile la session en scénario.
+
+    `adr` : la boucle fermée (LinkADRReq) est demandée. Elle n'existe qu'à passerelle unique,
+    sans mesh et avec un plan régional ; le scénario prend alors la forme `gateway` au lieu de
+    `gateways`, seule forme que le schéma accepte avec `mac`. Voir `adr_possible` pour les
+    conditions et leurs raisons — elles sont affichées telles quelles dans l'atelier.
+    """
     notes: list[str] = []
     gateways = [n for n in nodes if n.kind in ("relay", "border")]
     sensors = [n for n in nodes if n.kind == "sensor"]
@@ -136,6 +173,17 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
             gw["mesh"] = True
         scenario_gateways.append(gw)
 
+    # L'ADR n'existe que sur la forme `gateway` (une seule passerelle, sans mesh). On ne
+    # bascule que s'il est demandé **et** possible : la forme `gateways` reste le défaut, parce
+    # qu'elle porte le relais et la matrice des réceptions du §3. Changer de forme n'est pas
+    # un détail de sérialisation, c'est changer ce que le run peut simuler.
+    forme_mono = False
+    if adr:
+        ok, raison = adr_possible(nodes, configs)
+        if not ok:
+            raise CompileError(f"ADR refusé : {raison}", "adr")
+        forme_mono = True
+
     mesh_block = None
     if mesh_nodes:
         values = {key: {} for key in MESH_DEFAULTS}
@@ -186,9 +234,20 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         "schema_version": 1,
         "name": "Session d'étude",
         "seed": seed,
-        "gateways": scenario_gateways,
         "groups": groups,
     }
+    if forme_mono:
+        # Une seule passerelle, sans mesh : la forme que `mac` accepte. Le nom, le profil et
+        # l'indicateur mesh sont retirés, non pas par coquetterie mais parce que le schéma les
+        # refuse sur `gateway` (« nom, profil et mesh exigent gateways »).
+        seule = scenario_gateways[0]
+        scenario["gateway"] = {"x_m": seule["x_m"], "y_m": seule["y_m"],
+                               "antenna_gain_dbi": seule["antenna_gain_dbi"]}
+        scenario["mac"] = {"link_adr": True}
+        notes.append("ADR du serveur activé : ce run ne simule ni relais ni liaisons radio "
+                     "par couple (une seule passerelle)")
+    else:
+        scenario["gateways"] = scenario_gateways
     if mesh_block is not None:
         scenario["mesh"] = mesh_block
     if mesh_nodes:

@@ -680,3 +680,135 @@ def test_run_multi_passerelles_publie_une_matrice_lisible(api):
         assert somme == gw["audible_frames"], (
             f"{gw['name']} : la matrice compte {somme} réceptions, "
             f"le compteur en annonce {gw['audible_frames']}")
+
+
+# --- ADR du serveur : le chemin qui manquait -----------------------------------------------------
+#
+# L'ADR est simulé (boucle fermée : LinkADRReq / LinkADRAns) mais n'avait **aucun** chemin d'accès
+# depuis l'atelier : ni dans la fenêtre, ni au CLI. Il exige de plus une forme de scénario que
+# l'atelier ne produisait jamais (`gateway` au lieu de `gateways`), ce que le schéma refuse avec
+# `mac`. Ces tests tiennent le chemin, pas le mécanisme — le mécanisme a ses propres tests.
+
+def _session_une_passerelle(api, capteurs=("capteur-1",), region="EU868"):
+    """Une frontière, des capteurs, et le plan régional posé depuis la fenêtre."""
+    noeuds = [{"id": "gw-seule", "kind": "border", "name": "Seule", "x_m": 0, "y_m": 0}]
+    noeuds += [{"id": c, "kind": "sensor", "name": c, "x_m": 400 + 200 * i, "y_m": 0}
+               for i, c in enumerate(capteurs)]
+    sid = _session(api, nodes=noeuds)
+    if region is not None:
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/gw-seule/gateway",
+                             {"region": region}, token=api.alice)
+        assert status == 200
+    return sid
+
+
+def test_adr_refuse_sans_plan_regional_et_le_dit(api):
+    """Sans plan régional, `mac_loop.py` lève — le run échouerait. La raison est dite avant."""
+    sid = _session_une_passerelle(api, region=None)
+    _, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology", token=api.alice)
+    assert topo["adr_possible"] is False
+    assert "plan régional" in topo["adr_raison"]
+
+
+def test_adr_refuse_avec_plusieurs_passerelles_et_le_dit(api):
+    """`mac.link_adr` n'existe qu'à passerelle unique : le schéma le refuse, pas nous."""
+    sid = _session(api, nodes=[
+        {"id": "gw-a", "kind": "border", "name": "A", "x_m": -500, "y_m": 0},
+        {"id": "gw-b", "kind": "border", "name": "B", "x_m": 500, "y_m": 0},
+        {"id": "capteur-1", "kind": "sensor", "name": "C1", "x_m": 0, "y_m": 0}])
+    for g in ("gw-a", "gw-b"):
+        api.call("POST", f"/api/v1/sessions/{sid}/nodes/{g}/gateway",
+                 {"region": "EU868"}, token=api.alice)
+    _, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology", token=api.alice)
+    assert topo["adr_possible"] is False
+    assert "passerelle unique" in topo["adr_raison"]
+
+
+def test_adr_refuse_avec_un_relais_et_le_dit(api):
+    """La boucle fermée porte un seul `GatewayLoad` : le mesh lui est fermé."""
+    sid = _session(api, nodes=[
+        {"id": "frontiere", "kind": "border", "name": "F", "x_m": 0, "y_m": 0},
+        {"id": "relais-1", "kind": "relay", "name": "R", "x_m": 1200, "y_m": 0},
+        {"id": "capteur-1", "kind": "sensor", "name": "C1", "x_m": 1400, "y_m": 0}])
+    for g in ("frontiere", "relais-1"):
+        api.call("POST", f"/api/v1/sessions/{sid}/nodes/{g}/gateway",
+                 {"region": "EU868"}, token=api.alice)
+    _, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology", token=api.alice)
+    assert topo["adr_possible"] is False
+    assert "relais" in topo["adr_raison"]
+
+
+def test_adr_possible_une_passerelle_et_un_plan(api):
+    sid = _session_une_passerelle(api)
+    _, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology", token=api.alice)
+    assert topo["adr_possible"] is True and topo["adr_raison"] == ""
+
+
+def test_le_souhait_adr_est_garde_meme_quand_il_nest_pas_possible(api):
+    """Une session qui veut l'ADR sans le pouvoir garde son intention et lit la raison.
+
+    Effacer le souhait au motif qu'il n'est pas réalisable ferait perdre à l'utilisateur ce
+    qu'il voulait faire, sans rien lui apprendre de plus.
+    """
+    sid = _session(api, nodes=[
+        {"id": "gw-a", "kind": "border", "name": "A", "x_m": -500, "y_m": 0},
+        {"id": "gw-b", "kind": "border", "name": "B", "x_m": 500, "y_m": 0},
+        {"id": "capteur-1", "kind": "sensor", "name": "C1", "x_m": 0, "y_m": 0}])
+    status, topo = api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True}, token=api.alice)
+    assert status == 200, topo
+    assert topo["adr"] is True, "le souhait est enregistré"
+    assert topo["adr_possible"] is False, "mais il n'est pas annoncé comme simulé"
+    assert topo["adr_raison"], "et la raison est donnée"
+
+
+def test_adr_bascule_le_scenario_sur_la_forme_mono(api):
+    """`gateways` par défaut ; `gateway` + `mac` quand l'ADR est demandé.
+
+    Changer de forme n'est pas un détail de sérialisation : la forme `gateways` porte le relais
+    et la matrice des réceptions du §3, la forme `gateway` porte la boucle ADR. On ne peut pas
+    avoir les deux.
+    """
+    sid = _session_une_passerelle(api)
+    # La forme se lit sur un run terminé : c'est le seul endroit observable de bout en bout,
+    # il n'existe pas de route qui serve le scénario compilé.
+    api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": False}, token=api.alice)
+    status, r = api.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": 7}, token=api.alice)
+    assert status == 202, r
+    assert _wait_done(api, r["run_id"], token=api.alice)["state"] == "done"
+    _, avant = api.call("GET", f"/api/v1/runs/{r['run_id']}/summary", token=api.alice)
+    assert avant.get("gateways") is not None, "sans ADR, la forme multi-passerelles est conservée"
+
+    api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True}, token=api.alice)
+    status, r2 = api.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": 7}, token=api.alice)
+    assert status == 202, r2
+    assert _wait_done(api, r2["run_id"], token=api.alice)["state"] == "done"
+    _, apres = api.call("GET", f"/api/v1/runs/{r2['run_id']}/summary", token=api.alice)
+    assert apres.get("gateway") is not None, "avec ADR, le run passe en forme mono-passerelle"
+    assert apres.get("rx_matrix") is None, "le coût est réel : plus de matrice des réceptions"
+
+
+def test_adr_produit_des_linkadrreq_observables(api):
+    """Le but de l'exercice : le serveur commande un changement de débit, et ça se voit.
+
+    Sans l'ADR la trace ne porte que des uplinks. Avec, elle porte des `mac_request`
+    `LinkADRReq` — c'est cette différence que l'exercice interrogera.
+    """
+    sid = _session_une_passerelle(api, capteurs=("capteur-a", "capteur-b"))
+    for c in ("capteur-a", "capteur-b"):
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                             {"messages": 20, "start_spread_s": 60, "spreading_factor": 9,
+                              "period_s": 300}, token=api.alice)
+        assert status == 200
+
+    def linkadr(adr):
+        api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": adr}, token=api.alice)
+        status, r = api.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": 7},
+                             token=api.alice)
+        assert status == 202, r
+        assert _wait_done(api, r["run_id"], token=api.alice)["state"] == "done"
+        _, ev = api.call("GET", f"/api/v1/runs/{r['run_id']}/events?limit=500", token=api.alice)
+        return [e for e in ev["items"] if e.get("outcome") == "LinkADRReq"]
+
+    assert linkadr(False) == [], "sans ADR, aucune commande LinkADRReq"
+    reqs = linkadr(True)
+    assert reqs, "avec ADR, le serveur émet des LinkADRReq"
