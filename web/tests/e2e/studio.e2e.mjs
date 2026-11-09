@@ -317,8 +317,19 @@ try {
   await step("ADR : le plan de canaux laissé au terminal est affiché", async () => {
     await obsTab("Simulation");
     const adr = await page.$eval("#adr-toggle", (c) => ({ desactive: c.disabled, coche: c.checked }));
-    if (adr.desactive) throw new Error(
-      `ADR impossible sur cette session : ${await textOf("#adr-aide")}`);
+    if (adr.desactive) {
+      // Une case grisée sans explication est le genre de silence qui fait perdre une heure.
+      // On publie donc la raison **et** la topologie vue par le serveur : « 0 passerelles
+      // actives » sur une session qui en montre une ne se comprend qu'en les lisant ensemble.
+      const sid = await page.$eval("#session-select", (s) => s.value);
+      const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      const topo = await res.json();
+      throw new Error(`ADR impossible : ${await textOf("#adr-aide")}\n`
+        + `raison serveur : ${topo.adr_raison}\n`
+        + `nœuds : ${JSON.stringify((topo.nodes ?? []).map((n) => [n.id, n.kind]))}\n`
+        + `états : ${JSON.stringify((topo.states ?? []).map((s) => [s.node_id, s.hostname, s.region]))}`);
+    }
     if (!adr.coche) await page.click("#adr-toggle");
     await page.waitForFunction(() => !document.getElementById("adr-toggle").disabled);
     await setValue("#seed", "7");
