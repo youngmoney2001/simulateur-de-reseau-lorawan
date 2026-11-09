@@ -561,8 +561,28 @@ try {
     await setValue("#seed", "7");
     await page.click("#simulate");
     await waitText("#sim-status", /terminé/, 120_000);
-    await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
-      { timeout: 20_000 });
+    try {
+      await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
+        { timeout: 20_000 });
+    } catch (err) {
+      // Un bloc qui ne s'affiche pas a trois causes possibles, et aucune ne se devine :
+      // l'ADR n'était pas actif, le serveur n'a rien commandé, ou le run n'a pas observé la
+      // fin. On publie les trois plutôt que de laisser une attente expirée sans rien dire.
+      const sid = await page.$eval("#session-select", (s) => s.value);
+      const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      const topo = await res.json();
+      const run = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/runs`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sid, seed: 7 }),
+      }).then((r) => r.text());
+      throw new Error(`bloc ADR masqué\nstatut : ${await textOf("#sim-status")}\n`
+        + `case ADR : ${JSON.stringify(await page.$eval("#adr-toggle", (c) => ({ c: c.checked, d: c.disabled })))}\n`
+        + `aide ADR : ${await textOf("#adr-aide")}\n`
+        + `topologie : adr=${topo.adr} possible=${topo.adr_possible} raison=${topo.adr_raison}\n`
+        + `relance d'un run : ${run.slice(0, 400)}`);
+    }
     const lignes = await page.$$eval("#adr-bilan-liste li", (ls) => ls.map((l) => l.textContent));
     if (lignes.length === 0) throw new Error("bloc ADR visible sans aucun changement énoncé");
     const canaux = await textOf("#adr-bilan-canaux");
