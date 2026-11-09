@@ -19,12 +19,13 @@
 /**
  * Le rapport, en Markdown.
  *
- * @param {{etats?: Array, problemes?: Array, total?: number}} donnees
+ * @param {{etats?: Array, problemes?: Array, echec?: Error|string|null}} donnees
  * @returns le Markdown, terminé par un saut de ligne.
  */
 export function rapportClavier(donnees = {}) {
   const etats = donnees.etats ?? [];
   const horsEtat = donnees.problemes ?? [];
+  const echec = donnees.echec ?? null;
   const lignes = [];
   const dire = (t = "") => lignes.push(t);
   const total = etats.reduce((s, e) => s + (e.problemes?.length ?? 0), 0)
@@ -34,6 +35,17 @@ export function rapportClavier(donnees = {}) {
   dire();
   dire("Généré par `web/tests/e2e/audit-clavier.mjs`.");
   dire();
+  // Un audit interrompu n'est pas un audit sain : sans cette section, une panne rendrait un
+  // rapport vide, et un rapport vide se lit comme une interface sans défaut. C'est le piège
+  // que ce rapport existe pour éviter, il doit donc se refermer sur lui-même.
+  if (echec) {
+    const message = echec instanceof Error ? `${echec.name} : ${echec.message}` : String(echec);
+    dire(`> **Audit interrompu :** ${message}`);
+    dire(">");
+    dire("> Les états mesurés avant l'interruption sont rapportés ci-dessous. "
+      + "Les états manquants n'ont pas été mesurés : ils ne sont pas sains, ils sont inconnus.");
+    dire();
+  }
   dire(`**${total} problème(s)** sur ${etats.length} états mesurés `
     + `et ${etats.reduce((s, e) => s + (e.ordre?.length ?? 0), 0)} éléments atteints.`);
   dire();

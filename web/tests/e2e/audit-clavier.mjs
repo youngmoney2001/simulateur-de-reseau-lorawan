@@ -129,6 +129,13 @@ const nonAtteints = (sel, atteints) => {
 };
 
 let browser;
+// Le rapport est rédigé hors du `try` : un audit qui s'interrompt doit publier ce qu'il a
+// mesuré **et** la raison de l'interruption. Sans cela, une panne ne laisserait aucun
+// rapport du tout, et l'absence de rapport se lit comme une absence de défaut — exactement
+// le contresens que cet audit est fait pour éviter.
+let echec = null;
+const rapport = [];
+let horsEtat = [];
 try {
   const api = start("API", python, ["-m", "lsim.api_server", "serve", "--tokens", tokens,
     "--runs-db", join(work, "runs.sqlite"), "--port", String(API_PORT)], repoDir);
@@ -173,6 +180,17 @@ try {
 
   // Un run, sans quoi les panneaux d'observation sont vides et l'audit déclarerait saine une
   // interface où la moitié des contrôles n'existe pas encore.
+  // Le plan est la seule vue où l'on peut viser un nœud : la carte 3D est la vue par défaut,
+  // et les fenêtres d'équipement s'ouvrent d'un clic sur un nœud du plan.
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    if (b) b.click();
+  });
+  await page.waitForFunction(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    return b?.classList.contains("active");
+  }, { timeout: 10_000 });
+
   await page.evaluate(() => {
     const b = [...document.querySelectorAll(".tab")].find((e) => e.textContent.includes("Simulation"));
     if (b) b.click();
@@ -180,9 +198,27 @@ try {
   // Même graine que l'audit de mise en page : deux audits qui mesurent la même session restent
   // comparables d'une tranche à l'autre.
   await page.$eval("#seed", (e) => { e.value = "7"; });
+  await page.waitForFunction(() => {
+    const b = document.getElementById("simulate");
+    return b && !b.disabled && b.offsetParent !== null;
+  }, { timeout: 20_000 });
   await page.click("#simulate");
-  await page.waitForFunction(
-    () => /terminé/.test(document.getElementById("sim-status")?.textContent ?? ""), { timeout: 120_000 });
+  // Une attente qui expire sans dire ce qu'elle a lu est une panne aveugle : on ne saurait
+  // pas si le run n'a pas démarré, s'il a échoué, ou s'il est simplement lent. Le statut
+  // affiché est donc relu et publié avant de rendre la main.
+  try {
+    await page.waitForFunction(
+      () => /terminé/.test(document.getElementById("sim-status")?.textContent ?? ""), { timeout: 120_000 });
+  } catch (err) {
+    const suivi = await page.evaluate(() => ({
+      statut: document.getElementById("sim-status")?.textContent ?? "(vide)",
+      bouton: document.getElementById("simulate")?.disabled ?? null,
+      onglet: document.querySelector(".tab.active")?.textContent?.trim() ?? "(aucun)",
+      metriques: document.querySelectorAll(".metric").length,
+    }));
+    console.log(`SIMULATION NON TERMINÉE : ${JSON.stringify(suivi)}`);
+    throw err;
+  }
   await page.waitForFunction(() => document.querySelectorAll(".metric").length >= 1, { timeout: 30_000 });
   await pause(600);
 
@@ -218,7 +254,6 @@ try {
     } },
   ];
 
-  const rapport = [];
   for (const etat of etats) {
     if (!await etat.action()) { rapport.push({ etat: etat.nom, ordre: [], problemes: [] }); continue; }
     await pause(400);
@@ -272,7 +307,6 @@ try {
   // --- Les flèches sur les groupes d'onglets ------------------------------------------------
   // Le motif ARIA « tablist » promet que les flèches parcourent les onglets. `wireTabs`
   // l'implémente, mais rien ne vérifiait qu'il est branché sur **tous** les groupes.
-  const horsEtat = [];
   for (const [sel, label] of [[".tabs", ".tabs (panneau d'observation)"],
                               [".views", ".views (Carte 3D / Plan)"],
                               [".device-tabs", ".device-tabs (fenêtre d'équipement)"]]) {
@@ -293,12 +327,19 @@ try {
     }
   }
 
-  const markdown = rapportClavier({ etats: rapport, problemes: horsEtat });
-  console.log(markdown);
-  const cible = new URL("../../../docs/audits/clavier.md", import.meta.url);
-  writeFileSync(cible, markdown);
-  console.log(`rapport déposé : ${fileURLToPath(cible)}`);
+} catch (err) {
+  echec = err;
 } finally {
   for (const c of children) { try { c.kill("SIGTERM"); } catch { /* déjà arrêté */ } }
   if (browser) await browser.close();
+}
+
+const markdown = rapportClavier({ etats: rapport, problemes: horsEtat, echec });
+console.log(markdown);
+const cible = new URL("../../../docs/audits/clavier.md", import.meta.url);
+writeFileSync(cible, markdown);
+console.log(`rapport déposé : ${fileURLToPath(cible)}`);
+if (echec) {
+  console.error(echec);
+  process.exitCode = 1;
 }

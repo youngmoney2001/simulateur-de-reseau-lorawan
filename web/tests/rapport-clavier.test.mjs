@@ -67,6 +67,22 @@ test("un nom accessible contenant un « | » ne casse pas le tableau", () => {
   assert.match(md, /\| A \\\| B \|/);
 });
 
+test("un audit interrompu le dit, et ne se lit pas comme un audit sain", () => {
+  // C'est le cas réel qui a coûté un rapport entier : l'audit a expiré sur la simulation,
+  // n'a rien écrit, et le dépôt est resté sans trace — une absence qu'on lit « aucun défaut ».
+  const md = rapportClavier({ etats: [SAIN], problemes: [], echec: new Error("Waiting failed: 120000ms exceeded") });
+  assert.match(md, /> \*\*Audit interrompu :\*\* Error : Waiting failed: 120000ms exceeded/);
+  assert.match(md, /Les états manquants n'ont pas été mesurés/);
+  // Les états mesurés avant la panne restent publiés : ce n'est pas parce qu'on s'est
+  // arrêté qu'on n'a rien vu.
+  assert.match(md, /## observation · Journal/);
+});
+
+test("un rapport sans échec ne fabrique pas de section d'interruption", () => {
+  const md = rapportClavier({ etats: [SAIN], problemes: [] });
+  assert.doesNotMatch(md, /Audit interrompu/);
+});
+
 test("un rapport vide se tient : pas de total fabriqué", () => {
   for (const d of [{ etats: [], problemes: [] }, undefined]) {
     const md = rapportClavier(d);
