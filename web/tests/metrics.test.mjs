@@ -24,6 +24,7 @@ import {
   indicateursPasserelle,
   ventilationGroupes,
   pdrParDispositif,
+  planCanaux,
   ventilationTable,
   couleurPdr,
   echellePdr,
@@ -734,4 +735,52 @@ test("un run sans jointure ni confirmation donne des compteurs nuls, pas d'erreu
   const vide = bilanProtocole([]);
   assert.equal(vide.jointure.aucune, false);   // aucune demande : pas « aucune acceptation »
   assert.equal(vide.confirme.uplinks, 0);
+});
+
+// --- Canaux laissés au terminal -------------------------------------------------------------
+// Le plan de canaux vient de l'ABI v3 : c'est le même LinkADRReq qui porte le débit et le
+// masque. Deux confusions sont à éviter, et elles sont testées ici : un canal défini n'est
+// pas forcément actif, et un masque n'est pas forcément une plage contiguë de débits.
+
+test("le plan de canaux est nul quand le run n'en porte pas", () => {
+  // Hors boucle fermée, annoncer un plan ferait croire à une décision du serveur.
+  assert.equal(planCanaux([]), null);
+  assert.equal(planCanaux([{ device_index: 0 }]), null);
+  assert.equal(planCanaux([{ enabled_channels: [] }]), null);
+});
+
+test("les canaux actifs sont ceux de l'émission, pas tous les canaux définis", () => {
+  const plan = planCanaux([{ device_index: 0, enabled_channels: [0, 2],
+                             channel_dr_masks: { 0: 0b111111, 1: 0b111111, 2: 0b111 } }]);
+  assert.deepEqual(plan.actifs, [0, 2]);
+  // Le canal 1 est défini mais absent d'`enabled_channels` : il ne doit pas paraître.
+  assert.deepEqual(plan.parCanal.map((c) => c.canal), [0, 2]);
+  assert.deepEqual(plan.parCanal[0].drs, [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(plan.parCanal[1].drs, [0, 1, 2]);
+});
+
+test("un masque non contigu énumère les débits au lieu de tirer un trait", () => {
+  // 0b10000001 : DR0 et DR7 admis, rien entre les deux. « DR0 à DR7 » serait un mensonge.
+  const plan = planCanaux([{ device_index: 0, enabled_channels: [0],
+                             channel_dr_masks: { 0: 0b10000001 } }]);
+  assert.deepEqual(plan.parCanal[0].drs, [0, 7]);
+});
+
+test("les clés de masque arrivent en texte depuis la JSON, et sont quand même lues", () => {
+  // La JSON n'a pas de clé entière : le serveur publie « 0 », pas 0.
+  const plan = planCanaux([{ device_index: 0, enabled_channels: [1],
+                             channel_dr_masks: { 1: 0b1111 } }]);
+  assert.deepEqual(plan.parCanal[0].drs, [0, 1, 2, 3]);
+});
+
+test("un plan qui diverge d'un terminal à l'autre est signalé, pas masqué", () => {
+  const identiques = planCanaux([
+    { device_index: 0, enabled_channels: [0, 1], channel_dr_masks: { 0: 63, 1: 63 } },
+    { device_index: 1, enabled_channels: [1, 0], channel_dr_masks: { 0: 63, 1: 63 } }]);
+  assert.equal(identiques.homogene, true);      // même ensemble, ordre différent
+  const divergents = planCanaux([
+    { device_index: 0, enabled_channels: [0, 1], channel_dr_masks: { 0: 63, 1: 63 } },
+    { device_index: 1, enabled_channels: [0], channel_dr_masks: { 0: 63 } }]);
+  assert.equal(divergents.homogene, false);
+  assert.equal(divergents.terminaux, 2);
 });

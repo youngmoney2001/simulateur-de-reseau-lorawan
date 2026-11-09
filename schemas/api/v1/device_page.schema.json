@@ -20,10 +20,41 @@
           "default": null,
           "title": "Average Current Ua"
         },
+        "channel_dr_masks": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel Dr Masks"
+        },
         "device_index": {
           "minimum": 0,
           "title": "Device Index",
           "type": "integer"
+        },
+        "enabled_channels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enabled Channels"
         },
         "energy_per_message_j": {
           "anyOf": [

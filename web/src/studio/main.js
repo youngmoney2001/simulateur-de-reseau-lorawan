@@ -13,7 +13,7 @@ import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
   limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte,
-  bilanAdr, bilanProtocole } from "./metrics.js";
+  bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -1295,17 +1295,44 @@ function formaterDb(valeur) {
   return `${Number.isInteger(arrondi) ? arrondi : arrondi.toFixed(1)} dB`;
 }
 
+/**
+ * Le plan de canaux, en une phrase.
+ *
+ * « Canaux actifs 0, 1, 2 (DR0 à DR5 sur chacun) » dit deux choses qu'il ne faut pas
+ * confondre : les canaux sur lesquels le terminal émet, et les débits que chacun admet.
+ * Un plan divergent d'un terminal à l'autre est dit, plutôt que de publier le premier.
+ */
+function texteCanaux(plan) {
+  if (!plan) return "";
+  const parCanal = plan.parCanal
+    .map(({ canal, drs }) => (drs.length === 0 ? `${canal} (aucun débit)`
+      : drs.length === 1 ? `${canal} : DR${drs[0]}`
+        : `${canal} : DR${drs[0]} à DR${drs[drs.length - 1]}`))
+    .join(", ");
+  const tete = plan.homogene
+    ? `Canaux laissés au terminal : ${parCanal}.`
+    : `Canaux laissés au terminal (variables selon l'équipement, premier observé) : ${parCanal}.`;
+  // Un canal défini mais non activé existe sans servir : le dire, sinon le nombre de canaux
+  // affichés laisserait croire à une capacité que la trame suivante n'utilisera pas.
+  return `${tete} Seuls les canaux actifs servent à l'émission.`;
+}
+
 function renderAdrBilan(deviceRows = []) {
   const bloc = $("adr-bilan");
   const liste = $("adr-bilan-liste");
   const aide = $("adr-bilan-aide");
+  const canauxEl = $("adr-bilan-canaux");
   clear(liste);
   const changes = bilanAdr(deviceRows, state.topo?.nodes ?? []);
   if (changes.length === 0) {
     bloc.hidden = true;
     aide.textContent = "";
+    canauxEl.textContent = "";
     return;
   }
+  // Le plan de canaux se lit même quand aucun débit n'a bougé : la commande qui le porte est
+  // la même (LinkADRReq), et un terminal à qui le serveur n'a rien retiré garde un plan.
+  canauxEl.textContent = texteCanaux(planCanaux(deviceRows));
   for (const c of changes) {
     // Les deux décisions du serveur sont nommées séparément : dire « le débit a changé »
     // quand il a aussi retiré 14 dB taît le versant autonomie de la même commande.

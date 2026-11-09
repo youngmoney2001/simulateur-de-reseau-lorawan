@@ -165,6 +165,17 @@ class DeviceRowOut(_Strict):
     power_index: Optional[int] = Field(default=None, ge=0, le=15)
     final_power_index: Optional[int] = Field(default=None, ge=0, le=15)
     power_step_db: Optional[float] = Field(default=None, gt=0, le=10)
+    # Canaux que le serveur a **laissés** au terminal à la fin du run. Même règle que le
+    # débit et la puissance : ces champs n'existent que si la boucle fermée les a observés,
+    # donc absents ailleurs, plutôt que recopiés depuis la configuration de départ — ce qui
+    # publierait un plan de canaux que le serveur n'a pas arrêté.
+    #
+    # `enabled_channels` : canaux actifs. `channel_dr_masks` : canal -> masque des débits
+    # DR0..DR7 (bit k = DRk admis), publié avec des clés textuelles, la JSON n'ayant pas de
+    # clé entière. Un canal peut être défini sans être actif : c'est `enabled_channels` qui
+    # dit ce que la trame suivante empruntera réellement.
+    enabled_channels: Optional[list[int]] = Field(default=None, max_length=16)
+    channel_dr_masks: Optional[dict[int, int]] = None
     sent: int = Field(ge=0)
     received: int = Field(ge=0)
     lost_sensitivity: int = Field(ge=0)

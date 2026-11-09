@@ -411,6 +411,48 @@ function puissanceAppliquee(ligne) {
   return { indexDepart: a, indexFin: b, reductionDb: (b - a) * pas };
 }
 
+/**
+ * Canaux que le serveur a laissés au terminal, tels que la boucle fermée les rapporte.
+ *
+ * La commande qui les porte est la même que celle du débit — LinkADRReq — donc le plan de
+ * canaux se lit à côté du bilan ADR et nulle part ailleurs.
+ *
+ * Deux pièges, et ils sont dans la nature du masque plutôt que dans l'affichage :
+ *   - un canal peut être **défini** sans être **actif**. Seul `enabled_channels` dit ce que
+ *     la trame suivante empruntera ; afficher les canaux définis ferait croire à un plan qui
+ *     n'est pas celui de l'émission ;
+ *   - le masque code DR0..DR7 en huit bits. Le traduire en « DR0–DR5 » est lisible, mais
+ *     un masque non contigu existe : on énumère alors les débits au lieu de tirer un trait.
+ *
+ * `null` dès que le run ne les porte pas : hors boucle fermée, annoncer un plan de canaux
+ * ferait croire à une décision du serveur qui n'a pas eu lieu.
+ */
+export function planCanaux(deviceRows = []) {
+  const porteurs = deviceRows.filter((l) => (l.enabled_channels ?? []).length > 0);
+  if (porteurs.length === 0) return null;
+  const actifs = porteurs[0].enabled_channels.map(Number).sort((a, b) => a - b);
+  const masques = porteurs[0].channel_dr_masks ?? {};
+  // Le plan est régional : tous les terminaux d'un même run le partagent. S'il diverge, le
+  // dire vaut mieux que publier celui du premier et taire les autres.
+  const divergent = porteurs.some((l) => {
+    const s = (l.enabled_channels ?? []).map(Number).sort((a, b) => a - b);
+    return s.length !== actifs.length || s.some((v, i) => v !== actifs[i]);
+  });
+  return {
+    actifs,
+    parCanal: actifs.map((ch) => ({ canal: ch, drs: drsDuMasque(masques[ch] ?? masques[String(ch)] ?? 0) })),
+    homogene: !divergent,
+    terminaux: porteurs.length,
+  };
+}
+
+/** Débits admis par un masque : bit k = DRk. Un masque non contigu donne une liste. */
+function drsDuMasque(masque) {
+  const drs = [];
+  for (let k = 0; k < 8; k += 1) if ((Number(masque) >> k) & 1) drs.push(k);
+  return drs;
+}
+
 /** Nom lisible d'un dispositif : son groupe, sinon son index. */
 function nomDuDispositif(ligne, noms) {
   const g = ligne.group;

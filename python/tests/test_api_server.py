@@ -1028,3 +1028,41 @@ class TestStudioServi:
                 status, corps = brut(chemin)
                 assert status == 404
                 assert b"TOPSECRET" not in corps
+
+
+def test_device_row_carries_the_channels_the_server_left(api):
+    """Les canaux du terminal, publiés par l'API — et absents quand rien ne les a décidés.
+
+    Même règle que le SF final et la puissance : le champ n'existe que si la boucle fermée
+    l'a observé. Sans ADR, il est **absent** — le recopier depuis la configuration de départ
+    publierait un plan de canaux que le serveur n'a pas arrêté.
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test canaux", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _canaux(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [(x.get("enabled_channels"), x.get("channel_dr_masks")) for x in page["items"]]
+
+    # --- Sans ADR : aucun canal n'est arrêté par le serveur, les champs restent absents -------
+    for actifs, masques in _canaux({**base, "gateway": {"x_m": 0, "y_m": 0}}):
+        assert (actifs, masques) == (None, None), (actifs, masques)
+
+    # --- Avec ADR : la boucle fermée rapporte ce qu'elle a laissé au terminal ----------------
+    lignes = _canaux({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert len(lignes) == 3
+    for actifs, masques in lignes:
+        assert actifs and masques, lignes
+        # Un canal actif est défini, et porte un masque de débits non nul : sinon le terminal
+        # émettrait sur un canal où aucun débit n'est admis.
+        for ch in actifs:
+            assert masques.get(str(ch), masques.get(ch)) is not None, (ch, masques)
+            assert masques.get(str(ch), masques.get(ch)) != 0, (ch, masques)

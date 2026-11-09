@@ -717,6 +717,7 @@ class RunService:
         mesh_lost_by_device: Optional[tuple[int, ...]] = None
         sf_finaux: dict[int, int] = {}
         puissances: dict[int, Any] = {}          # boucle fermée seulement : DevicePower
+        canaux: dict[int, Any] = {}              # boucle fermée seulement : TerminalChannels
         if job.multi:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
@@ -745,6 +746,10 @@ class RunService:
             # fermée, donc les champs restent absents plutôt que de recopier l'index de
             # départ en laissant croire à une décision du serveur.
             puissances = dict(tr.device_power or {})
+            # Canaux laissés au terminal : même source et même garde que la puissance. Vides
+            # hors boucle fermée, donc les champs restent absents plutôt que de recopier la
+            # configuration de départ en laissant croire à une décision du serveur.
+            canaux = dict(tr.device_channels or {})
         self._set(run_id, 0.7)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
@@ -766,6 +771,8 @@ class RunService:
                 power_index=(puissances[i].first_index if i in puissances else None),
                 final_power_index=(puissances[i].last_index if i in puissances else None),
                 power_step_db=(puissances[i].step_db if i in puissances else None),
+                enabled_channels=(list(canaux[i].enabled) if i in canaux else None),
+                channel_dr_masks=(dict(canaux[i].dr_masks) if i in canaux else None),
                 sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
                 lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),
