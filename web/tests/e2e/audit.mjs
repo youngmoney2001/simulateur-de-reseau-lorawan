@@ -11,12 +11,13 @@
 //   - boîte importante réduite à rien ;
 //   - zones qui se recouvrent alors qu'elles ne le devraient pas.
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import puppeteer from "puppeteer-core";
+import { rapportMarkdown } from "./rapport-audit.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webDir = join(here, "..", "..");
@@ -429,23 +430,13 @@ try {
     }
   }
 
-  // Résumé lisible
-  for (const bloc of rapport) {
-    const p = bloc.problemes;
-    if (bloc.introuvable) { console.log(`\n=== ${bloc.etat} · ÉTAT NON ATTEINT ===`); continue; }
-    const titre = bloc.etat ?? `${bloc.largeur}px`;
-    console.log(`\n=== ${titre} · ${p.length} problème(s) · défilement horizontal : ${bloc.scrollHorizontal ? "oui" : "non"} ===`);
-    console.log("géométrie :");
-    for (const g of bloc.geometrie) console.log(`  ${g.quoi.padEnd(28)} x=${String(g.x).padStart(5)} y=${String(g.y).padStart(4)} ${g.l}x${g.h}`);
-    const parType = {};
-    for (const x of p) (parType[x.type] ??= []).push(x);
-    for (const [type, liste] of Object.entries(parType)) {
-      console.log(`${type} (${liste.length}) :`);
-      for (const x of liste.slice(0, 12)) console.log(`  ${x.quoi.padEnd(30)} ${x.detail}`);
-      if (liste.length > 12) console.log(`  … et ${liste.length - 12} autre(s)`);
-    }
-  }
-  console.log(`\nTOTAL : ${rapport.reduce((s, b) => s + b.problemes.length, 0)} problème(s)`);
+  // Résumé lisible, et déposé dans le dépôt : le journal du runner est hébergé hors de
+  // portée de l'outillage, un rapport qui n'y vit que là est perdu à chaque exécution.
+  const markdown = rapportMarkdown(rapport);
+  console.log(markdown);
+  const cible = new URL("../../../docs/audits/mise-en-page.md", import.meta.url);
+  writeFileSync(cible, markdown);
+  console.log(`rapport déposé : ${fileURLToPath(cible)}`);
 } finally {
   for (const c of children) { try { c.kill("SIGTERM"); } catch { /* déjà arrêté */ } }
   if (browser) await browser.close();

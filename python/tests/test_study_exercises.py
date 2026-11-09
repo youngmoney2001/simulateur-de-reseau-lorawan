@@ -436,3 +436,28 @@ def test_exercice_sous_bande_au_maximum_avec_la_fenetre_et_le_run(api, run_front
     assert status == 200
     _, body = _submit(api, "us915-sous-bande", sid)
     assert body["score"] == body["max_score"] == 30
+
+
+def test_un_champ_absent_du_formulaire_nefface_pas_le_reste(api):
+    """Un champ que la fenêtre n'affiche pas ne doit pas être effacé pour autant qu'elle poste.
+
+    Ce que le test client (`topology.test.mjs`) vérifie, c'est que `validateGateway` **n'émet
+    pas** la clé d'un champ vide. Ici on vérifie l'autre moitié, côté serveur : quand la fenêtre
+    poste un bornage partiel, `set_gateway` laisse intact ce qu'elle ne montre pas. Sans cette
+    propriété, régler la région depuis la fenêtre détruirait l'antenne posée au clavier — et
+    l'utilisateur ne le verrait nulle part, puisque l'antenne n'est pas affichée.
+    """
+    _, out = _session(api, exercise="us915-sous-bande")
+    sid = out["session_id"]
+    # Un réglage hors fenêtre, posé au CLI : c'est celui qu'on veut retrouver intact. On lit
+    # `show running-config` et non `/topology`, parce que l'état de topologie n'expose que les
+    # six champs de la fenêtre — il ne dirait donc rien d'un réglage qu'elle ne montre pas.
+    _cli(api, sid, "frontiere", "en", "conf t", "int lora 0", "antenna gain 5.5", "end")
+    status, body = _fenetre(api, sid, "frontiere", {"region": "US915"})
+    assert status == 200, body
+    _, conf = api.call("POST", f"/api/v1/sessions/{sid}/cli",
+                       {"node_id": "frontiere", "command": "show running-config"}, token=api.alice)
+    sortie = conf["output"]
+    assert "region US915" in sortie, f"la fenêtre n'a pas écrit la région : {sortie}"
+    assert "antenna gain 5.5" in sortie, (
+        f"l'antenne posée au CLI a été effacée par la fenêtre : {sortie}")

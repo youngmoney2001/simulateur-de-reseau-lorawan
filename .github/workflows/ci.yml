@@ -147,15 +147,19 @@ jobs:
       # Les artefacts sont servis par un hôte inaccessible depuis un poste de développement :
       # seule la branche permet de rapatrier les images. Le marqueur [skip ci] empêche ce
       # commit de déclencher à son tour une exécution, ce qui bouclerait indéfiniment.
-      - name: Rapatrier les captures dans la branche
+      - name: Rapatrier les captures et l'audit dans la branche
         if: always()
         continue-on-error: true
         run: |
-          if [ -z "$(ls -A captures 2>/dev/null)" ]; then echo "aucune capture à rapatrier"; exit 0; fi
+          # L'audit dépose son rapport dans docs/audits/ : sans ce rapatriement, il ne vivrait
+          # que dans le journal du runner, hébergé hors de portée de l'outillage — illisible
+          # par une machine et perdu à chaque exécution.
           git config user.name "ci-captures"
           git config user.email "ci-captures@users.noreply.github.com"
-          git add -f captures
-          git commit -q -m "Captures du rendu du studio [skip ci]" || exit 0
+          [ -z "$(ls -A captures 2>/dev/null)" ] || git add -f captures
+          [ -f docs/audits/mise-en-page.md ] || echo "aucun rapport d'audit à rapatrier"
+          git add -f docs/audits/mise-en-page.md 2>/dev/null || true
+          git commit -q -m "Captures et audit de mise en page [skip ci]" || exit 0
           git push origin "HEAD:${GITHUB_REF#refs/heads/}"
 
       # Le journal du runner est hébergé hors de portée de l'outillage : on le publie sur la
