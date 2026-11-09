@@ -294,18 +294,24 @@ try {
     if (!await etat.action()) { rapport.push({ etat: etat.nom, ordre: [], problemes: [] }); continue; }
     await pause(400);
     await page.evaluate(marquer, INTERACTIFS);
-    // On repart du début du document à chaque état, sinon l'ordre mesuré dépendrait de l'état
-    // précédent et un même état donnerait deux rapports différents.
-    await page.evaluate(() => {
-      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-    });
+    // Le parcours doit partir du premier élément du document. Un `blur()` n'y suffit pas :
+    // le navigateur conserve un point de départ de navigation séquentielle là où le focus
+    // était, et la tabulation continuerait depuis le dernier élément manipulé. Mesuré
+    // d'abord ainsi, l'état « Simulation » n'annonçait que 3 éléments et 30 inatteignables —
+    // un défaut de l'audit, pas de l'interface. On vise donc le premier interactif, puis on
+    // laisse le navigateur décider de la suite.
+    const depart = await page.evaluate((sel) => {
+      const premier = document.querySelector(sel);
+      if (premier) premier.focus();
+      return Boolean(premier);
+    }, INTERACTIFS);
 
     const ordre = [];
     const atteints = [];
     for (let i = 0; i < 250; i += 1) {
       // Une pression à la fois, comme le ferait un utilisateur : c'est le navigateur qui
       // décide de l'ordre, pas une liste d'éléments reconstituée.
-      await page.keyboard.press("Tab");
+      if (i > 0) await page.keyboard.press("Tab");
       const info = await page.evaluate(decrire, PROPRIETES);
       if (!info) break;                                 // le focus a quitté le document
       if (info.id && atteints.includes(info.id)) break;  // cycle : on a fait le tour
@@ -320,6 +326,7 @@ try {
         par: info.changements.join(", "),
       });
     }
+    if (!depart) console.log(`AUCUN ÉLÉMENT INTERACTIF dans l'état « ${etat.nom} »`);
 
     const problemes = [];
     for (const o of ordre) {
