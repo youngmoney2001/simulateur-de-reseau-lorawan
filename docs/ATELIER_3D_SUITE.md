@@ -20,7 +20,7 @@ concerne la **profondeur** de chaque étape, pas leur existence.
 
 ---
 
-## 1. ~~La fenêtre passerelle est presque vide~~ — **arbitrage tranché, en cours depuis cette tranche**
+## 1. ~~La fenêtre passerelle est presque vide~~ — **arbitrage tranché, livré**
 
 **C'est l'écart le plus grave, et il est chiffrable.**
 
@@ -132,6 +132,19 @@ CI est verte » n'aurait voulu dire que « aucune assertion n'a échoué ». Un 
 horizontal**, à 1400 px comme à 900 px. 517 px est la hauteur naturelle du contenu, sous la
 borne CSS de 760 px : le formulaire tient sans être rogné.
 
+Ces trois chiffres sont désormais **relus dans le dépôt**, pas répétés de mémoire. L'audit est
+`continue-on-error` et son rapport ne vivait que dans le journal du runner, hébergé hors de
+portée de l'outillage : illisible par une machine et perdu à chaque exécution. Il est écrit
+dans `docs/audits/mise-en-page.md` et rapatrié dans la branche. Vérifié à la lecture :
+**0 problème sur 21 états**, et `device-win.active` à `430×517` aux deux largeurs.
+
+Un champ que la fenêtre n'affiche pas ne doit pas être effacé pour autant qu'elle poste. Le test
+client vérifiait que `validateGateway` n'émet pas la clé d'un champ vide ; il manquait la moitié
+serveur, qui est la seule qui compte : régler la région depuis la fenêtre détruirait sinon
+l'antenne posée au clavier, sans que rien ne le montre puisque l'antenne n'est pas affichée.
+Vérifié par `show running-config` — et non par `/topology`, dont l'état n'expose que les six
+champs de la fenêtre et ne dirait donc rien d'un réglage qu'elle ne montre pas.
+
 ---
 
 ## 2. Le contenu : 7 exercices, et un moteur qui en simule bien plus
@@ -160,8 +173,50 @@ exercice « pourquoi ce capteur est-il passé de SF7 à SF10 ? » relierait dire
 au chiffre affiché.
 
 À comparer aux centaines d'activités livrées avec Packet Tracer. L'écart est structurel, il ne se
-comble pas en une tranche : **c'est un chantier de fond, à mener après l'arbitrage du §1** (les
-exercices s'écrivent contre l'interface qui les résout).
+comble pas en une tranche : **c'est un chantier de fond**. L'arbitrage du §1 est rendu, donc il
+peut commencer — et la première mesure à prendre n'était pas « combien d'exercices manquent »,
+mais « lesquels pourraient être résolus dans l'atelier ».
+
+### Les trois qui comptent ne sont pas également atteignables — mesuré
+
+§2 désignait ADR, join et retransmissions comme les trois mécanismes qu'un apprentissage de
+LoRaWAN ne peut pas ignorer. Ils n'existent pas au même endroit, et surtout **ils ne sont pas
+aussi accessibles les uns que les autres**. Trois scénarios réels, compilés depuis l'atelier,
+soumis au validateur du schéma :
+
+| Mécanisme | Bloc du scénario | Accepté sur un scénario d'atelier ? |
+|---|---|---|
+| Jointure OTAA | `retransmissions.join_requests_s` | **oui** |
+| Trames confirmées et réémissions | `retransmissions.enabled` / `retries` | **oui** |
+| ADR (LinkADRReq) | `mac.link_adr` | **non** — refusé |
+
+**Pourquoi l'ADR est refusé, et c'est le fait à retenir** : `mac.link_adr` n'est admis qu'à
+passerelle unique et sans mesh. Or `study_compile` émet **toujours** la liste `gateways`, y
+compris quand la session n'a qu'une seule passerelle — vérifié : un scénario d'une passerelle et
+d'un capteur porte `gateways: ['gw-seule']`. L'ADR est donc hors de portée de l'atelier **non
+pas parce que le moteur ne le simule pas** (la boucle MAC complète existe : `adr_decision`,
+`link_adr_req`, `link_adr_ans`, `apply`), mais parce que la forme du scénario que l'atelier
+produit lui est interdite.
+
+Le bloc `retransmissions`, lui, n'a pas cette contrainte : les deux mécanismes atteignables le
+sont sur un scénario multi-passerelles.
+
+### Ce que ça implique pour la suite
+
+Un exercice s'écrit contre l'interface qui le résout — c'était la leçon du §1, et elle s'applique
+ici deux fois plutôt qu'une. Ces réglages sont **au niveau du scénario**, pas de l'équipement : il
+n'existe aujourd'hui aucune surface pour les poser. Le formulaire de simulation de l'atelier ne
+porte qu'une graine et un bouton (`studio.html`, `#sim-form`), et `study_compile` n'émet ni
+`mac` ni `retransmissions`.
+
+Deux chantiers, d'ampleur très différente :
+
+1. **Jointure et trames confirmées** : ouvrir une surface de réglage de scénario, la brancher sur
+   `study_compile`, écrire les exercices. Mécanismes déjà simulés et déjà acceptés par le schéma.
+2. **ADR** : exige un choix d'architecture — étendre l'ADR aux scénarios multi-passerelles, ou
+   permettre à l'atelier de produire un scénario à passerelle unique (ce qui couperait les
+   liaisons radio du §3 et la matrice des réceptions, qui reposent sur `gateways`). Ce n'est pas
+   un complément du chantier 1, c'en est un autre.
 
 ---
 
