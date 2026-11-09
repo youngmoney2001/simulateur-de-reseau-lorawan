@@ -77,6 +77,18 @@ try {
     await page.screenshot({ path: fichier });
     console.log(`capture ${fichier}`);
   };
+  /** Le bloc seul, et pas la page entière : sur une capture plein écran l'encadré tient
+   *  dans une centaine de pixels et ses chiffres ne se lisent qu'à la loupe. Le recadrage
+   *  est demandé au navigateur sur l'élément lui-même, donc il suit la mise en page au
+   *  lieu de figer des coordonnées qui casseraient au premier changement de style. */
+  const shootBloc = async (nom, sel) => {
+    n += 1;
+    const fichier = join(outDir, `${String(n).padStart(2, "0")}-${nom}.png`);
+    const h = await page.$(sel);
+    if (!h) throw new Error(`${sel} introuvable : le recadrage n'a rien à cadrer`);
+    await h.screenshot({ path: fichier });
+    console.log(`capture ${fichier}`);
+  };
   const setValue = (sel, value) => page.$eval(sel, (e, v) => { e.value = v; }, value);
   const submitForm = (sel) => page.$eval(sel, (f) => f.requestSubmit());
   const clickTab = async (sel, label) => {
@@ -266,12 +278,14 @@ try {
   await lancerRun();
   await attendre("#proto-bilan", 2);
   await shoot("protocole-jointure-simultanee");
+  await shootBloc("bloc-echanges-simultanee", "#proto-bilan");
 
   // 7b. même flotte, départs étalés de 60 s : la jointure aboutit, les ACK suivent
   await reglerFlotte({ sf: 12, messages: 20, etale: 60 });
   await lancerRun();
   await attendre("#proto-bilan", 2);
   await shoot("protocole-jointure-etalee");
+  await shootBloc("bloc-echanges-etalee", "#proto-bilan");
 
   // 7c. ADR : l'ordre du serveur, et la condition pour qu'il parte
   await basculer("#confirmed-toggle", false);
@@ -281,6 +295,7 @@ try {
   await lancerRun();
   await attendre("#adr-bilan", 1);
   await shoot("protocole-adr-debit");
+  await shootBloc("bloc-adr-debit", "#adr-bilan");
 
   // On rend ce qu'on a emprunté : les trois cases retrouvent leur état de départ, pour que
   // la session capturée ne reste pas dans une configuration que personne n'a choisie.
