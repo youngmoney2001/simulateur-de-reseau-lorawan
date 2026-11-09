@@ -288,7 +288,12 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 /* Le nœud est focalisable depuis qu'il porte tabindex : il doit donc montrer qu'il l'est.
    Un contour SVG ne se lit pas comme celui d'une boîte — on double l'épaisseur du trait et
    on ajoute un halo, visibles sur les trois couleurs d'équipement. */
-.node:focus-visible { outline:none; }
+/* Le halo porte sur le nœud lui-même, pas seulement sur sa forme : c'est le groupe qui
+   reçoit le focus, et un indicateur posé sur un enfant ne se voit pas de l'élément
+   focalisé — l'audit clavier l'a mesuré ainsi, en ne lisant aucun changement de style sur
+   le groupe. Le trait épaissi en tirets reste, pour rester lisible sur les trois couleurs
+   d'équipement et sur un fond de plan clair. */
+.node:focus-visible { outline:none; filter:drop-shadow(0 0 4px #0b3d91); }
 .node:focus-visible circle, .node:focus-visible rect {
   stroke:#0b3d91; stroke-width:4; stroke-dasharray:5 3;
 }
