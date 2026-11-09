@@ -337,6 +337,16 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .gw-aide-bloc { grid-column:1 / -1; margin:0; }
 .gw-champ.gw-desactive { opacity:.55; }
 .gw-avance { margin-top:8px; font-size:.88em; }
+
+/* --- ADR du serveur ------------------------------------------------------------------------ */
+/* La case n'est pas dans la fenêtre d'un équipement : l'ADR est une décision du serveur de
+   réseau, et elle change la forme du run. Elle vit donc avec le lancement. */
+.adr { margin:2px 0 6px; font-size:.9em; }
+.adr label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+/* Une case grisée doit se voir grisée, sinon on clique dessus sans comprendre. */
+.adr input:disabled { cursor:not-allowed; }
+.adr input:disabled + * , .adr label:has(input:disabled) { opacity:.6; cursor:not-allowed; }
+.adr .gw-aide { margin:3px 0 0 22px; }
 .gw-avance summary { cursor:pointer; color:var(--muted); }
 .sensor-actions { grid-column:1 / -1; display:flex; gap:6px; margin-top:4px; }
 

@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { validateGateway, REGIONS_A_SOUS_BANDE, AVANCE_EN_CLI, REGIONS }
+import { validateGateway, REGIONS_A_SOUS_BANDE, AVANCE_EN_CLI, REGIONS,
+  adrMessage, adrStatut }
   from "../src/studio/topology.js";
 
 
@@ -71,4 +72,44 @@ test("les réglages avancés sont nommés, pas passés sous silence", () => {
   assert.ok(AVANCE_EN_CLI.includes("gain d'antenne"));
   assert.ok(AVANCE_EN_CLI.includes("fréquence"));
   assert.ok(AVANCE_EN_CLI.length >= 4);
+});
+
+// --- ADR : ce que la case dit ---------------------------------------------------------------
+
+test("ADR possible et coché : le coût est dit, pas sous-entendu", () => {
+  const m = adrMessage({ possible: true, actif: true });
+  assert.match(m, /ADR activé/);
+  // Activer l'ADR change la forme du run : le dire après coup serait le cacher.
+  assert.match(m, /ni relais ni liaisons radio/);
+});
+
+test("ADR possible et décoché : on annonce ce qui se passera", () => {
+  assert.match(adrMessage({ possible: true, actif: false }), /LinkADRReq/);
+});
+
+test("ADR impossible : la raison est affichée, jamais un silence", () => {
+  // Un réglage grisé sans explication est le genre de silence qui fait perdre une heure ;
+  // c'était la leçon de la sous-bande du §1, et elle s'applique ici de la même façon.
+  const m = adrMessage({ possible: false, raison: "l'ADR exige un plan régional", actif: false });
+  assert.match(m, /plan régional/);
+});
+
+test("ADR impossible mais demandé : la raison d'abord, le constat ensuite", () => {
+  const m = adrMessage({ possible: false, raison: "réseau à relais", actif: true });
+  assert.match(m, /réseau à relais/);
+  assert.match(m, /souhait est gardé/);
+  // L'ordre compte : on explique avant de constater.
+  assert.ok(m.indexOf("réseau à relais") < m.indexOf("souhait est gardé"));
+});
+
+test("le statut annonce ce qui est simulable, pas ce qui est demandé", () => {
+  // Le serveur garde le souhait sans pouvoir l'appliquer. Le répéter tel quel laisserait
+  // croire à un run qu'on n'aura pas.
+  assert.match(adrStatut({ possible: true, actif: true }), /simulera les LinkADRReq/);
+  assert.match(adrStatut({ possible: false, actif: true, raison: "relais" }), /non simulable/);
+  assert.match(adrStatut({ possible: false, actif: false }), /désactivé/);
+});
+
+test("un serveur muet sur la raison ne produit pas un message vide", () => {
+  assert.match(adrStatut({ possible: false, actif: true }), /topologie incompatible/);
 });

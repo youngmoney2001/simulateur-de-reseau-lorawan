@@ -256,6 +256,38 @@ Ce que l'atelier doit montrer, et c'est le but de l'exercice : **le débit a cha
 La trace porte `mac_request` / `LinkADRReq` ; c'est cette trace que l'exercice interrogera, pas
 une affirmation sur un formulaire.
 
+### Ce qui est livré, et vérifié sur un serveur réel
+
+Le chemin existe d'un bout à l'autre, et il a été exercé en HTTP, pas seulement en test :
+
+| Étape | Mesuré |
+|---|---|
+| `POST /sessions/{sid}/adr` | le souhait est enregistré ; la topologie revient avec `adr_possible` et `adr_raison` |
+| compilation | `gateway` + `mac` au lieu de `gateways`, avec la note de coût |
+| run | ADR désactivé : 40 uplinks, rien d'autre. **ADR activé : 40 uplinks, 2 `downlink`, 2 `mac_request` `LinkADRReq`** — un par capteur |
+
+La case vit dans le panneau de simulation, pas dans la fenêtre d'un équipement : l'ADR est une
+décision du serveur de réseau, et elle change la forme du run entier. Elle est **grisée avec sa
+ raison** quand la topologie ne le permet pas — la leçon du §1, appliquée une deuxième fois.
+
+Le souhait est gardé même quand il n'est pas réalisable, et le statut annonce ce qui sera
+**réellement** simulé plutôt que ce qui a été demandé : le serveur accepte de garder une
+intention qu'il ne peut pas exécuter, et la répéter telle quelle laisserait croire à un run
+qu'on n'aura pas.
+
+Sept tests serveur, six tests web. Les libellés sont des fonctions pures (`adrMessage`,
+`adrStatut`) : un réglage qui explique son refus mérite d'être vérifié, et cela se fait sans
+navigateur.
+
+### Ce qui reste
+
+- **L'exercice ADR lui-même.** Le chemin est ouvert et prouvé ; il n'existe pas encore d'exercice
+  « pourquoi ce capteur est-il passé de SF7 à SF10 ? ». C'est l'objet de la prochaine tranche,
+  et il s'écrira contre la trace (`mac_request` / `LinkADRReq`), pas contre le formulaire.
+- **Montrer le changement de débit.** La trace dit *que* le serveur a commandé ; elle ne dit pas
+  encore *de SF7 à SF10* dans le résumé. C'est ce qui rendrait l'exercice lisible.
+- **Le joint et les trames confirmées**, restés au chantier 1 et mesurés atteignables.
+
 ---
 
 ## 3. Liaisons observées sur les deux vues — **mesh et radio, livrés**

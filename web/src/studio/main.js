@@ -5,7 +5,7 @@ import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
-  GATEWAY_LIMITS, AVANCE_EN_CLI,
+  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut,
 } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
@@ -281,6 +281,7 @@ async function selectSession(sid) {
   state.passerelles = null;
   state.rxMatrix = null;
   state.liaisonsObservees = [];
+  renderAdr();
   renderSessionChoices();
   await loadTopology();
   const meta = state.sessions.find((s) => s.session_id === sid);
@@ -309,6 +310,7 @@ async function loadTopology() {
   const topo = await guard(() => state.client.topology(state.sid));
   if (topo) state.topo = topo;
   renderTerrains();
+  renderAdr();
   refreshViews();
   renderDevice();
 }
@@ -755,6 +757,10 @@ function renderGatewayConfig(node, body) {
       const topo = await guard(() => state.client.setGateway(state.sid, node.id, checked.settings));
       if (topo) {
         state.topo = topo;
+        // Le plan régional peut rendre l'ADR possible, ou le relais l'interdire : la case doit
+        // se réévaluer ici, sinon l'utilisateur ne verrait le changement qu'en changeant de
+        // session — et croirait l'ADR impossible alors qu'il vient de le rendre possible.
+        renderAdr();
         refreshViews();
         message.textContent = "Réglages enregistrés.";
       }
@@ -1253,6 +1259,39 @@ async function choisirTerrain(terrainId) {
   state.topo = topo;
   renderTerrains();
   setStatus(vide ? `Relief « ${vide} » appliqué aux prochains runs` : "Relief retiré");
+}
+
+/**
+ * La case ADR, et surtout ce qu'elle dit quand elle ne peut pas être cochée.
+ *
+ * Le réglage est grisé **avec sa raison**, sur le motif de la sous-bande du §1 : « désactivé »
+ * sans explication est le genre de silence qui fait perdre une heure. La raison vient du
+ * serveur, qui seul connaît la topologie — la recalculer ici serait une deuxième vérité.
+ *
+ * Le coût est affiché en permanence, pas seulement quand l'ADR est actif : l'utilisateur doit
+ * savoir avant de cocher que ce run ne simulera ni relais ni liaisons radio.
+ */
+function renderAdr() {
+  const champ = $("adr-field");
+  const case_ = $("adr-toggle");
+  const aide = $("adr-aide");
+  if (!champ || !case_ || !aide) return;
+  const possible = state.topo?.adr_possible === true;
+  const raison = state.topo?.adr_raison ?? "";
+  case_.checked = state.topo?.adr === true;
+  case_.disabled = !possible;
+  // Les libellés vivent dans `topology.js`, sans DOM, donc vérifiables hors navigateur.
+  aide.textContent = adrMessage({ possible, raison, actif: case_.checked });
+}
+
+async function basculerAdr(actif) {
+  if (!state.sid) return;
+  const topo = await guard(() => state.client.setAdr(state.sid, actif));
+  if (!topo) return;
+  state.topo = topo;
+  renderAdr();
+  setStatus(adrStatut({ possible: topo.adr_possible === true, raison: topo.adr_raison ?? "",
+    actif: topo.adr === true }));
 }
 
 function renderMetrics(summary, deviceRows) {
@@ -1994,6 +2033,9 @@ $("session-select").addEventListener("change", (ev) => selectSession(ev.target.v
 $("new-session").addEventListener("click", () => newSession(null));
 $("delete-session").addEventListener("click", deleteSession);
 $("terrain-select").addEventListener("change", (ev) => choisirTerrain(ev.target.value));
+// `change` et non `click` : la case peut aussi basculer au clavier, et c'est le changement
+// d'état qu'on veut, pas le geste.
+$("adr-toggle").addEventListener("change", (ev) => basculerAdr(ev.target.checked));
 $("save-chantier").addEventListener("click", sauvegarderChantier);
 $("load-chantier").addEventListener("click", () => $("chantier-file").click());
 // Vider la valeur après chaque lecture : sinon recharger le même fichier une deuxième fois

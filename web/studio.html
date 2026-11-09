@@ -174,6 +174,13 @@
             <label>Graine <input id="seed" type="number" min="0" max="4294967295" value="1" /></label>
             <button type="submit" id="simulate">Simuler</button>
           </form>
+          <!-- L'ADR est une décision du serveur de réseau, et elle change la forme du run :
+               elle n'a donc rien à faire dans la fenêtre d'un équipement. La case porte le
+               coût à côté d'elle, pas dans une note qu'on ne lit qu'après coup. -->
+          <div id="adr-field" class="adr">
+            <label><input type="checkbox" id="adr-toggle" /> ADR du serveur (LinkADRReq)</label>
+            <p id="adr-aide" class="gw-aide muted" role="status"></p>
+          </div>
           <p id="sim-status" class="muted"></p>
           <ul id="sim-notes" class="notes"></ul>
           <table id="sim-results" hidden>

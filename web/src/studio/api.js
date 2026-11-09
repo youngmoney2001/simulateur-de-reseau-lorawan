@@ -58,6 +58,9 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     terrains: () => request("GET", "/api/v1/terrains"),
     setTerrain: (sid, terrainId) =>
       request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
+    // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,
+    // et il renvoie la raison avec la topologie plutôt qu'un refus.
+    setAdr: (sid, adr) => request("POST", `${s(sid)}/adr`, { adr }),
     submit: (exerciseId, sid) =>
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),

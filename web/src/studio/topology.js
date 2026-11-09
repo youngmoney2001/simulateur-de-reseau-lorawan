@@ -260,3 +260,43 @@ export function validateGateway(form) {
 export function nodeCaption(node) {
   return `${node.name} (${node.id})`;
 }
+
+/**
+ * Ce que la case ADR écrit à côté d'elle.
+ *
+ * Fonction pure, sans DOM ni `state` : c'est ce qui permet de la vérifier hors navigateur,
+ * comme `validateGateway` l'est déjà. Seule reste à la vue la pose du texte.
+ *
+ * Deux règles, et elles viennent du §1 :
+ *   - un réglage grisé porte **sa raison**, jamais un silence ;
+ *   - quand l'ADR n'est pas possible mais reste demandé, on dit d'abord pourquoi, ensuite
+ *     qu'on a gardé le souhait — et surtout on ne prétend pas qu'il sera simulé.
+ *
+ * @param possible l'ADR est-il simulable sur cette topologie (dit par le serveur) ?
+ * @param raison   pourquoi il ne l'est pas, telle que le serveur l'énonce
+ * @param actif    l'utilisateur l'a-t-il demandé ?
+ */
+export function adrMessage({ possible = false, raison = "", actif = false } = {}) {
+  if (possible) {
+    return actif
+      ? "ADR activé : ce run ne simule ni relais ni liaisons radio par couple."
+      : "Le serveur adaptera le débit et la puissance des capteurs (LinkADRReq).";
+  }
+  const garde = actif ? " — le souhait est gardé, mais ce run sera lancé sans ADR." : "";
+  return `${raison}${garde}`;
+}
+
+/**
+ * Ce qu'on annonce après une bascule : ce qui est **réellement** simulable, pas ce qui a été
+ * demandé. Le serveur garde le souhait sans pouvoir l'appliquer ; le répéter tel quel
+ * laisserait croire à un run qu'on n'aura pas.
+ */
+export function adrStatut({ possible = false, raison = "", actif = false } = {}) {
+  if (actif && possible) {
+    return "ADR du serveur activé : le prochain run simulera les LinkADRReq.";
+  }
+  if (actif) {
+    return `ADR demandé mais non simulable : ${raison || "topologie incompatible"}`;
+  }
+  return "ADR désactivé.";
+}
