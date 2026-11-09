@@ -238,10 +238,10 @@ précisément le cas d'usage visé ; ce ne l'est pas pour un serveur partagé.
 |---|---|---|---|
 | **A** | Écran de lancement : saisie du jeton, choix Conception / Étude, mode changeable à chaud | Faible | **Fait** |
 | **B** | Plan dominant + palette en bas à gauche + barre d'outils à droite + barre d'état | Faible | **Fait** |
-| **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus | Fait *en panneau ancré* ; le flottant reste à faire |
+| **C** | Fenêtre d'équipement flottante, trois onglets | **Moyen** : touche `renderConsole` et le focus | **Fait** (le flottant est livré en phase E) |
 | **D** | Panneau d'observation à onglets (Simulation / Journal / Trame / Exercice) | Faible | **Fait** |
 | **E** | Fenêtre réellement flottante et redimensionnable (détachement du panneau) | Moyen | **Fait** |
-| **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible | À faire |
+| **F** | Adaptatif, accessibilité clavier, **vérification en navigateur réel** | Faible | **Fait** |
 
 ### Ce que couvrent les phases A–D
 
@@ -295,6 +295,40 @@ Deux remarques d'exploitation. Le journal d'un job est hébergé hors de portée
 développement : en cas d'échec, il est publié en commentaire de la pull request pour rester
 lisible. Et le paquet déclarant `dependencies: []`, la CI doit installer l'extra `[test]` — sans
 quoi le serveur API échoue à l'import avant même que le navigateur ne démarre.
+
+### Phase F — accessibilité clavier : mesurée, pas supposée
+
+L'adaptatif et la vérification en navigateur étaient acquis. Restait une question qu'aucune
+lecture de code ne tranche — « peut-on se passer de la souris ? » — et à laquelle personne
+ici ne peut répondre à la main, faute d'affichage. La méthode est donc celle de l'audit de
+mise en page : **substituer des mesures à l'examen impossible**.
+
+`web/tests/e2e/audit-clavier.mjs` ouvre le studio dans Chromium, construit la même session
+que l'audit de mise en page (une passerelle, deux capteurs, graine 7), lance un run, puis
+parcourt huit états à la tabulation réelle. Pour chaque élément atteint, il publie le rôle,
+le nom accessible, la visibilité, et **ce que le focus change au style** — mesuré en
+comparant le style calculé avant et après, plutôt qu'en cherchant un `outline` : un thème
+peut signaler le focus par une bordure, un fond ou une ombre.
+
+**État mesuré : 0 problème sur 8 états et 297 éléments atteints.** Le rapport est déposé
+dans `docs/audits/clavier.md` et rapatrié par la CI, comme celui de la mise en page.
+
+Trois défauts ont été trouvés et corrigés au passage, tous par la mesure :
+
+| Défaut | Ce que la mesure a montré |
+|---|---|
+| La couche d'animation avalait les clics | `elementFromPoint` au centre d'un capteur renvoyait `circle.anim-ok.frame`, pas le nœud : après un run, cliquer un équipement sur le plan ne faisait plus rien. La couche est décorative ; elle ne capte plus le pointeur. |
+| Les onglets `Carte 3D / Plan` étaient sourds aux flèches | Ils portent `role="tab"` et un `aria-selected` tenu à jour — le motif ARIA promet donc les flèches, mais `wireTabs` n'était câblé que sur deux des trois groupes. Il gagne aussi Début et Fin. |
+| Les équipements du plan n'étaient atteignables qu'au pointeur | Un groupe SVG sans `tabindex` ni rôle n'est une cible de tabulation pour personne. Sans souris, **aucune fenêtre d'équipement ne pouvait être ouverte** — donc aucun réglage d'émission, de batterie ou de SF. Les nœuds sont désormais des boutons : `role`, nom accessible, indicateur de focus, et ouverture par Envoi ou Espace. |
+
+Un quatrième point mérite d'être noté parce qu'il a coûté deux rapports : l'audit s'est d'abord
+trompé lui-même. Un `blur()` ne remet pas à zéro le point de départ de la navigation
+séquentielle (un état annonçait 3 éléments et 30 inatteignables qui n'étaient qu'en aval), et
+un `focus()` programmatique ne tient pas dans ce navigateur (ordre vide dans les quatre états).
+Seules de vraies pressions de touche déplacent le focus de façon fiable. Un contrôle désactivé
+est par ailleurs **correctement** hors du parcours : les boutons « Indice » et « Noter »,
+inactifs tant qu'aucun exercice n'est lancé, ont été exclus de la règle plutôt que comptés
+comme des défauts.
 
 ### Captures d'écran : produites, mais illisibles par une machine
 
