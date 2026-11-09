@@ -310,6 +310,33 @@ try {
     if (!libelles.includes("Courant moyen")) throw new Error(libelles.join(" | "));
   });
 
+  // Le plan de canaux que le serveur a laissé au terminal, affiché. Il vient de l'ABI v3 et
+  // voyage dans la même commande que le débit — LinkADRReq — donc il se lit dans le bloc ADR.
+  // Aucun test de navigateur ne l'exerçait : le module pur ne peut pas dire si la phrase est
+  // réellement peinte, et seul un run avec ADR la produit.
+  await step("ADR : le plan de canaux laissé au terminal est affiché", async () => {
+    await obsTab("Simulation");
+    const adr = await page.$eval("#adr-toggle", (c) => ({ desactive: c.disabled, coche: c.checked }));
+    if (adr.desactive) throw new Error(
+      `ADR impossible sur cette session : ${await textOf("#adr-aide")}`);
+    if (!adr.coche) await page.click("#adr-toggle");
+    await page.waitForFunction(() => !document.getElementById("adr-toggle").disabled);
+    await setValue("#seed", "7");
+    await page.click("#simulate");
+    await waitText("#sim-status", /terminé/, 120_000);
+    await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
+      { timeout: 20_000 });
+    const lignes = await page.$$eval("#adr-bilan-liste li", (ls) => ls.map((l) => l.textContent));
+    if (lignes.length === 0) throw new Error("bloc ADR visible sans aucun changement énoncé");
+    const canaux = await textOf("#adr-bilan-canaux");
+    for (const attendu of ["Canaux laissés au terminal", "Seuls les canaux actifs servent"])
+      if (!canaux.includes(attendu)) throw new Error(`« ${canaux} » sans « ${attendu} »`);
+    // Le plan doit nommer au moins un canal et son débit : une phrase sans chiffre serait
+    // un masque vide rendu comme une information.
+    if (!/\d+\s*:\s*DR\d/.test(canaux)) throw new Error(`plan sans canal ni débit : « ${canaux} »`);
+    console.log(`ADR : ${lignes.length} changement(s) · ${canaux}`);
+  });
+
   await step("autonomie : le courant est simule, la capacite est enoncee", async () => {
     await obsTab("Simulation");
     await page.waitForFunction(() => !document.getElementById("sim-autonomie").hidden,
