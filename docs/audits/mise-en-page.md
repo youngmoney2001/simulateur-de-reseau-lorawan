@@ -60,7 +60,7 @@ Aucun problème.
 | button.tool | 324 | 963 | 129×38 |
 | button.tool | 17 | 1007 | 225×38 |
 | button.tool | 248 | 1007 | 198×38 |
-| div.observation | 8 | 1101 | 1164×837 |
+| div.observation | 8 | 1101 | 1164×897 |
 | footer.statusbar | 0 | 974 | 1180×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -91,7 +91,7 @@ Aucun problème.
 | button.tool | 324 | 911 | 129×38 |
 | button.tool | 17 | 955 | 225×38 |
 | button.tool | 248 | 955 | 198×38 |
-| div.observation | 8 | 1049 | 1084×869 |
+| div.observation | 8 | 1049 | 1084×930 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -122,7 +122,7 @@ Aucun problème.
 | button.tool | 324 | 871 | 129×38 |
 | button.tool | 17 | 915 | 225×38 |
 | button.tool | 248 | 915 | 198×38 |
-| div.observation | 8 | 1009 | 1024×835 |
+| div.observation | 8 | 1009 | 1024×896 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -153,7 +153,7 @@ Aucun problème.
 | button.tool | 324 | 845 | 129×38 |
 | button.tool | 17 | 889 | 225×38 |
 | button.tool | 248 | 889 | 198×38 |
-| div.observation | 8 | 983 | 984×855 |
+| div.observation | 8 | 983 | 984×916 |
 | footer.statusbar | 0 | 974 | 1000×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -184,7 +184,7 @@ Aucun problème.
 | button.tool | 324 | 780 | 129×38 |
 | button.tool | 17 | 824 | 225×38 |
 | button.tool | 248 | 824 | 198×38 |
-| div.observation | 8 | 918 | 884×902 |
+| div.observation | 8 | 918 | 884×963 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -215,7 +215,7 @@ Aucun problème.
 | button.tool | 324 | 692 | 129×38 |
 | button.tool | 17 | 736 | 225×38 |
 | button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1052 |
+| div.observation | 8 | 830 | 744×1113 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
