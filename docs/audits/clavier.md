@@ -2,19 +2,13 @@
 
 Généré par `web/tests/e2e/audit-clavier.mjs`.
 
-**24 problème(s)** sur 8 états mesurés et 297 éléments atteints.
+**0 problème(s)** sur 8 états mesurés et 297 éléments atteints.
 
 ## observation · Simulation
 
-3 problème(s) · 35 élément(s) dans l'ordre de tabulation
+0 problème(s) · 35 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -28,9 +22,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -45,7 +39,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab.active | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -60,15 +54,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## observation · Journal
 
-3 problème(s) · 35 élément(s) dans l'ordre de tabulation
+0 problème(s) · 35 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -82,9 +70,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -99,7 +87,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab.active | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -114,15 +102,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## observation · Trame
 
-3 problème(s) · 31 élément(s) dans l'ordre de tabulation
+0 problème(s) · 31 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -136,9 +118,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -153,7 +135,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab.active | tab | Trame | oui |
@@ -164,15 +146,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## observation · Exercice
 
-3 problème(s) · 32 élément(s) dans l'ordre de tabulation
+0 problème(s) · 32 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -186,9 +162,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -203,7 +179,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -215,15 +191,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## équipement · Physique
 
-3 problème(s) · 40 élément(s) dans l'ordre de tabulation
+0 problème(s) · 40 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -237,9 +207,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -254,7 +224,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -274,15 +244,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## équipement · Config
 
-3 problème(s) · 45 élément(s) dans l'ordre de tabulation
+0 problème(s) · 45 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -296,9 +260,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -313,7 +277,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -338,15 +302,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## équipement · CLI
 
-3 problème(s) · 36 élément(s) dans l'ordre de tabulation
+0 problème(s) · 36 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -360,9 +318,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -377,7 +335,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -393,15 +351,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 ## passerelle · Config
 
-3 problème(s) · 43 élément(s) dans l'ordre de tabulation
+0 problème(s) · 43 élément(s) dans l'ordre de tabulation
 
-### sans indicateur de focus (3)
-
-| élément | détail |
-|---|---|
-| g | « gw-nord — Passerelle frontière » prend le focus mais aucun style ne change |
-| g | « capteur-a — Capteur » prend le focus mais aucun style ne change |
-| g | « capteur-b — Capteur » prend le focus mais aucun style ne change |
+Aucun problème.
 
 <details><summary>ordre de tabulation</summary>
 
@@ -415,9 +367,9 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
 | 7 | button.view-tab | tab | Carte 3D | oui |
 | 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | non |
-| 10 | g | button | capteur-a — Capteur | non |
-| 11 | g | button | capteur-b — Capteur | non |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
 | 12 | button.tool.active | button | Sélection | oui |
 | 13 | button.tool | button | Déplacer | oui |
 | 14 | button.tool | button | Supprimer | oui |
@@ -432,7 +384,7 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session XfIZx04n · 3 équip. | oui |
+| 26 | select#session-select | select | Session ZJe3PRjC · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -453,4 +405,4 @@ Généré par `web/tests/e2e/audit-clavier.mjs`.
 
 </details>
 
-TOTAL : 24 problème(s)
+TOTAL : 0 problème(s)
