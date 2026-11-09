@@ -104,6 +104,10 @@ class _Study:
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
     sf_par_equipement: dict = field(default_factory=dict)  # groupe -> {SF depart, SF final}
+    # Options de protocole du run. Demandées ici, **effectivement simulées** selon ce que le
+    # moteur accepte : la jointure et l'ADR s'excluent (`mac_loop.check_closed_loop`).
+    join: bool = False
+    confirmed: bool = False
     run_id: Optional[str] = None
     terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
     # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
@@ -125,6 +129,20 @@ def _adr_etat(st: _Study) -> tuple[bool, str]:
     return adr_possible(list(st.nodes.values()), {nid: c.config for nid, c in st.cli.items()})
 
 
+def _join_etat(st: _Study) -> tuple[bool, str]:
+    """La jointure OTAA est-elle simulable, et sinon pourquoi. Lisible **avant** le run."""
+    from lsim.study_compile import join_possible
+    return join_possible(list(st.nodes.values()), {nid: c.config for nid, c in st.cli.items()},
+                         st.adr)
+
+
+def _confirmed_etat(st: _Study) -> tuple[bool, str]:
+    """Les trames confirmées sont-elles simulables, et sinon pourquoi."""
+    from lsim.study_compile import confirmed_possible
+    return confirmed_possible(list(st.nodes.values()),
+                              {nid: c.config for nid, c in st.cli.items()}, st.adr)
+
+
 def _encode(st: _Study) -> dict:
     return {
         "exercise_id": st.exercise_id,
@@ -135,6 +153,8 @@ def _encode(st: _Study) -> dict:
         "run_id": st.run_id,
         "terrain_id": st.terrain_id,
         "adr": st.adr,
+        "join": st.join,
+        "confirmed": st.confirmed,
         "hints_revealed": st.hints_revealed,
         "attempt_count": st.attempt_count,
         "compiled": {rid: [link.model_dump(mode="json") for link in links]
@@ -149,6 +169,7 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 cli={nid: _cli_from_dict(nid, c) for nid, c in body["cli"].items()},
                 reports=body["reports"], run_id=body["run_id"],
                 sf_par_equipement=body.get("sf_par_equipement") or {},
+                join=bool(body.get("join")), confirmed=bool(body.get("confirmed")),
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
                           for rid, links in body["compiled"].items()},
@@ -239,9 +260,14 @@ class StudyService:
                 configured=cli.config != study_cli.new_session(node.id).config,
                 gateway=_gateway_state(node, cli)))
         ok, raison = _adr_etat(st)
+        join_ok, join_raison = _join_etat(st)
+        conf_ok, conf_raison = _confirmed_etat(st)
         return SessionTopology(session_id=sid, nodes=nodes, states=states,
                                 terrain_id=st.terrain_id, adr=st.adr,
-                                adr_possible=ok, adr_raison=raison)
+                                adr_possible=ok, adr_raison=raison,
+                                join=st.join, join_possible=join_ok, join_raison=join_raison,
+                                confirmed=st.confirmed, confirmed_possible=conf_ok,
+                                confirmed_raison=conf_raison)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -396,9 +422,21 @@ class StudyService:
             configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
         try:
             return compile_session(nodes, configs, seed, terrain_id=st.terrain_id,
-                                        adr=st.adr)
+                                        adr=st.adr, join=st.join, confirmed=st.confirmed)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
+
+    def set_protocol(self, owner: str, sid: str, join: bool, confirmed: bool) -> SessionTopology:
+        """Règle la jointure OTAA et les trames confirmées.
+
+        Comme pour l'ADR, le souhait est gardé même quand il n'est pas simulable, et c'est la
+        topologie qui décide : la raison revient dans la réponse plutôt que dans un refus.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            st.join = bool(join)
+            st.confirmed = bool(confirmed)
+            return self._topology_locked(sid, st)
 
     def set_adr(self, owner: str, sid: str, adr: bool) -> SessionTopology:
         """Active ou désactive l'ADR du serveur.

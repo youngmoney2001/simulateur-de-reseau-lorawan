@@ -314,6 +314,50 @@ export function ventilationTable(groupes = [], limites = null) {
 }
 
 /**
+ * Bilan des échanges avec le serveur : la jointure OTAA et les trames confirmées.
+ *
+ * Ce qui est compté, et pourquoi ces nombres-là :
+ *
+ * - **Jointure.** Un `join_request` est une **tentative** : un terminal qui n'obtient pas son
+ *   join-accept réessaie, et les tentatives se comptent donc séparément des acceptations. Un
+ *   `join_accept` n'est émis que si la demande a été reçue : c'est une jointure aboutie. Le cas
+ *   qui compte est « des dizaines de demandes, aucune acceptation » — une flotte qui joint au
+ *   même instant se collisionne et **n'émet jamais la moindre donnée**.
+ *
+ * - **Trames confirmées.** Un `ack` n'est émis que pour un uplink **reçu** par le serveur. La
+ *   différence « uplinks − ack » n'est donc pas des ACK perdus en vol : ce sont des trames qui
+ *   ne sont jamais arrivées, ou qu'une passerelle occupée n'a pas entendues. Le dire autrement
+ *   (« 6 ACK perdus ») accuserait la descente de ce qui est une perte à la montée.
+ *
+ * Les deux bilans sont toujours renvoyés, même à zéro : dire « le réglage était actif » est du
+ * ressort de la session, pas d'un comptage. Afficher « 0 jointure » sur un run où la jointure
+ * n'était pas demandée serait un mensonge par omission — l'appelant ne le fait pas.
+ */
+export function bilanProtocole(events = []) {
+  let demandes = 0, acceptees = 0, uplinks = 0, acquittes = 0;
+  for (const e of events) {
+    switch (e.kind) {
+      case "join_request": demandes += 1; break;
+      case "join_accept": acceptees += 1; break;
+      case "uplink": uplinks += 1; break;
+      case "ack": acquittes += 1; break;
+      default: break;
+    }
+  }
+  // Les compteurs sont rendus tels quels : c'est l'appelant qui sait si le réglage était
+  // simulé (la session le dit), et lui seul peut décider de montrer le bloc. Deviner ici
+  // (« il y a des ack, donc les trames confirmées étaient actives ») casserait sur un run où
+  // le serveur n'a rien acquitté — le cas qu'il faut justement savoir afficher.
+  return {
+    jointure: { demandes, acceptees, tentativesDeplus: Math.max(0, demandes - acceptees),
+                // Des demandes, aucune acceptation : la flotte n'a pas joint, et ce run
+                // n'émettra aucune donnée. C'est le cas que ce bloc doit rendre visible.
+                aucune: demandes > 0 && acceptees === 0 },
+    confirme: { uplinks, acquittes, sansReponse: Math.max(0, uplinks - acquittes) },
+  };
+}
+
+/**
  * Bilan du débit commandé par le serveur : « ce capteur est passé de SF12 à SF7 ».
  *
  * Le seul endroit où le changement se lit est la ligne de dispositif du run : `spreading_factor`

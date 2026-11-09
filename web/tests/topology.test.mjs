@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { validateGateway, REGIONS_A_SOUS_BANDE, AVANCE_EN_CLI, REGIONS,
-  adrMessage, adrStatut }
+  adrMessage, adrStatut, protocoleMessage, protocoleStatut }
   from "../src/studio/topology.js";
 
 
@@ -112,4 +112,38 @@ test("le statut annonce ce qui est simulable, pas ce qui est demandé", () => {
 
 test("un serveur muet sur la raison ne produit pas un message vide", () => {
   assert.match(adrStatut({ possible: false, actif: true }), /topologie incompatible/);
+});
+
+// --- Jointure OTAA et trames confirmées : ce que la case dit -----------------------------------
+
+test("réglage possible : la case annonce ce que le run fera", () => {
+  const m = protocoleMessage({ nom: "Jointure OTAA", possible: true, actif: true });
+  assert.match(m, /Jointure OTAA/);
+  assert.match(m, /simulé sur ce run/);
+  assert.match(protocoleMessage({ nom: "Trames confirmées", possible: true, actif: false }),
+    /non simulé sur ce run/);
+});
+
+test("jointure impossible : la raison du moteur est affichée, jamais un silence", () => {
+  // La jointure et l'ADR s'excluent : `mac_loop.check_closed_loop` lève. Le dire avant le run
+  // évite un échec que rien n'expliquerait.
+  const m = protocoleMessage({ nom: "Jointure OTAA", possible: false,
+    raison: "la jointure et l'ADR s'excluent", actif: true });
+  assert.match(m, /ADR s'excluent/);
+  assert.match(m, /souhait est gardé/);
+  assert.ok(m.indexOf("ADR s'excluent") < m.indexOf("souhait est gardé"));
+});
+
+test("le statut de protocole annonce le simulable, pas le demandé", () => {
+  assert.match(protocoleStatut({ nom: "Jointure OTAA", possible: true, actif: true }),
+    /simulera/);
+  assert.match(protocoleStatut({ nom: "Jointure OTAA", possible: false, actif: true,
+    raison: "ADR actif" }), /non simulable/);
+  assert.match(protocoleStatut({ nom: "Trames confirmées", possible: true, actif: false }),
+    /désactivé/);
+});
+
+test("un serveur muet sur la raison ne produit pas un message vide", () => {
+  assert.match(protocoleStatut({ nom: "Jointure OTAA", possible: false, actif: true }),
+    /réglage incompatible/);
 });

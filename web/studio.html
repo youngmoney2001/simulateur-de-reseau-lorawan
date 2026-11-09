@@ -181,6 +181,16 @@
             <label><input type="checkbox" id="adr-toggle" /> ADR du serveur (LinkADRReq)</label>
             <p id="adr-aide" class="gw-aide muted" role="status"></p>
           </div>
+          <!-- Jointure OTAA et trames confirmées : deux autres décisions qui changent la
+               forme du run entier, donc deux autres cases ici plutôt que dans une fenêtre
+               d'équipement. Chacune porte sa raison quand le moteur ne peut pas la simuler —
+               la jointure et l'ADR s'excluent. -->
+          <div id="proto-field" class="adr">
+            <label><input type="checkbox" id="join-toggle" /> Jointure OTAA (join-request)</label>
+            <p id="join-aide" class="gw-aide muted" role="status"></p>
+            <label><input type="checkbox" id="confirmed-toggle" /> Trames confirmées (ACK)</label>
+            <p id="confirmed-aide" class="gw-aide muted" role="status"></p>
+          </div>
           <p id="sim-status" class="muted"></p>
           <ul id="sim-notes" class="notes"></ul>
           <!-- Le débit commandé par le serveur, tel que le run l'a observé. Ce bloc ne dit rien
@@ -190,6 +200,13 @@
             <h3>Débit commandé par le serveur</h3>
             <ul id="adr-bilan-liste" class="notes"></ul>
             <p id="adr-bilan-aide" class="gw-aide muted"></p>
+          </div>
+          <!-- Les échanges avec le serveur, tels que le run les a produits : jointures
+               abouties ou non, et uplinks restés sans réponse. -->
+          <div id="proto-bilan" hidden>
+            <h3>Échanges avec le serveur</h3>
+            <ul id="proto-bilan-liste" class="notes"></ul>
+            <p id="proto-bilan-aide" class="gw-aide muted"></p>
           </div>
           <table id="sim-results" hidden>
             <thead>

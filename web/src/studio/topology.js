@@ -300,3 +300,41 @@ export function adrStatut({ possible = false, raison = "", actif = false } = {})
   }
   return "ADR désactivé.";
 }
+
+// --- Jointure OTAA et trames confirmées ------------------------------------------------------
+//
+// Même traitement que l'ADR : des fonctions pures, sans DOM, donc vérifiables hors navigateur.
+// Ces deux réglages changent la forme du run entier (le premier message de chaque capteur
+// devient une demande de jointure ; chaque uplink reçu appelle un ACK), et non le comportement
+// d'un équipement : ils n'ont donc rien à faire dans une fenêtre d'équipement.
+
+/**
+ * Message affiché sous une case de protocole : la raison quand le moteur ne peut pas la simuler.
+ *
+ * La jointure et l'ADR s'excluent (`mac_loop.check_closed_loop` lève). C'est le seul cas où
+ * `possible` est faux aujourd'hui, mais la fonction ne le suppose pas : elle répète la raison
+ * du serveur, comme `adrMessage` le fait.
+ *
+ * @param nom      « jointure » ou « trames confirmées »
+ * @param possible le réglage est-il simulable (dit par le serveur) ?
+ * @param raison   pourquoi il ne l'est pas, telle que le serveur l'énonce
+ * @param actif    l'utilisateur l'a-t-il demandé ?
+ */
+export function protocoleMessage({ nom = "réglage", possible = false, raison = "",
+  actif = false } = {}) {
+  if (possible) {
+    return actif ? `${nom} : simulé sur ce run.` : `${nom} : non simulé sur ce run.`;
+  }
+  const garde = actif ? ` — le souhait est gardé, mais ce run sera lancé sans.` : "";
+  return `${raison}${garde}`;
+}
+
+/**
+ * Ce qu'on annonce après une bascule : ce qui est réellement simulé, pas ce qui est demandé.
+ */
+export function protocoleStatut({ nom = "réglage", possible = false, raison = "",
+  actif = false } = {}) {
+  if (actif && possible) return `${nom} : le prochain run les simulera.`;
+  if (actif) return `${nom} demandé mais non simulable : ${raison || "réglage incompatible"}`;
+  return `${nom} désactivé.`;
+}

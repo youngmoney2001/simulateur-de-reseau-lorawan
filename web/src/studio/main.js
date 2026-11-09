@@ -7,12 +7,13 @@ import {
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
   GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut,
 } from "./topology.js";
+import { protocoleMessage, protocoleStatut } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
   limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte,
-  bilanAdr } from "./metrics.js";
+  bilanAdr, bilanProtocole } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -283,6 +284,7 @@ async function selectSession(sid) {
   state.rxMatrix = null;
   state.liaisonsObservees = [];
   renderAdr();
+  renderProtocole();
   renderSessionChoices();
   await loadTopology();
   const meta = state.sessions.find((s) => s.session_id === sid);
@@ -312,6 +314,7 @@ async function loadTopology() {
   if (topo) state.topo = topo;
   renderTerrains();
   renderAdr();
+  renderProtocole();
   refreshViews();
   renderDevice();
 }
@@ -762,6 +765,7 @@ function renderGatewayConfig(node, body) {
         // se réévaluer ici, sinon l'utilisateur ne verrait le changement qu'en changeant de
         // session — et croirait l'ADR impossible alors qu'il vient de le rendre possible.
         renderAdr();
+        renderProtocole();
         refreshViews();
         message.textContent = "Réglages enregistrés.";
       }
@@ -1120,6 +1124,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     $("adr-bilan").hidden = true;
     clear($("adr-bilan-liste"));
     $("adr-bilan-aide").textContent = "";
+    $("proto-bilan").hidden = true;
+    clear($("proto-bilan-liste"));
+    $("proto-bilan-aide").textContent = "";
     $("sim-status").textContent = `Run ${started.run_id} : ${started.state}…`;
     const status = await waitForRun(started.run_id);
     if (!status) return;
@@ -1153,6 +1160,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     renderDevice();             // la fenêtre ouverte chiffre le résultat
     syncMap();                  // la carte change de couleur : elle montre le run
     await loadAnimation(started.run_id);
+    // Après le chargement des événements, et pas avant : le bilan des échanges les compte.
+    // L'appeler depuis `renderResults` l'aurait fait lire ceux du run précédent.
+    renderBilanProtocole();
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
   } finally {
     state.busy = false;
@@ -1189,6 +1199,67 @@ function renderResults(summary, linkedNames, deviceRows = []) {
   table.hidden = rows.length === 0;
   renderAdrBilan(deviceRows);
   renderMetrics(summary, deviceRows);
+}
+
+/**
+ * Les échanges avec le serveur, tels que le run les a produits.
+ *
+ * Deux règles tiennent ce bloc debout :
+ *   - il ne s'ouvre que si le réglage était **simulé** (la session le dit, pas le comptage) ;
+ *   - les chiffres viennent des événements du run, jamais des cases du formulaire.
+ *
+ * Les deux cas qui méritent d'être vus ne ressemblent pas à des succès : une flotte dont
+ * aucune jointure n'aboutit n'émettra **aucune donnée**, et un uplink sans ACK n'est pas un
+ * ACK perdu — c'est une trame qui n'est jamais arrivée au serveur.
+ */
+function renderBilanProtocole() {
+  const bloc = $("proto-bilan");
+  const liste = $("proto-bilan-liste");
+  const aide = $("proto-bilan-aide");
+  clear(liste);
+  const topo = state.topo;
+  // Ce que le run a **réellement** simulé : demandé **et** possible au moment du lancement.
+  const joinSimule = topo?.join === true && topo?.join_possible === true;
+  const confSimule = topo?.confirmed === true && topo?.confirmed_possible === true;
+  if (!joinSimule && !confSimule) {
+    bloc.hidden = true;
+    aide.textContent = "";
+    return;
+  }
+  const { jointure, confirme } = bilanProtocole(state.events ?? []);
+  if (joinSimule) {
+    if (jointure.aucune) {
+      // Le cas d'école, et il doit se voir comme un échec franc : tout le monde a demandé,
+      // personne n'a été accepté, et le run ne porte donc aucune donnée.
+      liste.append(el("li", { text: `Jointure : ${jointure.demandes} demande(s), aucune `
+        + `acceptée — aucun capteur n'a joint, et ce run n'a émis aucune donnée.` }));
+      aide.textContent = "Tout le monde a demandé au même instant : les join-request se sont "
+        + "collisionnées. Une dispersion du départ (champ « Dispersion du départ » du capteur) "
+        + "les étale, et la jointure aboutit.";
+    } else {
+      const plus = jointure.tentativesDeplus > 0
+        ? ` (${jointure.tentativesDeplus} demande(s) de plus que de capteurs : des terminaux ont dû recommencer)` : "";
+      liste.append(el("li", { text: `Jointure : ${jointure.acceptees} acceptée(s)`
+        + ` pour ${jointure.demandes} demande(s)${plus}.` }));
+    }
+  }
+  if (confSimule) {
+    if (confirme.sansReponse === 0) {
+      liste.append(el("li", { text: `Trames confirmées : ${confirme.acquittes} ACK `
+        + `pour ${confirme.uplinks} uplink(s) — le serveur a répondu à tout ce qu'il a reçu.` }));
+    } else {
+      // Pas « des ACK perdus » : un ACK n'existe que pour un uplink reçu. Ce qui manque,
+      // ce sont des trames qui ne sont jamais arrivées.
+      liste.append(el("li", { text: `Trames confirmées : ${confirme.acquittes} ACK pour `
+        + `${confirme.uplinks} uplink(s) : ${confirme.sansReponse} sans réponse — elles n'ont `
+        + `pas atteint le serveur.` }));
+    }
+    if (aide.textContent === "") {
+      aide.textContent = "Un ACK n'est émis que pour une trame reçue : l'écart compte donc des "
+        + "uplinks perdus à la montée, pas des acquittements perdus en vol.";
+    }
+  }
+  bloc.hidden = false;
 }
 
 /**
@@ -1315,6 +1386,43 @@ async function choisirTerrain(terrainId) {
  * Le coût est affiché en permanence, pas seulement quand l'ADR est actif : l'utilisateur doit
  * savoir avant de cocher que ce run ne simulera ni relais ni liaisons radio.
  */
+/**
+ * Les trois réglages qui changent la forme du run : ADR, jointure, trames confirmées.
+ *
+ * Ils sont rendus ensemble et de la même façon parce qu'ils obéissent à la même règle — le
+ * souhait est gardé, c'est le moteur qui décide, et la raison est affichée sous la case.
+ */
+function renderProtocole() {
+  for (const [id, cle, nom] of [["join-toggle", "join", "Jointure OTAA"],
+    ["confirmed-toggle", "confirmed", "Trames confirmées"]]) {
+    const case_ = $(id);
+    const aide = $(id.replace("-toggle", "-aide"));
+    if (!case_ || !aide) continue;
+    const possible = state.topo?.[`${cle}_possible`] === true;
+    const raison = state.topo?.[`${cle}_raison`] ?? "";
+    case_.checked = state.topo?.[cle] === true;
+    case_.disabled = !possible;
+    aide.textContent = protocoleMessage({ nom, possible, raison, actif: case_.checked });
+  }
+}
+
+async function basculerProtocole(join, confirmed) {
+  if (!state.sid) return;
+  const topo = await guard(() => state.client.setProtocole(state.sid, join, confirmed));
+  if (!topo) return;
+  state.topo = topo;
+  renderProtocole();
+  // L'ADR et la jointure s'excluent : activer l'un peut griser l'autre, donc l'ADR est
+  // relu lui aussi — sans quoi sa case garderait un état que le serveur vient de changer.
+  renderAdr();
+  const j = protocoleStatut({ nom: "Jointure OTAA", possible: topo.join_possible === true,
+    raison: topo.join_raison ?? "", actif: topo.join === true });
+  const c = protocoleStatut({ nom: "Trames confirmées",
+    possible: topo.confirmed_possible === true, raison: topo.confirmed_raison ?? "",
+    actif: topo.confirmed === true });
+  setStatus(`${j} ${c}`);
+}
+
 function renderAdr() {
   const champ = $("adr-field");
   const case_ = $("adr-toggle");
@@ -1334,6 +1442,7 @@ async function basculerAdr(actif) {
   if (!topo) return;
   state.topo = topo;
   renderAdr();
+  renderProtocole();
   setStatus(adrStatut({ possible: topo.adr_possible === true, raison: topo.adr_raison ?? "",
     actif: topo.adr === true }));
 }
@@ -2080,6 +2189,12 @@ $("terrain-select").addEventListener("change", (ev) => choisirTerrain(ev.target.
 // `change` et non `click` : la case peut aussi basculer au clavier, et c'est le changement
 // d'état qu'on veut, pas le geste.
 $("adr-toggle").addEventListener("change", (ev) => basculerAdr(ev.target.checked));
+// Les deux cases de protocole partagent un seul appel : elles sont rendues ensemble, et
+// envoyer l'une sans l'autre reviendrait à effacer le souhait de sa voisine côté serveur.
+for (const id of ["join-toggle", "confirmed-toggle"]) {
+  $(id).addEventListener("change", () => basculerProtocole(
+    $("join-toggle").checked, $("confirmed-toggle").checked));
+}
 $("save-chantier").addEventListener("click", sauvegarderChantier);
 $("load-chantier").addEventListener("click", () => $("chantier-file").click());
 // Vider la valeur après chaque lecture : sinon recharger le même fichier une deuxième fois

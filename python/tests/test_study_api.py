@@ -5,6 +5,7 @@ du panneau (`lsim.study_contract`). Pas d'exercices dans cette version : leurs r
 """
 
 import re
+from collections import Counter
 
 import pytest
 
@@ -310,6 +311,107 @@ def test_adr_exercise_is_graded_on_the_observed_datarate_not_the_checkbox(api):
     criteres, note = soumettre(40)
     assert criteres["debit"]
     assert note == 40
+
+
+# --- Protocole du run : jointure OTAA et trames confirmées -------------------------------------
+
+def _evenements(api, run_id):
+    """Compte les événements d'un run terminé, toutes pages confondues."""
+    vus, cursor = Counter(), 0
+    while cursor is not None:
+        _, page = api.call("GET", f"/api/v1/runs/{run_id}/events?limit=100&cursor={cursor}")
+        for e in page["items"]:
+            vus[e["kind"]] += 1
+        cursor = page["next_cursor"]
+    return vus
+
+
+def _lancer(api, sid, seed=7):
+    status, started = api.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": seed})
+    assert status == 202
+    assert _wait_done(api, started["run_id"])["state"] == "done"
+    return started["run_id"]
+
+
+def test_join_and_confirmed_are_reflected_in_the_run(api):
+    """Les deux réglages atteignent le run, et la trace le montre.
+
+    Sans eux : six messages par capteur, tous en uplink. Avec eux : le premier message de
+    chaque capteur devient une demande de jointure, et chaque uplink reçu appelle un ACK.
+    """
+    sid = _session_une_passerelle(api, capteurs=("c0", "c1", "c2"))
+    for c in ("c0", "c1", "c2"):
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                             {"messages": 6, "period_s": 300, "start_spread_s": 20})
+        assert status == 200
+    _, topo = api.call("POST", f"/api/v1/sessions/{sid}/protocol", {"join": False,
+                                                                  "confirmed": False})
+    assert topo["join"] is False and topo["confirmed"] is False
+    avant = _evenements(api, _lancer(api, sid))
+    assert dict(avant) == {"uplink": 18}, dict(avant)
+
+    _, topo = api.call("POST", f"/api/v1/sessions/{sid}/protocol", {"join": True,
+                                                                  "confirmed": True})
+    assert topo["join"] is True and topo["join_possible"] is True
+    apres = _evenements(api, _lancer(api, sid))
+    # Trois jointures : un join-request de plus que de capteurs, un terminal ayant dû
+    # recommencer. Les données tombent de 18 à 15 : le premier message est la jointure.
+    assert apres["join_request"] >= 3 and apres["join_accept"] >= 3, dict(apres)
+    assert apres["uplink"] == 15, dict(apres)
+    assert apres["ack"] > 0, dict(apres)
+
+
+def test_join_is_refused_when_adr_is_on_and_says_why(api):
+    """La jointure et l'ADR s'excluent (le moteur lève). Le souhait reste, la raison est dite.
+
+    Sans quoi le run échouerait sur une exception que rien n'explique : le refus du moteur
+    doit se lire **avant** le lancement.
+    """
+    sid = _session_une_passerelle(api, capteurs=("c0", "c1"))
+    for c in ("c0", "c1"):
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                             {"messages": 6, "period_s": 300, "start_spread_s": 20})
+        assert status == 200
+    _, topo = api.call("POST", f"/api/v1/sessions/{sid}/protocol", {"join": True,
+                                                                  "confirmed": False})
+    assert topo["join_possible"] is True and topo["join_raison"] == ""
+    _, topo = api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True})
+    assert topo["adr_possible"] is True, topo
+    # Le souhait est gardé, mais il n'est plus simulable, et c'est dit.
+    assert topo["join"] is True
+    assert topo["join_possible"] is False
+    assert "ADR" in topo["join_raison"], topo["join_raison"]
+    # Et le run part quand même, sans jointure : ce n'est pas une erreur de l'utilisateur.
+    vus = _evenements(api, _lancer(api, sid))
+    assert "join_request" not in vus, dict(vus)
+    assert vus["uplink"] == 12, dict(vus)
+
+
+def test_confirmed_uplinks_cost_is_visible_in_the_device_rows(api):
+    """Une trame confirmée se paie : le capteur ouvre une fenêtre d'écoute pour l'ACK.
+
+    Mesuré, pas supposé : le courant moyen monte parce que la réception est comptée. Dire
+    « les trames confirmées sont plus sûres » sans montrer ce qu'elles coûtent serait
+    présenter un avantage sans son prix.
+    """
+    sid = _session_une_passerelle(api, capteurs=("c0", "c1", "c2"))
+    for c in ("c0", "c1", "c2"):
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                             {"messages": 6, "period_s": 300, "start_spread_s": 20})
+        assert status == 200
+
+    def courant(confirme):
+        _, topo = api.call("POST", f"/api/v1/sessions/{sid}/protocol",
+                           {"join": False, "confirmed": confirme})
+        assert topo["confirmed"] is confirme
+        run_id = _lancer(api, sid)
+        _, page = api.call("GET", f"/api/v1/runs/{run_id}/devices")
+        rows = page["items"]
+        return sum(r["average_current_ua"] for r in rows) / len(rows)
+
+    sans = courant(False)
+    avec = courant(True)
+    assert avec > sans, f"courant sans {sans} / avec {avec} : le coût devrait se voir"
 
 
 def test_binding_an_unknown_or_foreign_run_is_not_found(api, multi_run):

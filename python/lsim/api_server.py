@@ -60,8 +60,8 @@ from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
     CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
-    AdrChoice, SessionCreate, SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
-    TerrainChoice,
+    AdrChoice, ProtocoleChoice, SessionCreate, SimulateOut, SimulateRequest, SimulationBind,
+    SubmitRequest, TerrainChoice,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
@@ -1063,6 +1063,13 @@ class _Handler(BaseHTTPRequestHandler):
             req = self._parse_body(AdrChoice)
             return 200, self._study(lambda: study.set_adr(
                 owner, m_adr.group(1), req.adr)).model_dump()
+        m_prot = re.fullmatch(r"sessions/([^/]+)/protocol", rest)
+        if m_prot is not None and method == "POST":
+            # Même règle que l'ADR : le souhait est enregistré quel qu'il soit, c'est le
+            # moteur qui décide s'il est simulable, et la raison revient dans la réponse.
+            req = self._parse_body(ProtocoleChoice)
+            return 200, self._study(lambda: study.set_protocol(
+                owner, m_prot.group(1), req.join, req.confirmed)).model_dump()
         if method == "POST" and rest == "sessions":
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))

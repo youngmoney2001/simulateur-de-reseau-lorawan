@@ -61,6 +61,10 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,
     // et il renvoie la raison avec la topologie plutôt qu'un refus.
     setAdr: (sid, adr) => request("POST", `${s(sid)}/adr`, { adr }),
+    // Jointure OTAA et trames confirmées : mêmes règles que l'ADR (souhait envoyé tel quel,
+    // raison renvoyée par le serveur). La jointure et l'ADR s'excluent côté moteur.
+    setProtocole: (sid, join, confirmed) =>
+      request("POST", `${s(sid)}/protocol`, { join, confirmed }),
     submit: (exerciseId, sid) =>
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),

@@ -207,6 +207,16 @@ class SessionTopology(_Strict):
     adr: bool = False
     adr_possible: bool = False
     adr_raison: str = ""
+    # Jointure OTAA et trames confirmées : même forme que l'ADR, et pour la même raison —
+    # chacun dit ce qui est **demandé**, et `*_possible` / `*_raison` ce que le run fera.
+    # Ce sont des options de protocole du run (`RunCreate.protocol`), pas des réglages
+    # d'équipement : le moteur les applique à tous les dispositifs, ou à aucun.
+    join: bool = False
+    join_possible: bool = False
+    join_raison: str = ""
+    confirmed: bool = False
+    confirmed_possible: bool = False
+    confirmed_raison: str = ""
 
 
 class AdrChoice(_Strict):
@@ -217,6 +227,18 @@ class AdrChoice(_Strict):
     """
 
     adr: bool = False
+
+
+class ProtocoleChoice(_Strict):
+    """Demande de réglage protocolaire d'une session : jointure OTAA, trames confirmées.
+
+    Comme `AdrChoice`, le client n'indique que son souhait. La jointure et l'ADR s'excluent
+    (le moteur refuse le couple — `mac_loop.check_closed_loop`), et c'est le serveur qui le
+    dit, avec la raison, plutôt que de laisser le run échouer.
+    """
+
+    join: bool = False
+    confirmed: bool = False
 
 
 class TerrainChoice(_Strict):

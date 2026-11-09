@@ -99,14 +99,53 @@ def adr_possible(nodes: list[Node], configs: dict[str, GatewayConfig]) -> tuple[
     return True, ""
 
 
+
+def join_possible(nodes: list[Node], configs: dict[str, GatewayConfig],
+                  adr: bool) -> tuple[bool, str]:
+    """La jointure OTAA peut-elle être simulée sur cette session ? Et sinon, pourquoi.
+
+    Une seule condition, et elle est un refus du moteur, vérifié par exécution : la boucle
+    fermée (ADR) lève « jointure non supportée » dans `mac_loop.check_closed_loop`. Les deux
+    réglages s'excluent donc, et le dire avant le run évite un échec incompréhensible.
+
+    `nodes` et `configs` sont pris pour garder la même signature que `adr_possible` : la
+    jointure n'a aujourd'hui aucune condition de topologie, mais une nuit de réflexion sur
+    le relais pourrait en ajouter une, et l'appelant n'aurait rien à changer.
+    """
+    if adr:
+        return False, "la jointure et l'ADR s'excluent : le moteur refuse de simuler les deux"
+    return True, ""
+
+
+def confirmed_possible(nodes: list[Node], configs: dict[str, GatewayConfig],
+                       adr: bool) -> tuple[bool, str]:
+    """Les trames confirmées peuvent-elles être simulées ? Et sinon, pourquoi.
+
+    Aucune condition aujourd'hui : le moteur accepte le couple avec l'ADR (mesuré : 120
+    uplinks, 120 ACK et 3 LinkADRReq sur le même run). La fonction existe pour que l'atelier
+    interroge les trois réglages de la même façon, plutôt que d'en câbler deux en dur et le
+    troisième avec une raison.
+    """
+    return True, ""
+
+
 def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int,
-                    terrain_id: Optional[str] = None, adr: bool = False) -> Compiled:
+                    terrain_id: Optional[str] = None, adr: bool = False,
+                    join: bool = False, confirmed: bool = False) -> Compiled:
     """Compile la session en scénario.
 
     `adr` : la boucle fermée (LinkADRReq) est demandée. Elle n'existe qu'à passerelle unique,
     sans mesh et avec un plan régional ; le scénario prend alors la forme `gateway` au lieu de
     `gateways`, seule forme que le schéma accepte avec `mac`. Voir `adr_possible` pour les
     conditions et leurs raisons — elles sont affichées telles quelles dans l'atelier.
+
+    `join` : jointure OTAA. Le premier message de chaque dispositif devient un join-request,
+    au lieu d'un uplink de données ; le moteur répond d'un join-accept. Exclu par l'ADR.
+
+    `confirmed` : uplinks de données confirmés, chacun attendant un ACK.
+
+    Les trois passent par `protocol` du corps de run, et non par le scénario : le moteur les
+    applique à tous les dispositifs du run, ou à aucun.
     """
     notes: list[str] = []
     gateways = [n for n in nodes if n.kind in ("relay", "border")]
@@ -262,7 +301,16 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
     notes.append(f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
                  "moyen est celui de ce matériel")
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
-    body: dict = {"scenario": scenario, "protocol": {}, "energy_profile": ENERGY_PROFILE}
+    # Le protocole effectif, pas le protocole demandé : une jointure demandée alors que l'ADR
+    # est actif ne serait pas simulée, et l'écrire dans le corps laisserait croire à un run
+    # qui joint. La raison, elle, est portée par `SessionTopology` et affichée avant le run.
+    protocole = {}
+    if join and join_possible(nodes, configs, adr)[0]:
+        protocole["join"] = True
+    if confirmed and confirmed_possible(nodes, configs, adr)[0]:
+        protocole["confirmed_uplinks"] = True
+    body: dict = {"scenario": scenario, "protocol": protocole,
+                  "energy_profile": ENERGY_PROFILE}
     # Le relief n'entre dans le corps que s'il a ete choisi : une cle absente et une cle a
     # `null` n'ont pas le meme sens cote serveur, et seul le choix doit se voir.
     if terrain_id is not None:

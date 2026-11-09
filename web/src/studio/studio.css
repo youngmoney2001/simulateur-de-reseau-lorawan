@@ -362,6 +362,21 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 #adr-bilan h3 { margin: 0 0 4px; font-size: 13px; }
 #adr-bilan .notes { margin: 0; }
 #adr-bilan .gw-aide { margin: 5px 0 0; }
+
+/* --- Échanges avec le serveur (jointure, ACK) --------------------------------------------- */
+/* Même gabarit que l'encadré du débit, avec un liseré d'une autre teinte : les deux blocs
+   répondent à des questions différentes et ne doivent pas se confondre au premier coup d'œil. */
+#proto-bilan {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--bord, #d6d9de);
+  border-left: 3px solid #4a6fa5;
+  border-radius: 4px;
+  background: #f6f8fb;
+}
+#proto-bilan h3 { margin: 0 0 4px; font-size: 13px; }
+#proto-bilan .notes { margin: 0; }
+#proto-bilan .gw-aide { margin: 5px 0 0; }
 .gw-avance summary { cursor:pointer; color:var(--muted); }
 .sensor-actions { grid-column:1 / -1; display:flex; gap:6px; margin-top:4px; }
 

@@ -28,7 +28,7 @@ import {
   couleurPdr,
   echellePdr,
   ECHELLE_PDR,
-  bilanAdr,
+  bilanAdr, bilanProtocole,
   resultatsParNoeud,
   lignesResultat,
   verdictDutyCycle,
@@ -626,4 +626,56 @@ test("un run sans changement donne un bilan vide, pas un bilan nul", () => {
   ];
   assert.deepEqual(bilanAdr(rows, []), []);
   assert.deepEqual(bilanAdr([], [{ id: "c1" }]), []);
+});
+
+// --- Jointure OTAA et trames confirmées -------------------------------------------------------
+//
+// Les nombres de ce bloc sont ceux qu'on lirait à l'œil dans une trace. Le seul piège est de
+// ne pas les confondre : une tentative n'est pas une acceptation, et un uplink sans ACK n'est
+// pas un ACK perdu.
+
+test("la jointure compte les tentatives et les acceptations séparément", () => {
+  const ev = [
+    { kind: "join_request" }, { kind: "join_accept" },
+    { kind: "join_request" }, { kind: "join_accept" },
+    { kind: "join_request" },          // une demande de plus : un terminal a dû recommencer
+    { kind: "uplink" }, { kind: "uplink" },
+  ];
+  const { jointure } = bilanProtocole(ev);
+  assert.equal(jointure.demandes, 3);
+  assert.equal(jointure.acceptees, 2);
+  assert.equal(jointure.tentativesDeplus, 1);
+  assert.equal(jointure.aucune, false);
+});
+
+test("une flotte qui n'obtient aucune acceptation est signalée", () => {
+  // Trente demandes, aucune acceptation : c'est le cas d'école (tout le monde joint au même
+  // instant) et il doit sauter aux yeux plutôt que se lire comme « 0 jointure réussie ».
+  const ev = Array.from({ length: 30 }, () => ({ kind: "join_request" }));
+  const { jointure } = bilanProtocole(ev);
+  assert.equal(jointure.demandes, 30);
+  assert.equal(jointure.acceptees, 0);
+  assert.equal(jointure.aucune, true);
+});
+
+test("les uplinks sans ACK sont comptés sans accuser la descente", () => {
+  // Un `ack` n'existe que pour un uplink **reçu**. 24 acquittés sur 30 uplinks : les 6
+  // manquants n'ont pas perdu leur ACK, ils ne sont jamais arrivés au serveur.
+  const ev = [
+    ...Array.from({ length: 30 }, () => ({ kind: "uplink" })),
+    ...Array.from({ length: 24 }, () => ({ kind: "ack" })),
+  ];
+  const { confirme } = bilanProtocole(ev);
+  assert.equal(confirme.uplinks, 30);
+  assert.equal(confirme.acquittes, 24);
+  assert.equal(confirme.sansReponse, 6);
+});
+
+test("un run sans jointure ni confirmation donne des compteurs nuls, pas d'erreur", () => {
+  const { jointure, confirme } = bilanProtocole([{ kind: "uplink" }, { kind: "downlink" }]);
+  assert.deepEqual(jointure, { demandes: 0, acceptees: 0, tentativesDeplus: 0, aucune: false });
+  assert.deepEqual(confirme, { uplinks: 1, acquittes: 0, sansReponse: 1 });
+  const vide = bilanProtocole([]);
+  assert.equal(vide.jointure.aucune, false);   // aucune demande : pas « aucune acceptation »
+  assert.equal(vide.confirme.uplinks, 0);
 });
