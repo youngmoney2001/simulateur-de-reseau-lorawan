@@ -103,6 +103,7 @@ class _Study:
     nodes: dict = field(default_factory=dict)       # id -> Node
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
+    sf_par_equipement: dict = field(default_factory=dict)  # groupe -> {SF depart, SF final}
     run_id: Optional[str] = None
     terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
     # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
@@ -130,6 +131,7 @@ def _encode(st: _Study) -> dict:
         "nodes": {nid: n.model_dump(mode="json") for nid, n in st.nodes.items()},
         "cli": {nid: _cli_to_dict(c) for nid, c in st.cli.items()},
         "reports": st.reports,
+        "sf_par_equipement": st.sf_par_equipement,
         "run_id": st.run_id,
         "terrain_id": st.terrain_id,
         "adr": st.adr,
@@ -146,6 +148,7 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 nodes={nid: Node.model_validate(n) for nid, n in body["nodes"].items()},
                 cli={nid: _cli_from_dict(nid, c) for nid, c in body["cli"].items()},
                 reports=body["reports"], run_id=body["run_id"],
+                sf_par_equipement=body.get("sf_par_equipement") or {},
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
                           for rid, links in body["compiled"].items()},
@@ -440,20 +443,40 @@ class StudyService:
 
     # Liaison à une simulation -------------------------------------------------------------------
 
-    def bind_run(self, owner: str, sid: str, req: SimulationBind, summary: dict) -> SimulationBound:
+    def bind_run(self, owner: str, sid: str, req: SimulationBind, summary: dict,
+                 sf_par_equipement: Optional[dict] = None) -> SimulationBound:
         """Lie le résumé d'un run terminé selon les associations de la requête, ou, sans
         association, selon la compilation de la session si le run en vient.
 
         Tout est validé avant la moindre modification : une association invalide ne laisse aucun
         équipement à moitié lié. `summary` vient de `RunService.summary` (propriétaire vérifié).
+
+        `sf_par_equipement` : SF de départ et de fin par groupe, lu dans les lignes de
+        dispositifs. Il n'est pas dans le résumé, et c'est pourtant la seule pièce qui dise si
+        le serveur a changé le débit d'un capteur — donc la seule qui permette de noter un
+        exercice sur l'ADR sans interroger une case de formulaire.
         """
         gateways = {g["name"]: g for g in summary.get("gateways") or []}
+        # Un run ADR n'a **aucune passerelle nommée** : la session y compile en forme
+        # `gateway` (singulier), seule forme que le moteur accepte avec un MAC actif. Il n'y a
+        # donc rien à lier, et ce n'est pas une erreur de l'utilisateur — c'est le coût assumé
+        # de l'ADR. On accepte la liaison sans lien plutôt que de la refuser : sinon l'atelier
+        # échouerait sur **chaque** run ADR, y compris celui qui vient d'être lancé.
+        #
+        # En revanche, un run qui nomme des passerelles reste strict : un nom absent du run est
+        # une faute de l'utilisateur, et le refus le lui dit.
+        sans_passerele_nommee = not gateways
         seen_nodes: set[str] = set()
         seen_gateways: set[str] = set()
         with self._lock:
             st = self._get_locked(owner, sid)
             if req.links:
+                # Liaison explicite : jamais avalée en silence. Un nom absent du run est une
+                # faute de l'utilisateur, et le refus le lui dit — même si le run n'en nomme
+                # aucun. C'est la seule voie qui doive rester stricte.
                 links = list(req.links)
+            elif sans_passerele_nommee:
+                links = []          # rien à lier : le run ne nomme aucune passerelle
             else:
                 links = [link for link in st.compiled.get(req.run_id, [])
                          if link.node_id in st.nodes]
@@ -484,6 +507,7 @@ class StudyService:
                 if node_id not in seen_nodes:
                     cli.simulation = None
             st.run_id = req.run_id
+            st.sf_par_equipement = dict(sf_par_equipement or {})
             unlinked = [n for n in st.nodes if n not in seen_nodes]
             self._save(sid, st)
         return SimulationBound(session_id=sid, run_id=req.run_id, linked=linked, unlinked=unlinked)
@@ -524,7 +548,9 @@ class StudyService:
             exercise = self._exercise_for_session(st, exercise_id, "session_id")
             state = study_exercises.State(
                 configs={nid: cli.config.copy() for nid, cli in st.cli.items()},
-                reports={nid: dict(r) for nid, r in st.reports.items()})
+                reports={nid: dict(r) for nid, r in st.reports.items()},
+                devices={k: dict(v) for k, v in st.sf_par_equipement.items()},
+                adr=st.adr)
             hints_used = st.hints_revealed.get(exercise_id, 0)
         graded = study_exercises.grade(exercise, state)
         criteria = [CriterionResult(id=c.id, label=c.label, passed=ok,

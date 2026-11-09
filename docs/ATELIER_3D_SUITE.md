@@ -279,14 +279,49 @@ Sept tests serveur, six tests web. Les libellés sont des fonctions pures (`adrM
 `adrStatut`) : un réglage qui explique son refus mérite d'être vérifié, et cela se fait sans
 navigateur.
 
+### Montrer le débit que le serveur a laissé
+
+La trace disait *que* le serveur a commandé ; elle ne disait pas *de SF12 à SF7*. Rien ne
+montrait le changement, et la mesure a d'abord semblé dire qu'il n'existait pas : les sauts d'un
+événement uplink portent `radios[dev].dr`, le DR **de départ**, figé pour tout le run, et un
+`mac_request` ne porte que le nom de la commande. Le seul endroit où le changement se lit est le
+SF du **dernier uplink**.
+
+`DeviceRowOut` porte donc `final_spreading_factor`. Il est **absent** quand le run n'observe pas
+la fin (voie multi-passerelles, sans enregistrements d'émission) plutôt que de recopier le SF de
+départ : un champ absent vaut mieux qu'une valeur qui laisserait croire à une mesure.
+
+L'atelier en fait un encadré, « Débit commandé par le serveur », qui ne s'ouvre que si le run a
+observé une différence, et qui dit combien de dispositifs n'ont **pas** bougé — sans quoi trois
+changements sur trente passeraient pour une décision générale.
+
+### L'exercice : prouver le changement, pas le demander
+
+`adr-debit-observe` (40 points) part d'un capteur à 150 m en SF12 qui n'émet que 20 messages.
+Les vingt premiers points tombent avec le plan régional et la case ADR. Les vingt autres
+**n'existent que si le run a vu le débit changer** :
+
+| Messages | Ce que la trace porte | Note |
+|---|---|---|
+| 20 | `LinkADRReq` émis, terminal non encore appliqué : SF12 → SF12 | **20 / 40** |
+| 40 | SF12 → **SF7** | **40 / 40** |
+
+Mesuré sur serveur HTTP réel, trois graines, reproductible. La case cochée ne suffit donc pas :
+c'est bien le run qui est noté. Les deux indices le disent sans donner la réponse.
+
+**Défaut trouvé en chemin, et corrigé.** Un run ADR compile en forme `gateway` (singulier) : il
+ne nomme **aucune** passerelle. Or `bind_run` exigeait un nom — l'atelier aurait donc échoué sur
+**chaque** run ADR, y compris celui qu'il vient de lancer. La liaison implicite accepte
+désormais un run sans passerelle nommée ; la liaison explicite reste stricte, parce qu'un nom
+demandé qui n'existe pas est une faute de l'utilisateur et que le refus la lui dit.
+
 ### Ce qui reste
 
-- **L'exercice ADR lui-même.** Le chemin est ouvert et prouvé ; il n'existe pas encore d'exercice
-  « pourquoi ce capteur est-il passé de SF7 à SF10 ? ». C'est l'objet de la prochaine tranche,
-  et il s'écrira contre la trace (`mac_request` / `LinkADRReq`), pas contre le formulaire.
-- **Montrer le changement de débit.** La trace dit *que* le serveur a commandé ; elle ne dit pas
-  encore *de SF7 à SF10* dans le résumé. C'est ce qui rendrait l'exercice lisible.
 - **Le joint et les trames confirmées**, restés au chantier 1 et mesurés atteignables.
+- **L'ABI v3 et ses terminaux.** `simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`
+  (DR final, puissance, masques de canaux) — l'état complet du terminal, pas seulement son SF.
+  Elle n'est câblée dans aucune voie de production : l'atelier tourne en ABI v2. La brancher
+  permettrait de montrer la puissance d'émission et les canaux, pas seulement le débit.
 
 ---
 

@@ -241,6 +241,77 @@ def test_single_gateway_run_has_no_gateway_name_to_link(api):
     assert status == 422 and body["field"] == "links"
 
 
+def test_adr_run_binds_without_a_gateway_name_and_keeps_the_final_sf(api):
+    """Un run ADR ne nomme aucune passerelle : la liaison ne doit pas échouer pour autant.
+
+    La session y compile en forme `gateway` (singulier), seule forme que le moteur accepte avec
+    un MAC actif — c'est le coût assumé de l'ADR. Refuser la liaison ferait échouer l'atelier sur
+    **chaque** run ADR, y compris celui qu'il vient de lancer. Ce qu'on y gagne (le SF de fin
+    par capteur) est justement ce que l'exercice note.
+    """
+    d = _scenario(count=3, messages=4)
+    d["mac"] = {"link_adr": True}
+    d["groups"][0]["region"] = "EU868"
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 202
+    assert _wait_done(api, created["run_id"])["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{created['run_id']}/summary")
+    assert not summary.get("gateways")            # voie mono-passerelle : aucun nom
+    sid = _session(api)
+    status, body = _link(api, sid, created["run_id"], [])
+    assert status == 200, body
+    assert body["linked"] == []                   # rien à lier, et ce n'est pas une erreur
+    # Une liaison explicite, elle, reste stricte : le nom demandé n'existe pas dans le run.
+    status, body = _link(api, sid, created["run_id"], [FRONT])
+    assert status == 422 and body["field"] == "links"
+
+
+def test_adr_exercise_is_graded_on_the_observed_datarate_not_the_checkbox(api):
+    """La note ne bouge que si le **run** a vu le débit changer.
+
+    Deux soumissions de la même session, à vingt puis quarante messages. Dans les deux cas la
+    case ADR est cochée et le plan régional est posé : les vingt premiers points tombent. Les
+    vingt derniers ne tombent que si le SF du dernier uplink est plus bas que celui du départ —
+    à vingt messages la commande part mais le terminal ne l'applique pas encore.
+    """
+    status, created = api.call("POST", "/api/v1/sessions", {"exercise_id": "adr-debit-observe"})
+    assert status == 201, created
+    sid = created["session_id"]
+    for cmd in ("enable", "configure terminal", "interface lora 0", "region EU868"):
+        status, body = api.call("POST", f"/api/v1/sessions/{sid}/cli",
+                                {"node_id": "frontiere", "command": cmd})
+        assert status == 200 and not body.get("error"), body
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True})
+    assert status == 200 and body["adr_possible"] is True, body
+
+    def soumettre(messages):
+        status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/capteur-1/sensor",
+                             {"spreading_factor": 12, "messages": messages, "period_s": 60,
+                              "start_spread_s": 20})
+        assert status == 200
+        status, started = api.call("POST", f"/api/v1/sessions/{sid}/simulate", {"seed": 7})
+        assert status == 202
+        assert _wait_done(api, started["run_id"])["state"] == "done"
+        status, bound = api.call("POST", f"/api/v1/sessions/{sid}/simulation",
+                                 {"run_id": started["run_id"]})
+        assert status == 200, bound
+        status, note = api.call("POST", "/api/v1/exercises/adr-debit-observe/submit",
+                                {"session_id": sid})
+        assert status == 200
+        return {c["id"]: c["passed"] for c in note["criteria"]}, note["score"]
+
+    # Vingt messages : la case est cochée, le serveur commande, mais le terminal n'applique pas.
+    criteres, note = soumettre(20)
+    assert criteres["region"] and criteres["adr"]
+    assert not criteres["debit"]
+    assert note == 20
+
+    # Quarante messages : le run observe le changement, et lui seul fait la note.
+    criteres, note = soumettre(40)
+    assert criteres["debit"]
+    assert note == 40
+
+
 def test_binding_an_unknown_or_foreign_run_is_not_found(api, multi_run):
     run_id, _ = multi_run
     sid = _session(api)

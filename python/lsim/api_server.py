@@ -84,6 +84,9 @@ MAX_ACTIVE_PER_OWNER = 4
 DEFAULT_PAGE = 100
 DEFAULT_RATE_PER_MIN = 120      # requêtes authentifiées soutenues, par jeton
 DEFAULT_RATE_BURST = 60         # rafale tolérée
+# Borne de lecture des lignes de dispositifs quand on n'en veut qu'un champ (SF de fin, pour
+# noter un exercice). Au-delà, on ne lit pas : un run peut compter des milliers de dispositifs.
+SF_READ_LIMIT = 2000
 _RUN_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _TERMINAL = ("done", "failed", "cancelled")
 _LOOPBACK = ("127.0.0.1", "::1", "localhost")
@@ -338,6 +341,26 @@ class RunStore:
             (run_id, cursor, limit + 1)).fetchall()
         nxt = rows[limit][0] if len(rows) > limit else None
         return [json.loads(b) for _, b in rows[:limit]], nxt
+
+    def sf_par_equipement(self, run_id: str) -> dict[str, dict]:
+        """Facteur d'étalement de départ et de fin, par groupe, pour noter un exercice.
+
+        Une session d'étude compile un groupe par capteur (`explicit`, une position) : le nom du
+        groupe est donc l'identifiant de l'équipement. On ne lit que les deux champs utiles, et
+        bornés : noter un exercice d'atelier ne justifie pas de charger des milliers de lignes.
+        """
+        rows = self._conn.execute(
+            "SELECT body FROM devices WHERE run_id = ? ORDER BY idx LIMIT ?",
+            (run_id, SF_READ_LIMIT)).fetchall()
+        out: dict[str, dict] = {}
+        for (body,) in rows:
+            d = json.loads(body)
+            groupe = d.get("group")
+            if groupe is None:
+                continue
+            out[groupe] = {"spreading_factor": d.get("spreading_factor"),
+                           "final_spreading_factor": d.get("final_spreading_factor")}
+        return out
 
     def events_page(self, run_id: str, cursor: int, limit: int) -> tuple[list, Optional[int]]:
         rows = self._conn.execute(
@@ -629,6 +652,12 @@ class RunService:
             self._done(owner, run_id)
             items, nxt = self._store.devices_page(run_id, cursor, limit)
         return DevicePage(items=items, next_cursor=nxt).model_dump()
+
+    def sf_par_equipement(self, owner: str, run_id: str) -> dict[str, dict]:
+        """SF de départ et de fin par équipement, pour noter un exercice (propriétaire vérifié)."""
+        with self._lock:
+            self._done(owner, run_id)
+            return self._store.sf_par_equipement(run_id)
 
     def events_page(self, owner: str, run_id: str, cursor: int, limit: int) -> dict[str, Any]:
         with self._lock:
@@ -1075,8 +1104,12 @@ class _Handler(BaseHTTPRequestHandler):
             if method == "POST" and action == "simulation":
                 req = self._parse_body(SimulationBind)
                 summary = svc.summary(owner, req.run_id)  # propriétaire vérifié ; 409 si non fini
+                # Le SF de fin n'est pas dans le résumé : il se lit dans les lignes de
+                # dispositifs. Sans lui, un exercice sur l'ADR ne pourrait pas être noté sur
+                # ce que le run a observé.
+                sf = svc.sf_par_equipement(owner, req.run_id)
                 return 200, self._study(
-                    lambda: study.bind_run(owner, sid, req, summary)).model_dump()
+                    lambda: study.bind_run(owner, sid, req, summary, sf)).model_dump()
 
         m = re.fullmatch(r"runs/([^/]+)(?:/(summary|devices|events))?", rest)
         if m is None:
