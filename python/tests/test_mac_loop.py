@@ -264,28 +264,45 @@ def test_queue_counters_are_deterministic():
     assert a.events == b.events
 
 
-def test_abi_v1_and_v2_agree_without_mac_commands(monkeypatch):
-    """Sans commande MAC, l'ABI v1 (historique) et v2 donnent les mêmes uplinks, descentes et
-    événements. La v2 ne fournit ni file ni octets MAC à zéro commande."""
+def test_abi_v1_and_v3_agree_without_mac_commands(monkeypatch):
+    """Sans commande MAC, l'ABI v1 (historique) et la v3 donnent les mêmes uplinks, descentes et
+    événements. La v3 ne fournit ni file ni octets MAC à zéro commande.
+
+    La voie de production est la v3 depuis qu'elle est la seule à rapporter les canaux laissés
+    au terminal, que la v2 ne porte pas. Le test est donc **aussi le garde-fou de la bascule** :
+    il compare la v3 à l'ABI historique sur un run sans commande, et verrait la divergence que
+    la migration aurait pu introduire. Il remplace l'ancienne comparaison v1/v2, dont le
+    mécanisme — patcher `closed_loop.simulate_closed_loop` — ne mordait plus : la production
+    n'appelle plus ce symbole.
+    """
     import lsim.closed_loop as cl
+    import lsim.closed_loop_v3 as cl3
     from lsim.trace_events import build_trace_closed_loop
 
     # Bloc `mac:` présent mais sans commande : la boucle fermée tourne, la calendrier est vide.
     plain = _scenario("mac:\n  link_adr: false\n")
-    v2 = build_trace_closed_loop(plain, ProtocolOptions())
-    original = cl.simulate_closed_loop
+    v3 = build_trace_closed_loop(plain, ProtocolOptions())
 
-    def v1(*args, **kwargs):
-        kwargs.pop("mac", None)
-        return original(*args, abi=1, **kwargs)
+    def v1_sans_mac(devices, gateway, propagation, radios, regions, options, **kwargs):
+        # La v3 reçoit `environment` en mot-clé, la v2 en position : c'est la seule
+        # différence de forme entre les deux ponts.
+        out = cl.simulate_closed_loop(devices, gateway, propagation, kwargs.get("environment"),
+                                      radios, regions, options, abi=1)
+        # Le résultat est revêtu de la forme v3, terminal vide : l'ABI v1 ne rapporte aucun
+        # canal, ce qui est exactement ce que le test veut établir — le reste du run doit
+        # être identique.
+        return cl3.ClosedLoopV3Outcome(per_device=out.per_device, totals=out.totals,
+                                       load=out.load, uplinks=out.uplinks,
+                                       downlinks=out.downlinks, busy=out.busy,
+                                       mac_queue=out.mac_queue, terminals=())
 
-    monkeypatch.setattr(cl, "simulate_closed_loop", v1)
+    monkeypatch.setattr(cl3, "simulate_closed_loop_v3", v1_sans_mac)
     legacy = build_trace_closed_loop(plain, ProtocolOptions())
-    assert legacy.records == v2.records
-    assert legacy.per_device == v2.per_device
-    assert legacy.totals == v2.totals
-    assert legacy.events == v2.events
-    assert v2.mac_queue is not None and v2.mac_queue.enqueued == 0
+    assert legacy.records == v3.records
+    assert legacy.per_device == v3.per_device
+    assert legacy.totals == v3.totals
+    assert legacy.events == v3.events
+    assert v3.mac_queue is not None and v3.mac_queue.enqueued == 0
     assert legacy.mac_queue is None
 
 

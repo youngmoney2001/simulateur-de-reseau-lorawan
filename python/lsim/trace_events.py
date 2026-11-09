@@ -235,6 +235,23 @@ class DevicePower:
 
 
 @dataclass(frozen=True)
+class TerminalChannels:
+    """Canaux que le serveur a **laissés** au terminal à la fin du run.
+
+    `dr_masks` : canal -> masque des débits DR0..DR7 (bit k = DRk admis sur ce canal).
+    `enabled` : canaux actifs, sous-ensemble des canaux définis.
+
+    Distinction qui compte, et qui est celle du moteur : un canal **défini** mais non
+    **activé** existe dans la configuration du terminal sans servir à l'émission. Afficher
+    l'un pour l'autre ferait croire à un plan de canaux qui n'est pas celui que la trame
+    suivante va réellement emprunter.
+    """
+
+    dr_masks: Mapping[int, int]
+    enabled: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class TraceRun:
     per_device: tuple[Counters, ...]
     totals: Counters
@@ -251,6 +268,10 @@ class TraceRun:
     # ailleurs — le chemin historique ne décide d'aucune puissance, et recopier l'index de
     # départ ferait croire à une observation là où le moteur n'a rien commandé.
     device_power: Optional[Mapping[int, DevicePower]] = None
+    # Boucle fermée seulement : canaux laissés au terminal, par dispositif. Absent ailleurs,
+    # pour la même raison que la puissance : l'ABI v2 ne les porte pas, et les recopier
+    # depuis la configuration de départ publierait un plan que le serveur n'a pas arrêté.
+    device_channels: Optional[Mapping[int, TerminalChannels]] = None
 
 
 @dataclass(frozen=True)
@@ -1232,20 +1253,34 @@ def build_trace_closed_loop(scenario: Scenario, options: ProtocolOptions = Proto
 def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propagation, environment,
                              options: ProtocolOptions) -> TraceRun:
     """Boucle fermée S2/S3 : une exécution, uplinks, réservations MAC et descentes du moteur natif."""
-    from lsim.closed_loop import OUTCOME_CODES, simulate_closed_loop
+    from lsim.closed_loop import OUTCOME_CODES
+    from lsim.closed_loop_v3 import simulate_closed_loop_v3
     from lsim.mac_loop import (
         check_closed_loop, loop_options, loop_regions, mac_byte_accounting, mac_slots,
     )
     check_closed_loop(scenario, options)
     schedule = _schedule_of(scenario)
     regions = loop_regions(scenario, group_of)
-    out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
-                               regions, loop_options(scenario, options),
-                               mac=mac_slots(schedule, devices))
+    # ABI v3, et non v2 : c'est la seule qui rapporte les canaux laissés au terminal
+    # (`terminals`), que la v2 ne porte pas. L'équivalence sur les champs communs a été
+    # mesurée avant la bascule — comptages, uplinks, descendantes, occupations et file MAC
+    # identiques sur six scénarios — sinon ce ne serait pas une migration mais une
+    # régression silencieuse de toutes les mesures existantes.
+    out = simulate_closed_loop_v3(devices, gateway, propagation, radios,
+                                  regions, loop_options(scenario, options),
+                                  mac=mac_slots(schedule, devices),
+                                  environment=environment)
     records = tuple(
         TxRecord(u.device, u.start_ns, u.end_ns, u.spreading_factor, u.rssi_dbm,
                  OUTCOME_CODES[u.outcome])
         for u in out.uplinks)
+    # Canaux laissés au terminal par le serveur. Ils ne sont lisibles que sur la v3 : l'ABI
+    # v2 ne les porte pas, et c'est la raison d'être de la bascule. `terminals` est vide
+    # quand le moteur n'a rien à en dire — le champ reste alors absent plutôt que de
+    # publier une liste vide qui ferait croire à une observation.
+    canaux = {t.device: TerminalChannels(
+        dr_masks={ch: mask for ch, mask in sorted(t.dr_masks.items())},
+        enabled=tuple(t.enabled)) for t in (out.terminals or ())}
     # Puissance appliquée, un relevé par dispositif. `u.power_index` existe sur chaque
     # uplink de la boucle fermée : il était simplement jeté à la ligne ci-dessus, si bien
     # que l'atelier montrait le débit commandé par le serveur sans jamais dire qu'il avait
@@ -1265,7 +1300,8 @@ def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propa
     return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
                     events=events, gateway_tx=out.busy, mac_queue=out.mac_queue,
                     mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks),
-                    device_power=puissances or None)
+                    device_power=puissances or None,
+                    device_channels=canaux or None)
 
 
 def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOptions,

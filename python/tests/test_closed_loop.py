@@ -95,3 +95,40 @@ def test_adr_trace_carries_the_power_the_loop_applied():
         assert p.step_db > 0
     assert max(p.reduction_db for p in avec.device_power.values()) > 0, (
         "sur un lien qui le permet, le serveur doit avoir retiré de la puissance")
+
+
+def test_adr_trace_carries_the_channels_the_server_left():
+    """Les canaux du terminal viennent de l'ABI v3, seule à les porter.
+
+    La v2 ne les expose pas : c'est la raison d'être de la bascule de la voie de production.
+    Deux mesures importent, et elles ne se confondent pas :
+      - hors boucle fermée, le champ est **absent** — le recopier depuis la configuration de
+        départ publierait un plan que le serveur n'a pas arrêté ;
+      - dans la boucle, chaque canal activé est **aussi** défini, et porte un masque de débits
+        non nul. Un canal activé sans masque serait un canal sur lequel rien ne peut passer.
+    """
+    from lsim.trace_events import build_trace
+
+    sans = build_trace(_scenario_adr())
+    assert sans.device_channels is None, (
+        "hors boucle fermée, annoncer des canaux ferait croire à une décision du serveur")
+
+    avec = build_trace(_scenario_adr(mac={"link_adr": True}))
+    assert avec.device_channels is not None and len(avec.device_channels) == 3
+    for i, canaux in avec.device_channels.items():
+        assert canaux.enabled, f"le terminal {i} n'émettrait sur aucun canal"
+        for ch in canaux.enabled:
+            assert ch in canaux.dr_masks, (
+                f"canal {ch} activé sans être défini sur le terminal {i}")
+            assert canaux.dr_masks[ch] != 0, (
+                f"canal {ch} actif avec un masque de débits vide sur le terminal {i}")
+
+
+def test_channel_masks_stay_inside_the_eight_data_rates():
+    """Un masque de canaux code DR0..DR7 : huit bits, pas davantage."""
+    from lsim.trace_events import build_trace
+
+    run = build_trace(_scenario_adr(mac={"link_adr": True}))
+    for canaux in run.device_channels.values():
+        for ch, mask in canaux.dr_masks.items():
+            assert 0 < mask < 256, f"masque {mask} hors des huit débits sur le canal {ch}"

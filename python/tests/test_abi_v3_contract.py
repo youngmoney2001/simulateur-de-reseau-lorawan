@@ -10,6 +10,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Le seul endroit qui appelle la v3 en production. Le nommer rend l'invariant vérifiable :
+# un second appelant casse le test au lieu de passer inaperçu.
+VOIE_DE_PRODUCTION = ["python/lsim/trace_events.py"]
 sys.path.insert(0, str(ROOT / "python"))
 
 from pydantic import ValidationError  # noqa: E402
@@ -394,7 +398,20 @@ class PathIsolationTests(unittest.TestCase):
             if "closed_loop_v3" in text and rel != "python/lsim/closed_loop_v3.py":
                 importers.append(rel)
         self.assertEqual(bindings, ["python/lsim/closed_loop_v3.py"])
-        self.assertEqual(importers, [])
+        # L'assertion `importers == []` disait plus que l'invariant qu'elle énonce. Celui-ci
+        # est dans le commentaire ci-dessus : **v1, v2 et gw2** n'importent rien de v3 — la
+        # dépendance va dans un seul sens, la v3 réutilisant les structures de la v2. Or
+        # l'assertion interdisait à quiconque d'appeler la v3, ce qui n'avait de sens que
+        # tant que la v2 restait la voie de production.
+        # La v3 l'est devenue : c'est la seule qui rapporte les canaux laissés au terminal,
+        # que la v2 ne porte pas. L'invariant est donc resserré sur son intention — un seul
+        # module de liaison, aucune dépendance en retour — et la voie d'appel est nommée,
+        # pour qu'un second appelant soit vu plutôt que toléré.
+        self.assertEqual(importers, VOIE_DE_PRODUCTION)
+        for rel in importers:
+            self.assertNotIn("closed_loop_gw2", rel, "gw2 ne doit pas connaître la v3")
+        self.assertNotIn("python/lsim/closed_loop.py", importers,
+                         "la v2 ne doit pas connaître la v3 : la dépendance va dans un seul sens")
         source = (ROOT / "python/lsim/closed_loop_v3.py").read_text(encoding="utf-8")
         self.assertIn("from lsim._native import", source)
         self.assertIn("LIB.lsim_simulate_closed_loop_v3(ctypes.pointer(args))", source)
