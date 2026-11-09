@@ -228,6 +228,44 @@ try {
     return Boolean(b);
   }, selecteur, texte);
 
+  /**
+   * Ouvre la fenêtre d'un équipement depuis le plan.
+   *
+   * Le clic peut manquer sa cible pour une raison qui n'a rien à voir avec le clavier — un
+   * nœud recouvert par un autre élément, une vue repassée à la carte. Sans mesure, la panne
+   * se lit « la fenêtre ne s'ouvre pas », ce qui n'apprend rien. On relit donc la vue active,
+   * la boîte du nœud, et ce qui se trouve réellement sous le point visé.
+   */
+  const ouvrirFenetre = async (id, forme) => {
+    await page.evaluate(() => {
+      const p = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+      if (p && !p.classList.contains("active")) p.click();
+    });
+    const noeud = `g.node[data-id="${id}"] ${forme}`;
+    await page.waitForSelector(noeud, { timeout: 10_000 });
+    const visee = await page.evaluate((sel) => {
+      const e = document.querySelector(sel);
+      const r = e.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const dessus = document.elementFromPoint(x, y);
+      return {
+        boite: `${Math.round(r.width)}x${Math.round(r.height)} @ ${Math.round(x)},${Math.round(y)}`,
+        // Si ce n'est pas le nœud qui reçoit le clic, le clic ne peut pas ouvrir la fenêtre :
+        // c'est la cause la plus probable, et elle est mesurable.
+        dessus: dessus ? `${dessus.tagName.toLowerCase()}.${dessus.getAttribute("class") ?? ""}`
+          + (dessus.closest("g.node") ? ` (nœud ${dessus.closest("g.node").dataset.id})` : "") : "(rien)",
+        vue: document.querySelector(".view-tab.active")?.textContent?.trim() ?? "(aucune)",
+      };
+    }, noeud);
+    await page.click(noeud);
+    try {
+      await page.waitForSelector(`.device-win[data-node-id="${id}"]`, { timeout: 10_000 });
+    } catch (err) {
+      console.log(`FENÊTRE ${id} NON OUVERTE : ${JSON.stringify(visee)}`);
+      throw err;
+    }
+  };
+
   const etats = [
     { nom: "observation · Simulation", action: () => cliquerTexte(".tab", "Simulation") },
     { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
@@ -237,8 +275,7 @@ try {
       await page.evaluate(() => {
         document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
       });
-      await page.click('g.node[data-id="capteur-a"] circle');
-      await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
+      await ouvrirFenetre("capteur-a", "circle");
       return cliquerTexte('.device-win[data-node-id="capteur-a"] .dtab', "Physique");
     } },
     { nom: "équipement · Config", action: () => cliquerTexte('.device-win[data-node-id="capteur-a"] .dtab', "Config") },
@@ -248,8 +285,7 @@ try {
         document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
       });
       await pause(300);
-      await page.click('g.node[data-id="gw-nord"] rect');
-      await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
+      await ouvrirFenetre("gw-nord", "rect");
       return cliquerTexte('.device-win[data-node-id="gw-nord"] .dtab', "Config");
     } },
   ];
