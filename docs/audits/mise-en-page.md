@@ -2,13 +2,18 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**0 problème(s)** sur 21 états mesurés.
+**14 problème(s)** sur 21 états mesurés.
 
 ## 1400px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -37,9 +42,14 @@ Aucun problème.
 
 ## 1180px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -60,7 +70,7 @@ Aucun problème.
 | button.tool | 324 | 963 | 129×38 |
 | button.tool | 17 | 1007 | 225×38 |
 | button.tool | 248 | 1007 | 198×38 |
-| div.observation | 8 | 1101 | 1164×897 |
+| div.observation | 8 | 1101 | 1164×1020 |
 | footer.statusbar | 0 | 974 | 1180×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -68,9 +78,14 @@ Aucun problème.
 
 ## 1100px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -91,7 +106,7 @@ Aucun problème.
 | button.tool | 324 | 911 | 129×38 |
 | button.tool | 17 | 955 | 225×38 |
 | button.tool | 248 | 955 | 198×38 |
-| div.observation | 8 | 1049 | 1084×930 |
+| div.observation | 8 | 1049 | 1084×1053 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -99,9 +114,14 @@ Aucun problème.
 
 ## 1040px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -122,7 +142,7 @@ Aucun problème.
 | button.tool | 324 | 871 | 129×38 |
 | button.tool | 17 | 915 | 225×38 |
 | button.tool | 248 | 915 | 198×38 |
-| div.observation | 8 | 1009 | 1024×896 |
+| div.observation | 8 | 1009 | 1024×1019 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -130,9 +150,14 @@ Aucun problème.
 
 ## 1000px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -153,7 +178,7 @@ Aucun problème.
 | button.tool | 324 | 845 | 129×38 |
 | button.tool | 17 | 889 | 225×38 |
 | button.tool | 248 | 889 | 198×38 |
-| div.observation | 8 | 983 | 984×916 |
+| div.observation | 8 | 983 | 984×1039 |
 | footer.statusbar | 0 | 974 | 1000×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -161,9 +186,14 @@ Aucun problème.
 
 ## 900px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -184,7 +214,7 @@ Aucun problème.
 | button.tool | 324 | 780 | 129×38 |
 | button.tool | 17 | 824 | 225×38 |
 | button.tool | 248 | 824 | 198×38 |
-| div.observation | 8 | 918 | 884×963 |
+| div.observation | 8 | 918 | 884×1086 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -192,9 +222,14 @@ Aucun problème.
 
 ## 760px
 
-0 problème(s) · défilement horizontal : non
+2 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (2)
+
+| élément | détail |
+|---|---|
+| input#join-toggle | 13x13 (seuil 20) |
+| input#confirmed-toggle | 13x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -215,7 +250,7 @@ Aucun problème.
 | button.tool | 324 | 692 | 129×38 |
 | button.tool | 17 | 736 | 225×38 |
 | button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1113 |
+| div.observation | 8 | 830 | 744×1236 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -655,4 +690,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 0 problème(s)
+TOTAL : 14 problème(s)
