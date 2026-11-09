@@ -107,7 +107,16 @@ const decrire = (props) => {
   };
 };
 
-/** Les éléments interactifs **visibles** dont l'identifiant n'a jamais été atteint. */
+/**
+ * Les éléments interactifs **visibles** dont l'identifiant n'a jamais été atteint.
+ *
+ * Trois cas sont volontairement exclus, et les nommer compte autant que la règle : un
+ * contrôle désactivé, un contenu masqué aux technologies d'assistance, ou un élément retiré
+ * de la tabulation (tabindex="-1", atteignable au clavier mais par une autre voie) sont
+ * **correctement** hors du parcours. Les compter comme des défauts — ce que la première
+ * exécution a fait sur les boutons « Indice » et « Noter », désactivés tant qu'aucun
+ * exercice n'est lancé — aurait noyé les vrais défauts sous les faux.
+ */
 const nonAtteints = (sel, atteints) => {
   const vu = (e) => {
     const s = getComputedStyle(e);
@@ -115,8 +124,11 @@ const nonAtteints = (sel, atteints) => {
     const r = e.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
+  const exclu = (e) => e.disabled === true
+    || e.getAttribute("aria-hidden") === "true"
+    || e.getAttribute("tabindex") === "-1";
   return [...document.querySelectorAll(sel)]
-    .filter((e) => vu(e) && !atteints.includes(e.dataset.kaId ?? ""))
+    .filter((e) => vu(e) && !exclu(e) && !atteints.includes(e.dataset.kaId ?? ""))
     .map((e) => {
       const cls = e.className && typeof e.className === "string"
         ? "." + e.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
@@ -301,7 +313,10 @@ try {
     // un défaut de l'audit, pas de l'interface. On vise donc le premier interactif, puis on
     // laisse le navigateur décider de la suite.
     const depart = await page.evaluate((sel) => {
-      const premier = document.querySelector(sel);
+      // Le premier **focalisable**, pas le premier interactif : viser un bouton désactivé ne
+      // déplacerait pas le focus et le parcours rendrait un ordre vide.
+      const premier = [...document.querySelectorAll(sel)]
+        .find((e) => e.disabled !== true && e.getAttribute("tabindex") !== "-1");
       if (premier) premier.focus();
       return Boolean(premier);
     }, INTERACTIFS);
