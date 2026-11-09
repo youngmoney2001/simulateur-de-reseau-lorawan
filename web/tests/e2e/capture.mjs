@@ -189,6 +189,103 @@ try {
   await pause(600);
   await shoot("etroit-760");
 
+  // 7. le protocole à l'œuvre : ce que les réglages CHANGENT, et pas seulement à quoi ils
+  // ressemblent. Les captures 1 à 6 montrent l'atelier au repos ; celles-ci montrent trois
+  // runs de la même flotte, seul le réglage différant :
+  //   - départs simultanés : les join-request se collisionnent, la flotte ne joint pas ;
+  //   - départs étalés de 60 s : les trois capteurs joignent, et les ACK suivent ;
+  //   - ADR : le serveur commande un débit plus rapide — à condition que les uplinks lui
+  //     parviennent, ce que la même dispersion permet.
+  //
+  // Chiffres mesurés sur cette flotte (graine 1, SF12), et que les images doivent porter :
+  //   simultané : 41 join-request → 1 acceptée, 19 uplinks, 19 ACK
+  //   étalé 60 s :  4 join-request → 3 acceptées, 56 uplinks, 56 ACK
+  //   ADR       : les 3 capteurs passent SF12 → SF7
+  // L'encadré ne s'ouvre que si le run les porte : une capture au bloc masqué est un échec,
+  // et c'est voulu — une image vide ne prouverait rien.
+  await page.setViewport({ width: 1400, height: 1000 });
+  await pause(400);
+
+  const sid = await page.$eval("#session-select option", (o) => o.value);
+  const appeler = async (chemin, corps) => {
+    const res = await fetch(`http://127.0.0.1:${API_PORT}${chemin}`, {
+      method: corps === undefined ? "GET" : "POST",
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}`,
+        ...(corps === undefined ? {} : { "Content-Type": "application/json" }) },
+      body: corps === undefined ? undefined : JSON.stringify(corps),
+    });
+    if (!res.ok) throw new Error(`${chemin} : HTTP ${res.status} — ${await res.text()}`);
+    return res.status === 204 ? null : res.json();
+  };
+  // `POST .../sensor` **remplace** les réglages : on renvoie donc l'objet entier, et non
+  // un patch qui effacerait la période ou la charge utile à l'insu de la suite.
+  const reglerFlotte = async ({ sf, messages, etale }) => {
+    for (const id of ["capteur-a", "capteur-b", "capteur-c"]) {
+      await appeler(`/api/v1/sessions/${encodeURIComponent(sid)}/nodes/${id}/sensor`,
+        { spreading_factor: sf, payload_bytes: 10, tx_power_dbm: 14.0, period_s: 600,
+          messages, start_spread_s: etale });
+    }
+  };
+  // Plan régional sur la passerelle : l'ADR en a besoin (le moteur refuse sans lui) et la
+  // jointure s'en accommode. Réglé une fois pour les trois runs.
+  await appeler(`/api/v1/sessions/${encodeURIComponent(sid)}/nodes/gw-nord/gateway`,
+    { region: "EU868" });
+
+  /** Lance un run et attend qu'il soit **terminé**, en vidant le statut d'abord : sans cela
+   *  le message du run précédent ferait croire que le nouveau est fini avant qu'il parte. */
+  const lancerRun = async () => {
+    await page.evaluate(() => { const s = document.querySelector("#sim-status"); if (s) s.textContent = ""; });
+    await page.click("#simulate");
+    await page.waitForFunction(
+      () => (document.querySelector("#sim-status")?.textContent ?? "").includes("terminé"),
+      { timeout: 180_000 });
+    await pause(700);
+  };
+  /** Coche ou décoche une case et **attend que le serveur ait répondu**. Deux clics
+   *  rapprochés partiraient en concurrence : le second lit l'état du premier, et rien ne
+   *  garantit l'ordre d'arrivée — la dernière réponse gagne et peut remettre la case
+   *  qu'on vient de cocher. Attendre la case rend la suite déterministe. */
+  const basculer = async (id, etat) => {
+    await page.click(id);
+    await page.waitForFunction((s, v) => document.querySelector(s).checked === v,
+      { timeout: 15_000 }, id, etat);
+  };
+  /** L'encadré `sel` doit être visible et porter au moins `min` lignes. C'est l'assertion
+   *  qui donne son sens à la capture : un encadré masqué ou vide, et l'image ne prouve
+   *  rien — le script échoue alors, au lieu de publier une case vide. */
+  const attendre = (sel, min) => page.waitForFunction((s, n) => {
+    const bloc = document.querySelector(s);
+    return !!bloc && !bloc.hidden && bloc.querySelectorAll("li").length >= n;
+  }, { timeout: 20_000 }, sel, min);
+
+  // 7a. départs simultanés : la jointure n'aboutit pas
+  await obsTab("Simulation");
+  await reglerFlotte({ sf: 12, messages: 20, etale: 0 });
+  await basculer("#join-toggle", true);
+  await basculer("#confirmed-toggle", true);
+  await lancerRun();
+  await attendre("#proto-bilan", 2);
+  await shoot("protocole-jointure-simultanee");
+
+  // 7b. même flotte, départs étalés de 60 s : la jointure aboutit, les ACK suivent
+  await reglerFlotte({ sf: 12, messages: 20, etale: 60 });
+  await lancerRun();
+  await attendre("#proto-bilan", 2);
+  await shoot("protocole-jointure-etalee");
+
+  // 7c. ADR : l'ordre du serveur, et la condition pour qu'il parte
+  await basculer("#confirmed-toggle", false);
+  await basculer("#join-toggle", false);
+  await reglerFlotte({ sf: 12, messages: 40, etale: 60 });
+  await basculer("#adr-toggle", true);
+  await lancerRun();
+  await attendre("#adr-bilan", 1);
+  await shoot("protocole-adr-debit");
+
+  // On rend ce qu'on a emprunté : les trois cases retrouvent leur état de départ, pour que
+  // la session capturée ne reste pas dans une configuration que personne n'a choisie.
+  await basculer("#adr-toggle", false);
+
   console.log(`${n} captures dans ${outDir}`);
 } finally {
   for (const c of children) { try { c.kill("SIGTERM"); } catch { /* déjà arrêté */ } }
