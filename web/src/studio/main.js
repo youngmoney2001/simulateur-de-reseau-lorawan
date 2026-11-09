@@ -2172,17 +2172,24 @@ function addFromPalette(kind) {
 // --- Accessibilité clavier -------------------------------------------------------------------
 // Les onglets suivent le motif ARIA « tablist » : les flèches parcourent les onglets, ce qui
 // évite de tabuler à travers chacun pour atteindre le suivant.
+// Motif ARIA « tablist » : les flèches parcourent les onglets, Début et Fin vont aux
+// extrémités. Sans cela, un groupe annoncé comme tablist par son `role` ne tient aucune des
+// promesses que ce rôle porte, et le clavier y est plus pauvre que la souris.
 function wireTabs(container) {
+  if (!container) return;
   container.addEventListener("keydown", (ev) => {
-    const sens = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
-    if (!sens) return;
     const onglets = [...container.querySelectorAll('[role="tab"]')];
     const i = onglets.indexOf(document.activeElement);
     if (i < 0) return;
+    let j = i;
+    if (ev.key === "ArrowRight") j = (i + 1) % onglets.length;
+    else if (ev.key === "ArrowLeft") j = (i - 1 + onglets.length) % onglets.length;
+    else if (ev.key === "Home") j = 0;
+    else if (ev.key === "End") j = onglets.length - 1;
+    else return;
     ev.preventDefault();
-    const suivant = onglets[(i + sens + onglets.length) % onglets.length];
-    suivant.focus();
-    suivant.click();
+    onglets[j].focus();
+    onglets[j].click();
   });
 }
 
@@ -2269,6 +2276,9 @@ $("cesium").addEventListener("pointerdown", (ev) => {
 for (const b of document.querySelectorAll(".view-tab")) {
   b.addEventListener("click", () => showView(b.dataset.view));
 }
+// Ces onglets portent role="tab" et un aria-selected tenu à jour : le motif promet donc les
+// flèches. Personne ne les câblait — seul le panneau d'observation l'était.
+wireTabs(document.querySelector(".views"));
 applyMode(sessionStorage.getItem("lsim-mode") || "design");
 
 // Origine géographique : relue à l'ouverture, puis suivie à chaque modification.
