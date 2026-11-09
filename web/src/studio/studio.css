@@ -386,6 +386,14 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .sensor-actions { grid-column:1 / -1; display:flex; gap:6px; margin-top:4px; }
 
 /* --- Animation des trames (player.js) ------------------------------------------------- */
+
+/* La couche est ajoutée après les nœuds : elle est donc peinte **dessus**, et les cercles
+   de trame qui s'arrêtent sur un équipement interceptaient les clics destinés à ouvrir sa
+   fenêtre. Mesuré par l'audit clavier — `elementFromPoint` au centre d'un capteur renvoyait
+   `circle.anim-ok.frame` et non le nœud, après un run. Rien dans cette couche n'est
+   interactif : elle ne doit pas capter le pointeur. */
+#anim-layer { pointer-events:none; }
+
 .anim-ok { stroke:#2e7d32; fill:#2e7d32; }
 .anim-lost { stroke:#c62828; fill:#c62828; }
 .anim-neutral { stroke:#546e7a; fill:#546e7a; }
