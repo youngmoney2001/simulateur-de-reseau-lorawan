@@ -597,9 +597,17 @@ try {
     await attendreReglages("capt-1", { spreading_factor: 12, messages: 60 }, refus);
     await obsTab("Simulation");
 
+    // Troisième visage du même piège, après le message du formulaire : le statut affiche
+    // déjà « …terminé (graine 7) » du run de l'étape précédente, donc attendre ce mot passe
+    // avant même que le nouveau run parte — on lit alors les lignes de l'ancien, qui n'a ni
+    // les 60 messages ni le SF12. On attend un « terminé » portant un autre numéro de run.
     await setValue("#seed", "7");
+    const runAvant = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
     await page.click("#simulate");
-    await waitText("#sim-status", /terminé/, 120_000);
+    await page.waitForFunction((avant) => {
+      const t = document.getElementById("sim-status").textContent;
+      return t.includes("terminé") && (!avant || !t.includes(avant));
+    }, { timeout: 120_000 }, runAvant);
     try {
       await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
         { timeout: 20_000 });
