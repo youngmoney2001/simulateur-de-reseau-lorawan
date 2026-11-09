@@ -2,18 +2,13 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**14 problème(s)** sur 21 états mesurés.
+**0 problème(s)** sur 21 états mesurés.
 
 ## 1400px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -42,14 +37,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1180px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -70,7 +60,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 963 | 129×38 |
 | button.tool | 17 | 1007 | 225×38 |
 | button.tool | 248 | 1007 | 198×38 |
-| div.observation | 8 | 1101 | 1164×1020 |
+| div.observation | 8 | 1101 | 1164×1023 |
 | footer.statusbar | 0 | 974 | 1180×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -78,14 +68,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1100px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -106,7 +91,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 911 | 129×38 |
 | button.tool | 17 | 955 | 225×38 |
 | button.tool | 248 | 955 | 198×38 |
-| div.observation | 8 | 1049 | 1084×1053 |
+| div.observation | 8 | 1049 | 1084×1056 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -114,14 +99,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1040px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -142,7 +122,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 871 | 129×38 |
 | button.tool | 17 | 915 | 225×38 |
 | button.tool | 248 | 915 | 198×38 |
-| div.observation | 8 | 1009 | 1024×1019 |
+| div.observation | 8 | 1009 | 1024×1022 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -150,14 +130,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1000px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -178,7 +153,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 845 | 129×38 |
 | button.tool | 17 | 889 | 225×38 |
 | button.tool | 248 | 889 | 198×38 |
-| div.observation | 8 | 983 | 984×1039 |
+| div.observation | 8 | 983 | 984×1042 |
 | footer.statusbar | 0 | 974 | 1000×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -186,14 +161,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 900px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -214,7 +184,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 780 | 129×38 |
 | button.tool | 17 | 824 | 225×38 |
 | button.tool | 248 | 824 | 198×38 |
-| div.observation | 8 | 918 | 884×1086 |
+| div.observation | 8 | 918 | 884×1089 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -222,14 +192,9 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 760px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (2)
-
-| élément | détail |
-|---|---|
-| input#join-toggle | 13x13 (seuil 20) |
-| input#confirmed-toggle | 13x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -250,7 +215,7 @@ Généré par `web/tests/e2e/audit.mjs`.
 | button.tool | 324 | 692 | 129×38 |
 | button.tool | 17 | 736 | 225×38 |
 | button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1236 |
+| div.observation | 8 | 830 | 744×1239 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -690,4 +655,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 14 problème(s)
+TOTAL : 0 problème(s)
