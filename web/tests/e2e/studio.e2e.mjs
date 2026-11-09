@@ -76,6 +76,17 @@ try {
   });
   page.on("console", (m) => { if (m.type() === "error") console.error("console:", m.text()); });
   page.on("dialog", (d) => d.accept());
+  // Un refus du serveur ne se voit qu'au corps de la réponse : la console du navigateur
+  // n'affiche que « 422 », et un formulaire qui garde son message de succès précédent
+  // laisse croire à un enregistrement qui n'a pas eu lieu. On garde donc le corps des
+  // réponses en erreur, pour le joindre à l'échec plutôt que de le deviner.
+  const refus = [];
+  page.on("response", async (r) => {
+    if (r.status() < 400) return;
+    const corps = await r.text().catch(() => "(corps illisible)");
+    refus.push(`${r.request().method()} ${r.url().replace(/^http:\/\/[^/]+/, "")} `
+      + `→ ${r.status()} ${corps.slice(0, 300)}`);
+  });
   await page.goto(`http://127.0.0.1:${WEB_PORT}/studio.html`, { waitUntil: "domcontentloaded" });
 
   const steps = [];
@@ -94,6 +105,30 @@ try {
     { timeout }, sel, re.source);
   const setValue = (sel, value) => page.$eval(sel, (e, v) => { e.value = v; }, value);
   const submitForm = (sel) => page.$eval(sel, (f) => f.requestSubmit());
+  /** Le serveur a-t-il les réglages attendus ? Lu chez lui, pas dans le message de l'écran.
+   *
+   * Un formulaire garde le « enregistrés » de la soumission précédente : attendre ce mot
+   * passe donc avant que la soumission courante aboutisse, et un refus (422) passe
+   * inaperçu jusqu'à ce qu'un run parte sur les anciens réglages. On interroge la
+   * topologie jusqu'à l'échéance ; à défaut, on publie les refus HTTP collectés.
+   */
+  const attendreReglages = async (nodeId, attendus, refus = [], timeoutMs = 10_000) => {
+    const sid = await page.$eval("#session-select", (s) => s.value);
+    const fin = Date.now() + timeoutMs;
+    let vu = null;
+    for (;;) {
+      const topo = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+        { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+      const n = (topo.nodes ?? []).find((x) => x.id === nodeId);
+      vu = n?.sensor ?? null;
+      if (vu && Object.entries(attendus).every(([k, v]) => vu[k] === v)) return;
+      if (Date.now() > fin) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error(`réglages de ${nodeId} non enregistrés : attendu `
+      + `${JSON.stringify(attendus)}, serveur ${JSON.stringify(vu)}\n`
+      + `refus HTTP : ${refus.slice(-5).join("\n  ") || "aucun"}`);
+  };
   // L'interface est a onglets (disposition Packet Tracer) : on choisit l'onglet par son libelle.
   const clickTab = async (sel, label) => {
     await page.evaluate((s, txt) => {
@@ -555,7 +590,11 @@ try {
     // accusant l'affichage d'un plan de canaux que le moteur n'a simplement pas eu à écrire.
     await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="spreading_factor"]', "12");
     await submitForm('.device-win[data-node-id="capt-1"] form');
-    await waitText('.device-win[data-node-id="capt-1"] form', /enregistrés/);
+    // Attendre le mot « enregistrés » ne prouve rien : le formulaire l'affiche depuis
+    // l'étape de saisie, donc l'attente passe avant même que cette soumission parte. Ce
+    // qui prouve, c'est que **le serveur** a les nouveaux réglages — on les relit donc
+    // chez lui, et on publie ses refus si ce n'est pas le cas.
+    await attendreReglages("capt-1", { spreading_factor: 12, messages: 60 }, refus);
     await obsTab("Simulation");
 
     await setValue("#seed", "7");
