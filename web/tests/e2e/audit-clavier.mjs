@@ -344,7 +344,6 @@ try {
         par: info.changements.join(", "),
       });
     }
-    if (!depart) console.log(`AUCUN ÉLÉMENT INTERACTIF dans l'état « ${etat.nom} »`);
 
     const problemes = [];
     for (const o of ordre) {
@@ -371,18 +370,25 @@ try {
   for (const [sel, label] of [[".tabs", ".tabs (panneau d'observation)"],
                               [".views", ".views (Carte 3D / Plan)"],
                               [".device-tabs", ".device-tabs (fenêtre d'équipement)"]]) {
-    const bouge = await page.evaluate((s) => {
-      const conteneur = document.querySelector(s);
-      if (!conteneur) return null;                      // groupe absent de cet état : sans objet
-      const onglets = [...conteneur.querySelectorAll('[role="tab"]')];
-      if (onglets.length < 2) return null;
-      const premier = onglets[0];
-      premier.focus();
-      const depart = document.activeElement;
-      premier.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-      return document.activeElement !== depart;
-    }, sel);
-    if (bouge === false) {
+    // Rang de l'onglet focalisé dans son groupe : -1 si aucun ne l'est.
+    const rang = () => page.evaluate((s) => [...document.querySelectorAll(`${s} [role="tab"]`)]
+      .indexOf(document.activeElement), sel);
+    const onglets = await page.$$(`${sel} [role="tab"]`);
+    if (onglets.length < 2) continue;                   // groupe absent ou réduit : sans objet
+    // Le focus est posé par Puppeteer, pas par un `focus()` dans la page : cette dernière
+    // voie a été mesurée comme ne tenant pas dans ce navigateur, et une épreuve qui ne
+    // tient pas se lit « sourde » — un défaut de l'audit pris pour un défaut de l'interface.
+    await onglets[0].focus();
+    const avant = await rang();
+    if (avant < 0) {
+      horsEtat.push({ type: "flèches non vérifiables", quoi: label,
+        detail: "l'onglet n'a pas pris le focus : l'épreuve n'a pas eu lieu, le groupe n'est "
+          + "ni sain ni fautif" });
+      continue;
+    }
+    await page.keyboard.press("ArrowRight");
+    const apres = await rang();
+    if (apres === avant) {
       horsEtat.push({ type: "tablist sourde aux flèches", quoi: label,
         detail: "les onglets portent role=\"tab\" mais ArrowRight ne déplace pas le focus" });
     }
