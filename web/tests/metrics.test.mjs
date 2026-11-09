@@ -28,6 +28,7 @@ import {
   couleurPdr,
   echellePdr,
   ECHELLE_PDR,
+  bilanAdr,
   resultatsParNoeud,
   lignesResultat,
   verdictDutyCycle,
@@ -580,4 +581,49 @@ test("une autonomie non calculable ne s'affiche pas", () => {
   assert.equal(autonomieTexte(null), null);
   assert.equal(autonomieTexte(0), null);
   assert.equal(autonomieTexte(-3), null);
+});
+
+// --- Bilan ADR : le changement de débit, tel qu'observé ---------------------------------------
+//
+// Le but n'est pas de compter des lignes mais de garantir la règle qui rend l'encadré honnête :
+// on n'annonce que ce que le run a observé, jamais ce que le formulaire a demandé.
+
+test("le bilan ADR ne retient que les dispositifs dont le SF a changé", () => {
+  const rows = [
+    { device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: 7 },
+    { device_index: 1, group: "c2", spreading_factor: 12, final_spreading_factor: 12 },
+  ];
+  const bilan = bilanAdr(rows, []);
+  assert.equal(bilan.length, 1);
+  assert.equal(bilan[0].deviceIndex, 0);
+  assert.equal(bilan[0].depart, 12);
+  assert.equal(bilan[0].fin, 7);
+  assert.equal(bilan[0].baisse, true);      // SF plus bas : le serveur l'a fait monter en débit
+  assert.equal(bilan[0].hausse, false);
+});
+
+test("un SF final absent n'est pas un changement, même s'il diffère du départ", () => {
+  // Voie multi-passerelles : le run n'observe pas la fin. Recopier le départ serait faire
+  // croire à une mesure là où il n'y en a pas.
+  const rows = [{ device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: null }];
+  assert.deepEqual(bilanAdr(rows, []), []);
+  // Et une ligne sans champ du tout ne lève pas.
+  assert.deepEqual(bilanAdr([{ device_index: 0 }], []), []);
+});
+
+test("le bilan nomme l'équipement plutôt que l'identifiant de groupe", () => {
+  const rows = [{ device_index: 0, group: "capteur-1", spreading_factor: 9, final_spreading_factor: 12 }];
+  const noeuds = [{ id: "capteur-1", name: "Capteur nord" }];
+  const bilan = bilanAdr(rows, noeuds);
+  assert.equal(bilan[0].nom, "Capteur nord");
+  assert.equal(bilan[0].hausse, true);      // SF plus haut : le serveur l'a fait descendre
+});
+
+test("un run sans changement donne un bilan vide, pas un bilan nul", () => {
+  const rows = [
+    { device_index: 0, group: "c1", spreading_factor: 12, final_spreading_factor: 12 },
+    { device_index: 1, group: "c2", spreading_factor: 7, final_spreading_factor: 7 },
+  ];
+  assert.deepEqual(bilanAdr(rows, []), []);
+  assert.deepEqual(bilanAdr([], [{ id: "c1" }]), []);
 });

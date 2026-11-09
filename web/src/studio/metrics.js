@@ -313,6 +313,53 @@ export function ventilationTable(groupes = [], limites = null) {
   return { entetes, lignes, unParGroupe };
 }
 
+/**
+ * Bilan du débit commandé par le serveur : « ce capteur est passé de SF12 à SF7 ».
+ *
+ * Le seul endroit où le changement se lit est la ligne de dispositif du run : `spreading_factor`
+ * est le SF de départ, `final_spreading_factor` celui du **dernier uplink**, tel que l'ADR
+ * l'a laissé. Une commande MAC ne porte que son nom, et les sauts d'un événement uplink
+ * portent le DR de départ figé — ni l'un ni l'autre ne montrent le changement.
+ *
+ * Ne renvoie que les dispositifs **observés comme ayant changé**. Une liste vide n'est pas un
+ * échec : c'est la vérité d'un run où le serveur n'a rien commandé, et l'appelant laisse
+ * l'encadré masqué plutôt que d'annoncer un ADR qui n'a rien fait.
+ */
+export function bilanAdr(deviceRows = [], nodes = []) {
+  const noms = nomParGroupe(nodes);
+  const changes = [];
+  for (const l of deviceRows) {
+    const depart = l.spreading_factor;
+    const fin = l.final_spreading_factor;
+    // `final_spreading_factor` absent : le run n'observe pas la fin (voie multi-passerelles).
+    if (!Number.isFinite(depart) || !Number.isFinite(fin) || fin === depart) continue;
+    changes.push({
+      deviceIndex: l.device_index ?? null,
+      nom: nomDuDispositif(l, noms),
+      depart,
+      fin,
+      baisse: fin < depart,        // SF plus bas = débit plus rapide = plus près ou meilleur lien
+      hausse: fin > depart,
+    });
+  }
+  return changes;
+}
+
+/** Nom lisible d'un dispositif : son groupe, sinon son index. */
+function nomDuDispositif(ligne, noms) {
+  const g = ligne.group;
+  if (g !== undefined && g !== null && noms.has(g)) return noms.get(g);
+  if (g !== undefined && g !== null) return String(g);
+  return `dispositif ${ligne.device_index ?? "?"}`;
+}
+
+/** `group` -> nom de l'équipement, pour ne pas afficher un identifiant de groupe brut. */
+function nomParGroupe(nodes = []) {
+  const m = new Map();
+  for (const n of nodes) if (n && n.id) m.set(n.id, n.name ?? n.id);
+  return m;
+}
+
 /** Taux de livraison par dispositif : la matière première du coloriage de la carte (phase L). */
 export function pdrParDispositif(lignes = []) {
   return lignes.map((l) => ({

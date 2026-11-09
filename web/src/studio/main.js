@@ -11,7 +11,8 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte } from "./metrics.js";
+  limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte,
+  bilanAdr } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
@@ -1114,6 +1115,11 @@ $("sim-form").addEventListener("submit", async (ev) => {
     if (!started) return;
     clear($("sim-notes"));
     for (const note of started.notes) $("sim-notes").append(el("li", { text: note }));
+    // Le bilan du run précédent ne survit pas au lancement : un encadré qui reste affiché
+    // pendant que le nouveau run tourne ferait lire l'ancien résultat comme le nouveau.
+    $("adr-bilan").hidden = true;
+    clear($("adr-bilan-liste"));
+    $("adr-bilan-aide").textContent = "";
     $("sim-status").textContent = `Run ${started.run_id} : ${started.state}…`;
     const status = await waitForRun(started.run_id);
     if (!status) return;
@@ -1181,7 +1187,45 @@ function renderResults(summary, linkedNames, deviceRows = []) {
       el("td", { text: r.mesh })));
   }
   table.hidden = rows.length === 0;
+  renderAdrBilan(deviceRows);
   renderMetrics(summary, deviceRows);
+}
+
+/**
+ * Le débit que le serveur a effectivement commandé, lu dans le run — pas dans le formulaire.
+ *
+ * Le bloc reste masqué quand le bilan est vide : sur un run sans ADR, ou quand le serveur n'a
+ * encore rien commandé faute d'assez d'uplinks, il n'y a rien à montrer, et un encadré vide
+ * laisserait croire que la question a été traitée et qu'elle n'a rien donné — alors que la
+ * réponse est « pas de changement observé », et qu'elle mérite son propre mot.
+ */
+function renderAdrBilan(deviceRows = []) {
+  const bloc = $("adr-bilan");
+  const liste = $("adr-bilan-liste");
+  const aide = $("adr-bilan-aide");
+  clear(liste);
+  const changes = bilanAdr(deviceRows, state.topo?.nodes ?? []);
+  if (changes.length === 0) {
+    bloc.hidden = true;
+    aide.textContent = "";
+    return;
+  }
+  for (const c of changes) {
+    const sens = c.baisse
+      ? "débit plus rapide : le lien le permettait"
+      : "débit plus lent : la marge de liaison était insuffisante";
+    liste.append(el("li", { text: `${c.nom} : SF${c.depart} → SF${c.fin} — ${sens}` }));
+  }
+  // Combien n'ont pas bougé : sans ce chiffre, trois changements sur trente passeraient
+  // pour une décision générale du serveur.
+  const observes = deviceRows.filter((l) => Number.isFinite(l.final_spreading_factor)).length;
+  const inchanges = observes - changes.length;
+  aide.textContent = inchanges > 0
+    ? `${changes.length} dispositif(s) sur ${observes} observés ont changé de débit. `
+      + `${inchanges} sont restés au SF de départ : l'ADR agit à chaque uplink reçu, `
+      + `il faut plusieurs messages avant qu'une commande parte.`
+    : `Les ${observes} dispositifs observés ont changé de débit.`;
+  bloc.hidden = false;
 }
 
 // Indicateurs calculés à partir des seuls compteurs du run. Chaque bloc affiche la formule

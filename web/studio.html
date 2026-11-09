@@ -183,6 +183,14 @@
           </div>
           <p id="sim-status" class="muted"></p>
           <ul id="sim-notes" class="notes"></ul>
+          <!-- Le débit commandé par le serveur, tel que le run l'a observé. Ce bloc ne dit rien
+               de ce que l'utilisateur a coché : il ne s'ouvre que si la trace porte une
+               différence entre le SF de départ et celui du dernier uplink. -->
+          <div id="adr-bilan" hidden>
+            <h3>Débit commandé par le serveur</h3>
+            <ul id="adr-bilan-liste" class="notes"></ul>
+            <p id="adr-bilan-aide" class="gw-aide muted"></p>
+          </div>
           <table id="sim-results" hidden>
             <thead>
               <tr><th>Passerelle</th><th>Reçues</th><th>Pertes</th><th>Latence p95</th><th>Relais mesh</th></tr>

@@ -37,6 +37,20 @@
           "default": null,
           "title": "Energy Per Message J"
         },
+        "final_spreading_factor": {
+          "anyOf": [
+            {
+              "maximum": 12,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Spreading Factor"
+        },
         "group": {
           "maxLength": 64,
           "title": "Group",

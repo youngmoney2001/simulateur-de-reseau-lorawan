@@ -347,6 +347,21 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .adr input:disabled { cursor:not-allowed; }
 .adr input:disabled + * , .adr label:has(input:disabled) { opacity:.6; cursor:not-allowed; }
 .adr .gw-aide { margin:3px 0 0 22px; }
+
+/* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */
+/* Encadré plutôt que ligne perdue : ce bloc est la réponse à « pourquoi ce capteur a-t-il
+   changé de débit ? ». Il doit se voir dès la fin du run, avant les indicateurs. */
+#adr-bilan {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--bord, #d6d9de);
+  border-left: 3px solid #2f7d5d;
+  border-radius: 4px;
+  background: #f6faf8;
+}
+#adr-bilan h3 { margin: 0 0 4px; font-size: 13px; }
+#adr-bilan .notes { margin: 0; }
+#adr-bilan .gw-aide { margin: 5px 0 0; }
 .gw-avance summary { cursor:pointer; color:var(--muted); }
 .sensor-actions { grid-column:1 / -1; display:flex; gap:6px; margin-top:4px; }
 

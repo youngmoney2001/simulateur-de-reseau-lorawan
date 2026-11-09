@@ -466,6 +466,27 @@ def _duty_cycle_out(scenario: Scenario) -> Optional[list[dict[str, Any]]]:
     return rows or None
 
 
+def _sf_final_par_dispositif(records) -> dict[int, int]:
+    """Facteur d'étalement de la **dernière** émission de chaque dispositif.
+
+    `records` est trié par émission ; on garde donc le dernier SF vu par dispositif, sans
+    présumer de l'ordre dans lequel le moteur les range. C'est le seul endroit où se lit un
+    changement de débit commandé par l'ADR : le moteur l'applique en cours de run, et rien
+    d'autre ne le rapporte.
+
+    Vide quand le run ne porte pas d'enregistrements : plutôt un champ absent qu'une valeur
+    qui recopierait le SF initial en laissant croire à une observation.
+    """
+    if not records:
+        return {}
+    out: dict[int, int] = {}
+    for r in records:
+        sf = getattr(r, "spreading_factor", None)
+        if sf is not None:
+            out[r.device_index] = sf
+    return out
+
+
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
                  rx_matrix=None) -> dict[str, Any]:
@@ -664,6 +685,7 @@ class RunService:
         energy_rows: dict[int, Any] = {}
         mesh_lost_total: Optional[int] = None
         mesh_lost_by_device: Optional[tuple[int, ...]] = None
+        sf_finaux: dict[int, int] = {}
         if job.multi:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
@@ -684,6 +706,10 @@ class RunService:
             tr = build_trace(scenario, job.options)
             totals, per_device, events = tr.totals, tr.per_device, tr.events
             gateway_load, gateways = tr.gateway, None
+            # Seule la voie mono porte les enregistrements d'émission, et c'est aussi la seule
+            # où l'ADR est simulé : le SF final n'a de sens que là. Sur la voie multi il reste
+            # absent, plutôt que de recopier le SF initial en laissant croire à une observation.
+            sf_finaux = _sf_final_par_dispositif(tr.records)
         self._set(run_id, 0.7)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
@@ -701,6 +727,7 @@ class RunService:
             rows.append(DeviceRowOut(
                 device_index=i, group=group_of[i], index_in_group=index_in_group[i],
                 x_m=dev.x_m, y_m=dev.y_m, spreading_factor=dev.spreading_factor,
+                final_spreading_factor=sf_finaux.get(i),
                 sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
                 lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),

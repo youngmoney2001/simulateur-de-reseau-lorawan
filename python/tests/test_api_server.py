@@ -371,6 +371,44 @@ def test_devices_are_paginated_and_complete(finished_run):
     assert sum(d["sent"] for d in seen) == summary["totals"]["sent"]
 
 
+def test_final_spreading_factor_says_what_the_server_left_the_device_at(api):
+    """Le SF final est une observation : il ne recopie jamais le SF de départ.
+
+    Deux runs de trois capteurs partis de SF12, assez proches pour que l'ADR les fasse monter.
+    Sans ADR rien ne peut changer le débit : le champ recopierait donc le SF de départ, ce qui
+    laisserait croire à une observation — il est laissé absent. Avec ADR, il porte le SF que le
+    terminal avait **au dernier uplink**, seul endroit où le changement se lit (les sauts d'un
+    événement uplink portent le DR de départ, figé, et une commande MAC ne porte que son nom).
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test sf final", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _sf(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [d_["spreading_factor"] for d_ in page["items"]], \
+               [d_["final_spreading_factor"] for d_ in page["items"]]
+
+    # --- Voie multi-passerelles : pas d'enregistrements d'émission, donc rien à observer ------
+    departs, finaux = _sf({**base, "gateways": [
+        {"name": "gw-a", "x_m": 0, "y_m": 0}, {"name": "gw-b", "x_m": 400, "y_m": 0}]})
+    assert departs == [12, 12, 12]
+    assert finaux == [None, None, None]
+
+    # --- Avec ADR : le serveur commande un changement, et la trace le porte -------------------
+    departs, finaux = _sf({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert departs == [12, 12, 12]                      # le départ est inchangé dans le rapport
+    assert all(f is not None for f in finaux), finaux   # la voie mono observe la fin du run
+    assert min(finaux) < 12, finaux                     # au moins un terminal a été fait monter
+
+
 def test_events_are_ordered_paginated_and_hops_are_bounded(finished_run):
     call, rid = finished_run["call"], finished_run["run_id"]
     seqs, kinds, cursor = [], set(), 0

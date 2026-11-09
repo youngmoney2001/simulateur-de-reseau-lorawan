@@ -146,6 +146,14 @@ class DeviceRowOut(_Strict):
     x_m: float
     y_m: float
     spreading_factor: int = Field(ge=5, le=12)
+    # Facteur d'étalement **à la fin du run**. Il ne diffère de `spreading_factor` que si le
+    # serveur a commandé un changement de débit (ADR) et que le terminal l'a appliqué — c'est
+    # donc la seule pièce qui réponde à « pourquoi ce capteur est-il passé de SF12 à SF7 ? ».
+    #
+    # Absent quand le run ne porte pas d'enregistrements d'émission (chemin multi-passerelles,
+    # où l'ADR n'est de toute façon pas simulé) : un champ absent plutôt qu'une valeur qui
+    # recopierait `spreading_factor` en laissant croire à une observation.
+    final_spreading_factor: Optional[int] = Field(default=None, ge=5, le=12)
     sent: int = Field(ge=0)
     received: int = Field(ge=0)
     lost_sensitivity: int = Field(ge=0)
