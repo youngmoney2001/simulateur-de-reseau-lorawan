@@ -39,6 +39,10 @@ class State:
     # Vide avant la liaison d'un run, et sur la voie multi-passerelles qui n'observe pas la fin.
     devices: dict = field(default_factory=dict)
     adr: bool = False            # ADR demandé sur la session (le souhait, pas son effet)
+    join: bool = False           # jointure OTAA demandée (le souhait, pas son effet)
+    # Nature des événements du run lié : {"join_request": n, "join_accept": n, "uplink": n, ...}
+    # Vide avant la liaison d'un run. Compté par le serveur, donc exact et non borné.
+    echanges: dict = field(default_factory=dict)
 
     def config(self, node: str) -> Optional[GatewayConfig]:
         return self.configs.get(node)
@@ -150,6 +154,38 @@ def _adr_active() -> Callable[[State], bool]:
     return lambda st: st.adr
 
 
+def _jointure_active() -> Callable[[State], bool]:
+    """La jointure est demandée sur la session. Son effet, lui, se lit dans `echanges`."""
+    return lambda st: st.join
+
+
+def _jointures_acceptees(au_moins: int) -> Callable[[State], bool]:
+    """Au moins `au_moins` join-accept **observés** dans le run.
+
+    On compte les acceptations, pas les demandes : un terminal qui n'obtient pas son
+    join-accept recommence, et un run peut porter trente demandes pour une seule jointure
+    aboutie. Noter sur les demandes donnerait le point à une flotte qui n'a jamais joint.
+    """
+    def check(st: State) -> bool:
+        return int(st.echanges.get("join_accept") or 0) >= au_moins
+
+    return check
+
+
+def _uplinks_de_donnees(au_moins: int) -> Callable[[State], bool]:
+    """Au moins `au_moins` uplinks de **données** observés dans le run.
+
+    C'est la conséquence qui compte, et elle ne se déduit pas de la jointure : un capteur
+    peut avoir joint et ne rien émettre. Avec la jointure activée, chaque capteur perd son
+    premier message au profit du join-request — le compte attendu n'est donc pas
+    « messages x capteurs ».
+    """
+    def check(st: State) -> bool:
+        return int(st.echanges.get("uplink") or 0) >= au_moins
+
+    return check
+
+
 def _sf_a_baisse(node: str) -> Callable[[State], bool]:
     """Le run **observe** un débit plus rapide à la fin qu'au départ, sur cet équipement.
 
@@ -174,13 +210,27 @@ def _node(id_: str, kind: str, name: str, x: float, y: float) -> Node:
 
 
 def _sensor(x: float, tx_power_dbm: float = 14.0, messages: int = 1,
-            spreading_factor: int = 7) -> Node:
+            spreading_factor: int = 7, start_spread_s: float = 0.0) -> Node:
     """Capteur de départ. Avec un relais, il émet à -10 dBm à 1500 m : la frontière ne l'entend
     pas, le relais (à 300 m) si, et la trame n'arrive au LNS que par le mesh."""
     return Node(id="capteur-1", kind="sensor", name="Capteur 1", x_m=x, y_m=0,
                 sensor=SensorSettings(tx_power_dbm=tx_power_dbm, messages=messages,
                                       spreading_factor=spreading_factor,
+                                      start_spread_s=start_spread_s,
                                       period_s=60.0 if messages > 1 else 600.0))
+
+
+def _flotte(ids: tuple[str, ...], x0: float = 400.0, pas: float = 200.0, messages: int = 6,
+            start_spread_s: float = 0.0) -> tuple[Node, ...]:
+    """Plusieurs capteurs alignés, réglés de la même façon.
+
+    `start_spread_s` vaut 0 par défaut : c'est le piège que l'exercice sur la jointure veut
+    faire rencontrer — tout le monde émet au même instant.
+    """
+    return tuple(Node(id=i, kind="sensor", name=i, x_m=x0 + pas * n, y_m=0,
+                      sensor=SensorSettings(messages=messages, period_s=300.0,
+                                            start_spread_s=start_spread_s))
+                 for n, i in enumerate(ids))
 
 
 EXERCISES: tuple[Exercise, ...] = (
@@ -306,6 +356,31 @@ EXERCISES: tuple[Exercise, ...] = (
                "406, 812 et 1625 kHz.",
                "Une bande plus large raccourcit l'émission mais réduit la portée : c'est le "
                "compromis que cet exercice demande d'appliquer à la valeur extrême."),
+    ),
+    Exercise(
+        id="join-flotte-etalee",
+        title="Une flotte qui joint au même instant n'émet rien",
+        statement=("Activez la jointure OTAA. Quatre capteurs démarrent tous au même instant : "
+                   "lancez une simulation et regardez combien de jointures aboutissent — et "
+                   "combien de données sortent. Étalez ensuite les départs (champ "
+                   "« Dispersion du départ » de chaque capteur) jusqu'à ce que les quatre "
+                   "capteurs émettent leurs données."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     *_flotte(("c0", "c1", "c2", "c3"), messages=6, start_spread_s=0.0)),
+        criteria=(
+            Criterion("join", "Jointure OTAA activée sur la session", 10, _jointure_active()),
+            Criterion("acceptees", "Les quatre jointures sont acceptées dans le run", 20,
+                      _jointures_acceptees(4)),
+            # 4 capteurs x 5 messages de données (le premier part en join-request) = 20.
+            # Mesuré à 19 ou 20 selon la graine : une trame peut se perdre en route, et le
+            # seuil la tolère sans rien exiger de moins que « la flotte émet ».
+            Criterion("donnees", "Les quatre capteurs émettent leurs données", 10,
+                      _uplinks_de_donnees(18)),
+        ),
+        hints=("Le join-request est une trame comme une autre : quatre émises au même instant "
+               "sur le même canal se collisionnent, et personne n'est accepté.",
+               "Le champ « Dispersion du départ » du capteur étale les premières émissions. "
+               "10 secondes suffisent ici — et le run passe alors de 0 à 20 uplinks de données."),
     ),
     Exercise(
         id="adr-debit-observe",

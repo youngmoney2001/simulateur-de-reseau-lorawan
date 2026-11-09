@@ -414,6 +414,81 @@ def test_confirmed_uplinks_cost_is_visible_in_the_device_rows(api):
     assert avec > sans, f"courant sans {sans} / avec {avec} : le coût devrait se voir"
 
 
+def test_join_exercise_is_graded_on_the_observed_joins(api):
+    """Une flotte qui joint au même instant n'émet rien : la note le constate, puis le voit cesser.
+
+    Deux soumissions de la même session. La première, départs simultanés : les join-request se
+    collisionnent, aucune jointure n'aboutit et **aucune donnée** ne sort. La seconde, après
+    étalement des départs : quatre jointures acceptées, dix-neuf uplinks de données.
+
+    Le point n'est pas de cocher une case : la jointure est activée dans les deux cas. C'est le
+    run qui fait la note.
+    """
+    status, created = api.call("POST", "/api/v1/sessions", {"exercise_id": "join-flotte-etalee"})
+    assert status == 201, created
+    sid = created["session_id"]
+    for cmd in ("enable", "configure terminal", "interface lora 0", "region EU868"):
+        status, body = api.call("POST", f"/api/v1/sessions/{sid}/cli",
+                                {"node_id": "frontiere", "command": cmd})
+        assert status == 200 and not body.get("error"), body
+    status, topo = api.call("POST", f"/api/v1/sessions/{sid}/protocol",
+                            {"join": True, "confirmed": False})
+    assert status == 200 and topo["join_possible"] is True, topo
+
+    def soumettre(spread):
+        for c in ("c0", "c1", "c2", "c3"):
+            status, _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                                 {"messages": 6, "period_s": 300, "start_spread_s": spread})
+            assert status == 200
+        run_id = _lancer(api, sid)
+        status, bound = api.call("POST", f"/api/v1/sessions/{sid}/simulation",
+                                 {"run_id": run_id})
+        assert status == 200, bound
+        _, summary = api.call("GET", f"/api/v1/runs/{run_id}/summary")
+        status, note = api.call("POST", "/api/v1/exercises/join-flotte-etalee/submit",
+                                {"session_id": sid})
+        assert status == 200
+        return summary["event_kinds"], {c["id"]: c["passed"] for c in note["criteria"]}, \
+            note["score"]
+
+    # Départs simultanés : des dizaines de demandes, aucune acceptation, aucune donnée.
+    natures, criteres, note = soumettre(0)
+    assert natures.get("join_accept", 0) == 0, natures
+    assert natures.get("uplink", 0) == 0, natures
+    assert criteres["join"] is True
+    assert criteres["acceptees"] is False and criteres["donnees"] is False
+    assert note == 10
+
+    # Départs étalés : la flotte joint, et les données sortent.
+    natures, criteres, note = soumettre(10)
+    assert natures.get("join_accept", 0) >= 4, natures
+    assert natures.get("uplink", 0) >= 18, natures
+    assert criteres["acceptees"] is True and criteres["donnees"] is True
+    assert note == 40
+
+
+def test_summary_counts_event_kinds_exactly(api):
+    """`event_kinds` est compté à la fin du run, donc exact — pas borné par une relecture.
+
+    Les événements sont stockés en JSON sans colonne de nature : les recompter à la demande
+    obligerait à relire les corps et donc à borner. Un compte borné noterait un exercice sur
+    un run partiellement lu sans le dire.
+    """
+    sid = _session_une_passerelle(api, capteurs=("c0", "c1"))
+    for c in ("c0", "c1"):
+        api.call("POST", f"/api/v1/sessions/{sid}/nodes/{c}/sensor",
+                 {"messages": 5, "period_s": 300, "start_spread_s": 20})
+    api.call("POST", f"/api/v1/sessions/{sid}/protocol", {"join": True, "confirmed": True})
+    run_id = _lancer(api, sid)
+    _, summary = api.call("GET", f"/api/v1/runs/{run_id}/summary")
+    natures = summary["event_kinds"]
+    events = _evenements(api, run_id)
+    # Le compte du résumé égale le parcours effectif des événements servis.
+    for kind, n in natures.items():
+        assert n == events[kind], f"{kind} : résumé {n} vs parcours {events[kind]}"
+    assert set(natures) == set(events), (sorted(natures), sorted(events))
+
+
 def test_binding_an_unknown_or_foreign_run_is_not_found(api, multi_run):
     run_id, _ = multi_run
     sid = _session(api)

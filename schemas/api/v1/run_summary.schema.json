@@ -390,6 +390,22 @@
       "default": null,
       "title": "Energy Profile"
     },
+    "event_kinds": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "maxProperties": 32,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Event Kinds"
+    },
     "gateway": {
       "anyOf": [
         {

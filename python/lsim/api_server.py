@@ -512,7 +512,7 @@ def _sf_final_par_dispositif(records) -> dict[int, int]:
 
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
-                 rx_matrix=None) -> dict[str, Any]:
+                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -523,6 +523,7 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
         energy_profile=energy_profile,
         duty_cycle=_duty_cycle_out(scenario),
         rx_matrix=rx_matrix,
+        event_kinds=event_kinds or None,
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(
@@ -772,7 +773,11 @@ class RunService:
         _run_obj = mt if job.multi else tr
         _vues = frames_for_run(_run_obj, scenario)
         events_out = []
+        natures: dict[str, int] = {}
         for _i, ev in enumerate(events):
+            # Compté ici, dans la passe qui sérialise déjà : un second parcours serait un coût
+            # pour rien, et un comptage à la demande relirait les corps (borné, donc faux).
+            natures[ev.kind] = natures.get(ev.kind, 0) + 1
             events_out.append(TraceEvent(
                 seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
                 gateway_index=ev.gateway_index, outcome=ev.outcome,
@@ -783,7 +788,7 @@ class RunService:
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total,
-                               mt.rx_matrix if job.multi else None)
+                               mt.rx_matrix if job.multi else None, event_kinds=natures)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {

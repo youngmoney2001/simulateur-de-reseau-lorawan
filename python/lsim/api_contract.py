@@ -252,6 +252,16 @@ class RunSummary(_Strict):
     # Une ligne par dispositif (jusqu'à `MAX_DEVICES`), une colonne par passerelle
     # (jusqu'à `MAX_GATEWAYS`) : borner les lignes à 64 casserait tout run un peu peuplé.
     rx_matrix: Optional[list[list[int]]] = None
+    # Nature des événements du run, comptée **à la fin du calcul** — quand ils sont encore
+    # en mémoire, donc exacte et sans borne de lecture.
+    #
+    # Pourquoi un compte plutôt qu'un parcours à la demande : les événements sont stockés en
+    # JSON, sans colonne de nature. Les recompter à la demande obligerait à relire les corps,
+    # donc à borner — et un compte borné noterait un exercice sur un run tronqué sans le dire.
+    #
+    # C'est ce qui permet de répondre à « les quatre capteurs ont-ils obtenu leur join-accept ? »
+    # par ce que le run a produit, jamais par ce que le formulaire a demandé.
+    event_kinds: Optional[dict[str, int]] = Field(default=None, max_length=32)
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":

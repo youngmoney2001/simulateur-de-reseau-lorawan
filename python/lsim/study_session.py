@@ -108,6 +108,10 @@ class _Study:
     # moteur accepte : la jointure et l'ADR s'excluent (`mac_loop.check_closed_loop`).
     join: bool = False
     confirmed: bool = False
+    # Nature des événements du dernier run lié (`join_request`, `join_accept`, `uplink`, `ack`).
+    # Comptée par le serveur à la fin du run, donc exacte : noter un exercice sur un compte
+    # partiel reviendrait à noter un run qu'on n'a pas entièrement lu.
+    echanges: dict = field(default_factory=dict)
     run_id: Optional[str] = None
     terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
     # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
@@ -155,6 +159,7 @@ def _encode(st: _Study) -> dict:
         "adr": st.adr,
         "join": st.join,
         "confirmed": st.confirmed,
+        "echanges": st.echanges,
         "hints_revealed": st.hints_revealed,
         "attempt_count": st.attempt_count,
         "compiled": {rid: [link.model_dump(mode="json") for link in links]
@@ -170,6 +175,7 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 reports=body["reports"], run_id=body["run_id"],
                 sf_par_equipement=body.get("sf_par_equipement") or {},
                 join=bool(body.get("join")), confirmed=bool(body.get("confirmed")),
+                echanges=dict(body.get("echanges") or {}),
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
                           for rid, links in body["compiled"].items()},
@@ -493,6 +499,9 @@ class StudyService:
         dispositifs. Il n'est pas dans le résumé, et c'est pourtant la seule pièce qui dise si
         le serveur a changé le débit d'un capteur — donc la seule qui permette de noter un
         exercice sur l'ADR sans interroger une case de formulaire.
+
+        `summary["event_kinds"]` : nature des événements, comptée par le serveur à la fin du
+        run. C'est ce qui permet de noter une jointure sur les join-accept **observés**.
         """
         gateways = {g["name"]: g for g in summary.get("gateways") or []}
         # Un run ADR n'a **aucune passerelle nommée** : la session y compile en forme
@@ -546,6 +555,7 @@ class StudyService:
                     cli.simulation = None
             st.run_id = req.run_id
             st.sf_par_equipement = dict(sf_par_equipement or {})
+            st.echanges = dict(summary.get("event_kinds") or {})
             unlinked = [n for n in st.nodes if n not in seen_nodes]
             self._save(sid, st)
         return SimulationBound(session_id=sid, run_id=req.run_id, linked=linked, unlinked=unlinked)
@@ -588,7 +598,7 @@ class StudyService:
                 configs={nid: cli.config.copy() for nid, cli in st.cli.items()},
                 reports={nid: dict(r) for nid, r in st.reports.items()},
                 devices={k: dict(v) for k, v in st.sf_par_equipement.items()},
-                adr=st.adr)
+                adr=st.adr, join=st.join, echanges=dict(st.echanges))
             hints_used = st.hints_revealed.get(exercise_id, 0)
         graded = study_exercises.grade(exercise, state)
         criteria = [CriterionResult(id=c.id, label=c.label, passed=ok,

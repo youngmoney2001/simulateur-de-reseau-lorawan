@@ -315,9 +315,44 @@ ne nomme **aucune** passerelle. Or `bind_run` exigeait un nom — l'atelier aura
 désormais un run sans passerelle nommée ; la liaison explicite reste stricte, parce qu'un nom
 demandé qui n'existe pas est une faute de l'utilisateur et que le refus la lui dit.
 
+### Jointure OTAA et trames confirmées — **livrés**
+
+Le moteur les modélisait déjà (`ProtocolOptions.join` et `confirmed_uplinks`) ; `compile_session`
+figeait `"protocol": {}`, et rien ne les exposait. Deux cases dans le panneau de simulation,
+donc — à côté de l'ADR, parce qu'elles en ont la nature : ce sont des décisions qui changent la
+forme du run entier, pas le comportement d'un équipement.
+
+**Les deux s'excluent de l'ADR, et c'est dit avant le run.** `mac_loop` lève « jointure non
+supportée par la boucle fermée ». Sans l'annonce, l'atelier aurait présenté une case valide
+dont le run échoue sur une exception que rien n'explique.
+
+Le cas d'école, mesuré sur serveur HTTP réel (5 capteurs, 6 messages, graine 7) :
+
+| dispersion | join-request | join-accept | uplinks de données |
+|---|---|---|---|
+| 0 s  | 25 | **1** | **5**  |
+| 20 s | 6  | 5     | **24** |
+
+Une flotte qui joint au même instant se collisionne et n'émet presque rien. C'est ce que
+l'encadré « Échanges avec le serveur » rend visible, plutôt que « 0 jointure réussie ».
+
+Deux comptages qui ne se confondent pas, et la nuance est dans le code aussi bien que dans le
+texte : un `join_accept` n'existe que si la demande a été reçue (une **tentative** n'est pas une
+acceptation), et un `ack` n'existe que pour un uplink reçu — l'écart compte donc des trames
+jamais arrivées au serveur, **pas** des acquittements perdus en vol.
+
+**Le coût des trames confirmées est mesuré, pas supposé :** 16,1 → 18,4 µA de courant moyen
+(+14,6 %), 15,9 → 18,2 mJ par message. Le capteur ouvre une fenêtre d'écoute pour l'ACK.
+
+**Exercice `join-flotte-etalee`** (40 points) : quatre capteurs démarrent ensemble.
+
+| état | run | note |
+|---|---|---|
+| départs simultanés | 24 join-request, **0 acceptation, 0 donnée** | **10 / 40** |
+| dispersion 10 s | 4 acceptations, 19 uplinks | **40 / 40** |
+
 ### Ce qui reste
 
-- **Le joint et les trames confirmées**, restés au chantier 1 et mesurés atteignables.
 - **L'ABI v3 et ses terminaux.** `simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`
   (DR final, puissance, masques de canaux) — l'état complet du terminal, pas seulement son SF.
   Elle n'est câblée dans aucune voie de production : l'atelier tourne en ABI v2. La brancher
