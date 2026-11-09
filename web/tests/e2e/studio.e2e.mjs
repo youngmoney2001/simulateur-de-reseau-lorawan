@@ -550,6 +550,10 @@ try {
     await deviceTab("Config", "capt-1");
     await page.waitForSelector('.device-win[data-node-id="capt-1"] .sensor-form input[name="messages"]');
     await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="messages"]', "60");
+    // SF de départ haut : à 300 m, un capteur déjà réglé sur SF9 n'a aucune marge à rendre et
+    // le serveur ne commande rien — le bloc ADR resterait masqué, et le test échouerait en
+    // accusant l'affichage d'un plan de canaux que le moteur n'a simplement pas eu à écrire.
+    await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="spreading_factor"]', "12");
     await submitForm('.device-win[data-node-id="capt-1"] form');
     await waitText('.device-win[data-node-id="capt-1"] form', /enregistrés/);
     await obsTab("Simulation");
