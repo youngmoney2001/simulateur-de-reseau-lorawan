@@ -353,10 +353,32 @@ jamais arrivées au serveur, **pas** des acquittements perdus en vol.
 
 ### Ce qui reste
 
-- **Les masques de canaux.** `simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`,
-  dont `dr_masks` et `enabled` — les canaux que le serveur a laissés au terminal. Ils ne sont
-  câblés dans aucune voie de production, et l'ABI v2 ne les porte pas : les montrer passerait
-  par la v3, que l'arbitrage **D1** isole (un seul module de liaison, aucun import ailleurs).
+Rien. Les masques de canaux, dernier point ouvert du §2, sont livrés.
+
+### Les masques de canaux — **livrés, par la v3 devenue voie de production**
+
+`simulate_closed_loop_v3` expose `ClosedLoopV3Outcome.terminals`, dont `dr_masks` et
+`enabled` — les canaux que le serveur a laissés au terminal. Ils n'étaient câblés dans
+aucune voie de production, et l'ABI v2 ne les porte pas.
+
+**L'invariant D1 disait plus que son intention.** Son commentaire énonce : « v1, v2 et gw2
+n'importent rien de v3 » — la dépendance va dans un seul sens, la v3 réutilisant les
+structures de la v2. L'assertion, elle, interdisait à **quiconque** d'appeler la v3, ce qui
+n'avait de sens que tant que la v2 restait la voie de production. La v3 l'est devenue, et
+l'assertion est resserrée sur l'intention : aucun retour de v1, v2 ou gw2 vers la v3, et une
+seule voie d'appel nommée, pour qu'un second appelant soit vu plutôt que toléré.
+
+**La bascule a été mesurée avant d'être faite.** Six scénarios — sans ADR, ADR proche, ADR
+lointain, trames confirmées, cycle de service, créneaux MAC — ont été soumis aux deux ABI :
+comptages, uplinks, descendantes, occupations et file MAC **identiques**. Sans cette mesure,
+la bascule aurait été une régression silencieuse de toutes les mesures existantes plutôt
+qu'une migration. Le test de parité v1/v2 est devenu un test v1/v3, et sert désormais de
+garde-fou permanent.
+
+Le plan est publié par l'API (`enabled_channels`, `channel_dr_masks`) et affiché dans le bloc
+ADR, dont la commande — LinkADRReq — porte justement le débit **et** le masque. Deux
+confusions écartées par les tests : un canal défini n'est pas forcément actif, et un masque
+n'est pas forcément une plage contiguë (`0b10000001` admet DR0 et DR7, rien entre les deux).
 
 ### La puissance d'émission — **livrée par l'ABI v2, sans toucher à D1**
 
