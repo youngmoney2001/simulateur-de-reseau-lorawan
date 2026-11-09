@@ -572,16 +572,21 @@ try {
       const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
         { headers: { Authorization: `Bearer ${token}` } });
       const topo = await res.json();
-      const run = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/runs`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sid, seed: 7 }),
-      }).then((r) => r.text());
+      // Le moteur a été mesuré hors navigateur : à 300 m, un capteur à SF12 se voit retirer
+      // 14 dB. Si le bloc reste masqué, c'est donc que **ce** run ne porte pas les champs —
+      // on lit les lignes de dispositif du run qu'on vient de voir aboutir, plutôt que
+      // d'imaginer une troisième cause. Le numéro du run est dans le statut affiché.
+      const rid = (await textOf("#sim-status")).match(/Run (\S+) terminé/)?.[1] ?? "";
+      const auth = { Authorization: `Bearer ${token}` };
+      const lignesRun = rid
+        ? await fetch(`http://127.0.0.1:${API_PORT}/api/v1/runs/${rid}/devices`,
+          { headers: auth }).then((r) => r.text())
+        : "run non identifié dans le statut";
       throw new Error(`bloc ADR masqué\nstatut : ${await textOf("#sim-status")}\n`
         + `case ADR : ${JSON.stringify(await page.$eval("#adr-toggle", (c) => ({ c: c.checked, d: c.disabled })))}\n`
         + `aide ADR : ${await textOf("#adr-aide")}\n`
         + `topologie : adr=${topo.adr} possible=${topo.adr_possible} raison=${topo.adr_raison}\n`
-        + `relance d'un run : ${run.slice(0, 400)}`);
+        + `lignes du run ${rid} : ${lignesRun.slice(0, 2000)}`);
     }
     const lignes = await page.$$eval("#adr-bilan-liste li", (ls) => ls.map((l) => l.textContent));
     if (lignes.length === 0) throw new Error("bloc ADR visible sans aucun changement énoncé");
