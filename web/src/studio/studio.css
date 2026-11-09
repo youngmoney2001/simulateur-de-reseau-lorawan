@@ -285,6 +285,13 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .grid-label { font-size:10px; fill:#8b98a5; pointer-events:none; }
 
 .node { cursor:grab; }
+/* Le nœud est focalisable depuis qu'il porte tabindex : il doit donc montrer qu'il l'est.
+   Un contour SVG ne se lit pas comme celui d'une boîte — on double l'épaisseur du trait et
+   on ajoute un halo, visibles sur les trois couleurs d'équipement. */
+.node:focus-visible { outline:none; }
+.node:focus-visible circle, .node:focus-visible rect {
+  stroke:#0b3d91; stroke-width:4; stroke-dasharray:5 3;
+}
 /* Marques intérieures : la forme distingue les types, la couleur ne fait que renforcer. */
 .node .icon { fill:#ffffff; opacity:0.85; pointer-events:none; }
 .node .icon-stroke { fill:none; stroke:#ffffff; stroke-width:2; stroke-linecap:round; opacity:0.9;

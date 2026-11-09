@@ -384,7 +384,13 @@ function renderPlan() {
   svg.append(renderLiaisons(nodes, bounds));
   for (const n of nodes) {
     const p = toScreen(n, bounds, W, H);
-    const g = svgEl("g", { class: `node${state.selected === n.id ? " selected" : ""}`, "data-id": n.id, transform: `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})` });
+    // Atteignable au clavier : sans tabindex ni rôle, un équipement du plan ne s'ouvrait
+    // qu'au pointeur, et la fenêtre d'un équipement restait inaccessible sans souris. Le
+    // nœud est un bouton — Envoi ou Espace l'ouvre — et porte un nom lisible, faute de quoi
+    // une technologie d'assistance n'annoncerait qu'un « groupe » sans identité.
+    const g = svgEl("g", { class: `node${state.selected === n.id ? " selected" : ""}`, "data-id": n.id,
+      tabindex: "0", role: "button", "aria-label": `${n.id} — ${KIND_LABEL[n.kind] ?? n.kind}`,
+      transform: `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})` });
     // Équipements agrandis : à l'échelle précédente (9 px de rayon) un capteur était
     // quasiment invisible sur un plan de plus de mille pixels de large.
     const shape = n.kind === "sensor"
@@ -498,6 +504,17 @@ function selectNode(nodeId) {
   openDeviceWindow(nodeId);
   refreshViews();
 }
+
+// Ouvrir un équipement du plan au clavier. Le nœud est un bouton depuis qu'il porte
+// tabindex et role : il doit donc répondre aux touches qui activent un bouton, et à elles
+// seules — la barre d'espace fait défiler la page si on la laisse passer.
+$("plan").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const g = ev.target.closest?.("g.node");
+  if (!g) return;
+  ev.preventDefault();
+  selectNode(g.dataset.id);
+});
 
 // --- Fenêtres d'équipement flottantes (phase E) -------------------------------------------
 // Une fenêtre par équipement, déplaçable et redimensionnable : on peut en ouvrir plusieurs
