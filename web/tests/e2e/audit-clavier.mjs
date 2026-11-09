@@ -306,27 +306,30 @@ try {
     if (!await etat.action()) { rapport.push({ etat: etat.nom, ordre: [], problemes: [] }); continue; }
     await pause(400);
     await page.evaluate(marquer, INTERACTIFS);
-    // Le parcours doit partir du premier élément du document. Un `blur()` n'y suffit pas :
-    // le navigateur conserve un point de départ de navigation séquentielle là où le focus
-    // était, et la tabulation continuerait depuis le dernier élément manipulé. Mesuré
-    // d'abord ainsi, l'état « Simulation » n'annonçait que 3 éléments et 30 inatteignables —
-    // un défaut de l'audit, pas de l'interface. On vise donc le premier interactif, puis on
-    // laisse le navigateur décider de la suite.
-    const depart = await page.evaluate((sel) => {
-      // Le premier **focalisable**, pas le premier interactif : viser un bouton désactivé ne
-      // déplacerait pas le focus et le parcours rendrait un ordre vide.
-      const premier = [...document.querySelectorAll(sel)]
-        .find((e) => e.disabled !== true && e.getAttribute("tabindex") !== "-1");
-      if (premier) premier.focus();
-      return Boolean(premier);
-    }, INTERACTIFS);
+    // Le parcours doit partir du premier élément du document. On l'obtient en sortant du
+    // document par l'avant : au tour suivant, la tabulation entre nécessairement par le
+    // premier élément. Deux autres voies ont été essayées et abandonnées, chacune mesurée :
+    //   - `blur()` ne suffit pas — le navigateur garde un point de départ de navigation
+    //     séquentielle là où le focus était : l'état « Simulation » n'annonçait alors que
+    //     3 éléments et 30 inatteignables qui n'étaient qu'en aval de ce point ;
+    //   - viser le premier élément par `focus()` ne tient pas — le parcours rendait un
+    //     ordre vide dans les quatre états.
+    // Seules de vraies pressions de touche déplacent le focus de façon fiable ici.
+    let sorti = false;
+    for (let i = 0; i < 300 && !sorti; i += 1) {
+      await page.keyboard.press("Tab");
+      sorti = await page.evaluate(() => !document.activeElement
+        || document.activeElement === document.body
+        || document.activeElement === document.documentElement);
+    }
+    if (!sorti) console.log(`POINT DE DÉPART INCERTAIN dans l'état « ${etat.nom} »`);
 
     const ordre = [];
     const atteints = [];
     for (let i = 0; i < 250; i += 1) {
       // Une pression à la fois, comme le ferait un utilisateur : c'est le navigateur qui
       // décide de l'ordre, pas une liste d'éléments reconstituée.
-      if (i > 0) await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
       const info = await page.evaluate(decrire, PROPRIETES);
       if (!info) break;                                 // le focus a quitté le document
       if (info.id && atteints.includes(info.id)) break;  // cycle : on a fait le tour
