@@ -347,6 +347,11 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .adr input:disabled { cursor:not-allowed; }
 .adr input:disabled + * , .adr label:has(input:disabled) { opacity:.6; cursor:not-allowed; }
 .adr .gw-aide { margin:3px 0 0 22px; }
+/* Une case à cocher native mesure 13x13 : sous les 20 px en dessous desquels viser devient
+   un jeu de hasard, dans un atelier qui se pilote au clic. L'ADR échappait au contrôle parce
+   qu'elle est grisée tant que le plan régional manque — l'audit ne mesure pas un élément
+   désactivé ; la jointure et les trames confirmées, toujours actives, l'ont révélé. */
+.adr input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
 
 /* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */
 /* Encadré plutôt que ligne perdue : ce bloc est la réponse à « pourquoi ce capteur a-t-il
