@@ -370,6 +370,26 @@ function refreshViews() {
   syncMap();
 }
 
+/**
+ * Une topologie revenue du serveur : le plan **et** les réglages qu'elle conditionne.
+ *
+ * L'ADR et la jointure se lisent depuis `state.topo`. Ajouter une passerelle rend l'ADR
+ * possible ; poser un relais le rend impossible ; régler une région sur la passerelle lève
+ * le dernier obstacle. Ne rafraîchir que le plan laissait donc un réglage grisé **avec une
+ * raison qui n'était plus la sienne** — mesuré dans le navigateur par l'étape ADR : après
+ * l'ajout de la passerelle, l'atelier annonçait encore « 0 passerelles actives ici » alors
+ * que le serveur répondait déjà « exige un plan régional ».
+ *
+ * Un réglage grisé sans explication coûte une heure ; un réglage grisé avec la mauvaise
+ * explication en coûte davantage, parce qu'on cherche la passerelle manquante au lieu de
+ * régler la région.
+ */
+function refreshTopologie() {
+  refreshViews();
+  renderAdr();
+  renderProtocole();
+}
+
 function renderPlan() {
   const svg = $("plan");
   clear(svg);
@@ -778,12 +798,10 @@ function renderGatewayConfig(node, body) {
       const topo = await guard(() => state.client.setGateway(state.sid, node.id, checked.settings));
       if (topo) {
         state.topo = topo;
-        // Le plan régional peut rendre l'ADR possible, ou le relais l'interdire : la case doit
-        // se réévaluer ici, sinon l'utilisateur ne verrait le changement qu'en changeant de
-        // session — et croirait l'ADR impossible alors qu'il vient de le rendre possible.
-        renderAdr();
-        renderProtocole();
-        refreshViews();
+        // Le plan régional peut rendre l'ADR possible, ou le relais l'interdire : la case
+        // doit se réévaluer ici, sinon l'utilisateur ne verrait le changement qu'en changeant
+        // de session — et croirait l'ADR impossible alors qu'il vient de le rendre possible.
+        refreshTopologie();
         message.textContent = "Réglages enregistrés.";
       }
     },
@@ -970,7 +988,9 @@ function renderConsole(node, body) {
       const fresh = await guard(() => state.client.topology(state.sid));
       if (fresh && state.selected === node.id) {
         state.topo = fresh;
-        refreshViews();
+        // La console peut régler la région, dernier obstacle à l'ADR : le réglage doit se
+        // réévaluer sans reconstruire la console — le focus et la saisie en cours comptent.
+        refreshTopologie();
         // Le corps de la fenêtre est passé explicitement : renderDeviceInfo écrit dedans et ne
         // peut plus deviner un panneau unique. On ne rafraîchit que si la zone est toujours là —
         // la fenêtre a pu être refermée pendant l'aller-retour réseau.
@@ -1052,7 +1072,9 @@ $("add-form").addEventListener("submit", async (ev) => {
     state.topo = topo;
     state.selected = checked.node.id;
     ev.target.reset();
-    refreshViews();
+    // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
+    // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
+    refreshTopologie();
     renderDevice();
     await refreshSessions();
   }

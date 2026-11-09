@@ -310,44 +310,6 @@ try {
     if (!libelles.includes("Courant moyen")) throw new Error(libelles.join(" | "));
   });
 
-  // Le plan de canaux que le serveur a laissé au terminal, affiché. Il vient de l'ABI v3 et
-  // voyage dans la même commande que le débit — LinkADRReq — donc il se lit dans le bloc ADR.
-  // Aucun test de navigateur ne l'exerçait : le module pur ne peut pas dire si la phrase est
-  // réellement peinte, et seul un run avec ADR la produit.
-  await step("ADR : le plan de canaux laissé au terminal est affiché", async () => {
-    await obsTab("Simulation");
-    const adr = await page.$eval("#adr-toggle", (c) => ({ desactive: c.disabled, coche: c.checked }));
-    if (adr.desactive) {
-      // Une case grisée sans explication est le genre de silence qui fait perdre une heure.
-      // On publie donc la raison **et** la topologie vue par le serveur : « 0 passerelles
-      // actives » sur une session qui en montre une ne se comprend qu'en les lisant ensemble.
-      const sid = await page.$eval("#session-select", (s) => s.value);
-      const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
-        { headers: { Authorization: `Bearer ${token}` } });
-      const topo = await res.json();
-      throw new Error(`ADR impossible : ${await textOf("#adr-aide")}\n`
-        + `raison serveur : ${topo.adr_raison}\n`
-        + `nœuds : ${JSON.stringify((topo.nodes ?? []).map((n) => [n.id, n.kind]))}\n`
-        + `états : ${JSON.stringify((topo.states ?? []).map((s) => [s.node_id, s.hostname, s.region]))}`);
-    }
-    if (!adr.coche) await page.click("#adr-toggle");
-    await page.waitForFunction(() => !document.getElementById("adr-toggle").disabled);
-    await setValue("#seed", "7");
-    await page.click("#simulate");
-    await waitText("#sim-status", /terminé/, 120_000);
-    await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
-      { timeout: 20_000 });
-    const lignes = await page.$$eval("#adr-bilan-liste li", (ls) => ls.map((l) => l.textContent));
-    if (lignes.length === 0) throw new Error("bloc ADR visible sans aucun changement énoncé");
-    const canaux = await textOf("#adr-bilan-canaux");
-    for (const attendu of ["Canaux laissés au terminal", "Seuls les canaux actifs servent"])
-      if (!canaux.includes(attendu)) throw new Error(`« ${canaux} » sans « ${attendu} »`);
-    // Le plan doit nommer au moins un canal et son débit : une phrase sans chiffre serait
-    // un masque vide rendu comme une information.
-    if (!/\d+\s*:\s*DR\d/.test(canaux)) throw new Error(`plan sans canal ni débit : « ${canaux} »`);
-    console.log(`ADR : ${lignes.length} changement(s) · ${canaux}`);
-  });
-
   await step("autonomie : le courant est simule, la capacite est enoncee", async () => {
     await obsTab("Simulation");
     await page.waitForFunction(() => !document.getElementById("sim-autonomie").hidden,
@@ -549,6 +511,63 @@ try {
       { headers: { Authorization: `Bearer ${token}` } });
     const st2 = (await res2.json()).states.find((x) => x.node_id === "gw-nord").gateway;
     if (st2.sub_band !== null) throw new Error(`sous-bande conservée : ${st2.sub_band}`);
+  });
+
+  // Le plan de canaux que le serveur a laissé au terminal, affiché.
+  //
+  // Placé **après** le réglage de la région sur la passerelle, et c'est la condition : sans
+  // plan régional, l'ADR n'est pas simulable et le bloc ne s'affiche jamais. Un test écrit
+  // avant ce réglage échouerait sur une topologie qui n'a rien à voir avec l'objet du test. Il vient de l'ABI v3 et
+  // voyage dans la même commande que le débit — LinkADRReq — donc il se lit dans le bloc ADR.
+  // Aucun test de navigateur ne l'exerçait : le module pur ne peut pas dire si la phrase est
+  // réellement peinte, et seul un run avec ADR la produit.
+  await step("ADR : le plan de canaux laissé au terminal est affiché", async () => {
+    await obsTab("Simulation");
+    const adr = await page.$eval("#adr-toggle", (c) => ({ desactive: c.disabled, coche: c.checked }));
+    if (adr.desactive) {
+      // Une case grisée sans explication est le genre de silence qui fait perdre une heure.
+      // On publie donc la raison **et** la topologie vue par le serveur : « 0 passerelles
+      // actives » sur une session qui en montre une ne se comprend qu'en les lisant ensemble.
+      const sid = await page.$eval("#session-select", (s) => s.value);
+      const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/sessions/${sid}/topology`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      const topo = await res.json();
+      throw new Error(`ADR impossible : ${await textOf("#adr-aide")}\n`
+        + `raison serveur : ${topo.adr_raison}\n`
+        + `nœuds : ${JSON.stringify((topo.nodes ?? []).map((n) => [n.id, n.kind]))}\n`
+        + `états : ${JSON.stringify((topo.states ?? []).map((s) => [s.node_id, s.hostname, s.region]))}`);
+    }
+    if (!adr.coche) await page.click("#adr-toggle");
+    await page.waitForFunction(() => !document.getElementById("adr-toggle").disabled);
+
+    // L'ADR agit à chaque uplink reçu : il faut plusieurs messages avant qu'une commande
+    // parte. Le capteur est réglé sur 2 depuis l'étape de saisie, où ce petit nombre servait
+    // à garder un run court — avec 2 trames, le serveur ne commande rien et le bloc ADR ne
+    // s'afficherait pas, ce qui ferait échouer le test sur une tout autre raison.
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-1"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-1"]');
+    await deviceTab("Config", "capt-1");
+    await page.waitForSelector('.device-win[data-node-id="capt-1"] .sensor-form input[name="messages"]');
+    await setValue('.device-win[data-node-id="capt-1"] .sensor-form input[name="messages"]', "60");
+    await submitForm('.device-win[data-node-id="capt-1"] form');
+    await waitText('.device-win[data-node-id="capt-1"] form', /enregistrés/);
+    await obsTab("Simulation");
+
+    await setValue("#seed", "7");
+    await page.click("#simulate");
+    await waitText("#sim-status", /terminé/, 120_000);
+    await page.waitForFunction(() => !document.getElementById("adr-bilan").hidden,
+      { timeout: 20_000 });
+    const lignes = await page.$$eval("#adr-bilan-liste li", (ls) => ls.map((l) => l.textContent));
+    if (lignes.length === 0) throw new Error("bloc ADR visible sans aucun changement énoncé");
+    const canaux = await textOf("#adr-bilan-canaux");
+    for (const attendu of ["Canaux laissés au terminal", "Seuls les canaux actifs servent"])
+      if (!canaux.includes(attendu)) throw new Error(`« ${canaux} » sans « ${attendu} »`);
+    // Le plan doit nommer au moins un canal et son débit : une phrase sans chiffre serait
+    // un masque vide rendu comme une information.
+    if (!/\d+\s*:\s*DR\d/.test(canaux)) throw new Error(`plan sans canal ni débit : « ${canaux} »`);
+    console.log(`ADR : ${lignes.length} changement(s) · ${canaux}`);
   });
 
   // Liaisons mesh observées : un relais qui a livré des trames à la frontière. C'est la seule
