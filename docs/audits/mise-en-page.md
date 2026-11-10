@@ -434,7 +434,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
@@ -465,7 +465,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×347 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
@@ -496,7 +496,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×361 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
@@ -527,7 +527,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
@@ -589,7 +589,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
@@ -651,7 +651,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×517 |
+| section.device-win.active | 90 | 70 | 430×544 |
 
 </details>
 
