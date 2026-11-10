@@ -684,6 +684,10 @@ function champListe(nom, label, options, valeur, aide) {
   for (const o of options) {
     select.append(el("option", {
       value: o.value, text: o.text, selected: String(valeur ?? "") === o.value ? "selected" : undefined,
+      // Un choix qui ne peut pas être retenu reste **visible et nommé**, mais grisé : le
+      // retirer de la liste ferait croire qu'il n'existe pas, et le laisser actif ferait
+      // enregistrer une configuration qu'aucun run ne peut compiler.
+      disabled: o.disabled ? "disabled" : undefined,
     }));
   }
   const bloc = el("label", { class: "gw-champ" }, label, select);
@@ -759,11 +763,21 @@ function renderGatewayConfig(node, body) {
 
   // Un seul jeu de champs, référencé deux fois : `fields` pour la lecture, le DOM pour
   // l'affichage. Les créer deux fois donnait des valeurs lues hors du formulaire.
+  // Le rôle de l'équipement n'est pas un réglage : une frontière ne devient pas relais en
+  // choisissant un mode. Le mode qui le contredit est donc grisé, avec la raison écrite à
+  // côté — l'enregistrer était accepté ici et refusé au lancement, trois gestes plus loin,
+  // par un message (« mode mesh « relay » ne correspond pas au rôle border ») qui nomme un
+  // réglage que l'utilisateur a depuis longtemps oublié avoir posé.
+  const modeEtranger = node.kind === "border" ? "relay" : "border";
   const modeMesh = champListe("mesh_mode", "Mode",
     [{ value: "", text: "non configuré" },
-      { value: "relay", text: "relay — relayer vers la frontière" },
-      { value: "border", text: "border — passerelle frontière" }],
-    g.mesh_mode);
+      { value: "relay", text: "relay — relayer vers la frontière",
+        disabled: modeEtranger === "relay" },
+      { value: "border", text: "border — passerelle frontière",
+        disabled: modeEtranger === "border" }],
+    g.mesh_mode,
+    `« ${modeEtranger} » est réservé aux équipements de rôle ${modeEtranger} ; celui-ci est `
+    + `un ${node.kind}. Un run ne compilerait pas.`);
   const sautsMesh = champNombre("mesh_max_hops", "Sauts max",
     GATEWAY_LIMITS.mesh_max_hops, g.mesh_max_hops);
   const bandeMesh = champListe("mesh_bandwidth_khz", "Bande passante (kHz)",
