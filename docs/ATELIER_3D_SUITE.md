@@ -295,6 +295,31 @@ L'atelier en fait un encadré, « Débit commandé par le serveur », qui ne s'o
 observé une différence, et qui dit combien de dispositifs n'ont **pas** bougé — sans quoi trois
 changements sur trente passeraient pour une décision générale.
 
+#### Le bloc restait masqué : quatre causes, une seule visible à la fois
+
+L'étape e2e qui vérifie ce bloc a échoué plusieurs fois, et **la cause a changé à chaque
+mesure** — c'est la leçon à retenir, plus que la succession des correctifs :
+
+1. l'ADR n'était pas simulable (passerelle inactive) ⇒ `refreshTopologie()` ;
+2. le plan régional manquait (étape placée avant celle qui le règle) ⇒ étape déplacée ;
+3. **le run lu n'était pas le nouveau.** Le statut affichait déjà « …terminé (graine 7) » du
+   run précédent : attendre ce mot passait avant que le run parte, et on lisait les lignes de
+   l'ancien, qui n'avaient ni les 60 messages ni le SF12. Un texte laissé par une étape
+   antérieure ne prouve rien sur l'étape courante — le même piège que le message
+   « enregistrés » d'un formulaire, rencontré juste avant ;
+4. **la session était incompilable.** `POST /simulate` renvoyait 422 : « mode mesh « relay »
+   ne correspond pas au rôle border ». L'étape précédente posait `relay` sur une frontière, ce
+   que l'enregistrement acceptait sans broncher et que le compilateur refusait au lancement —
+   trois gestes plus loin, par un message nommant un réglage que l'utilisateur a oublié.
+
+Le point 4 était un vrai défaut, et il est corrigé au **réglage**, pas au lancement : le mode
+qui contredit le rôle reste visible et nommé, mais grisé, avec la raison écrite à côté. Le
+retirer de la liste ferait croire qu'il n'existe pas ; le laisser actif ferait enregistrer une
+configuration qu'aucun run ne peut compiler.
+
+Ce n'est qu'en **lisant le corps des réponses HTTP** que la cause 4 est apparue : la console du
+navigateur n'affiche que « 422 ».
+
 ### L'exercice : prouver le changement, pas le demander
 
 `adr-debit-observe` (40 points) part d'un capteur à 150 m en SF12 qui n'émet que 20 messages.
@@ -542,11 +567,30 @@ directe renvoyait la bonne valeur. La cause était un **retour anticipé** — l
 sortait avant le `return` que j'avais modifié. Le symptôme ressemblait à une panne de moteur ;
 c'était une ligne plus haut dans le fichier.
 
+### Seconde passerelle de l'audit — **livrée**
+
+La session de l'audit a désormais **deux** frontières : `gw-nord` à l'origine, `gw-sud` à 400 m à
+l'est et 350 m au sud. Les liaisons radio y sont donc mesurées autrement que par l'étape e2e, et
+la vue Plan est entrée dans les états passées au gabarit.
+
+Ligne de base déplacée sciemment, et mesurée : **4 liaisons** tracées (2 capteurs × 2
+passerelles), chacune portant 4 trames décodées, **0 problème** sur 23 états.
+
+Deux écueils, et ils valent d'être notés parce qu'ils ne ressemblaient pas à des défauts de
+l'application :
+
+- **Un plan qu'on vient de cacher.** La première version revenait à la vue Carte après le
+  comptage des liaisons ; l'audit signalait alors 35 problèmes — « `.plan-area` présente mais
+  masquée », « `svg#plan` 0x0 » — qui n'étaient que le plan qu'on venait de masquer. La boucle
+  de largeurs mesure le plan ; il faut y rester.
+- **Deux capteurs qui émettent à la même seconde se collisionnent.** Il n'en restait qu'une
+  trame décodée, donc **une** liaison : de quoi mesurer la géométrie d'un trait, pas celle d'un
+  réseau. Une dispersion des départs (`start_spread_s`) et quatre trames chacun donnent les
+  quatre liaisons attendues.
+
 ### Ce qui reste
 
-- Donner une seconde passerelle à la session de l'audit de mise en page, pour que les liaisons
-  radio y soient mesurées autrement que par l'étape e2e. Cela déplace sa ligne de base : à faire
-  sciemment, pas en passant.
+Rien d'ouvert à cet endroit.
 
 ---
 
