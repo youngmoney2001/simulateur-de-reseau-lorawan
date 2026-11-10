@@ -520,7 +520,12 @@ try {
 
     await page.select(sel("sub_band"), "2");
     await setValue(sel("tx_power_dbm"), "20");
-    await page.select(sel("mesh_mode"), "relay");
+    // « border », et non « relay » : `gw-nord` est une frontière, et le compilateur refuse
+    // un mode mesh qui contredit le rôle de l'équipement (`study_compile.py`). Poser « relay »
+    // ici enregistrait une configuration qu'**aucun** run ne peut compiler — la session
+    // devenait inutilisable, et l'échec n'apparaissait que trois étapes plus loin, au
+    // lancement, sous la forme « mode mesh « relay » ne correspond pas au rôle border ».
+    await page.select(sel("mesh_mode"), "border");
     await setValue(sel("mesh_max_hops"), "2");
     await page.select(sel("mesh_bandwidth_khz"), "1625");
     await submitForm('.device-win[data-node-id="gw-nord"] form');
@@ -532,7 +537,7 @@ try {
       { headers: { Authorization: `Bearer ${token}` } });
     const st = (await res.json()).states.find((x) => x.node_id === "gw-nord").gateway;
     for (const [cle, val] of [["region", "US915"], ["sub_band", 2],
-      ["tx_power_dbm", 20], ["mesh_mode", "relay"], ["mesh_max_hops", 2],
+      ["tx_power_dbm", 20], ["mesh_mode", "border"], ["mesh_max_hops", 2],
       ["mesh_bandwidth_khz", "1625"]]) {
       if (st[cle] !== val) throw new Error(`${cle} : ${st[cle]} au lieu de ${val}`);
     }
