@@ -368,6 +368,37 @@ try {
   await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
   await pause(400);
 
+  // Deux capteurs qui émettent à la même seconde se collisionnent : il n'en restait qu'une
+  // seule trame décodée, donc une seule liaison tracée sur le plan — de quoi mesurer la
+  // géométrie d'un trait, pas celle d'un réseau. Une dispersion des départs les décale, et
+  // plusieurs trames chacun donnent à chaque passerelle de quoi entendre les deux capteurs.
+  for (const id of ["capteur-a", "capteur-b"]) {
+    await page.click(`g.node[data-id="${id}"] circle`);
+    await page.waitForSelector(`.device-win[data-node-id="${id}"]`);
+    await page.evaluate((n) => {
+      const b = [...document.querySelectorAll(`.device-win[data-node-id="${n}"] .dtab`)]
+        .find((e) => e.textContent.trim() === "Config");
+      if (b) b.click();
+    }, id);
+    await page.waitForSelector(`.device-win[data-node-id="${id}"] .sensor-form input[name="messages"]`);
+    await setValue(`.device-win[data-node-id="${id}"] .sensor-form input[name="messages"]`, "4");
+    await setValue(`.device-win[data-node-id="${id}"] .sensor-form input[name="start_spread_s"]`, "30");
+    await submitForm(`.device-win[data-node-id="${id}"] form`);
+    await page.waitForFunction((n) => {
+      const f = document.querySelector(`.device-win[data-node-id="${n}"] form`);
+      return /enregistrés/.test(f?.textContent ?? "");
+    }, { timeout: 10_000 }, id);
+    // On referme : deux fenêtres ouvertes se recouvriraient, et l'audit lit un recouvrement
+    // comme un défaut de mise en page. Ce n'est pas ce qu'on veut mesurer ici.
+    await page.evaluate((n) => {
+      document.querySelector(`.device-win[data-node-id="${n}"] .close`)?.click();
+    }, id);
+    await pause(200);
+  }
+  await page.click('g.node[data-id="capteur-a"] circle');
+  await page.waitForSelector('.device-win[data-node-id="capteur-a"]');
+  await pause(400);
+
   // Les indicateurs calculés ne sont rendus qu'après un run : sans cette étape, l'audit
   // mesurerait une interface où le bloc n'existe pas, et le déclarerait sain faute de
   // l'avoir vu. Le bloc reste affiché pendant toute la boucle de largeurs qui suit.
@@ -405,7 +436,10 @@ try {
   const liens = await page.$$eval("#plan .lien", (ls) => ls.map((l) => l.getAttribute("class")));
   const etiquettes = await page.$$eval("#plan .lien-etiquette", (ts) => ts.map((t) => t.textContent));
   console.log(`Plan : ${liens.length} liaison(s) tracée(s) · ${etiquettes.join(", ") || "aucune étiquette"}`);
-  await cliquerVue("Carte");
+  // On reste sur le plan : c'est la vue que la boucle de largeurs mesure, et la seule où le
+  // nœud soit visable. Revenir à la carte la masquait, et l'audit signalait alors
+  // « .plan-area présente mais masquée » et « svg#plan 0x0 » — 35 problèmes qui n'étaient
+  // que le plan qu'on venait de cacher. La carte est déjà mesurée plus haut, à part.
 
   // 1040 est la largeur où le menu du haut disparaît et 1000 celle juste en dessous : le
   // défaut qu'on cherche à attraper est un en-tête qui déborde **entre** les seuils, donc
