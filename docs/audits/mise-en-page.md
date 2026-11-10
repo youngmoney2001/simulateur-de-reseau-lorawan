@@ -2,46 +2,19 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**35 problème(s)** sur 23 états mesurés.
+**0 problème(s)** sur 23 états mesurés.
 
 ## 1400px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
+| section.plan-area | 169 | 66 | 1145×669 |
 | button.tool.active | 1321 | 74 | 65×47 |
 | button.tool | 1321 | 123 | 65×47 |
 | button.tool | 1321 | 172 | 65×47 |
@@ -64,57 +37,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1180px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 133 | 77×31 |
-| button.tool | 93 | 133 | 74×31 |
-| button.tool | 168 | 133 | 82×31 |
-| button.tool | 252 | 133 | 74×31 |
-| button.tool | 328 | 133 | 58×31 |
-| button.tool#new-session | 394 | 133 | 72×31 |
-| button.tool.danger#delete-session | 468 | 133 | 82×31 |
-| button.tool#save-chantier | 558 | 133 | 95×31 |
-| button.tool#load-chantier | 655 | 133 | 68×31 |
-| button.tool.active | 17 | 189 | 156×38 |
-| button.tool | 179 | 189 | 139×38 |
-| button.tool | 324 | 189 | 129×38 |
-| button.tool | 17 | 233 | 225×38 |
-| button.tool | 248 | 233 | 198×38 |
-| div.observation | 8 | 327 | 1164×1069 |
+| section.plan-area | 8 | 132 | 1164×757 |
+| button.tool.active | 14 | 907 | 77×31 |
+| button.tool | 93 | 907 | 74×31 |
+| button.tool | 168 | 907 | 82×31 |
+| button.tool | 252 | 907 | 74×31 |
+| button.tool | 328 | 907 | 58×31 |
+| button.tool#new-session | 394 | 907 | 72×31 |
+| button.tool.danger#delete-session | 468 | 907 | 82×31 |
+| button.tool#save-chantier | 558 | 907 | 95×31 |
+| button.tool#load-chantier | 655 | 907 | 68×31 |
+| button.tool.active | 17 | 963 | 156×38 |
+| button.tool | 179 | 963 | 139×38 |
+| button.tool | 324 | 963 | 129×38 |
+| button.tool | 17 | 1007 | 225×38 |
+| button.tool | 248 | 1007 | 198×38 |
+| div.observation | 8 | 1101 | 1164×1065 |
 | footer.statusbar | 0 | 974 | 1180×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -122,57 +68,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1100px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 133 | 77×31 |
-| button.tool | 93 | 133 | 74×31 |
-| button.tool | 168 | 133 | 82×31 |
-| button.tool | 252 | 133 | 74×31 |
-| button.tool | 328 | 133 | 58×31 |
-| button.tool#new-session | 394 | 133 | 72×31 |
-| button.tool.danger#delete-session | 468 | 133 | 82×31 |
-| button.tool#save-chantier | 558 | 133 | 95×31 |
-| button.tool#load-chantier | 655 | 133 | 68×31 |
-| button.tool.active | 17 | 189 | 156×38 |
-| button.tool | 179 | 189 | 139×38 |
-| button.tool | 324 | 189 | 129×38 |
-| button.tool | 17 | 233 | 225×38 |
-| button.tool | 248 | 233 | 198×38 |
-| div.observation | 8 | 327 | 1084×1101 |
+| section.plan-area | 8 | 132 | 1084×705 |
+| button.tool.active | 14 | 855 | 77×31 |
+| button.tool | 93 | 855 | 74×31 |
+| button.tool | 168 | 855 | 82×31 |
+| button.tool | 252 | 855 | 74×31 |
+| button.tool | 328 | 855 | 58×31 |
+| button.tool#new-session | 394 | 855 | 72×31 |
+| button.tool.danger#delete-session | 468 | 855 | 82×31 |
+| button.tool#save-chantier | 558 | 855 | 95×31 |
+| button.tool#load-chantier | 655 | 855 | 68×31 |
+| button.tool.active | 17 | 911 | 156×38 |
+| button.tool | 179 | 911 | 139×38 |
+| button.tool | 324 | 911 | 129×38 |
+| button.tool | 17 | 955 | 225×38 |
+| button.tool | 248 | 955 | 198×38 |
+| div.observation | 8 | 1049 | 1084×1098 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -180,57 +99,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1040px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 133 | 77×31 |
-| button.tool | 93 | 133 | 74×31 |
-| button.tool | 168 | 133 | 82×31 |
-| button.tool | 252 | 133 | 74×31 |
-| button.tool | 328 | 133 | 58×31 |
-| button.tool#new-session | 394 | 133 | 72×31 |
-| button.tool.danger#delete-session | 468 | 133 | 82×31 |
-| button.tool#save-chantier | 558 | 133 | 95×31 |
-| button.tool#load-chantier | 655 | 133 | 68×31 |
-| button.tool.active | 17 | 189 | 156×38 |
-| button.tool | 179 | 189 | 139×38 |
-| button.tool | 324 | 189 | 129×38 |
-| button.tool | 17 | 233 | 225×38 |
-| button.tool | 248 | 233 | 198×38 |
-| div.observation | 8 | 327 | 1024×1067 |
+| section.plan-area | 8 | 132 | 1024×666 |
+| button.tool.active | 14 | 815 | 77×31 |
+| button.tool | 93 | 815 | 74×31 |
+| button.tool | 168 | 815 | 82×31 |
+| button.tool | 252 | 815 | 74×31 |
+| button.tool | 328 | 815 | 58×31 |
+| button.tool#new-session | 394 | 815 | 72×31 |
+| button.tool.danger#delete-session | 468 | 815 | 82×31 |
+| button.tool#save-chantier | 558 | 815 | 95×31 |
+| button.tool#load-chantier | 655 | 815 | 68×31 |
+| button.tool.active | 17 | 871 | 156×38 |
+| button.tool | 179 | 871 | 139×38 |
+| button.tool | 324 | 871 | 129×38 |
+| button.tool | 17 | 915 | 225×38 |
+| button.tool | 248 | 915 | 198×38 |
+| div.observation | 8 | 1009 | 1024×1053 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -238,57 +130,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 1000px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 133 | 77×31 |
-| button.tool | 93 | 133 | 74×31 |
-| button.tool | 168 | 133 | 82×31 |
-| button.tool | 252 | 133 | 74×31 |
-| button.tool | 328 | 133 | 58×31 |
-| button.tool#new-session | 394 | 133 | 72×31 |
-| button.tool.danger#delete-session | 468 | 133 | 82×31 |
-| button.tool#save-chantier | 558 | 133 | 95×31 |
-| button.tool#load-chantier | 655 | 133 | 68×31 |
-| button.tool.active | 17 | 189 | 156×38 |
-| button.tool | 179 | 189 | 139×38 |
-| button.tool | 324 | 189 | 129×38 |
-| button.tool | 17 | 233 | 225×38 |
-| button.tool | 248 | 233 | 198×38 |
-| div.observation | 8 | 327 | 984×1087 |
+| section.plan-area | 8 | 132 | 984×640 |
+| button.tool.active | 14 | 789 | 77×31 |
+| button.tool | 93 | 789 | 74×31 |
+| button.tool | 168 | 789 | 82×31 |
+| button.tool | 252 | 789 | 74×31 |
+| button.tool | 328 | 789 | 58×31 |
+| button.tool#new-session | 394 | 789 | 72×31 |
+| button.tool.danger#delete-session | 468 | 789 | 82×31 |
+| button.tool#save-chantier | 558 | 789 | 95×31 |
+| button.tool#load-chantier | 655 | 789 | 68×31 |
+| button.tool.active | 17 | 845 | 156×38 |
+| button.tool | 179 | 845 | 139×38 |
+| button.tool | 324 | 845 | 129×38 |
+| button.tool | 17 | 889 | 225×38 |
+| button.tool | 248 | 889 | 198×38 |
+| div.observation | 8 | 983 | 984×1086 |
 | footer.statusbar | 0 | 974 | 1000×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -296,57 +161,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 900px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 133 | 77×31 |
-| button.tool | 93 | 133 | 74×31 |
-| button.tool | 168 | 133 | 82×31 |
-| button.tool | 252 | 133 | 74×31 |
-| button.tool | 328 | 133 | 58×31 |
-| button.tool#new-session | 394 | 133 | 72×31 |
-| button.tool.danger#delete-session | 468 | 133 | 82×31 |
-| button.tool#save-chantier | 558 | 133 | 95×31 |
-| button.tool#load-chantier | 655 | 133 | 68×31 |
-| button.tool.active | 17 | 189 | 156×38 |
-| button.tool | 179 | 189 | 139×38 |
-| button.tool | 324 | 189 | 129×38 |
-| button.tool | 17 | 233 | 225×38 |
-| button.tool | 248 | 233 | 198×38 |
-| div.observation | 8 | 327 | 884×1134 |
+| section.plan-area | 8 | 132 | 884×575 |
+| button.tool.active | 14 | 724 | 77×31 |
+| button.tool | 93 | 724 | 74×31 |
+| button.tool | 168 | 724 | 82×31 |
+| button.tool | 252 | 724 | 74×31 |
+| button.tool | 328 | 724 | 58×31 |
+| button.tool#new-session | 394 | 724 | 72×31 |
+| button.tool.danger#delete-session | 468 | 724 | 82×31 |
+| button.tool#save-chantier | 558 | 724 | 95×31 |
+| button.tool#load-chantier | 655 | 724 | 68×31 |
+| button.tool.active | 17 | 780 | 156×38 |
+| button.tool | 179 | 780 | 139×38 |
+| button.tool | 324 | 780 | 129×38 |
+| button.tool | 17 | 824 | 225×38 |
+| button.tool | 248 | 824 | 198×38 |
+| div.observation | 8 | 918 | 884×1130 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -354,57 +192,30 @@ Généré par `web/tests/e2e/audit.mjs`.
 
 ## 760px
 
-5 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### contraste (1)
-
-| élément | détail |
-|---|---|
-| a.cesium-credit-expand-link | rapport 1.08 (seuil 4.5) |
-
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| a | 138x10 (seuil 20) |
-
-### commande-sans-nom (1)
-
-| élément | détail |
-|---|---|
-| a | ni texte, ni aria-label, ni titre — div.cesium-widget-credits > div.cesium-credit-logoContainer > div.cesium-credit-wrapper > a |
-
-### region-invisible (1)
-
-| élément | détail |
-|---|---|
-| .plan-area | présente mais masquée |
-
-### region-ecrasee (1)
-
-| élément | détail |
-|---|---|
-| svg#plan | 0x0 |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
 | élément | x | y | largeur × hauteur |
 |---|---|---|---|
-| button.tool.active | 14 | 135 | 77×31 |
-| button.tool | 93 | 135 | 74×31 |
-| button.tool | 168 | 135 | 82×31 |
-| button.tool | 252 | 135 | 74×31 |
-| button.tool | 328 | 135 | 58×31 |
-| button.tool#new-session | 394 | 135 | 72×31 |
-| button.tool.danger#delete-session | 468 | 135 | 82×31 |
-| button.tool#save-chantier | 558 | 135 | 95×31 |
-| button.tool#load-chantier | 655 | 135 | 68×31 |
-| button.tool.active | 17 | 191 | 156×38 |
-| button.tool | 179 | 191 | 139×38 |
-| button.tool | 324 | 191 | 129×38 |
-| button.tool | 17 | 235 | 225×38 |
-| button.tool | 248 | 235 | 198×38 |
-| div.observation | 8 | 329 | 744×1284 |
+| section.plan-area | 8 | 134 | 744×484 |
+| button.tool.active | 14 | 636 | 77×31 |
+| button.tool | 93 | 636 | 74×31 |
+| button.tool | 168 | 636 | 82×31 |
+| button.tool | 252 | 636 | 74×31 |
+| button.tool | 328 | 636 | 58×31 |
+| button.tool#new-session | 394 | 636 | 72×31 |
+| button.tool.danger#delete-session | 468 | 636 | 82×31 |
+| button.tool#save-chantier | 558 | 636 | 95×31 |
+| button.tool#load-chantier | 655 | 636 | 68×31 |
+| button.tool.active | 17 | 692 | 156×38 |
+| button.tool | 179 | 692 | 139×38 |
+| button.tool | 324 | 692 | 129×38 |
+| button.tool | 17 | 736 | 225×38 |
+| button.tool | 248 | 736 | 198×38 |
+| div.observation | 8 | 830 | 744×1265 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -714,7 +525,7 @@ Aucun problème.
 | button.tool | 324 | 780 | 129×38 |
 | button.tool | 17 | 824 | 225×38 |
 | button.tool | 248 | 824 | 198×38 |
-| div.observation | 8 | 918 | 884×347 |
+| div.observation | 8 | 918 | 884×489 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×544 |
 
@@ -906,4 +717,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 35 problème(s)
+TOTAL : 0 problème(s)
