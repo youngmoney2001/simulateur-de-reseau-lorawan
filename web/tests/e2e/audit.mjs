@@ -284,6 +284,16 @@ try {
   await setValue('#add-form [name="id"]', "gw-nord");
   await submitForm("#add-form");
   await page.waitForSelector('g.node[data-id="gw-nord"]');
+  // Seconde passerelle : sans elle, la session de l'audit n'a qu'une frontière et le plan ne
+  // trace donc **aucun** trait radio — les liaisons n'étaient mesurées que par l'étape e2e.
+  // L'ajouter change la topologie mesurée, donc la ligne de base du rapport : c'est le but,
+  // et c'est fait sciemment (registre, §3). 400 m à l'est et 350 m au sud de l'origine, donc
+  // à portée des deux capteurs sans se confondre avec `gw-nord`.
+  await setValue('#add-form [name="id"]', "gw-sud");
+  await setValue('#add-form [name="lat"]', "4.047952");
+  await setValue('#add-form [name="lon"]', "9.771506");
+  await submitForm("#add-form");
+  await page.waitForSelector('g.node[data-id="gw-sud"]');
   // Coordonnées en degrés, converties depuis les mètres par la formule de geo.py :
   // 250 m à l'est et 90 m au nord de l'origine 4.0511 / 9.7679.
   for (const [id, lat, lon] of [["capteur-a", "4.051909", "9.770154"],
@@ -378,6 +388,25 @@ try {
   const groupesVisible = await page.$eval("#sim-groups", (t) => !t.hidden);
   console.log(`Indicateurs : ${nbBlocs} bloc(s) · table par équipement ${groupesVisible ? "visible" : "masquée"}`);
 
+  // Les liaisons radio tracées sur le plan. Elles n'existent qu'après un run, et il faut
+  // deux passerelles pour qu'il y en ait une seule : avec une frontière unique, le plan
+  // n'avait aucun trait et cette géométrie n'était jamais passée au gabarit. Le compte est
+  // publié parce qu'un plan muet et un plan sans liaison se ressemblent trait pour trait.
+  const cliquerVue = (texte) => page.evaluate((t) => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes(t));
+    if (b) b.click();
+    return Boolean(b);
+  }, texte);
+  await cliquerVue("Plan");
+  await page.waitForFunction(() => {
+    const b = [...document.querySelectorAll(".view-tab")].find((e) => e.textContent.includes("Plan"));
+    return b?.classList.contains("active");
+  }, { timeout: 10_000 });
+  const liens = await page.$$eval("#plan .lien", (ls) => ls.map((l) => l.getAttribute("class")));
+  const etiquettes = await page.$$eval("#plan .lien-etiquette", (ts) => ts.map((t) => t.textContent));
+  console.log(`Plan : ${liens.length} liaison(s) tracée(s) · ${etiquettes.join(", ") || "aucune étiquette"}`);
+  await cliquerVue("Carte");
+
   // 1040 est la largeur où le menu du haut disparaît et 1000 celle juste en dessous : le
   // défaut qu'on cherche à attraper est un en-tête qui déborde **entre** les seuils, donc
   // il faut mesurer de part et d'autre du repli, pas seulement largement au-dessus et
@@ -400,6 +429,10 @@ try {
   }, selecteur, texte);
 
   const etats = [
+    // Le plan porte les liaisons radio depuis que la session a deux passerelles : c'est une
+    // géométrie que rien ne mesurait, les traits pouvant déborder du cadre sans que rien
+    // ne le voie.
+    { nom: "vue · Plan", action: () => cliquerVue("Plan") },
     { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
     { nom: "observation · Trame", action: () => cliquerTexte(".tab", "Trame") },
     { nom: "observation · Exercice", action: () => cliquerTexte(".tab", "Exercice") },
