@@ -1,9 +1,64 @@
 {
   "$defs": {
+    "EnvironmentSettings": {
+      "additionalProperties": false,
+      "description": "Environnement radio d'une session.\n\n`shadowing_sigma_db` : écart-type du tirage log-normal, un tirage par dispositif. Mesuré\nà 10 km SF10 sans obstacle : à sigma 4 dB, 37 tirages sur 40 restent entendus ; à 8 dB,\n30 sur 40. Les hauteurs comptent aussi : face à un mur de 12 m, une passerelle à 40 m\nreçoit encore là où une passerelle à 15 m a tout perdu.",
+      "properties": {
+        "device_height_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Device Height M",
+          "type": "number"
+        },
+        "gateway_height_m": {
+          "default": 15.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Gateway Height M",
+          "type": "number"
+        },
+        "obstacles": {
+          "items": {
+            "$ref": "#/$defs/Obstacle"
+          },
+          "maxItems": 200,
+          "title": "Obstacles",
+          "type": "array"
+        },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        }
+      },
+      "title": "EnvironmentSettings",
+      "type": "object"
+    },
     "GatewaySettings": {
       "additionalProperties": false,
       "description": "Réglages d'une passerelle exposés dans l'atelier 3D.\n\nCe n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur\nd'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit\nexplicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux\nque réclament les exercices, les autres relèvent du dépannage.\n\nLes bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans\nla fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent\nau même endroit (`Session.config`), ils ne peuvent pas diverger.",
       "properties": {
+        "gateway_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak7249",
+                "rak5148",
+                "rak5146-rak5148",
+                "rak7391"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateway Profile"
+        },
         "mesh_bandwidth_khz": {
           "anyOf": [
             {
@@ -108,6 +163,24 @@
     "Node": {
       "additionalProperties": false,
       "properties": {
+        "gateway_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak7249",
+                "rak5148",
+                "rak5146-rak5148",
+                "rak7391"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateway Profile"
+        },
         "id": {
           "pattern": "^[a-z][a-z0-9-]{0,31}$",
           "title": "Id",
@@ -226,6 +299,77 @@
         "configured"
       ],
       "title": "NodeState",
+      "type": "object"
+    },
+    "Obstacle": {
+      "additionalProperties": false,
+      "description": "Une boîte qui atténue. Soit une atténuation saisie, soit un matériau + une épaisseur.\n\nL'atténuation est le chemin principal : à 868 MHz, 13 des 15 matériaux du catalogue sont\nhors de la plage documentée du Tableau 3 de l'UIT-R P.2040-4, et la perte est alors\nextrapolée. Saisir ses dB reste la façon honnête de procéder ; le matériau est une\ncommodité, et son caractère extrapolé est exposé par l'API.",
+      "properties": {
+        "attenuation_db": {
+          "default": 0.0,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Attenuation Db",
+          "type": "number"
+        },
+        "height_m": {
+          "default": 12.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Height M",
+          "type": "number"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "thickness_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thickness M"
+        },
+        "x_max_m": {
+          "title": "X Max M",
+          "type": "number"
+        },
+        "x_min_m": {
+          "title": "X Min M",
+          "type": "number"
+        },
+        "y_max_m": {
+          "title": "Y Max M",
+          "type": "number"
+        },
+        "y_min_m": {
+          "title": "Y Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min_m",
+        "y_min_m",
+        "x_max_m",
+        "y_max_m"
+      ],
+      "title": "Obstacle",
       "type": "object"
     },
     "SensorSettings": {
@@ -361,6 +505,9 @@
       "default": "",
       "title": "Confirmed Raison",
       "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentSettings"
     },
     "join": {
       "default": false,

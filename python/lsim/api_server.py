@@ -53,7 +53,8 @@ from lsim.api_contract import (
     DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
     RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
-    ValidateResponse, list_energy_profiles, list_regions,
+    ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
+    list_regions,
 )
 from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
@@ -61,7 +62,7 @@ from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
     CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
     AdrChoice, ProtocoleChoice, SessionCreate, SimulateOut, SimulateRequest, SimulationBind,
-    SubmitRequest, TerrainChoice,
+    EnvironmentChoice, SubmitRequest, TerrainChoice,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
@@ -1062,6 +1063,28 @@ class _Handler(BaseHTTPRequestHandler):
         # choix par équipement, et les libellés doivent venir du moteur, pas de lui.
         if method == "GET" and rest == "energy-profiles":
             return 200, list_energy_profiles().model_dump()
+        # Modèles de passerelle du catalogue, avec ce que chacun change : sans cela,
+        # présenter trois modèles au seuil identique ferait croire à un choix.
+        if method == "GET" and rest == "gateway-profiles":
+            return 200, list_gateway_profiles().model_dump()
+        # Matériaux d'obstacle, avec la perte réelle à la fréquence et à l'épaisseur demandées
+        # et son caractère extrapolé. À 868 MHz, 13 des 15 matériaux sortent de la plage
+        # documentée de l'UIT-R P.2040-4 : le dire ici plutôt que de laisser l'atelier afficher
+        # une perte qu'on croirait mesurée.
+        if method == "GET" and rest == "materials":
+            try:
+                f_hz = float(query.get("frequency_hz", ["868.1e6"])[0])
+                ep = float(query.get("thickness_m", ["0.2"])[0])
+            except (ValueError, IndexError, TypeError):
+                raise ApiError(422, "validation_error",
+                               "frequency_hz et thickness_m doivent être numériques") from None
+            if not (0 < f_hz < 1e12):
+                raise ApiError(422, "validation_error", "frequency_hz hors bornes",
+                               "frequency_hz")
+            if not (0 < ep <= 10):
+                raise ApiError(422, "validation_error", "thickness_m hors bornes",
+                               "thickness_m")
+            return 200, list_materials(f_hz, ep).model_dump()
         if method == "GET" and rest == "terrains":
             return 200, svc.terrains.listing()
         if method == "POST" and rest == "scenarios/validate":
@@ -1080,6 +1103,13 @@ class _Handler(BaseHTTPRequestHandler):
             connus = svc.terrains.ids()
             return 200, self._study(lambda: study.set_terrain(
                 owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        # Environnement radio : obstacles tracés sur le plan, shadowing, hauteurs d'antennes.
+        # Le matériau est vérifié côté service — un nom inconnu se refuse à la pose du mur.
+        m_env = re.fullmatch(r"sessions/([^/]+)/environment", rest)
+        if m_env is not None and method == "POST":
+            req = self._parse_body(EnvironmentChoice)
+            return 200, self._study(lambda: study.set_environment(
+                owner, m_env.group(1), req)).model_dump()
         m_adr = re.fullmatch(r"sessions/([^/]+)/adr", rest)
         if m_adr is not None and method == "POST":
             # Le souhait est enregistré quel qu'il soit ; c'est la topologie qui décide s'il est

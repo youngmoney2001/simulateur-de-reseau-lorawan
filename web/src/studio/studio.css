@@ -459,3 +459,22 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
   .modes { grid-template-columns:1fr; }
   .plan-area { min-height:260px; }
 }
+
+/* --- Obstacles : ce qui sépare deux équipements ---------------------------------------- */
+/* Hachurés, jamais pleins : un mur opaque masquerait le plan qu'il est censé expliquer, et
+   ce sont les équipements de part et d'autre qu'on vient lire. */
+.obstacles rect.obstacle { fill:#d9534f; fill-opacity:.18; stroke:#b03a37;
+  stroke-width:2; stroke-dasharray:6 3; pointer-events:none; }
+/* Le rectangle en cours de tracé, lui, se voit franchement : c'est un geste en train de se
+   faire, pas un objet posé. */
+rect.obstacle-trace { fill:#d9534f; fill-opacity:.10; stroke:#d9534f; stroke-width:2;
+  stroke-dasharray:4 3; pointer-events:none; }
+.obstacle-row { display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+  padding:4px 0; border-bottom:1px solid var(--line); }
+.obstacle-row > span:first-child { flex:1 1 100%; font-size:12px; }
+.obstacle-ctrls { display:flex; flex-wrap:wrap; gap:3px; align-items:center; }
+.obstacle-ctrls input, .obstacle-ctrls select { font-size:12px; padding:1px 3px; }
+.obstacle-ctrls input[type="number"] { width:62px; }
+.obstacle-ctrls select { max-width:130px; }
+.obstacle-ctrls button { font-size:11px; padding:1px 6px; }
+.obstacle-del { color:var(--danger); }

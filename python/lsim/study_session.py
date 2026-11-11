@@ -32,7 +32,8 @@ from lsim.study_contract import (
     GatewayLink, GatewaySettings, HintOut, Node, NodeState, Position, SensorSettings,
     SessionCreate, SessionList, SessionOut, SessionSummary, SessionTopology, SimulationBind,
     SimulationBound, SubmitResult,
-)
+    EnvironmentSettings, EnvironmentChoice,)
+from lsim.materials import MATERIAL_NAMES
 from lsim.study_store import StudyStore
 
 SESSION_TTL_S = 4 * 3600
@@ -114,6 +115,9 @@ class _Study:
     echanges: dict = field(default_factory=dict)
     run_id: Optional[str] = None
     terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
+    # Environnement radio : obstacles, shadowing, hauteurs d'antennes. Vierge par défaut —
+    # un scénario compilé sans environnement n'émet aucun bloc, et garde son empreinte.
+    environment: EnvironmentSettings = field(default_factory=EnvironmentSettings)
     # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
     # le vouloir sans qu'il soit possible, et la raison est alors affichée, pas tue.
     adr: bool = False
@@ -156,6 +160,7 @@ def _encode(st: _Study) -> dict:
         "sf_par_equipement": st.sf_par_equipement,
         "run_id": st.run_id,
         "terrain_id": st.terrain_id,
+        "environment": st.environment.model_dump(mode="json"),
         "adr": st.adr,
         "join": st.join,
         "confirmed": st.confirmed,
@@ -179,7 +184,11 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
                           for rid, links in body["compiled"].items()},
-                terrain_id=body.get("terrain_id"), adr=body.get("adr", False))
+                terrain_id=body.get("terrain_id"), adr=body.get("adr", False),
+                # Une session enregistrée avant l'environnement radio n'a pas la clé : elle
+                # rouvre avec un environnement vierge, donc des runs à l'identique.
+                environment=EnvironmentSettings.model_validate(
+                    body["environment"]) if "environment" in body else EnvironmentSettings())
     st.attempts.extend(AttemptOut.model_validate(a) for a in attempts)
     return st
 
@@ -270,6 +279,7 @@ class StudyService:
         conf_ok, conf_raison = _confirmed_etat(st)
         return SessionTopology(session_id=sid, nodes=nodes, states=states,
                                 terrain_id=st.terrain_id, adr=st.adr,
+                                environment=st.environment,
                                 adr_possible=ok, adr_raison=raison,
                                 join=st.join, join_possible=join_ok, join_raison=join_raison,
                                 confirmed=st.confirmed, confirmed_possible=conf_ok,
@@ -390,6 +400,13 @@ class StudyService:
                 cfg.mesh.max_hops = settings.mesh_max_hops
             if settings.mesh_bandwidth_khz is not None:
                 cfg.mesh.bandwidth_khz = settings.mesh_bandwidth_khz
+            # Le modèle n'est pas un réglage du CLI : c'est le matériel, il vit sur le nœud.
+            # Il se règle ici quand même, même endroit que les autres réglages passerelle,
+            # sinon une passerelle posée depuis la palette resterait au seuil de référence.
+            # Vide explicite = retour à la référence ; champ absent = rien ne change.
+            if "gateway_profile" in settings.model_fields_set:
+                st.nodes[node_id] = node.model_copy(
+                    update={"gateway_profile": settings.gateway_profile})
             self._save(sid, st)
             return self._topology_locked(sid, st)
 
@@ -428,6 +445,7 @@ class StudyService:
             configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
         try:
             return compile_session(nodes, configs, seed, terrain_id=st.terrain_id,
+                                        environment=st.environment,
                                         adr=st.adr, join=st.join, confirmed=st.confirmed)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
@@ -472,6 +490,38 @@ class StudyService:
                 raise StudyError(422, "validation_error",
                                  f"relief « {terrain_id} » inconnu du catalogue", "terrain_id")
             st.terrain_id = terrain_id
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
+
+    def set_environment(self, owner: str, sid: str,
+                        settings: EnvironmentChoice) -> SessionTopology:
+        """Environnement radio de la session : obstacles, shadowing, hauteurs d'antennes.
+
+        Seuls les champs présents sont appliqués, comme sur `set_gateway` : régler le
+        shadowing ne doit pas démolir les murs déjà posés. Un environnement **vierge** —
+        aucun obstacle, sigma nul, hauteurs au défaut du moteur — n'émet aucun bloc
+        `environment` : le scénario compilé est alors exactement celui d'avant, et son
+        empreinte avec.
+
+        Le matériau est vérifié contre le catalogue du moteur ici, et non au run : un nom
+        inconnu doit être refusé à la pose du mur, pas à la simulation.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            for o in settings.obstacles or []:
+                if o.material is not None and o.material not in MATERIAL_NAMES:
+                    raise StudyError(422, "validation_error",
+                                     f"matériau inconnu : {o.material}", "obstacles")
+            actuel = st.environment
+            st.environment = EnvironmentSettings(
+                shadowing_sigma_db=settings.shadowing_sigma_db
+                if settings.shadowing_sigma_db is not None else actuel.shadowing_sigma_db,
+                gateway_height_m=settings.gateway_height_m
+                if settings.gateway_height_m is not None else actuel.gateway_height_m,
+                device_height_m=settings.device_height_m
+                if settings.device_height_m is not None else actuel.device_height_m,
+                obstacles=settings.obstacles if settings.obstacles is not None
+                else actuel.obstacles)
             self._save(sid, st)
             return self._topology_locked(sid, st)
 

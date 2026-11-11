@@ -11,7 +11,7 @@ import pytest
 
 from lsim import study_session
 from lsim.study_contract import (
-    CliResponse, SessionOut, SessionTopology, SimulationBound,
+    CliResponse, GatewaySettings, SessionOut, SessionTopology, SimulationBound,
 )
 from lsim.study_session import StudyService
 from test_api_server import _make_api, _scenario, _wait_done
@@ -1060,3 +1060,118 @@ def test_adr_produit_des_linkadrreq_observables(api):
     assert linkadr(False) == [], "sans ADR, aucune commande LinkADRReq"
     reqs = linkadr(True)
     assert reqs, "avec ADR, le serveur émet des LinkADRReq"
+
+
+# --- Modèle de passerelle --------------------------------------------------------------------
+# Le modèle vit sur le nœud, pas dans la configuration CLI : c'est le matériel. Mais il se
+# règle au même endroit que les autres réglages passerelle (`POST .../gateway`), sinon une
+# passerelle posée depuis la palette resterait au seuil de référence sans pouvoir en changer.
+
+def _gateway(api, sid, noeud, body):
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{noeud}/gateway", body)
+    if status == 200:
+        SessionTopology.model_validate(out)
+    return status, out
+
+
+def _modele_de(api, sid, noeud):
+    status, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert status == 200, topo
+    return next((n.get("gateway_profile") for n in topo["nodes"] if n["id"] == noeud), None)
+
+
+def _environment(api, sid, body):
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/environment", body)
+    if status == 200:
+        SessionTopology.model_validate(out)
+    return status, out
+
+
+def test_gateway_profile_is_set_read_and_cleared_through_the_same_route(api):
+    sid = _session(api)
+
+    status, _ = _gateway(api, sid, "frontiere", {"gateway_profile": "rak7249"})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") == "rak7249"
+
+    # Vide explicite : retour à la référence du moteur.
+    status, _ = _gateway(api, sid, "frontiere", {"gateway_profile": None})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") is None
+
+    # Champ absent : rien ne change — un envoi partiel ne doit pas effacer le modèle posé.
+    _gateway(api, sid, "frontiere", {"gateway_profile": "rak7249"})
+    status, _ = _gateway(api, sid, "frontiere", {"region": "EU868"})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") == "rak7249"
+
+
+def test_gateway_profile_is_refused_on_a_sensor(api):
+    """Les réglages passerelle n'existent que sur une passerelle — un capteur n'en a pas."""
+    sid = _session(api)
+    status, out = _gateway(api, sid, "capteur-1", {"gateway_profile": "rak7249"})
+    assert status == 422, out
+
+
+def test_an_unknown_gateway_profile_is_refused_by_the_route(api):
+    """Un modèle hors catalogue est refusé ici, pas au run : l'erreur nomme le champ."""
+    sid = _session(api)
+    status, out = _gateway(api, sid, "frontiere", {"gateway_profile": "invente"})
+    assert status == 422, out
+    assert "gateway_profile" in str(out)
+
+
+def test_the_environment_is_set_read_and_partially_applied(api):
+    """Obstacles, shadowing et hauteurs : seul ce qui est envoyé change.
+
+    Un envoi partiel ne doit pas effacer les murs posés, sinon régler le shadowing
+    reviendrait à démolir le quartier.
+    """
+    sid = _session(api)
+
+    mur = {"x_min_m": 400.0, "y_min_m": -300.0, "x_max_m": 600.0, "y_max_m": 300.0,
+           "height_m": 12.0, "attenuation_db": 6.0}
+    status, topo = _environment(api, sid, {"obstacles": [mur], "shadowing_sigma_db": 4.0})
+    assert status == 200, topo
+    env = topo["environment"]
+    assert len(env["obstacles"]) == 1 and env["shadowing_sigma_db"] == 4.0
+    assert env["obstacles"][0]["attenuation_db"] == 6.0
+
+    # Envoi partiel : le mur reste.
+    status, topo = _environment(api, sid, {"gateway_height_m": 40.0})
+    assert status == 200, topo
+    assert len(topo["environment"]["obstacles"]) == 1
+    assert topo["environment"]["gateway_height_m"] == 40.0
+    assert topo["environment"]["shadowing_sigma_db"] == 4.0   # inchangé
+
+
+def test_an_unknown_material_is_refused_when_the_wall_is_built(api):
+    """Un matériau hors catalogue se refuse à la pose du mur, pas au run."""
+    sid = _session(api)
+    status, out = _environment(api, sid, {"obstacles": [
+        {"x_min_m": 0.0, "y_min_m": 0.0, "x_max_m": 10.0, "y_max_m": 10.0,
+         "material": "carton", "thickness_m": 0.2}]})
+    assert status == 422, out
+
+
+def test_a_wall_cannot_carry_both_an_attenuation_and_a_material(api):
+    sid = _session(api)
+    status, _ = _environment(api, sid, {"obstacles": [
+        {"x_min_m": 0.0, "y_min_m": 0.0, "x_max_m": 10.0, "y_max_m": 10.0,
+         "attenuation_db": 5.0, "material": "concrete", "thickness_m": 0.2}]})
+    assert status == 422
+
+
+def test_the_material_catalogue_says_what_is_extrapolated(api):
+    """À 868 MHz, 12 matériaux sur 15 sortent de la plage documentée : le dire.
+
+    Sans cette mention, une perte affichée passerait pour mesurée alors que le moteur
+    l'extrapole hors du Tableau 3 de l'UIT-R P.2040-4.
+    """
+    from lsim.api_contract import list_materials
+    r = list_materials(868.1e6, 0.2)
+    dans_la_plage = [m.name for m in r.materials if not m.extrapolated]
+    assert dans_la_plage == ["air", "wood", "glass"], dans_la_plage
+    assert len(r.materials) - len(dans_la_plage) == 12   # 12 des 15 extrapolés
+    beton = next(m for m in r.materials if m.name == "concrete")
+    assert beton.extrapolated and beton.loss_db > 0

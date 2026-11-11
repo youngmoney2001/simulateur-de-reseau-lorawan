@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "MaterialInfo": {
+      "additionalProperties": false,
+      "description": "Un matériau d'obstacle, avec la perte qu'il causerait réellement.\n\n`extrapolated` : la fréquence demandée sort de la plage documentée du matériau\n(UIT-R P.2040-4, Tableau 3). À 868 MHz c'est le cas de 13 matériaux sur 15 — seuls\n`air`, `wood` et `glass` sont dans la plage. Le dire ici évite qu'une interface affiche\nune perte en la laissant croire mesurée.",
+      "properties": {
+        "extrapolated": {
+          "title": "Extrapolated",
+          "type": "boolean"
+        },
+        "frequency_max_hz": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frequency Max Hz"
+        },
+        "frequency_min_hz": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frequency Min Hz"
+        },
+        "loss_db": {
+          "maximum": 10000.0,
+          "minimum": 0.0,
+          "title": "Loss Db",
+          "type": "number"
+        },
+        "name": {
+          "maxLength": 32,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "loss_db",
+        "extrapolated"
+      ],
+      "title": "MaterialInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "frequency_hz": {
+      "title": "Frequency Hz",
+      "type": "number"
+    },
+    "materials": {
+      "items": {
+        "$ref": "#/$defs/MaterialInfo"
+      },
+      "maxItems": 64,
+      "title": "Materials",
+      "type": "array"
+    },
+    "thickness_m": {
+      "title": "Thickness M",
+      "type": "number"
+    }
+  },
+  "required": [
+    "frequency_hz",
+    "thickness_m",
+    "materials"
+  ],
+  "title": "MaterialList",
+  "type": "object"
+}

@@ -256,3 +256,82 @@ test("un identifiant de relief invalide est refuse en le citant", () => {
   refuse(ecrire({ format: FORMAT, version: VERSION, origine: null,
     terrain_id: "../../etc/passwd", equipements: [] }), "../../etc/passwd");
 });
+
+// --- Modèle de passerelle --------------------------------------------------------------------
+// Le seuil de réception se choisit à la pose ; un chantier qui ne le porte pas repart à la
+// référence du moteur sans rien dire.
+
+test("le modele d'une passerelle fait partie du chantier", () => {
+  const topo = { ...TOPO,
+    nodes: TOPO.nodes.map((n) => (n.kind === "border"
+      ? { ...n, gateway_profile: "rak5146-rak5148" } : n)) };
+  const c = serialiserChantier({ topo, origine: ORIGINE });
+  const gw = c.equipements.find((e) => e.id === "gw-nord");
+  assert.equal(gw.gateway_profile, "rak5146-rak5148");
+  assert.equal(lireChantier(ecrire(c)).equipements[0].gateway_profile, "rak5146-rak5148");
+});
+
+test("une passerelle sans modele n'ecrit rien : le chantier reste celui d'avant", () => {
+  const c = serialiserChantier({ topo: TOPO, origine: ORIGINE });
+  assert.ok(!("gateway_profile" in c.equipements[0]));
+});
+
+// --- Obstacles et environnement ---------------------------------------------------------------
+
+const MUR = { x_min_m: 400, y_min_m: -300, x_max_m: 600, y_max_m: 300,
+              height_m: 12, attenuation_db: 6 };
+
+test("un environnement vierge n'ecrit rien : le fichier reste celui d'avant", () => {
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 0, gateway_height_m: 15, device_height_m: 1.5, obstacles: [] } },
+    origine: ORIGINE });
+  assert.ok(!("environment" in c), Object.keys(c).join(", "));
+});
+
+test("les murs et le shadowing font partie du chantier, et se relisent", () => {
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 4, gateway_height_m: 40, device_height_m: 1.5,
+    obstacles: [MUR] } }, origine: ORIGINE });
+  assert.equal(c.environment.shadowing_sigma_db, 4);
+  assert.equal(c.environment.gateway_height_m, 40);
+  assert.deepEqual(c.environment.obstacles[0], MUR);
+  const relu = lireChantier(ecrire(c)).environment;
+  assert.deepEqual(relu.obstacles[0], MUR);
+  assert.equal(relu.gateway_height_m, 40);
+});
+
+test("un mur en materiau garde le materiau, pas une attenuation", () => {
+  const mur = { ...MUR, material: "concrete", thickness_m: 0.2 };
+  delete mur.attenuation_db;
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 0, gateway_height_m: 15, device_height_m: 1.5,
+    obstacles: [mur] } }, origine: ORIGINE });
+  const relu = lireChantier(ecrire(c)).environment.obstacles[0];
+  assert.equal(relu.material, "concrete");
+  assert.ok(!("attenuation_db" in relu));
+});
+
+test("un mur a l'emprise vide est refuse en disant lequel", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ x_min_m: 10, y_min_m: 0, x_max_m: 10, y_max_m: 5,
+                                 height_m: 12, attenuation_db: 6 }] },
+    equipements: [] });
+  assert.throws(() => lireChantier(texte), (err) => {
+    assert.ok(err instanceof ChantierInvalide);
+    assert.match(err.message, /obstacle nº 1 : emprise vide/);
+    return true;
+  });
+});
+
+test("un mur qui porte a la fois une attenuation et un materiau est refuse", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ ...MUR, material: "concrete", thickness_m: 0.2 }] },
+    equipements: [] });
+  assert.throws(() => lireChantier(texte), /atténuation et matériau s'excluent/);
+});
+
+test("une attenuation hors bornes est refusee", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ ...MUR, attenuation_db: 500 }] }, equipements: [] });
+  assert.throws(() => lireChantier(texte), /atténuation hors bornes/);
+});

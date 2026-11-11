@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "Obstacle": {
+      "additionalProperties": false,
+      "description": "Une boîte qui atténue. Soit une atténuation saisie, soit un matériau + une épaisseur.\n\nL'atténuation est le chemin principal : à 868 MHz, 13 des 15 matériaux du catalogue sont\nhors de la plage documentée du Tableau 3 de l'UIT-R P.2040-4, et la perte est alors\nextrapolée. Saisir ses dB reste la façon honnête de procéder ; le matériau est une\ncommodité, et son caractère extrapolé est exposé par l'API.",
+      "properties": {
+        "attenuation_db": {
+          "default": 0.0,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Attenuation Db",
+          "type": "number"
+        },
+        "height_m": {
+          "default": 12.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Height M",
+          "type": "number"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "thickness_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thickness M"
+        },
+        "x_max_m": {
+          "title": "X Max M",
+          "type": "number"
+        },
+        "x_min_m": {
+          "title": "X Min M",
+          "type": "number"
+        },
+        "y_max_m": {
+          "title": "Y Max M",
+          "type": "number"
+        },
+        "y_min_m": {
+          "title": "Y Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min_m",
+        "y_min_m",
+        "x_max_m",
+        "y_max_m"
+      ],
+      "title": "Obstacle",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Réglage de l'environnement. Seuls les champs présents sont appliqués : une interface\nqui n'affiche pas les hauteurs ne doit pas pouvoir les remettre à leur défaut.",
+  "properties": {
+    "device_height_m": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Device Height M"
+    },
+    "gateway_height_m": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateway Height M"
+    },
+    "obstacles": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Obstacle"
+          },
+          "maxItems": 200,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Obstacles"
+    },
+    "shadowing_sigma_db": {
+      "anyOf": [
+        {
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Shadowing Sigma Db"
+    }
+  },
+  "title": "EnvironmentChoice",
+  "type": "object"
+}

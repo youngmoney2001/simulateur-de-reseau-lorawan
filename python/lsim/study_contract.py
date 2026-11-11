@@ -19,6 +19,9 @@ TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
+# Obstacles par session de l'atelier. Le moteur en accepte 10 000 ; une session d'apprentissage
+# n'en demande pas autant, et la borne garde la topologie échangeable en une seule requête.
+MAX_OBSTACLES_ATELIER = 200
 MASKED = "******"
 ID_PATTERN = r"^[a-z][a-z0-9-]{0,31}$"           # identifiant d'équipement
 EXERCISE_PATTERN = r"^[a-z0-9][a-z0-9-]{2,63}$"
@@ -38,6 +41,10 @@ Region = Literal["EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"]
 # Modèles de matériel connus du moteur. Définis ici, couche basse, pour que l'API en
 # dérive son tuple au lieu de le recopier — deux listes séparées finissent par diverger.
 EnergyProfileName = Literal["rak4631", "sx1262-stm32l072"]
+
+# Modèles de passerelle du catalogue (`lsim.gateway_profiles`), couche basse : l'API en dérive
+# sa liste au lieu de la recopier. Un test verrouille la concordance avec le catalogue.
+GatewayProfileName = Literal["rak7249", "rak5148", "rak5146-rak5148", "rak7391"]
 
 
 class SensorSettings(_Strict):
@@ -80,6 +87,11 @@ class GatewaySettings(_Strict):
     mesh_mode: Optional[Literal["relay", "border"]] = None
     mesh_max_hops: Optional[int] = Field(None, ge=1, le=8)
     mesh_bandwidth_khz: Optional[MeshBandwidth] = None
+    # Modèle de la passerelle, dans le catalogue `lsim.gateway_profiles`. Il n'appartient pas
+    # à la configuration CLI — c'est le matériel — mais il se règle au même endroit, faute de
+    # quoi une passerelle posée depuis la palette resterait au seuil de référence sans
+    # pouvoir en changer. `None` : aucun modèle appliqué, comportement d'avant.
+    gateway_profile: Optional[GatewayProfileName] = None
 
 
 class Node(_Strict):
@@ -89,6 +101,22 @@ class Node(_Strict):
     x_m: float = Field(ge=-1_000_000, le=1_000_000)
     y_m: float = Field(ge=-1_000_000, le=1_000_000)
     sensor: Optional[SensorSettings] = None      # seulement pour un capteur
+    # Modèle de passerelle du catalogue. `None` : le run n'en applique aucun, et le seuil de
+    # réception reste la référence du moteur — le comportement d'avant. Mesuré : un modèle
+    # qui publie son point de sensibilité décale le seuil de 3 dB, et un run à la limite
+    # passe alors de 0 à 20 trames reçues sur 20. Les fiches qui ne publient pas le point
+    # (SF et bande) ne décalent rien : le catalogue le dit, l'interface doit le redire.
+    gateway_profile: Optional[GatewayProfileName] = None
+
+    @model_validator(mode="after")
+    def _gateway_profile_only_on_gateways(self) -> "Node":
+        if self.gateway_profile is not None and self.kind not in ("relay", "border"):
+            # Le nom du modèle fautif : sans lui, l'apprenant voit un refus sans savoir
+            # quel équipement ni quelle valeur le cause.
+            raise ValueError(
+                f"modèle de passerelle « {self.gateway_profile} » sur un équipement "
+                f"qui n'est pas une passerelle (kind={self.kind})")
+        return self
 
     @model_validator(mode="after")
     def _sensor_settings_only_on_sensors(self) -> "Node":
@@ -198,6 +226,75 @@ class SessionSummary(_Strict):
     idle_s: int = Field(ge=0)              # secondes depuis la dernière activité
 
 
+# --- Environnement radio : obstacles, shadowing, hauteurs d'antennes --------------------------
+# Modélisés par le moteur (UIT-R P.2040-4 pour les matériaux, tirage log-normal pour le
+# shadowing) mais jusque-là accessibles par le YAML seul. `None` veut dire « l'utilisateur n'a
+# rien réglé », et le scénario compilé n'émet alors aucun bloc `environment` : un scénario
+# écrit avant garde ses chiffres **et** son empreinte.
+
+class Obstacle(_Strict):
+    """Une boîte qui atténue. Soit une atténuation saisie, soit un matériau + une épaisseur.
+
+    L'atténuation est le chemin principal : à 868 MHz, 13 des 15 matériaux du catalogue sont
+    hors de la plage documentée du Tableau 3 de l'UIT-R P.2040-4, et la perte est alors
+    extrapolée. Saisir ses dB reste la façon honnête de procéder ; le matériau est une
+    commodité, et son caractère extrapolé est exposé par l'API.
+    """
+
+    x_min_m: float
+    y_min_m: float
+    x_max_m: float
+    y_max_m: float
+    height_m: float = Field(12.0, gt=0, le=1000)
+    attenuation_db: float = Field(0.0, ge=0, le=200)
+    material: Optional[str] = Field(None, max_length=32)
+    thickness_m: Optional[float] = Field(None, gt=0, le=10)
+
+    @model_validator(mode="after")
+    def _box_not_empty(self) -> "Obstacle":
+        if not (self.x_min_m < self.x_max_m and self.y_min_m < self.y_max_m):
+            raise ValueError("emprise de l'obstacle vide (min doit être < max)")
+        if self.material is None:
+            if self.thickness_m is not None:
+                raise ValueError("épaisseur sans matériau")
+        else:
+            if self.thickness_m is None:
+                raise ValueError("matériau sans épaisseur")
+            if "attenuation_db" in self.model_fields_set:
+                raise ValueError("atténuation et matériau s'excluent")
+        return self
+
+
+class EnvironmentSettings(_Strict):
+    """Environnement radio d'une session.
+
+    `shadowing_sigma_db` : écart-type du tirage log-normal, un tirage par dispositif. Mesuré
+    à 10 km SF10 sans obstacle : à sigma 4 dB, 37 tirages sur 40 restent entendus ; à 8 dB,
+    30 sur 40. Les hauteurs comptent aussi : face à un mur de 12 m, une passerelle à 40 m
+    reçoit encore là où une passerelle à 15 m a tout perdu.
+    """
+
+    shadowing_sigma_db: float = Field(0.0, ge=0.0, le=30.0)
+    gateway_height_m: float = Field(15.0, gt=0, le=1000)
+    device_height_m: float = Field(1.5, gt=0, le=1000)
+    obstacles: list[Obstacle] = Field(default_factory=list, max_length=MAX_OBSTACLES_ATELIER)
+
+    def est_vierge(self) -> bool:
+        """Rien n'a été réglé : le scénario compilé n'émet alors aucun bloc `environment`."""
+        return (not self.obstacles and self.shadowing_sigma_db == 0.0
+                and self.gateway_height_m == 15.0 and self.device_height_m == 1.5)
+
+
+class EnvironmentChoice(_Strict):
+    """Réglage de l'environnement. Seuls les champs présents sont appliqués : une interface
+    qui n'affiche pas les hauteurs ne doit pas pouvoir les remettre à leur défaut."""
+
+    shadowing_sigma_db: Optional[float] = Field(None, ge=0.0, le=30.0)
+    gateway_height_m: Optional[float] = Field(None, gt=0, le=1000)
+    device_height_m: Optional[float] = Field(None, gt=0, le=1000)
+    obstacles: Optional[list[Obstacle]] = Field(None, max_length=MAX_OBSTACLES_ATELIER)
+
+
 class SessionList(_Strict):
     items: list[SessionSummary] = Field(max_length=8)   # au plus 8 par compte
 
@@ -226,6 +323,10 @@ class SessionTopology(_Strict):
     confirmed: bool = False
     confirmed_possible: bool = False
     confirmed_raison: str = ""
+    # Environnement radio de la session : obstacles, shadowing, hauteurs d'antennes. Porté
+    # par la topologie parce que le plan le dessine — il se lit au même endroit que les
+    # équipements qu'il sépare.
+    environment: EnvironmentSettings = Field(default_factory=EnvironmentSettings)
 
 
 class AdrChoice(_Strict):
@@ -341,6 +442,10 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_hint_request": HintRequest,
     "study_hint": HintOut,
     "study_attempt_list": AttemptList,
+    # Environnement radio de la session : l'atelier le dessine, le schéma le publie.
+    "study_environment": EnvironmentSettings,
+    "study_environment_choice": EnvironmentChoice,
+    "study_obstacle": Obstacle,
 }
 
 

@@ -5,7 +5,7 @@ import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
-  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut,
+  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut, modelesAdmis, aideModele,
 } from "./topology.js";
 import { protocoleMessage, protocoleStatut } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
@@ -57,6 +57,9 @@ const state = {
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
+  modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
+  materiaux: [],         // catalogue du moteur : perte et caractere extrapole, a 868 MHz
+  traceMur: false,       // mode « tracer un mur » : le plan attend un rectangle
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
@@ -136,11 +139,18 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  const passerelles = await guard(() => state.client.gatewayProfiles());
+  if (passerelles) state.modelesPasserelle = passerelles.profiles ?? [];
+  // Les matériaux se lisent à la fréquence de la bande : la perte dépend de la fréquence, et
+  // son caractère extrapolé aussi. EU868 par défaut — c'est le plan de la plupart des runs.
+  const materiaux = await guard(() => state.client.materials(868.1e6, 0.2));
+  if (materiaux) state.materiaux = materiaux.materials ?? [];
   // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
   // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
   // générique alors que le moteur en déclare deux.
   renderPalette();
   renderMaterielAjout();
+  renderModeleAjout();
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -222,6 +232,9 @@ async function chargerChantier(fichier) {
   const noeuds = chantier.equipements.map((eq) => ({
     id: eq.id, kind: eq.kind, name: eq.name, x_m: eq.x_m, y_m: eq.y_m,
     ...(eq.sensor ? { sensor: eq.sensor } : {}),
+    // Le modèle de la passerelle : posé à la création, faute de quoi le chantier rouvert
+    // repartait au seuil de référence sans rien dire.
+    ...(eq.gateway_profile ? { gateway_profile: eq.gateway_profile } : {}),
   }));
   const created = await guard(() => state.client.createSession({ nodes: noeuds }));
   if (!created) return;
@@ -246,6 +259,13 @@ async function chargerChantier(fichier) {
         chantier.terrain_id));
       if (t) state.topo = t;
     }
+  }
+  // L'environnement radio — obstacles, shadowing, hauteurs — vient du fichier, et le serveur
+  // le valide comme le reste : un mur hors bornes est signalé, pas absorbé.
+  if (chantier.environment) {
+    const e = await guard(() => state.client.setEnvironment(
+      created.session_id, chantier.environment));
+    if (e) state.topo = e;
   }
   // La zone s'écrit avant de sélectionner la session, pas après : sinon la carte s'affiche
   // d'abord à l'ancre du chantier précédent, puis saute. Le saut est invisible sur un plan en
@@ -402,6 +422,223 @@ function refreshTopologie() {
   refreshViews();
   renderAdr();
   renderProtocole();
+  // Les obstacles vivent dans la topologie : le plan les dessine au même titre que les
+  // équipements, et leur liste se relit après chaque retour du serveur.
+  renderEnvironnement();
+}
+
+// --- Obstacles : les tracer sur le plan, les lister, dire ce qu'ils coutent -------------------
+
+/**
+ * L'environnement radio de la session, sous forme d'un objet toujours complet.
+ *
+ * Le serveur renvoie des valeurs par défaut quand rien n'a été réglé ; les traiter comme
+ * « réglé » afficherait un shadowing de 0 dB que l'utilisateur croirait avoir choisi.
+ */
+function environnement() {
+  const e = state.topo?.environment ?? {};
+  return {
+    shadowing_sigma_db: e.shadowing_sigma_db ?? 0,
+    gateway_height_m: e.gateway_height_m ?? 15,
+    device_height_m: e.device_height_m ?? 1.5,
+    obstacles: e.obstacles ?? [],
+  };
+}
+
+/** Ce qu'un obstacle coûte, en mots. Le matériau n'est pas une perte : il la calcule. */
+function coutObstacle(o) {
+  if (o.material) {
+    const m = state.materiaux.find((x) => x.name === o.material);
+    if (!m) return `${o.material}, ${o.thickness_m} m`;
+    // La mention « extrapolé » n'est pas un détail : à 868 MHz, 12 des 15 matériaux sortent
+    // de la plage documentée de l'UIT-R P.2040-4. Afficher la perte sans le dire la ferait
+    // passer pour mesurée.
+    return `${o.material} ${o.thickness_m} m — ${m.loss_db.toFixed(1)} dB`
+      + (m.extrapolated ? " (hors plage documentée, extrapolé)" : "");
+  }
+  return `${o.attenuation_db} dB saisis`;
+}
+
+function renderObstacles(bounds) {
+  const g = svgEl("g", { class: "obstacles" });
+  for (const [i, o] of environnement().obstacles.entries()) {
+    const a = toScreen({ x_m: o.x_min_m, y_m: o.y_max_m }, bounds, W, H);
+    const b = toScreen({ x_m: o.x_max_m, y_m: o.y_min_m }, bounds, W, H);
+    g.append(svgEl("rect", {
+      class: "obstacle", x: Math.min(a.x, b.x).toFixed(1), y: Math.min(a.y, b.y).toFixed(1),
+      width: Math.abs(b.x - a.x).toFixed(1), height: Math.abs(b.y - a.y).toFixed(1),
+      "data-index": i,
+    }));
+  }
+  return g;
+}
+
+function renderObstacleList() {
+  const liste = $("obstacle-list");
+  if (!liste) return;
+  clear(liste);
+  const env = environnement();
+  if (!env.obstacles.length) {
+    liste.append(el("li", { class: "muted",
+      text: "Aucun obstacle : les liaisons ne sont atténuées que par la distance." }));
+    return;
+  }
+  env.obstacles.forEach((o, i) => {
+    const matiere = el("select", { class: "obstacle-mat" },
+      el("option", { value: "", text: "atténuation saisie" }),
+      ...state.materiaux.filter((m) => m.name !== "air").map((m) => el("option", {
+        value: m.name, text: m.extrapolated ? `${m.name} (extrapolé)` : m.name,
+        selected: o.material === m.name ? "selected" : undefined })));
+    const epaisseur = el("input", { type: "number", class: "obstacle-ep", min: "0.01",
+      max: "10", step: "0.05", value: o.thickness_m ?? 0.2 });
+    const attenuation = el("input", { type: "number", class: "obstacle-att", min: "0",
+      max: "200", step: "0.5", value: o.attenuation_db ?? 0 });
+    // Atténuation saisie ou matériau : jamais les deux. Le sélecteur commande laquelle des
+    // deux est visible, faute de quoi le formulaire afficherait un réglage sans effet.
+    const bascule = () => {
+      const parMatiere = matiere.value !== "";
+      attenuation.hidden = parMatiere;
+      epaisseur.hidden = !parMatiere;
+    };
+    matiere.addEventListener("change", bascule);
+    bascule();
+    const li = el("li", { class: "obstacle-row" },
+      el("span", { text: `Mur ${i + 1} — ${coutObstacle(o)}` }),
+      el("span", { class: "obstacle-ctrls" },
+        matiere, epaisseur, attenuation,
+        el("label", {}, "haut", el("input", { type: "number", class: "obstacle-h",
+          min: "0.1", max: "1000", step: "0.5", value: o.height_m }), "m"),
+        el("button", { type: "button", class: "obstacle-ok", text: "OK",
+          onclick: () => modifierObstacle(i, {
+            material: matiere.value || null,
+            thickness_m: matiere.value ? Number(epaisseur.value) : null,
+            attenuation_db: matiere.value ? undefined : Number(attenuation.value),
+            height_m: Number(li.querySelector(".obstacle-h").value) }) }),
+        el("button", { type: "button", class: "obstacle-del", text: "Retirer",
+          onclick: () => supprimerObstacle(i) })));
+    liste.append(li);
+  });
+}
+
+function renderEnvironnement() {
+  const env = environnement();
+  const sigma = $("sigma"), gw = $("gw-height"), dev = $("dev-height");
+  if (sigma && document.activeElement !== sigma) sigma.value = env.shadowing_sigma_db;
+  if (gw && document.activeElement !== gw) gw.value = env.gateway_height_m;
+  if (dev && document.activeElement !== dev) dev.value = env.device_height_m;
+  renderObstacleList();
+}
+
+async function ecrireEnvironnement(partiel, message) {
+  if (!state.sid) return;
+  const topo = await guard(() => state.client.setEnvironment(state.sid, partiel));
+  if (!topo) return;
+  state.topo = topo;
+  renderEnvironnement();
+  refreshViews();
+  const ou = $("env-status");
+  if (ou) ou.textContent = message;
+}
+
+async function modifierObstacle(index, changement) {
+  const obstacles = environnement().obstacles.map((o, i) => {
+    if (i !== index) return o;
+    const n = { ...o, height_m: changement.height_m };
+    if (changement.material) {
+      n.material = changement.material;
+      n.thickness_m = changement.thickness_m;
+      delete n.attenuation_db;          // atténuation et matériau s'excluent côté serveur
+    } else {
+      n.attenuation_db = changement.attenuation_db;
+      delete n.material;
+      delete n.thickness_m;
+    }
+    return n;
+  });
+  await ecrireEnvironnement({ obstacles }, `Mur ${index + 1} modifié`);
+}
+
+async function supprimerObstacle(index) {
+  const restants = environnement().obstacles.filter((_, i) => i !== index);
+  await ecrireEnvironnement({ obstacles: restants },
+    restants.length ? `Mur retiré : ${restants.length} restant(s)` : "Mur retiré : plus d'obstacle");
+}
+
+/**
+ * Le mode « tracer un mur ».
+ *
+ * Le tracé se fait sur le plan métrique, pas sur la carte : c'est là qu'on règle une
+ * distance, et un mur se mesure en mètres. Le rectangle est converti en emprise métrique
+ * dès le relâchement — ce que le serveur reçoit, c'est l'emprise, pas des pixels.
+ */
+function toggleTraceMur(on) {
+  state.traceMur = on ?? !state.traceMur;
+  const bouton = $("draw-obstacle");
+  const aide = $("obstacle-draw-aide");
+  if (bouton) {
+    bouton.setAttribute("aria-pressed", String(state.traceMur));
+    bouton.classList.toggle("active", state.traceMur);
+  }
+  if (aide) {
+    aide.textContent = state.traceMur
+      ? "Tirez un rectangle sur le plan, puis relâchez. Échap annule."
+      : "";
+  }
+  if (!state.traceMur) return;
+  const plan = $("plan");
+  if (!plan) return;
+  // Sans équipement, le plan n'a pas de repère métrique : tracer y serait silencieusement
+  // faux, l'emprise serait convertie depuis des bornes absentes. La topologie est la source,
+  // pas le dessin — un plan non redessiné mentirait.
+  if (!(state.topo?.nodes ?? []).length) {
+    // Le message se pose **après** la sortie du mode : celle-ci vide l'aide, et l'écrire
+    // avant l'effacerait.
+    toggleTraceMur(false);
+    if (aide) aide.textContent = "Ajoutez des équipements au plan avant de tracer un mur.";
+    return;
+  }
+  const depart = (ev) => {
+    if (ev.button !== 0 || !state.traceMur) return;
+    if (ev.target.closest(".node")) return;    // un équipement se déplace, il ne trace pas
+    const p0 = svgPoint(ev);
+    const rect = svgEl("rect", { class: "obstacle-trace", x: p0.x, y: p0.y, width: 0, height: 0 });
+    plan.append(rect);
+    const bouger = (e) => {
+      const p = svgPoint(e);
+      rect.setAttribute("x", Math.min(p0.x, p.x).toFixed(1));
+      rect.setAttribute("y", Math.min(p0.y, p.y).toFixed(1));
+      rect.setAttribute("width", Math.abs(p.x - p0.x).toFixed(1));
+      rect.setAttribute("height", Math.abs(p.y - p0.y).toFixed(1));
+    };
+    const finir = async (e) => {
+      plan.removeEventListener("pointermove", bouger);
+      plan.removeEventListener("pointerup", finir);
+      document.removeEventListener("keydown", annuler);
+      rect.remove();
+      toggleTraceMur(false);
+      const p1 = svgPoint(e);
+      if (Math.abs(p1.x - p0.x) < 4 || Math.abs(p1.y - p0.y) < 4) return;   // un clic, pas un mur
+      const a = toMeters({ x: Math.min(p0.x, p1.x), y: Math.max(p0.y, p1.y) }, state.bounds, W, H);
+      const b = toMeters({ x: Math.max(p0.x, p1.x), y: Math.min(p0.y, p1.y) }, state.bounds, W, H);
+      const mur = { x_min_m: a.x_m, y_min_m: b.y_m, x_max_m: b.x_m, y_max_m: a.y_m,
+                    height_m: 12, attenuation_db: 6 };
+      const obstacles = [...environnement().obstacles, mur];
+      await ecrireEnvironnement({ obstacles },
+        `Mur ajouté : ${obstacles.length} obstacle(s) — 6 dB saisis par défaut, modifiables ci-dessous`);
+    };
+    const annuler = (e) => {
+      if (e.key !== "Escape") return;
+      plan.removeEventListener("pointermove", bouger);
+      plan.removeEventListener("pointerup", finir);
+      document.removeEventListener("keydown", annuler);
+      rect.remove();
+      toggleTraceMur(false);
+    };
+    plan.addEventListener("pointermove", bouger);
+    plan.addEventListener("pointerup", finir);
+    document.addEventListener("keydown", annuler);
+  };
+  plan.addEventListener("pointerdown", depart, { once: true });
 }
 
 function renderPlan() {
@@ -413,6 +650,9 @@ function renderPlan() {
   const bounds = planBounds(nodes);
   state.bounds = bounds;
   svg.append(renderGrid(bounds));
+  // Les obstacles se dessinent **sous** les équipements : un mur n'a pas à masquer ce qu'il
+  // sépare, et c'est la position des équipements qu'on vient lire.
+  svg.append(renderObstacles(bounds));
   // Les liaisons se tracent **sous** les équipements : un trait qui passe par-dessus une
   // icône la masque, et l'icône est ce qu'on vient lire.
   svg.append(renderLiaisons(nodes, bounds));
@@ -802,6 +1042,29 @@ function renderGatewayConfig(node, body) {
   fields.mesh_max_hops = sautsMesh.querySelector("input");
   fields.mesh_bandwidth_khz = bandeMesh.querySelector("select");
 
+  // Le modèle, et ce qu'il change. Il vient du catalogue du moteur, filtré sur ce que le
+  // rôle permet : un relais exige une radio mesh documentée, un hôte sans radio publiée
+  // n'entre pas dans une passerelle. Masqué si le moteur n'en déclare aucun.
+  const modeleChamp = el("div", {});
+  const modeleAide = el("p", { class: "gw-aide", text: "" });
+  if (state.modelesPasserelle.length) {
+    const admis = modelesAdmis(state.modelesPasserelle, node.kind);
+    const modele = el("select", { name: "gateway_profile" },
+      el("option", { value: "", text: "référence du moteur" }));
+    for (const m of admis) {
+      modele.append(el("option", { value: m.name, text: m.name,
+        selected: node.gateway_profile === m.name ? "selected" : undefined }));
+    }
+    const dire = () => {
+      modeleAide.textContent = aideModele(admis.find((m) => m.name === modele.value));
+    };
+    modele.addEventListener("change", dire);
+    dire();
+    fields.gateway_profile = modele;
+    modeleChamp.append(el("label", {}, "Modèle", modele), modeleAide);
+  }
+
+  if (modeleChamp.childNodes.length) grid.append(sectionChamps("Matériel", modeleChamp));
   grid.append(sectionChamps("Relais (mesh)",
     modeMesh, sautsMesh, bandeMesh,
     el("p", { class: "gw-aide gw-aide-bloc",
@@ -931,6 +1194,25 @@ function renderDeviceInfo(node, body) {
     const nom = node.sensor?.energy_profile ?? "";
     const modele = state.modelesMateriel.find((m) => m.name === nom);
     ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+  }
+  // Le serveur se pose et se dessine, mais le run ne le simule pas : le LNS est implicite
+  // derrière la passerelle frontière. Le dire ici, parce que son rôle et ses ports, en haut
+  // de cette fenêtre, décrivent un équipement qui a l'air de participer — et qu'un élève
+  // conclurait qu'une trame lui arrive vraiment.
+  if (node.kind === "server") {
+    ligne("Dans le run", "représenté, non simulé : le serveur est implicite derrière la frontière");
+  }
+  // Le modèle de la passerelle, et surtout ce qu'il change : trois des quatre modèles du
+  // catalogue ne décalent pas le seuil, leur fiche ne publiant pas le point de mesure. Le
+  // voir ici évite de croire qu'un choix a été fait alors que le run calcule la référence.
+  if (node.kind === "relay" || node.kind === "border") {
+    const m = state.modelesPasserelle.find((x) => x.name === (node.gateway_profile ?? ""));
+    ligne("Modèle", m ? `${m.name} (${m.model})` : "référence du moteur");
+    if (m) {
+      ligne("Seuil de réception", m.sensitivity_published
+        ? `${m.sensitivity_offset_db.toFixed(1).replace("-", "−")} dB par rapport à la référence`
+        : "référence : la fiche ne publie pas le point de mesure");
+    }
   }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
@@ -1109,7 +1391,13 @@ function renderSensorForm(node, body) {
 // Le matériel n'a de sens que pour un capteur : le champ se masque pour les autres types,
 // comme la sous-bande se grise hors des plans qui en ont une. Mieux vaut un champ absent
 // qu'un champ sans objet.
-$("add-form").querySelector('[name="kind"]').addEventListener("change", appliquerMaterielAjout);
+$("add-form").querySelector('[name="kind"]').addEventListener("change", () => {
+  appliquerMaterielAjout();
+  // Le rôle a pu changer : un relais n'accepte pas les mêmes modèles qu'une frontière.
+  renderModeleAjout();
+});
+$("add-form").querySelector('[name="gateway_profile"]')
+  .addEventListener("change", appliquerModeleAjout);
 
 $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1129,6 +1417,7 @@ $("add-form").addEventListener("submit", async (ev) => {
     ev.target.reset();
     // Le type est revenu à « passerelle » : le matériel n'a plus d'objet.
     appliquerMaterielAjout();
+    appliquerModeleAjout();
     // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
     // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
     refreshTopologie();
@@ -1532,6 +1821,41 @@ function renderMaterielAjout() {
     select.append(el("option", { value: m.name, text: m.label }));
   }
   appliquerMaterielAjout();
+}
+
+function renderModeleAjout() {
+  const champ = $("add-modele");
+  const select = champ?.querySelector("select");
+  if (!champ || !select) return;
+  if (!state.modelesPasserelle.length) { champ.hidden = true; return; }
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  // Un relais exige une radio mesh documentée : le scénario le refuse sinon, autant ne pas
+  // le proposer. Et un hôte sans radio publiée n'a rien à faire dans une passerelle.
+  const admis = modelesAdmis(state.modelesPasserelle, role);
+  clear(select);
+  select.append(el("option", { value: "", text: "référence du moteur" }));
+  for (const m of admis) select.append(el("option", { value: m.name, text: m.name }));
+  const garde = select.value;
+  appliquerModeleAjout();
+  select.value = garde;
+  appliquerModeleAjout();
+}
+
+function appliquerModeleAjout() {
+  const champ = $("add-modele");
+  const aide = $("add-modele-aide");
+  const select = champ?.querySelector("select");
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  if (!champ || !select) return;
+  const passerelle = role === "relay" || role === "border";
+  champ.hidden = !passerelle || state.modelesPasserelle.length === 0;
+  if (aide) {
+    const m = state.modelesPasserelle.find((x) => x.name === select.value);
+    // L'aide ne s'affiche que si le champ est visible : une explication orpheline décrirait
+    // un réglage absent.
+    aide.hidden = champ.hidden;
+    aide.textContent = champ.hidden ? "" : aideModele(m);
+  }
 }
 
 function appliquerMaterielAjout() {
@@ -2284,6 +2608,31 @@ function demarrerDeplacement(ev, noeud) {
   return true;
 }
 
+/**
+ * Le panneau « Obstacles » : tracer, lister, et régler ce qui s'applique à toutes les
+ * liaisons. Le formulaire n'envoie que les champs affichés — les trois sont toujours là,
+ * donc les trois partent toujours, et c'est voulu : c'est ce panneau qui les possède.
+ */
+function wireEnvironnement() {
+  const bouton = $("draw-obstacle");
+  bouton?.addEventListener("click", () => toggleTraceMur());
+  $("env-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    await ecrireEnvironnement({
+      shadowing_sigma_db: Number($("sigma").value),
+      gateway_height_m: Number($("gw-height").value),
+      device_height_m: Number($("dev-height").value),
+    }, "Environnement appliqué aux prochains runs");
+  });
+  // Quitter l'onglet pendant un tracé laisserait le plan en attente du pointeur, sans
+  // sortie visible : le mode tombe dès que le panneau se masque.
+  for (const t of document.querySelectorAll(".tab")) {
+    t.addEventListener("click", () => {
+      if (t.dataset.tab !== "environment" && state.traceMur) toggleTraceMur(false);
+    });
+  }
+}
+
 function showView(view) {
   state.view = view;
   const estCarte = view === "map";
@@ -2491,6 +2840,7 @@ $("chantier-file").addEventListener("change", async (ev) => {
 });
 
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
+wireEnvironnement();
 for (const b of document.querySelectorAll(".tab"))
   b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
 wireTabs(document.querySelector(".tabs"));

@@ -3,6 +3,24 @@
     "Node": {
       "additionalProperties": false,
       "properties": {
+        "gateway_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak7249",
+                "rak5148",
+                "rak5146-rak5148",
+                "rak7391"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateway Profile"
+        },
         "id": {
           "pattern": "^[a-z][a-z0-9-]{0,31}$",
           "title": "Id",

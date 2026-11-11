@@ -355,3 +355,52 @@ def test_sessions_are_listed_per_owner_and_can_be_deleted(api):
     assert first not in [item["session_id"] for item in out["items"]]
     status, _ = api.call("GET", f"/api/v1/sessions/{first}/topology")
     assert status == 404
+
+
+# --- Obstacles : le mur tracé dans l'atelier change le run --------------------------------------
+
+def _session_prete(api, x_capteur=10_000):
+    """Une frontière EU868 et un capteur SF10 à 10 km — là où un mur se voit."""
+    sid = _session(api, nodes=[_border(), {"id": "capteur-1", "kind": "sensor",
+                                           "name": "Capteur", "x_m": x_capteur, "y_m": 0,
+                                           "sensor": {"spreading_factor": 10, "messages": 20}}])
+    _cli(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0",
+         "region EU868", "exit",
+         "lorawan server 10.0.0.5 up-port 1700 down-port 1701", "end")
+    return sid
+
+
+def _recus(api, sid, seed=7):
+    status, out = _simulate(api, sid, seed)
+    assert status == 202, out
+    corps = _wait_done(api, out["run_id"])
+    assert corps["state"] == "done", corps
+    _, resume = api.call("GET", f"/api/v1/runs/{out['run_id']}/summary")
+    return resume["totals"]["received"]
+
+
+MUR = {"x_min_m": 4900.0, "y_min_m": -300.0, "x_max_m": 5100.0, "y_max_m": 300.0,
+       "height_m": 12.0, "attenuation_db": 6.0}
+
+
+def test_a_wall_between_the_sensor_and_the_gateway_stops_the_link(api):
+    """Le mur tracé sur le plan arrive jusqu'au run : c'est toute la chaîne qui est testée.
+
+    Mesuré à 10 km, SF10, 20 trames : 20 reçues sans obstacle, 0 avec un mur de 6 dB. Le
+    basculement est franc parce que sans shadowing tous les messages sont identiques.
+    """
+    sid = _session_prete(api)
+    assert _recus(api, sid) == 20
+
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/environment",
+                           {"obstacles": [MUR]})
+    assert status == 200, out
+    assert _recus(api, sid) == 0
+
+
+def test_raising_the_gateway_over_the_wall_reopens_the_link(api):
+    """La hauteur compte : à 40 m la passerelle reçoit par-dessus un mur de 12 m."""
+    sid = _session_prete(api)
+    api.call("POST", f"/api/v1/sessions/{sid}/environment",
+             {"obstacles": [MUR], "gateway_height_m": 40.0})
+    assert _recus(api, sid) == 20

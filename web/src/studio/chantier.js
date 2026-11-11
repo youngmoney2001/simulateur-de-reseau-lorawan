@@ -17,6 +17,10 @@ export const VERSION = 1;
 // dans le studio un fichier que le serveur accepterait serait pire que l'inverse, et accepter
 // un fichier qu'il refuserait donnerait une erreur incompréhensible à la fin du chargement.
 export const MAX_EQUIPEMENTS = 64;
+// Obstacles par chantier. Le serveur en accepte 200 par session (MAX_OBSTACLES_ATELIER) ;
+// le fichier garde la même borne, pour la même raison : deux vérités sur une limite est une
+// erreur qu'on ne lit qu'à la fin.
+export const MAX_OBSTACLES = 200;
 const MOTIF_ID = /^[a-z][a-z0-9-]{0,31}$/;
 // Même motif que le serveur (`TERRAIN_ID_PATTERN`) : un identifiant accepté ici et
 // refusé là-bas donnerait une erreur au moment du run, trop tard pour être comprise.
@@ -54,6 +58,9 @@ export function serialiserChantier({ topo, origine = null }) {
     // `keys` n'est délibérément **pas** copié : il ne vaut de toute façon que « ****** », et un
     // fichier qui s'échange ne doit pas contenir de secret, même masqué.
     if (n.sensor) eq.sensor = nettoyer(n.sensor);
+    // Le modèle de passerelle : sans lui, un chantier rouvert perdait le seuil de réception
+    // choisi, et le run repartait à la référence sans rien dire.
+    if (n.gateway_profile) eq.gateway_profile = n.gateway_profile;
     if (etat?.gateway) eq.gateway = nettoyer(etat.gateway);
     if (etat && etat.hostname && etat.hostname !== n.id) eq.hostname = etat.hostname;
     return eq;
@@ -63,8 +70,43 @@ export function serialiserChantier({ topo, origine = null }) {
     version: VERSION,
     origine: origine ? { lat: origine.lat, lon: origine.lon } : null,
     terrain_id: topo?.terrain_id ?? null,
+    // Obstacles, shadowing et hauteurs : ce qui sépare deux équipements que la distance
+    // seule ne départagerait pas. Omis si rien n'a été réglé — un fichier se lit.
+    ...(environnementACharger(topo?.environment) ?? {}),
     equipements,
   };
+}
+
+/**
+ * L'environnement radio, ou `null` s'il est vierge.
+ *
+ * Écrit tel quel : les obstacles ont déjà été validés par le serveur à la pose, les relire
+ * ici avec d'autres bornes ferait deux vérités. Seules les clés présentes sont gardées.
+ */
+function environnementACharger(env) {
+  if (!env || typeof env !== "object") return null;
+  const obstacles = (env.obstacles ?? []).map((o) => {
+    const o2 = { x_min_m: o.x_min_m, y_min_m: o.y_min_m, x_max_m: o.x_max_m,
+                 y_max_m: o.y_max_m, height_m: o.height_m };
+    // Atténuation saisie ou matériau + épaisseur : jamais les deux, et c'est le serveur
+    // qui le refuse à la pose. Le fichier garde la forme qu'il a reçue.
+    if (o.material) { o2.material = o.material; o2.thickness_m = o.thickness_m; }
+    else o2.attenuation_db = o.attenuation_db;
+    return o2;
+  });
+  // Rien de réglé : on n'écrit rien plutôt qu'un bloc de valeurs par défaut. Un chantier
+  // écrit avant cette fonctionnalité reste identique, octet pour octet.
+  if (!obstacles.length && !env.shadowing_sigma_db
+      && (env.gateway_height_m === undefined || env.gateway_height_m === 15)
+      && (env.device_height_m === undefined || env.device_height_m === 1.5)) {
+    return null;
+  }
+  return { environment: {
+    shadowing_sigma_db: env.shadowing_sigma_db ?? 0,
+    gateway_height_m: env.gateway_height_m ?? 15,
+    device_height_m: env.device_height_m ?? 1.5,
+    obstacles,
+  } };
 }
 
 /** Copie sans les clés à `null` : un fichier se lit, il ne doit pas être encombré de vide. */
@@ -115,6 +157,7 @@ export function lireChantier(texte) {
     version: VERSION,
     origine: lireOrigine(brut.origine),
     terrain_id: lireTerrain(brut.terrain_id),
+    environment: lireEnvironnement(brut.environment),
     equipements: brut.equipements.map(lireEquipement),
   };
 }
@@ -143,6 +186,79 @@ function lireTerrain(id) {
   return id;
 }
 
+/**
+ * L'environnement radio d'un chantier, ou `null` s'il est absent.
+ *
+ * Les bornes sont celles du contrat : refuser ici un fichier que le serveur accepterait
+ * serait pire que l'inverse, et accepter l'inverse donnerait une erreur à la fin du
+ * chargement, quand tout est déjà créé.
+ */
+export function lireEnvironnement(env) {
+  if (env === null || env === undefined) return null;
+  if (typeof env !== "object" || Array.isArray(env)) {
+    throw new ChantierInvalide("environnement : objet attendu");
+  }
+  const lireNombre = (cle, min, max) => {
+    const v = env[cle];
+    if (v === undefined || v === null) return undefined;
+    if (!Number.isFinite(v) || v < min || v > max) {
+      throw new ChantierInvalide(`environnement : ${cle} hors bornes (${min} à ${max})`);
+    }
+    return v;
+  };
+  const out = {
+    shadowing_sigma_db: lireNombre("shadowing_sigma_db", 0, 30) ?? 0,
+    gateway_height_m: lireNombre("gateway_height_m", 0, 1000) ?? 15,
+    device_height_m: lireNombre("device_height_m", 0, 1000) ?? 1.5,
+    obstacles: [],
+  };
+  if (env.obstacles === undefined || env.obstacles === null) return out;
+  if (!Array.isArray(env.obstacles)) {
+    throw new ChantierInvalide("environnement : obstacles doit être une liste");
+  }
+  if (env.obstacles.length > MAX_OBSTACLES) {
+    throw new ChantierInvalide(`${env.obstacles.length} obstacles : au plus ${MAX_OBSTACLES}`);
+  }
+  out.obstacles = env.obstacles.map(lireObstacle);
+  return out;
+}
+
+function lireObstacle(o, rang) {
+  const ou = `obstacle nº ${rang + 1}`;
+  if (!o || typeof o !== "object" || Array.isArray(o)) {
+    throw new ChantierInvalide(`${ou} : objet attendu`);
+  }
+  for (const cle of ["x_min_m", "y_min_m", "x_max_m", "y_max_m"]) {
+    if (!Number.isFinite(o[cle])) throw new ChantierInvalide(`${ou} : ${cle} illisible`);
+  }
+  if (!(o.x_min_m < o.x_max_m) || !(o.y_min_m < o.y_max_m)) {
+    throw new ChantierInvalide(`${ou} : emprise vide (min doit être < max)`);
+  }
+  if (!Number.isFinite(o.height_m) || o.height_m <= 0 || o.height_m > 1000) {
+    throw new ChantierInvalide(`${ou} : hauteur hors bornes (0 à 1000 m)`);
+  }
+  const out = { x_min_m: o.x_min_m, y_min_m: o.y_min_m, x_max_m: o.x_max_m,
+                y_max_m: o.y_max_m, height_m: o.height_m };
+  if (o.material !== undefined && o.material !== null) {
+    // Matériau et épaisseur vont ensemble, et excluent l'atténuation saisie : mêmes règles
+    // que le contrat, pour que le fichier ne puisse pas porter un mur que le serveur refuse.
+    if (!Number.isFinite(o.thickness_m) || o.thickness_m <= 0 || o.thickness_m > 10) {
+      throw new ChantierInvalide(`${ou} : épaisseur hors bornes (0 à 10 m)`);
+    }
+    if (o.attenuation_db !== undefined && o.attenuation_db !== null) {
+      throw new ChantierInvalide(`${ou} : atténuation et matériau s'excluent`);
+    }
+    out.material = o.material;
+    out.thickness_m = o.thickness_m;
+    return out;
+  }
+  if (!Number.isFinite(o.attenuation_db) || o.attenuation_db < 0 || o.attenuation_db > 200) {
+    throw new ChantierInvalide(`${ou} : atténuation hors bornes (0 à 200 dB)`);
+  }
+  out.attenuation_db = o.attenuation_db;
+  return out;
+}
+
 function lireEquipement(eq, rang) {
   const ou = rang !== undefined ? ` équipement nº ${rang + 1}` : "";
   if (!eq || typeof eq !== "object" || Array.isArray(eq)) {
@@ -167,7 +283,7 @@ function lireEquipement(eq, rang) {
   }
   const out = {
     id: eq.id, kind: eq.kind, name: eq.name, x_m: eq.x_m, y_m: eq.y_m,
-    sensor: null, gateway: null, hostname: null,
+    sensor: null, gateway: null, hostname: null, gateway_profile: null,
   };
   // Les réglages sont optionnels : un chantier sans réglage reste un chantier valide, on pose
   // l'équipement et c'est tout. Refuser serait punir un fichier écrit à la main.
@@ -179,6 +295,18 @@ function lireEquipement(eq, rang) {
   }
   if (eq.gateway !== null && eq.gateway !== undefined) {
     out.gateway = lirePasserelle(eq.gateway, eq.id);
+  }
+  // Le modèle de la passerelle : choix de matériel, comme le profil d'énergie d'un capteur.
+  // Non borné ici — le serveur connaît la liste, et un nom inconnu est refusé par lui, avec
+  // la liste des modèles admis. Le recopier ici le laisserait dériver des fiches.
+  if (eq.gateway_profile !== null && eq.gateway_profile !== undefined) {
+    if (typeof eq.gateway_profile !== "string" || !eq.gateway_profile) {
+      throw new ChantierInvalide(`« ${eq.id} » : modèle de passerelle illisible`);
+    }
+    if (eq.kind !== "border" && eq.kind !== "relay") {
+      throw new ChantierInvalide(`« ${eq.id} » : modèle de passerelle sur un ${eq.kind}`);
+    }
+    out.gateway_profile = eq.gateway_profile;
   }
   if (eq.hostname !== null && eq.hostname !== undefined) {
     if (typeof eq.hostname !== "string" || eq.hostname.length < 1 || eq.hostname.length > 64) {

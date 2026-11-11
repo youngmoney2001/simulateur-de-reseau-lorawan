@@ -56,7 +56,15 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     attempts: (sid) => request("GET", `${s(sid)}/attempts`),
     exercises: () => request("GET", "/api/v1/exercises"),
     energyProfiles: () => request("GET", "/api/v1/energy-profiles"),
+    gatewayProfiles: () => request("GET", "/api/v1/gateway-profiles"),
     terrains: () => request("GET", "/api/v1/terrains"),
+    // Matériaux d'obstacle : la perte est calculée par le moteur à la fréquence et à
+    // l'épaisseur demandées, avec son caractère extrapolé. Rien n'est recopié ici.
+    materials: (frequency_hz, epaisseur_m) => request(
+      "GET", `/api/v1/materials?frequency_hz=${encodeURIComponent(frequency_hz)}`
+        + `&thickness_m=${encodeURIComponent(epaisseur_m)}`),
+    // Environnement radio de la session : obstacles, shadowing, hauteurs d'antennes.
+    setEnvironment: (sid, settings) => request("POST", `${s(sid)}/environment`, settings),
     setTerrain: (sid, terrainId) =>
       request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
     // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,

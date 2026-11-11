@@ -1,6 +1,7 @@
 """Compilation d'une topologie de session en scénario (`lsim.study_compile`), sans serveur."""
 
 import pytest
+from pydantic import ValidationError
 
 from lsim.channel_mask import sub_band_channels
 from lsim.plan import get_plan
@@ -117,6 +118,39 @@ def test_a_stopped_access_radio_leaves_the_run_and_a_relay_without_mesh_stays_an
     assert [link["node_id"] for link in out.links] == ["frontiere", "relais-1"]
 
 
+def test_the_energy_note_names_the_run_material_and_the_devices_that_differ():
+    """La note d'énergie décrit le run qu'on obtient, pas seulement le profil par défaut.
+
+    Depuis qu'un capteur peut porter le sien, annoncer « profil rak4631 » sans plus de
+    précision décrit un run qui n'est plus le sien : deux matériels dans une même session,
+    et la note se tait sur celui qui fait exception. Un courant moyen se vérifie en
+    sachant de quel matériel il vient.
+    """
+    def capteur(nid, modele):
+        s = SensorSettings(spreading_factor=9, period_s=60)
+        if modele:
+            s = s.model_copy(update={"energy_profile": modele})
+        return node(nid, "sensor", x=500, sensor=s)
+
+    def note(*capteurs):
+        out = compile_session([node("frontiere", "border"), *capteurs],
+                              configs(frontiere=cfg("EU868")), seed=0)
+        return next(n for n in out.notes if n.startswith("énergie"))
+
+    # Aucun modèle propre : la note reste celle d'avant, à l'identique.
+    seule = note(capteur("c1", None), capteur("c2", None))
+    assert seule == ("énergie des capteurs : profil rak4631 (RAK4631 (nRF52840 + SX1262, "
+                     "module)) — le courant moyen est celui de ce matériel")
+
+    # Un capteur déroge : il est nommé, avec le libellé du moteur.
+    deroge = note(capteur("c1", "sx1262-stm32l072"), capteur("c2", None))
+    assert "matériel propre à c1 : sx1262-stm32l072 (SX1262 (datasheet) + STM32L072 (MCU))" in deroge
+
+    # Répéter le profil du run n'est pas une dérogation : la note ne fait pas de doublon.
+    repete = note(capteur("c1", "rak4631"), capteur("c2", "sx1262-stm32l072"))
+    assert "c1" not in repete and "c2 : sx1262-stm32l072" in repete
+
+
 def test_us915_defaults_the_sub_band_and_picks_a_channel_inside_it():
     out = compile_session([node("frontiere", "border"), SENSOR],
                           configs(frontiere=cfg("US915")), seed=0)
@@ -155,3 +189,113 @@ def test_no_software_reserve_without_relay():
     out = compile_session([node("passerelle", "border"), SENSOR], configs(passerelle=cfg("EU868")), seed=0)
     assert not any("compatibilité logicielle" in n for n in out.notes)
     assert any("sensibilité des récepteurs" in n for n in out.notes)
+
+
+def test_the_chosen_profile_reaches_the_scenario_and_the_default_does_not():
+    """Le modèle posé descend jusqu'aux passerelles du scénario : c'est là qu'il décale le seuil.
+
+    Sans modèle, le champ est **absent** du scénario, pas vide : un scénario écrit avant cette
+    fonctionnalité doit garder son empreinte. Le relais, lui, garde la valeur historique — un
+    réseau mesh exige une radio mesh documentée, et le scénario refuse un modèle qui ne l'a pas.
+    """
+    from lsim.study_compile import MESH_PROFILE
+
+    gw = Node(id="frontiere", kind="border", name="frontiere", x_m=0, y_m=0,
+              gateway_profile="rak7249")
+    out = compile_session([gw, SENSOR], configs(frontiere=cfg("EU868")), seed=3)
+    assert next(g["profile"] for g in out.body["scenario"]["gateways"]
+                if g["name"] == "frontiere") == "rak7249"
+
+    # Sans modèle : aucun `profile` émis.
+    out_vierge = compile_session([node("frontiere", "border"), SENSOR],
+                                 configs(frontiere=cfg("EU868")), seed=3)
+    assert "profile" not in out_vierge.body["scenario"]["gateways"][0]
+
+    # Le relais porte la valeur historique, faute de quoi le scénario le refuse.
+    relais = node("relais-1", "relay", x=1200)
+    out_mesh = compile_session([Node(id="frontiere", kind="border", name="frontiere",
+                                     x_m=0, y_m=0, gateway_profile="rak7249"), relais, SENSOR],
+                               configs(frontiere=cfg("EU868"), **{"relais-1": cfg("EU868")}),
+                               seed=3)
+    assert next(g["profile"] for g in out_mesh.body["scenario"]["gateways"]
+                if g["name"] == "relais-1") == MESH_PROFILE
+
+
+def test_an_unknown_gateway_profile_is_refused_at_the_source():
+    """Un modèle hors catalogue ne doit pas atteindre le scénario : le contrat le refuse."""
+    with pytest.raises(ValidationError) as err:
+        Node(id="frontiere", kind="border", name="f", x_m=0, y_m=0,
+             gateway_profile="invente")
+    assert "gateway_profile" in str(err.value)
+    # Et un capteur n'en porte jamais : le serveur le refuse, la compilation n'a pas à
+    # choisir quoi en faire. Le modèle fautif est nommé — sans lui, l'apprenant voit un
+    # refus sans savoir quelle valeur le cause.
+    with pytest.raises(ValidationError) as capteur:
+        Node(id="c1", kind="sensor", name="c", x_m=0, y_m=0, gateway_profile="rak7249")
+    assert "rak7249" in str(capteur.value) and "pas une passerelle" in str(capteur.value)
+
+
+def test_the_environment_block_is_only_emitted_when_something_was_set():
+    """Un scénario vierge n'émet aucun bloc : c'est ce qui garde son empreinte.
+
+    Le shadowing n'appartient pas au bloc `environment` mais à `propagation`, et n'est émis
+    que s'il est non nul — la clé absente, c'est le comportement d'avant.
+    """
+    from lsim.study_contract import EnvironmentSettings, Obstacle
+
+    mur = Obstacle(x_min_m=4900, y_min_m=-300, x_max_m=5100, y_max_m=300,
+                   height_m=12, attenuation_db=6)
+    vierge = compile_session([node("frontiere", "border"), SENSOR],
+                             configs(frontiere=cfg("EU868")), seed=3,
+                             environment=EnvironmentSettings())
+    assert "environment" not in vierge.body["scenario"]
+    assert "propagation" not in vierge.body["scenario"]
+
+    avec_mur = compile_session([node("frontiere", "border"), SENSOR],
+                               configs(frontiere=cfg("EU868")), seed=3,
+                               environment=EnvironmentSettings(obstacles=[mur]))
+    assert avec_mur.body["scenario"]["environment"]["obstacles"][0] == {
+        "x_min_m": 4900.0, "y_min_m": -300.0, "x_max_m": 5100.0, "y_max_m": 300.0,
+        "height_m": 12.0, "attenuation_db": 6.0}
+    # Le shadowing n'est pas encore réglé : `propagation` reste absent.
+    assert "propagation" not in avec_mur.body["scenario"]
+
+    avec_sigma = compile_session([node("frontiere", "border"), SENSOR],
+                                 configs(frontiere=cfg("EU868")), seed=3,
+                                 environment=EnvironmentSettings(shadowing_sigma_db=4.0))
+    assert avec_sigma.body["scenario"]["propagation"] == {"shadowing_sigma_db": 4.0}
+    # Un sigma non nul suffit à faire émettre le bloc, hauteurs comprises : le run ne serait
+    # pas celui d'avant sinon.
+    assert avec_sigma.body["scenario"]["environment"]["gateway_height_m"] == 15.0
+
+
+def test_a_wall_made_of_a_material_carries_the_material_not_the_attenuation():
+    """Matériau + épaisseur d'un côté, atténuation saisie de l'autre : jamais les deux."""
+    from lsim.study_contract import EnvironmentSettings, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10,
+                   material="concrete", thickness_m=0.2)
+    out = compile_session([node("frontiere", "border"), SENSOR],
+                          configs(frontiere=cfg("EU868")), seed=3,
+                          environment=EnvironmentSettings(obstacles=[mur]))
+    o = out.body["scenario"]["environment"]["obstacles"][0]
+    assert o["material"] == "concrete" and o["thickness_m"] == 0.2
+    assert "attenuation_db" not in o
+
+
+def test_the_environment_is_announced_in_the_notes():
+    """Ce qui change le run est dit dans les notes, pas seulement dans le scénario."""
+    from lsim.study_contract import EnvironmentSettings, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10, attenuation_db=6)
+    out = compile_session([node("frontiere", "border"), SENSOR],
+                          configs(frontiere=cfg("EU868")), seed=3,
+                          environment=EnvironmentSettings(obstacles=[mur],
+                                                          shadowing_sigma_db=4.0))
+    notes = [n for n in out.notes if n.startswith("environnement")]
+    assert len(notes) == 1
+    assert "1 obstacle" in notes[0] and "4 dB" in notes[0]
+    # Sans environnement réglé, aucune note : annoncer un réglage absent est un mensonge.
+    vierge = compile_session([node("frontiere", "border"), SENSOR],
+                             configs(frontiere=cfg("EU868")), seed=3)
+    assert not [n for n in vierge.notes if n.startswith("environnement")]
