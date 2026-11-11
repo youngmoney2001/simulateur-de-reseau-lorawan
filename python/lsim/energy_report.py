@@ -66,9 +66,13 @@ def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[
         raise ValueError("devices, dl_airtime_ns et sent doivent avoir la même longueur")
     if ul_airtime_ns is not None and len(ul_airtime_ns) != len(devices):
         raise ValueError("ul_airtime_ns doit avoir la même longueur que devices")
-    pid = ENERGY_PROFILES[_check_name(profile)]
+    _check_name(profile)                 # le profil du run reste validé, même inutilisé
     out = []
     for i, d in enumerate(devices):
+        # Le modèle de matériel est une propriété de l'équipement, pas du run. Sans modèle
+        # propre, celui du run : un scénario écrit avant cette distinction garde donc
+        # exactement ses chiffres, et l'empreinte du schéma ne bouge pas.
+        pid = ENERGY_PROFILES[_check_name(getattr(d, "energy_profile", None) or profile)]
         if ul_airtime_ns is not None and sent[i]:
             # Temps d'antenne montant compté par le moteur (octets MAC réservés compris).
             airtime = ul_airtime_ns[i] // sent[i]
@@ -93,9 +97,13 @@ def device_energies_protocol(devices: Sequence[object], dl_airtime_ns: Sequence[
 def device_energies(devices: Sequence[object], profile: str = DEFAULT_ENERGY_PROFILE
                     ) -> tuple[DeviceEnergy, ...]:
     """Énergie par message pour chaque dispositif (`EndDevice` de `Scenario.deploy()`)."""
-    pid = ENERGY_PROFILES[_check_name(profile)]
+    _check_name(profile)
     out = []
     for i, d in enumerate(devices):
+        # Même règle que `device_energies_protocol` : le modèle de l'équipement prime, celui
+        # du run à défaut. Les deux fonctions ne doivent pas pouvoir diverger, sous peine
+        # de donner deux autonomies différentes selon le chemin emprunté.
+        pid = ENERGY_PROFILES[_check_name(getattr(d, "energy_profile", None) or profile)]
         airtime = time_on_air_ns(
             RadioConfig(spreading_factor=d.spreading_factor, bandwidth_hz=_BANDWIDTH_HZ),
             d.payload_bytes)

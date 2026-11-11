@@ -41,8 +41,49 @@ function fixe(valeur, decimales) {
   return valeur == null ? "—" : valeur.toFixed(decimales);
 }
 
-function entier(valeur) {
+/** Arrondi à l'affichage, sans décimale : une grandeur de run n'en a pas besoin. */
+export function entier(valeur) {
   return valeur == null ? "—" : String(Math.round(valeur));
+}
+
+/**
+ * Étendue d'une grandeur par dispositif : le plus sobre, le plus gourmand, et la moyenne.
+ *
+ * `null` si aucune valeur n'est exploitable — la grandeur n'a alors pas été mesurée, ce qui
+ * n'est pas la même chose que « mesurée à zéro ».
+ */
+export function etendue(valeurs = []) {
+  const definies = valeurs.filter((v) => Number.isFinite(v));
+  if (!definies.length) return null;
+  return { min: Math.min(...definies), max: Math.max(...definies), moyenne: moyenne(definies) };
+}
+
+/**
+ * Texte d'une grandeur par dispositif : l'intervalle quand ils divergent, la valeur seule
+ * quand ils concordent.
+ *
+ * Une moyenne ne vaut que si les dispositifs se ressemblent. Ils peuvent différer par le
+ * matériel, le facteur d'étalement ou la période : mesuré sur le jeu d'essai, 16 µA en SF7
+ * contre 2 503 µA en SF12, et 15,9 mJ contre 495,6 mJ par message. Leur moyenne — 1 146 µA,
+ * 233,9 mJ — n'est la consommation d'aucun dispositif du run, alors qu'elle en a l'air. Un
+ * nombre qui a l'air mesuré et ne l'est pas est pire qu'une absence : il se lit comme un fait.
+ *
+ * La borne basse se formate avant la comparaison : deux dispositifs à 16,06 et 16,4 µA
+ * s'affichent tous deux « 16 µA », et un intervalle « 16 à 16 µA » serait du bruit.
+ *
+ * @param {{min: number, max: number, moyenne: number}|null} et l'étendue
+ * @param {(v: number) => string} formater mise en forme d'une valeur
+ * @returns {string|null} intervalle ou valeur, `null` sans mesure.
+ */
+export function texteEtendue(et, formater = entier) {
+  if (!et) return null;
+  const bas = formater(et.min), haut = formater(et.max);
+  return bas === haut ? bas : `${bas} à ${haut}`;
+}
+
+/** Vrai si les dispositifs, une fois arrondis à l'affichage, ne concordent pas. */
+export function etendueVisible(et, formater = entier) {
+  return !!et && formater(et.min) !== formater(et.max);
 }
 
 // Énergie : le joule seul donne des nombres à rallonge sur des trames de 20 mJ.
@@ -101,8 +142,12 @@ export function indicateursReseau(summary, lignes = []) {
 
   // Énergie : absente sans profil (`energy_profile`), ou si la période est trop courte pour
   // la trame (`energy_per_message_j` vaut alors null sur la ligne concernée).
-  const energieParMessage = moyenne(lignes.map((l) => l.energy_per_message_j));
-  const courantMoyen = moyenne(lignes.map((l) => l.average_current_ua));
+  const energieMessage = etendue(lignes.map((l) => l.energy_per_message_j));
+  const courants = etendue(lignes.map((l) => l.average_current_ua));
+  const energieParMessage = energieMessage?.moyenne ?? null;
+  const courantMoyen = courants?.moyenne ?? null;
+  const energieEtalee = etendueVisible(energieMessage, energie);
+  const courantEtale = etendueVisible(courants);
   // Sans profil énergie, `somme` renverrait 0 et l'indicateur afficherait « 0.000 J » — un
   // nombre fabriqué, indiscernable d'une mesure nulle. L'absence de mesure doit rester
   // invisible : l'indicateur est alors écarté, pas affiché à zéro.
@@ -171,10 +216,14 @@ export function indicateursReseau(summary, lignes = []) {
   if (energieParMessage != null) {
     out.push({
       id: "energie_message",
-      label: "Énergie par message",
+      label: energieEtalee ? "Énergie par message, par dispositif" : "Énergie par message",
       value: energieParMessage,
-      text: energie(energieParMessage),
-      hint: "moyenne des dispositifs — émission, écoute RX1/RX2 et veille ramenés à un message",
+      text: texteEtendue(energieMessage, energie),
+      min: energieMessage.min,
+      max: energieMessage.max,
+      hint: energieEtalee
+        ? "les dispositifs ne dépensent pas la même chose : matériel, facteur d'étalement et période diffèrent — la moyenne ne serait la dépense d'aucun d'eux"
+        : "émission, écoute RX1/RX2 et veille ramenés à un message — même valeur sur tous les dispositifs",
     });
   }
   if (energieRun != null) {
@@ -189,10 +238,14 @@ export function indicateursReseau(summary, lignes = []) {
   if (courantMoyen != null) {
     out.push({
       id: "courant",
-      label: "Courant moyen",
+      label: courantEtale ? "Courant par dispositif" : "Courant moyen",
       value: courantMoyen,
-      text: `${entier(courantMoyen)} µA`,
-      hint: "moyenne des dispositifs — courant moyen sur la période d'émission, veille comprise",
+      text: `${texteEtendue(courants)} µA`,
+      min: courants.min,
+      max: courants.max,
+      hint: courantEtale
+        ? "les dispositifs ne consomment pas la même chose : matériel, facteur d'étalement et période diffèrent — la moyenne ne serait le courant d'aucun d'eux"
+        : "courant moyen sur la période d'émission, veille comprise — même valeur sur tous les dispositifs",
     });
   }
 
@@ -627,6 +680,30 @@ export function autonomieTexte(ans) {
 export const FENETRE_ETSI_S = 3600;
 
 /**
+ * Combien de messages pour qu'un run **couvre** la fenêtre de moyennage réglementaire.
+ *
+ * La règle n'est pas `cible / période`, et la mesure le montre : la fenêtre observée vaut
+ * `(messages - 1) × période`, parce qu'elle court de la première émission à la dernière et
+ * non de zéro à la dernière. À 60 s, 60 messages donnent donc 3 540 s — **60 s sous
+ * l'heure** — et le verdict retomberait dans sa réserve alors que l'utilisateur a cru
+ * faire juste. D'où le `+ 1`.
+ *
+ * La dispersion des départs s'ajoute à la fenêtre sans jamais la réduire : un capteur
+ * décalé émet plus tard, jamais plus tôt. Elle est donc acquise, et non à compenser —
+ * compter dessus reviendrait à prédire un tirage pseudo-aléatoire, et à tomber juste
+ * une fois sur deux. Mesuré : 2 capteurs, `start_spread_s` de 100 s, la fenêtre s'allonge
+ * de 17 s et non de 100.
+ *
+ * @param {number|null} periodeS période d'émission du capteur, en secondes
+ * @param {number} [cibleS] fenêtre à couvrir, en secondes
+ * @returns {number|null} nombre de messages, ou `null` si la période est inutilisable.
+ */
+export function messagesPourFenetre(periodeS, cibleS = FENETRE_ETSI_S) {
+  if (!Number.isFinite(periodeS) || periodeS <= 0 || !Number.isFinite(cibleS)) return null;
+  return Math.ceil(cibleS / periodeS) + 1;
+}
+
+/**
  * Durée lisible, depuis des nanosecondes. « 6 min 40 s » se confronte à une limite mieux que
  * « 400 s » ou que « 4,0e+11 ns » : c'est l'unité dans laquelle on parle d'une fenêtre.
  */
@@ -670,6 +747,45 @@ export function fenetreVerdictTexte(ns) {
   return `Mesuré sur ${duree}, quand la fenêtre de moyennage du texte réglementaire est de `
     + `1 h (ETSI) — soit environ ${rapport} fois plus long. Le verdict porte sur la fenêtre `
     + `du run : sur une heure, l'occupation moyenne peut être plus basse comme plus haute.`;
+}
+
+/**
+ * Ce qu'il faudrait changer pour que le run **couvre** la fenêtre réglementaire.
+ *
+ * Le verdict dit l'écart entre les deux fenêtres ; il ne dit pas comment le combler, et
+ * l'utilisateur reste avec un constat. On nomme donc le réglage et le nombre, mesurés par
+ * ailleurs : à 60 s il faut 61 messages, et non 60 — le genre de détail qui ne se devine
+ * pas et qui fait perdre un run entier.
+ *
+ * Une phrase vide quand le run couvre déjà la fenêtre : ajouter « il faudrait… » sous un
+ * verdict annoncé comme direct le décrédibiliserait.
+ *
+ * @param {number|null} fenetreNs fenêtre d'observation du run, en nanosecondes
+ * @param {Array<{periodeS: number|null, messages: number|null}>} capteurs réglages actuels
+ * @returns {string} une phrase complète, ou une chaîne vide s'il n'y a rien à dire.
+ */
+export function texteFenetreACouvrir(fenetreNs, capteurs = []) {
+  if (!Number.isFinite(fenetreNs)) return "";
+  if (fenetreNs / 1e9 >= FENETRE_ETSI_S) return "";
+  const periodes = [...new Set(
+    capteurs.map((c) => c.periodeS).filter((p) => Number.isFinite(p) && p > 0))];
+  if (periodes.length === 0) return "";
+  const besoins = periodes.map((p) => ({ periode: p, messages: messagesPourFenetre(p) }));
+  const actuel = capteurs.map((c) => c.messages).filter((m) => Number.isFinite(m));
+  const plusPetit = actuel.length ? Math.min(...actuel) : null;
+
+  if (besoins.length === 1) {
+    const { periode, messages } = besoins[0];
+    const aujourdhui = actuel.length && new Set(actuel).size === 1 ? actuel[0] : plusPetit;
+    return `Pour couvrir l'heure réglementaire : ${messages} messages par capteur `
+      + `(période ${periode} s)${aujourdhui != null ? `, au lieu de ${aujourdhui}` : ""}.`;
+  }
+  // Périodes différentes : le besoin le plus haut est porté par la période la plus courte.
+  // Le dire par le maximum plutôt que par une liste garde la phrase lisible ; le détail
+  // reste dans la fenêtre de chaque capteur.
+  const max = besoins.reduce((a, b) => (b.messages > a.messages ? b : a));
+  return `Pour couvrir l'heure réglementaire : jusqu'à ${max.messages} messages `
+    + `(période la plus courte, ${max.periode} s)${plusPetit != null ? `, au lieu de ${plusPetit}` : ""}.`;
 }
 
 /**

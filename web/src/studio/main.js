@@ -12,7 +12,8 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte,
+  limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, messagesPourFenetre,
+  autonomieAns, autonomieTexte, entier,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
@@ -55,9 +56,12 @@ const state = {
   passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
+  modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
+  courantMinUA: null,   // bornes du meme run : une moyenne ne decrit personne si elles divergent
+  courantMaxUA: null,
   capaciteMAh: null,    // l'autre terme est enonce par l'utilisateur, jamais devine ici
   terrains: [],         // catalogue du serveur : vide la plupart du temps, et c'est un fait
   terrainCharge: false, // le catalogue n'est demande qu'une fois, pas a chaque session
@@ -127,6 +131,16 @@ async function connect() {
     state.exercises = exercises.items;
     renderExerciseChoices();
   }
+  // Les modèles de matériel se lisent au moteur : leurs libellés sont les siens, et les
+  // recopier ici les laisserait dériver du matériel réellement modélisé. Liste vide si la
+  // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
+  const modeles = await guard(() => state.client.energyProfiles());
+  if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
+  // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
+  // générique alors que le moteur en déclare deux.
+  renderPalette();
+  renderMaterielAjout();
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -910,6 +924,14 @@ function renderDeviceInfo(node, body) {
     ligne("Configuration", st.configured ? "configuré" : "non configuré");
     if (st.region) ligne("Plan régional", st.region);
   }
+  // Le matériel, tel que le moteur le nomme : c'est lui qui décide du courant, et le voir
+  // ici évite d'aller le chercher dans l'onglet Config. Sans modèle propre, le capteur suit
+  // celui du run — il consomme donc bien quelque chose, et « aucun » serait un mensonge.
+  if (node.kind === "sensor") {
+    const nom = node.sensor?.energy_profile ?? "";
+    const modele = state.modelesMateriel.find((m) => m.name === nom);
+    ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+  }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
   // Résultat du dernier run, sur l'équipement lui-même. La carte colore, la fenêtre chiffre :
@@ -1042,6 +1064,20 @@ function renderSensorForm(node, body) {
   for (const r of REGIONS) regionSelect.append(el("option", { value: r, text: r, selected: values.region === r ? "selected" : undefined }));
   fields.region = regionSelect;
   grid.append(el("label", {}, "Plan régional", regionSelect));
+  // Le matériel, par équipement. Deux capteurs de matériel différent ne consomment pas la
+  // même chose (mesuré : 10 à 11 % de courant moyen), et pouvoir les comparer dans un même
+  // run est précisément l'intérêt du réglage. « celui du run » est le défaut : un chantier
+  // écrit avant cette distinction garde ses chiffres.
+  if (state.modelesMateriel.length) {
+    const modeleSelect = el("select", { name: "energy_profile" },
+      el("option", { value: "", text: "celui du run" }));
+    for (const m of state.modelesMateriel) {
+      modeleSelect.append(el("option", { value: m.name, text: m.label,
+        selected: values.energy_profile === m.name ? "selected" : undefined }));
+    }
+    fields.energy_profile = modeleSelect;
+    grid.append(el("label", {}, "Matériel", modeleSelect));
+  }
   const message = el("p", { class: "muted", text: "" });
   const form = el("form", {
     novalidate: "",   // les messages de validation sont ceux du studio, pas ceux du navigateur
@@ -1070,6 +1106,11 @@ function renderSensorForm(node, body) {
 }
 
 // --- Ajout d'équipement --------------------------------------------------------------------
+// Le matériel n'a de sens que pour un capteur : le champ se masque pour les autres types,
+// comme la sous-bande se grise hors des plans qui en ont une. Mieux vaut un champ absent
+// qu'un champ sans objet.
+$("add-form").querySelector('[name="kind"]').addEventListener("change", appliquerMaterielAjout);
+
 $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!state.sid) return showError(new Error("aucune session"));
@@ -1086,6 +1127,8 @@ $("add-form").addEventListener("submit", async (ev) => {
     state.topo = topo;
     state.selected = checked.node.id;
     ev.target.reset();
+    // Le type est revenu à « passerelle » : le matériel n'a plus d'objet.
+    appliquerMaterielAjout();
     // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
     // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
     refreshTopologie();
@@ -1433,10 +1476,23 @@ function renderAutonomie() {
     out.textContent = "courant moyen non simulé";
     return;
   }
+  // Même règle que pour le courant affiché : si les dispositifs ne consomment pas la même
+  // chose, une autonomie unique serait celle d'un matériel qui n'existe pas. On donne
+  // l'intervalle, du plus gourmand au plus sobre — et non l'inverse, la plus forte
+  // consommation donnant la plus courte autonomie.
+  const etale = entier(state.courantMinUA) !== entier(state.courantMaxUA);
+  const duree = etale
+    ? `${autonomieTexte(autonomieAns(mAh, state.courantMaxUA))} à `
+      + autonomieTexte(autonomieAns(mAh, state.courantMinUA))
+    : autonomieTexte(ans);
+  // « pour » et non « à » : « 2 400 mAh à de 16 à 2 503 µA » se télescope.
+  const courantTexte = etale
+    ? `pour ${entier(state.courantMinUA)} à ${entier(state.courantMaxUA)} µA`
+    : `à ${entier(state.courantMoyenUA)} µA`;
   // Les deux termes sont rappelés : une autonomie sans son courant ni sa capacité ne se
   // vérifie pas. Et la limite est dite — une pile ne rend pas ce que le calcul promet.
-  out.textContent = `${autonomieTexte(ans)} — ${mAh} mAh à `
-    + `${Math.round(state.courantMoyenUA)} µA, hors vieillissement et hors autodécharge`;
+  out.textContent = `${duree} — ${mAh} mAh ${courantTexte}, `
+    + "hors vieillissement et hors autodécharge";
 }
 
 /**
@@ -1456,6 +1512,32 @@ async function chargerTerrains() {
   if (!liste) return;                       // l'erreur est déjà affichée ; on retentera plus tard
   state.terrains = liste.items ?? [];
   renderTerrains();
+}
+
+// Le matériel proposé à l'ajout : les modèles que le moteur a déclarés, et la mention
+// « celui du run » pour qui ne choisit pas. Masqué si le moteur n'en déclare aucun, et pour
+// les types qui ne sont pas des capteurs — un sélecteur sans objet serait un faux choix.
+function renderMaterielAjout() {
+  const champ = $("add-materiel");
+  const select = champ?.querySelector("select");
+  if (!champ || !select) return;
+  if (select.options.length) {            // déjà rempli : on ne reconstruit pas à chaque fois
+    appliquerMaterielAjout();
+    return;
+  }
+  if (!state.modelesMateriel.length) { champ.hidden = true; return; }
+  clear(select);
+  select.append(el("option", { value: "", text: "celui du run" }));
+  for (const m of state.modelesMateriel) {
+    select.append(el("option", { value: m.name, text: m.label }));
+  }
+  appliquerMaterielAjout();
+}
+
+function appliquerMaterielAjout() {
+  const champ = $("add-materiel");
+  const kind = $("add-form")?.querySelector('[name="kind"]')?.value;
+  if (champ) champ.hidden = kind !== "sensor" || state.modelesMateriel.length === 0;
 }
 
 function renderTerrains() {
@@ -1567,8 +1649,14 @@ function renderMetrics(summary, deviceRows) {
   // capacite inviterait a calculer quelque chose a partir de rien.
   // La valeur est reprise de l'indicateur deja calcule, pas recalculee : deux chemins vers
   // le meme chiffre finiraient par diverger sans que rien ne le signale.
-  const courant = liste.find((i) => i.id === "courant")?.value ?? null;
+  const bloc = liste.find((i) => i.id === "courant");
+  const courant = bloc?.value ?? null;
   state.courantMoyenUA = courant;
+  // Les bornes voyagent avec le courant : l'autonomie se calcule sur elles quand les
+  // dispositifs ne consomment pas la même chose, sans quoi elle décrirait un matériel
+  // intermédiaire qui n'existe pas.
+  state.courantMinUA = bloc?.min ?? courant;
+  state.courantMaxUA = bloc?.max ?? courant;
   $("sim-autonomie").hidden = courant == null;
   if (courant != null) {
     const champ = $("battery-mah");
@@ -1608,8 +1696,28 @@ function renderMetrics(summary, deviceRows) {
     // forcément celle du texte » laissait l'utilisateur sans moyen d'évaluer l'écart ; dire
     // « mesuré sur 6 min 40 s, quand le texte moyenne sur 1 h » le lui donne.
     note.append(el("span", { text: fenetreVerdictTexte(fenetreObservationNs(summary)) }));
+    // Dire l'écart entre les deux fenêtres sans dire comment le combler laisse
+    // l'utilisateur avec un constat. On nomme donc le réglage et le nombre — à 60 s il
+    // faut 61 messages et non 60, détail qui ne se devine pas et coûte un run entier.
+    const capteurs = (state.topo?.nodes ?? [])
+      .filter((n) => n.kind === "sensor")
+      .map((n) => ({ id: n.id, periodeS: n.sensor?.period_s ?? null,
+        messages: n.sensor?.messages ?? null }));
+    const aCouvrir = texteFenetreACouvrir(fenetreObservationNs(summary), capteurs);
+    if (aCouvrir) note.append(el("span", { text: " " + aCouvrir }));
+    // Un constat sans geste laisse l'utilisateur refaire à la main ce qu'on vient de
+    // calculer. Le bouton ne raccourcit jamais un run déjà assez long : il ne fait que
+    // porter chaque capteur au nombre de messages qui couvre l'heure.
+    const aProlonger = capteurs.filter(
+      (c) => Number.isFinite(c.periodeS) && c.periodeS > 0
+        && Number.isFinite(c.messages) && c.messages < messagesPourFenetre(c.periodeS)
+        && messagesPourFenetre(c.periodeS) <= SENSOR_LIMITS.messages[1]);
+    const bouton = $("prolonger-run");
+    bouton.hidden = aProlonger.length === 0;
+    bouton.onclick = () => prolongerRun(aProlonger);
   }
   note.hidden = sources.size === 0;
+  if (note.hidden) $("prolonger-run").hidden = true;   // pas de verdict, pas de geste
 }
 
 /**
@@ -1619,6 +1727,44 @@ function renderMetrics(summary, deviceRows) {
  * résultat décrirait des couleurs absentes. Le nom de chaque palier vient de `metrics.js`,
  * seule source de l'échelle — le recopier ici le laisserait dériver de la couleur réelle.
  */
+/**
+ * Porter chaque capteur au nombre de messages qui couvre la fenêtre réglementaire, puis
+ * relancer le run.
+ *
+ * Le réglage est un **remplacement complet** côté serveur (`set_sensor` recopie l'objet
+ * entier) : envoyer seulement `messages` remettrait la période, la charge utile et le SF à
+ * leurs défauts. On renvoie donc la configuration lue dans la topologie, avec un seul champ
+ * changé.
+ *
+ * Le run est relancé par le formulaire lui-même, et non par un second appel : c'est le même
+ * chemin que le bouton « Simuler », donc le même statut, la même attente et le même rendu.
+ * Le dupliquer donnerait deux façons de simuler, donc deux façons de se contredire.
+ *
+ * @param {Array<{id: string, periodeS: number, messages: number}>} capteurs à prolonger
+ */
+async function prolongerRun(capteurs) {
+  if (!state.sid || state.busy) return;
+  const bouton = $("prolonger-run");
+  if (bouton) bouton.disabled = true;
+  try {
+    for (const c of capteurs) {
+      const node = state.topo?.nodes.find((n) => n.id === c.id);
+      if (!node?.sensor) continue;
+      const vise = messagesPourFenetre(c.periodeS);
+      if (!Number.isFinite(vise)) continue;
+      const topo = await guard(
+        () => state.client.setSensor(state.sid, c.id, { ...node.sensor, messages: vise }));
+      // La topologie revient avec le run : la garder évite de relire un état qu'on vient
+      // d'écrire, et le champ `messages` affiché dans la fenêtre du capteur suit.
+      if (topo) state.topo = topo;
+    }
+  } finally {
+    if (bouton) bouton.disabled = false;
+  }
+  renderDevice();               // la fenêtre ouverte chiffre le nouveau réglage
+  $("sim-form").requestSubmit();
+}
+
 function renderLegend() {
   const boite = $("pdr-legend");
   clear(boite);
@@ -2060,8 +2206,15 @@ function glisserDepuisPalette(ev, kind) {
   });
 }
 
-/** Crée l'équipement à la position géographique donnée. */
-async function poserEquipement(kind, ll) {
+/**
+ * Pose un équipement là où le geste s'est relâché, à la position géographique donnée.
+ *
+ * @param {string} kind type d'équipement
+ * @param {{lat: number, lon: number}} ll point de dépôt, en degrés
+ * @param {string} [modele] matériel du capteur, quand la palette en présente un. `undefined`
+ *   laisse l'équipement sans modèle propre : il suivra celui du run, comme avant.
+ */
+async function poserEquipement(kind, ll, modele) {
   const o = readOrigin();
   if (!o || !state.sid) return;
   const { x_m, y_m } = degreesToMeters(ll.lat, ll.lon, o);
@@ -2074,6 +2227,9 @@ async function poserEquipement(kind, ll) {
   }
   const id = suggererId(kind, idsPris());
   const noeud = { id, kind, name: `${KIND_LABEL[kind]} ${id.split("-").pop()}`, x_m, y_m };
+  // Le matériel posé avec le capteur, sinon rien : un capteur sans modèle propre suit celui
+  // du run, ce qui reste le comportement d'avant.
+  if (kind === "sensor" && modele) noeud.sensor = { energy_profile: modele };
   const topo = await guard(() => state.client.addNode(state.sid, noeud));
   if (!topo) return;
   state.topo = topo;
@@ -2174,15 +2330,25 @@ function selectObservationTab(name) {
 // --- Palette d'équipements (bas à gauche) ----------------------------------------------------
 // Le dessin réel remplace l'icône CSS : la palette montre l'équipement tel qu'il apparaîtra,
 // ce qui la rend reconnaissable au lieu d'obliger à lire les étiquettes.
-const PALETTE = [
-  { cat: "Passerelles", models: [
-      { kind: "border", label: "Passerelle frontière" },
-      { kind: "relay",  label: "Passerelle relais" } ] },
-  { cat: "Capteurs", models: [
-      { kind: "sensor", label: "Capteur" } ] },
-  { cat: "Serveur", models: [
-      { kind: "server", label: "Serveur de réseau" } ] },
-];
+// Les capteurs de la palette sont les matériels que le moteur déclare, et non une liste
+// recopiée ici : un modèle ajouté au moteur apparaît dans la palette sans qu'on y touche.
+// Liste illisible : un seul « Capteur » sans matériel — plutôt un seul choix vrai qu'une
+// promesse non tenue. L'étiquette courte est l'identifiant du moteur, comme Packet Tracer
+// affiche « 2911 » ; le libellé complet reste en infobulle.
+function palette() {
+  const capteurs = state.modelesMateriel.length
+    ? state.modelesMateriel.map((m) => ({ kind: "sensor", energy_profile: m.name,
+                                          label: m.name, titre: m.label }))
+    : [{ kind: "sensor", label: "Capteur" }];
+  return [
+    { cat: "Passerelles", models: [
+        { kind: "border", label: "Passerelle frontière" },
+        { kind: "relay",  label: "Passerelle relais" } ] },
+    { cat: "Capteurs", models: capteurs },
+    { cat: "Serveur", models: [
+        { kind: "server", label: "Serveur de réseau" } ] },
+  ];
+}
 
 function renderPalette() {
   const cats = $("cat-box"), models = $("model-box");
@@ -2191,29 +2357,31 @@ function renderPalette() {
     clear(models);
     for (const m of cat.models) {
       models.append(el("button", {
-        type: "button", class: "tool", title: `${m.label} — glissez sur la carte, ou cliquez`,
+        type: "button", class: "tool",
+        title: `${m.titre ?? m.label} — glissez sur la carte, ou cliquez`,
         // Le geste part du `pointerdown` : attendre le `click` interdirait de connaître la
         // position du curseur au relâchement, donc où poser l'équipement.
-        onpointerdown: (ev) => demarrerDepuisPalette(ev, m.kind),
+        onpointerdown: (ev) => demarrerDepuisPalette(ev, m),
         // Le `click` garde la voie clavier (Entrée) et le raccourci d'ajout au formulaire.
         // On l'ignore juste après un dépôt réussi, sinon un glisser créerait deux fois.
         onclick: () => {
           if (Date.now() - (state.poseRecent ?? 0) < 600) return;
-          addFromPalette(m.kind);
+          addFromPalette(m);
         },
       }, el("span", { class: "tool-art" }, drawDevice(m.kind)),
          el("span", { class: "tool-label", text: m.label })));
     }
     for (const b of cats.children) b.classList.toggle("active", b === active);
   };
-  PALETTE.forEach((cat, i) => {
+  const groupes = palette();
+  groupes.forEach((cat, i) => {
     cats.append(el("button", {
       type: "button", class: "tool",
       onclick: () => draw(cat, cats.children[i]),
     }, el("span", { class: "tool-art" }, drawDevice(cat.models[0].kind)),
        el("span", { class: "tool-label", text: cat.cat })));
   });
-  if (cats.children.length) draw(PALETTE[0], cats.children[0]);
+  if (cats.children.length) draw(groupes[0], cats.children[0]);
 }
 
 // Clic sur un modèle : on remplit le formulaire existant et on le soumet. Aucune logique
@@ -2226,17 +2394,22 @@ function renderPalette() {
  * sont disjointes : le geste ne pose que s'il aboutit, et le clic ne s'ouvre que s'il ne
  * suit pas un dépôt réussi (`poseRecent`, ci-dessous).
  */
-async function demarrerDepuisPalette(ev, kind) {
-  const r = await glisserDepuisPalette(ev, kind);
+async function demarrerDepuisPalette(ev, modele) {
+  const r = await glisserDepuisPalette(ev, modele.kind);
   if (!r.cible) return;
   state.poseRecent = Date.now();
-  await poserEquipement(kind, r.cible);
+  await poserEquipement(modele.kind, r.cible, modele.energy_profile);
 }
 
-function addFromPalette(kind) {
+function addFromPalette(modele) {
   const f = $("add-form");
-  f.querySelector('[name="kind"]').value = kind;
-  const id = suggererId(kind, idsPris());
+  f.querySelector('[name="kind"]').value = modele.kind;
+  // Le matériel du modèle choisi suit dans le formulaire : c'est lui qui porte l'ajout, et
+  // le formulaire est aussi la voie clavier. Le champ vit donc ici, pas seulement dans le
+  // geste de la souris.
+  const materiel = f.querySelector('[name="energy_profile"]');
+  if (materiel) materiel.value = modele.energy_profile ?? "";
+  const id = suggererId(modele.kind, idsPris());
   f.querySelector('[name="id"]').value = id;
   // Le formulaire propose l'origine de la zone : un nouvel équipement se pose là où la
   // scène est cadrée bien plus souvent qu'ailleurs, et des champs vides obligeraient à

@@ -147,6 +147,10 @@
               <option value="server">Serveur</option>
             </select>
           </label>
+          <!-- Le matériel d'un capteur. Rempli depuis ce que le moteur déclare, et masqué
+               s'il n'en déclare aucun : un sélecteur vide serait une promesse non tenue.
+               Masqué aussi pour les autres types, qui n'ont pas de matériel à choisir. -->
+          <label id="add-materiel" hidden>Matériel <select name="energy_profile"></select></label>
           <!-- On saisit des degrés, pas des mètres : c'est ainsi qu'on relève un lieu, et
                c'est l'invariant D2. Les mètres partent au moteur, ils ne s'affichent pas. -->
           <div class="row">
@@ -239,6 +243,13 @@
             <tbody></tbody>
           </table>
           <p id="sim-duty-note" class="hint" hidden></p>
+          <!-- Prolonger le run jusqu'à la fenêtre réglementaire. Masqué tant que le run la
+               couvre déjà : un geste proposé sous un verdict annoncé comme direct
+               laisserait croire qu'il manque quelque chose. -->
+          <button type="button" id="prolonger-run" class="zone-btn" hidden
+            title="Porter chaque capteur au nombre de messages qui couvre l'heure réglementaire, puis relancer le run">
+            Prolonger le run jusqu'à 1 h
+          </button>
         </div>
 
         <div class="tab-body" data-panel="journal" hidden>

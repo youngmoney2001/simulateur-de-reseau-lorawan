@@ -698,6 +698,28 @@ Trois états, et ils ne se confondent pas : sans capacité saisie, rien n'est af
 nomme au lieu de convertir de force ; les deux présents, les deux termes sont rappelés et la
 limite est dite — une pile ne rend pas ce que le calcul promet.
 
+### Le courant moyen d'appareils qui ne se ressemblent pas
+
+Le raisonnement ci-dessus tient si le run ne mesure **qu'un** courant. Ce n'est pas le cas
+dès que les capteurs diffèrent, et ils diffèrent bien avant qu'on ne choisisse leur matériel :
+mesuré sur le jeu d'essai des indicateurs, **16 µA en SF7** contre **2 503 µA en SF12**, et
+**15,9 mJ** contre **495,6 mJ** par message. La moyenne des 22 dispositifs, **1 146 µA**,
+n'est la consommation d'aucun d'eux — elle en a pourtant l'air, ce qui est pire qu'une
+absence : un nombre qui a l'air mesuré se lit comme un fait.
+
+Les deux indicateurs d'énergie publient donc désormais l'**intervalle** dès que les
+dispositifs divergent à l'affichage, et un seul chiffre quand ils concordent — un run
+homogène ne doit pas devenir « 52 à 52 µA ». L'intitulé change avec (« Courant par
+dispositif » au lieu de « Courant moyen »), et l'infobulle dit pourquoi : matériel, facteur
+d'étalement et période diffèrent. L'autonomie suit la même règle, du plus gourmand au plus
+sobre : « 1 mois à 17 ans — 2 400 mAh pour 16 à 2 503 µA ».
+
+Deux raisons de le faire maintenant plutôt que plus tard. Le réglage du matériel par
+équipement venait d'être livré : sans cela, comparer un RAK4631 et un SX1262 dans un même
+run aurait abouti à un courant moyen décrivant un matériel intermédiaire qui n'existe pas —
+la comparaison rendue possible aurait été effacée par l'affichage. Et la moyenne mentait
+déjà, avant tout matériel, dès que deux facteurs d'étalement cohabitaient.
+
 ---
 
 ## 6. Relief — **livré** : choisissable depuis l'atelier, et sa voie réparée
@@ -745,7 +767,7 @@ Sans elle : **1/1**. Accepter un paramètre ne prouve pas qu'il fait quelque cho
 
 ---
 
-## 7. Le verdict réglementaire — **fenêtre de mesure affichée** ; la comparaison reste à deux fenêtres
+## 7. Le verdict réglementaire — **livré** : la fenêtre est couverte, la comparaison est directe
 
 Le verdict livré cette tranche compare l'occupation **mesurée sur la fenêtre du run** à une limite
 définie sur une **fenêtre de moyennage réglementaire** (une heure chez ETSI). La réserve est
@@ -753,11 +775,50 @@ affichée, mais la comparaison reste celle de deux fenêtres différentes.
 
 Deux voies pour la rendre exacte :
 
-- **Allonger le run** jusqu'à la fenêtre réglementaire — coûteux, mais la simulation est déjà
-  hors ligne ;
+- **Allonger le run** jusqu'à la fenêtre réglementaire — **livrée** ; la réserve « coûteuse »
+  qui l'accompagnait était fausse, voir ci-dessous ;
 - **Afficher la fenêtre de mesure à côté du verdict** — **retenue et livrée**. L'utilisateur
   juge de l'écart, ce qui suppose d'exposer la durée du run en clair là où le verdict
   s'affiche.
+
+#### Couvrir la fenêtre : la règle, et deux idées reçues que la mesure a défaites
+
+Le verdict nommait l'écart entre les deux fenêtres sans dire comment le combler. Il nomme
+désormais le réglage et le nombre, et propose le geste qui les applique.
+
+La fenêtre observée vaut **`(messages − 1) × période`**, parce qu'elle court de la première
+émission à la dernière et non de zéro à la dernière. D'où `messages = ceil(cible / période) + 1`.
+
+Le piège, mesuré sur un capteur à 60 s :
+
+| messages | fenêtre | occupation | verdict |
+|---|---|---|---|
+| 10 | 540 s | 0,267 % | réserve (7 fois plus long) |
+| **60** | **3 540 s** | 0,245 % | **réserve (1 fois plus long)** |
+| **61** | **3 600 s** | 0,245 % | **directe** |
+
+`3600 / 60 = 60` paraît la réponse ; elle tombe **60 s sous l'heure**, et le verdict
+retombe dans sa réserve en annonçant « 1 fois plus long » — ce qui sonne comme « presque
+bon » sans rien dire de plus. Vérifié sur 18 configurations (périodes de 7 à 300 s, 1 à 3
+capteurs, dispersion jusqu'à 100 s) : toutes couvrent l'heure, et dans 13 cas sur 18 un
+message de moins n'aurait pas suffi.
+
+À noter : l'occupation ne bouge pas (0,245 % contre 0,267 %). **Prolonger le run ne change
+pas la valeur du verdict, il change sa validité** — c'est tout l'intérêt de la manœuvre, et
+c'est pourquoi elle ne fausse rien.
+
+Deux idées reçues que la mesure a défaites :
+
+- **« Coûteux »** — non : 1,3 ms pour trois capteurs sur une heure, contre 0,5 ms pour dix
+  messages. C'est ce coût supposé qui avait fait écarter la voie, et il n'avait jamais été
+  mesuré.
+- **La dispersion des départs n'est pas déductible.** Un capteur décalé émet plus tard,
+  jamais plus tôt : elle s'ajoute à la fenêtre, on ne la compte pas. Mesuré : deux capteurs
+  et 100 s de dispersion allongent la fenêtre de 17 s, pas de 100. La retirer du calcul
+  ferait tomber sous l'heure dès qu'elle est nulle.
+
+Le geste n'est proposé que s'il y a quelque chose à faire : rien sous un verdict annoncé
+comme direct, et rien quand le besoin dépasse la borne du champ (1 000 messages).
 
 ### Ce qui est affiché
 

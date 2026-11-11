@@ -147,6 +147,40 @@ test("validation capteur : bornes, entiers, plan régional optionnel", () => {
   assert.equal(sensorFormFrom({ kind: "sensor" }).spreading_factor, 7);
 });
 
+test("ajout d'un capteur : le matériel choisi dans la palette part avec lui", () => {
+  // La palette présente les modèles du moteur ; poser un RAK4631 doit le poser tel quel,
+  // avant son premier run, et non après coup. Les autres types n'ont pas de matériel : le
+  // serveur refuse des réglages de capteur ailleurs, et ce refus est juste.
+  const capteur = validateNewNode({ id: "capt-1", kind: "sensor", name: "Capteur",
+    x_m: "0", y_m: "0", energy_profile: "rak4631" });
+  assert.equal(capteur.ok, true);
+  assert.deepEqual(capteur.node.sensor, { energy_profile: "rak4631" });
+  assert.equal("sensor" in validateNewNode({ id: "capt-2", kind: "sensor", x_m: 0, y_m: 0 }), false);
+  assert.equal("sensor" in validateNewNode({ id: "gw", kind: "border", x_m: 0, y_m: 0,
+    energy_profile: "rak4631" }), false);
+  // Même chose par coordonnées : la voie du formulaire passe par là.
+  const geo = validateNewNodeGeo({ id: "capt-3", kind: "sensor", lat: "4.05", lon: "9.76",
+    energy_profile: "sx1262-stm32l072" }, { lat: 4.05, lon: 9.76 });
+  assert.equal(geo.ok, true);
+  assert.deepEqual(geo.node.sensor, { energy_profile: "sx1262-stm32l072" });
+});
+
+test("matériel par équipement : transmis tel quel, absent = celui du run", () => {
+  const base = { spreading_factor: "9", payload_bytes: "20", tx_power_dbm: "14.5", period_s: "600",
+    messages: "2", start_spread_s: "0", region: "", channel_freq_hz: "" };
+  // La liste vient du moteur : le studio la transmet sans la recopier, et le vide signifie
+  // « celui du run » — il ne doit donc pas apparaître dans les réglages envoyés.
+  const avec = validateSensor({ ...base, energy_profile: "sx1262-stm32l072" });
+  assert.equal(avec.ok, true);
+  assert.equal(avec.settings.energy_profile, "sx1262-stm32l072");
+  assert.equal("energy_profile" in validateSensor({ ...base, energy_profile: "" }).settings, false);
+  assert.equal("energy_profile" in validateSensor(base).settings, false);
+  // Le formulaire se remplit depuis l'équipement, et le vide y est le défaut.
+  assert.equal(sensorFormFrom({ kind: "sensor", sensor: { period_s: 60 } }).energy_profile, "");
+  assert.equal(sensorFormFrom({ kind: "sensor",
+    sensor: { period_s: 60, energy_profile: "rak4631" } }).energy_profile, "rak4631");
+});
+
 test("historique de console : flèches haut/bas, pas de doublons consécutifs", () => {
   const h = createHistory();
   h.push("enable"); h.push("enable"); h.push("show version");

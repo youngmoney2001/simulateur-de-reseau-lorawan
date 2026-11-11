@@ -949,6 +949,76 @@ try {
     if (apres !== sessionsAvant) throw new Error(`${apres} sessions, ${sessionsAvant} attendues`);
   });
 
+  // Session dédiée : prolonger le run change la fenêtre d'observation, donc l'occupation et
+  // tous les compteurs qui en dépendent. Le faire sur la session du scénario ferait dérailler
+  // les étapes écrites pour un réseau précis — même raison que pour l'étape mesh.
+  await step("verdict réglementaire : le geste porte le run jusqu'à l'heure", async () => {
+    await page.click("#new-session");
+    await page.waitForFunction(() => !document.querySelector('g.node'), { timeout: 20_000 });
+
+    await setValue('#add-form [name="id"]', "gw-dc");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="gw-dc"]');
+
+    await setValue('#add-form [name="id"]', "capt-dc");
+    await page.select('#add-form [name="kind"]', "sensor");
+    await setValue('#add-form [name="lat"]', "4.051909");
+    await setValue('#add-form [name="lon"]', "9.770154");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="capt-dc"]');
+
+    // 60 s et 10 messages : fenêtre de 9 min, très sous l'heure. C'est le cas du registre,
+    // et c'est celui où le geste a quelque chose à faire.
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-dc"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-dc"]');
+    await deviceTab("Config", "capt-dc");
+    await page.waitForSelector('.device-win[data-node-id="capt-dc"] .sensor-form input[name="period_s"]');
+    await setValue('.device-win[data-node-id="capt-dc"] .sensor-form input[name="period_s"]', "60");
+    await setValue('.device-win[data-node-id="capt-dc"] .sensor-form input[name="messages"]', "10");
+    await submitForm('.device-win[data-node-id="capt-dc"] form');
+    await attendreReglages("capt-dc", { period_s: 60, messages: 10 }, refus);
+
+    await obsTab("Simulation");
+    await setValue("#seed", "7");
+    const runAvant = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
+    await page.click("#simulate");
+    // Même piège que plus haut : le statut affiche déjà « terminé » du run précédent.
+    await page.waitForFunction((avant) => {
+      const t = document.getElementById("sim-status").textContent;
+      return t.includes("terminé") && (!avant || !t.includes(avant));
+    }, { timeout: 120_000 }, runAvant);
+
+    // Dire l'écart entre les deux fenêtres ne suffit pas : il faut nommer le réglage et le
+    // nombre, sinon l'utilisateur refait à la main ce qu'on vient de calculer.
+    const avant = await textOf("#sim-duty-note");
+    if (!/Pour couvrir l'heure réglementaire/.test(avant)) throw new Error(`sans remède : ${avant}`);
+    if (!/\d+ messages/.test(avant)) throw new Error(`remède sans nombre : ${avant}`);
+    if (await page.$eval("#prolonger-run", (b) => b.hidden))
+      throw new Error("geste absent alors que le run ne couvre pas l'heure");
+
+    // L'identifiant à remplacer est celui du run **courant**, pas celui d'avant le premier :
+    // ce dernier est déjà remplacé, donc l'attente passerait aussitôt sans rien attendre —
+    // et on relirait la note du run qu'on cherche justement à remplacer. Lu avant le clic,
+    // pour ne pas dépendre de la vitesse à laquelle le gestionnaire écrit le statut.
+    const runProlonger = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
+    await page.click("#prolonger-run");
+    await page.waitForFunction((avant) => {
+      const t = document.getElementById("sim-status").textContent;
+      return t.includes("terminé") && (!avant || !t.includes(avant));
+    }, { timeout: 120_000 }, runProlonger);
+
+    const apres = await textOf("#sim-duty-note");
+    if (!/comparaison est directe/.test(apres))
+      throw new Error(`run prolongé sans couvrir l'heure : ${apres}`);
+    // Un geste proposé sous un verdict annoncé comme direct laisserait croire qu'il manque
+    // encore quelque chose.
+    if (await page.$eval("#prolonger-run", (b) => !b.hidden))
+      throw new Error("geste encore proposé sous un verdict direct");
+    console.log(`verdict : ${avant.match(/Mesuré sur [^,.]+/)?.[0] ?? "?"} -> `
+      + `${apres.match(/Mesuré sur [^,.]+/)?.[0] ?? "?"}`);
+  });
+
   await step("suppression de la session", async () => {
     const before = await page.$$eval("#session-select option", (o) => o.length);
     await page.click("#delete-session");

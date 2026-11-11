@@ -18,6 +18,8 @@ import {
   dureeTexte,
   fenetreVerdictTexte,
   FENETRE_ETSI_S,
+  messagesPourFenetre,
+  texteFenetreACouvrir,
   occupationNs,
   indicateursReseau,
   repartitionPertes,
@@ -95,10 +97,25 @@ test("indicateurs réseau : parité avec les compteurs du run", () => {
   // 152 reçues sur 1 742,5 s d'observation.
   assert.equal(i.debit.text, "0.09 trame/s");
   assert.equal(i.simultaneite.text, "3 trames");
-  // Profil énergie présent : moyenne des 22 dispositifs.
-  assert.equal(i.energie_message.text, "233.94 mJ");
+  // Profil énergie présent. Les 22 dispositifs ne se ressemblent pas : 12 en SF7 à 15,90 mJ
+  // et 16 µA, 10 en SF12 à 495,58 mJ et 2 503 µA. Leur moyenne — 233,94 mJ et 1 146 µA —
+  // n'est la dépense d'aucun d'eux, alors qu'elle en a l'air : d'où l'intervalle publié.
+  assert.equal(i.energie_message.text, "15.90 mJ à 495.58 mJ");
   assert.equal(i.energie_run.text, "50.703 J");
-  assert.equal(i.courant.text, "1146 µA");
+  assert.equal(i.courant.text, "16 à 2503 µA");
+});
+
+test("courant et énergie : un seul chiffre quand les dispositifs concordent", () => {
+  // Une moyenne ne ment que si les dispositifs diffèrent. Tous identiques, elle est une
+  // mesure : l'indicateur reste un chiffre et reprend son intitulé d'origine. Sans cela,
+  // la correction précédente transformerait chaque run en intervalle « 52 à 52 µA ».
+  const memes = devices.map((d) => ({ ...d, average_current_ua: 51.96,
+                                      energy_per_message_j: 0.0002 }));
+  const i = parId(indicateursReseau(summary, memes));
+  assert.equal(i.courant.text, "52 µA");
+  assert.equal(i.courant.label, "Courant moyen");
+  assert.equal(i.energie_message.text, "0.20 mJ");
+  assert.equal(i.energie_message.label, "Énergie par message");
 });
 
 test("charge offerte et occupation sont deux grandeurs distinctes", () => {
@@ -503,6 +520,58 @@ test("la fenetre de moyennage est nommee, pas sous-entendue", () => {
   assert.match(fenetreVerdictTexte(null), /moyennage/);
 });
 
+// --- Couvrir la fenetre reglementaire -------------------------------------------------------
+//
+// La regle vient d'une mesure du moteur, pas d'un raisonnement : la fenetre observee vaut
+// `(messages - 1) x periode`, parce qu'elle court de la premiere emission a la derniere.
+// Les nombres ci-dessous sont ceux que le moteur a effectivement produits.
+
+test("a 60 s, 60 messages ne couvrent pas l'heure : il en faut 61", () => {
+  // Le cas qui a fait ecrire la fonction. 3600 / 60 = 60 parait la reponse ; le moteur
+  // mesure 3540 s, soit 60 s sous l'heure, et le verdict retomberait dans sa reserve
+  // alors que l'utilisateur a cru faire juste.
+  assert.equal(messagesPourFenetre(60), 61);
+  assert.equal((61 - 1) * 60, FENETRE_ETSI_S);
+  assert.equal((60 - 1) * 60, 3540);
+});
+
+test("la formule couvre la fenetre pour des periodes qui ne la divisent pas", () => {
+  // 45 s : ceil(3600/45) = 80, plus un -> 81, et (81-1) x 45 = 3600 exactement.
+  // 100 s : 37 messages, 3600 s. 300 s : 13 messages, 3600 s.
+  for (const [periode, attendu] of [[45, 81], [100, 37], [300, 13], [30, 121]]) {
+    const m = messagesPourFenetre(periode);
+    assert.equal(m, attendu, `periode ${periode} s`);
+    // La fenetre produite couvre la cible : c'est la propriete qui compte, pas le nombre.
+    assert.ok((m - 1) * periode >= FENETRE_ETSI_S, `periode ${periode} s : fenetre trop courte`);
+  }
+});
+
+test("un message de moins ne couvre pas : le « +1 » n'est pas de la marge", () => {
+  for (const periode of [30, 45, 60, 100, 300]) {
+    const m = messagesPourFenetre(periode);
+    assert.ok((m - 2) * periode < FENETRE_ETSI_S,
+      `periode ${periode} s : ${m - 1} messages suffisaient, le +1 est superflu`);
+  }
+});
+
+test("la dispersion des departs n'est pas deduite : elle s'ajoute, on ne la prevoit pas", () => {
+  // Un capteur decale emet plus tard, jamais plus tot : la dispersion est acquise. La
+  // retirer du calcul ferait tomber sous l'heure des qu'elle est nulle, et la compter
+  // reviendrait a predire un tirage pseudo-aleatoire.
+  for (const periode of [60, 300]) {
+    const m = messagesPourFenetre(periode);
+    assert.ok((m - 1) * periode >= FENETRE_ETSI_S);
+  }
+});
+
+test("une periode inutilisable ne produit pas un nombre de messages", () => {
+  assert.equal(messagesPourFenetre(null), null);
+  assert.equal(messagesPourFenetre(0), null);
+  assert.equal(messagesPourFenetre(-60), null);
+  assert.equal(messagesPourFenetre(NaN), null);
+  assert.equal(messagesPourFenetre(undefined), null);
+});
+
 test("la reserve generale ne s'affiche pas quand la fenetre est connue", () => {
   // L'ancienne phrase disait « qui n'est pas forcement » : elle laissait croire au pire sans
   // rien mesurer. Avec la fenetre, on ne l'emploie plus.
@@ -783,4 +852,32 @@ test("un plan qui diverge d'un terminal à l'autre est signalé, pas masqué", (
     { device_index: 1, enabled_channels: [0], channel_dr_masks: { 0: 63 } }]);
   assert.equal(divergents.homogene, false);
   assert.equal(divergents.terminaux, 2);
+});
+
+test("un run qui ne couvre pas l'heure dit ce qu'il faudrait changer", () => {
+  const texte = texteFenetreACouvrir(400 * NS, [{ periodeS: 60, messages: 10 }]);
+  assert.match(texte, /61 messages/);
+  assert.match(texte, /période 60 s/);
+  assert.match(texte, /au lieu de 10/);
+});
+
+test("un run qui couvre deja l'heure n'ajoute rien : le verdict direct parle de lui-meme", () => {
+  // Ajouter « il faudrait… » sous un verdict annonce comme direct le decredibiliserait.
+  assert.equal(texteFenetreACouvrir(9000 * NS, [{ periodeS: 60, messages: 10 }]), "");
+  assert.equal(texteFenetreACouvrir(FENETRE_ETSI_S * NS, [{ periodeS: 60, messages: 61 }]), "");
+});
+
+test("sans capteur ni periode, on ne dit pas ce qu'il faudrait : on se tait", () => {
+  assert.equal(texteFenetreACouvrir(400 * NS, []), "");
+  assert.equal(texteFenetreACouvrir(400 * NS, [{ periodeS: null, messages: null }]), "");
+  assert.equal(texteFenetreACouvrir(null, [{ periodeS: 60, messages: 10 }]), "");
+});
+
+test("des periodes differentes : le besoin le plus haut est nomme, pas une liste", () => {
+  // Le maximum est porte par la periode la plus courte. Une liste de quatre nombres dans
+  // une note ne se lit pas ; le detail reste dans la fenetre de chaque capteur.
+  const texte = texteFenetreACouvrir(400 * NS, [
+    { periodeS: 30, messages: 10 }, { periodeS: 300, messages: 10 }]);
+  assert.match(texte, /jusqu'à 121 messages/);
+  assert.match(texte, /période la plus courte, 30 s/);
 });

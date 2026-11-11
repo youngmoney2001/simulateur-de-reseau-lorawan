@@ -18,8 +18,8 @@ import pytest
 
 from lsim import api_server as srv
 from lsim.api_contract import (
-    ApiScenario, DevicePage, RegionList, RunStatus, RunSummary, TerrainList, TracePage,
-    ValidateResponse,
+    ApiScenario, DevicePage, EnergyProfileList, RegionList, RunStatus, RunSummary, TerrainList,
+    TracePage, ValidateResponse,
 )
 from lsim.environment import load_dem_csv
 from lsim.export import run_scenario
@@ -162,6 +162,20 @@ def test_regions_match_contract(api):
     assert status == 200
     RegionList.model_validate(body)
     assert {r["name"] for r in body["regions"]} >= {"EU868", "US915"}
+
+
+def test_energy_profiles_match_contract(api):
+    """Les modèles de matériel servis à l'interface sont ceux du moteur, avec leurs libellés."""
+    status, body = api.call("GET", "/api/v1/energy-profiles")
+    assert status == 200
+    EnergyProfileList.model_validate(body)
+    noms = {p["name"] for p in body["profiles"]}
+    assert noms == {"rak4631", "sx1262-stm32l072"}, noms
+    assert all(p["label"] for p in body["profiles"])
+
+
+def test_energy_profiles_need_a_token(api):
+    assert api.call("GET", "/api/v1/energy-profiles", token=None)[0] == 401
 
 
 def test_validate_accepts_and_reports_problems(api):

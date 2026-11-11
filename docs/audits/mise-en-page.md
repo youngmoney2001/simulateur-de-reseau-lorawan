@@ -60,7 +60,7 @@ Aucun problème.
 | button.tool | 324 | 963 | 129×38 |
 | button.tool | 17 | 1007 | 225×38 |
 | button.tool | 248 | 1007 | 198×38 |
-| div.observation | 8 | 1101 | 1164×1065 |
+| div.observation | 8 | 1101 | 1164×1090 |
 | footer.statusbar | 0 | 974 | 1180×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -91,7 +91,7 @@ Aucun problème.
 | button.tool | 324 | 911 | 129×38 |
 | button.tool | 17 | 955 | 225×38 |
 | button.tool | 248 | 955 | 198×38 |
-| div.observation | 8 | 1049 | 1084×1098 |
+| div.observation | 8 | 1049 | 1084×1154 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -122,7 +122,7 @@ Aucun problème.
 | button.tool | 324 | 871 | 129×38 |
 | button.tool | 17 | 915 | 225×38 |
 | button.tool | 248 | 915 | 198×38 |
-| div.observation | 8 | 1009 | 1024×1053 |
+| div.observation | 8 | 1009 | 1024×1095 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -153,7 +153,7 @@ Aucun problème.
 | button.tool | 324 | 845 | 129×38 |
 | button.tool | 17 | 889 | 225×38 |
 | button.tool | 248 | 889 | 198×38 |
-| div.observation | 8 | 983 | 984×1086 |
+| div.observation | 8 | 983 | 984×1111 |
 | footer.statusbar | 0 | 974 | 1000×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -184,7 +184,7 @@ Aucun problème.
 | button.tool | 324 | 780 | 129×38 |
 | button.tool | 17 | 824 | 225×38 |
 | button.tool | 248 | 824 | 198×38 |
-| div.observation | 8 | 918 | 884×1130 |
+| div.observation | 8 | 918 | 884×1170 |
 | footer.statusbar | 0 | 974 | 900×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -215,7 +215,7 @@ Aucun problème.
 | button.tool | 324 | 692 | 129×38 |
 | button.tool | 17 | 736 | 225×38 |
 | button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1265 |
+| div.observation | 8 | 830 | 744×1289 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -403,7 +403,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×335 |
+| section.device-win.active | 90 | 70 | 430×386 |
 
 </details>
 

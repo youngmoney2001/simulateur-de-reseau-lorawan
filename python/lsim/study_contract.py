@@ -35,6 +35,10 @@ NodeKind = Literal["sensor", "relay", "border", "server"]
 
 Region = Literal["EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"]
 
+# Modèles de matériel connus du moteur. Définis ici, couche basse, pour que l'API en
+# dérive son tuple au lieu de le recopier — deux listes séparées finissent par diverger.
+EnergyProfileName = Literal["rak4631", "sx1262-stm32l072"]
+
 
 class SensorSettings(_Strict):
     """Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario."""
@@ -47,6 +51,11 @@ class SensorSettings(_Strict):
     start_spread_s: float = Field(0.0, ge=0, le=86400)
     region: Optional[Region] = None               # None : plan des passerelles
     channel_freq_hz: Optional[int] = Field(None, ge=137_000_000, le=3_000_000_000)
+    # Modèle de matériel du capteur. `None` : celui du run — un chantier écrit avant cette
+    # distinction garde donc exactement ses chiffres. Deux capteurs de matériel différent
+    # ne consomment pas la même chose (mesuré : 10 à 11 % de courant moyen), et les
+    # comparer dans un même run est précisément l'intérêt du réglage.
+    energy_profile: Optional[EnergyProfileName] = None
 
 
 MeshBandwidth = Literal["203", "406", "812", "1625"]      # comme `MeshModel` (scénario)

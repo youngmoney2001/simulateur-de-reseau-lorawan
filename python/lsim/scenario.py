@@ -317,6 +317,12 @@ class GroupModel(_Strict):
     # stricte — US915 n'admet que 0..3 — est vérifiée à l'usage, contre le plan, car elle
     # dépend de `region` qui peut être absent.
     rx1_dr_offset: int = Field(0, ge=0, le=7)
+    # Modèle de matériel du groupe (None : celui du scénario). Le matériel est une
+    # propriété de l'équipement, pas du run : deux capteurs de matériel différent ne
+    # consomment pas la même chose, et les comparer dans un même run est précisément
+    # l'intérêt. Champ **optionnel** : un scénario écrit avant cette distinction garde
+    # exactement ses chiffres, et son empreinte ne bouge pas.
+    energy: Optional[EnergyModel] = None
 
     @property
     def effective_duty_cycle(self) -> float:
@@ -715,6 +721,11 @@ class Scenario:
             # avant l'introduction du champ garde exactement la même empreinte.
             if group.get("rx1_dr_offset") == 0:
                 group.pop("rx1_dr_offset", None)
+            # Modèle de matériel non déclaré : hors du hash, donc un scénario écrit avant
+            # cette distinction garde exactement la même empreinte — et le même courant,
+            # puisque le profil du run continue de s'appliquer.
+            if group.get("energy") is None:
+                group.pop("energy", None)
         # Champs de pavé optionnels absents : hash des scénarios antérieurs inchangé.
         for env_dump in ([dumped["environment"]] if "environment" in dumped else []):
             for ob in env_dump.get("obstacles", []):
@@ -769,7 +780,8 @@ class Scenario:
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
                     duty_cycle=g.effective_duty_cycle,
-                    rf=g.rf.device() if g.rf is not None else None))
+                    rf=g.rf.device() if g.rf is not None else None,
+                    energy_profile=(g.energy.profile if g.energy is not None else None)))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

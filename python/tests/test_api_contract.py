@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     ApiScenario, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, RunCreate, TraceEvent,
-    list_regions, schemas,
+    ENERGY_PROFILES, list_energy_profiles, list_regions, schemas,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +74,24 @@ def test_region_list_covers_every_plan_and_is_serialisable():
         json.dumps(r.model_dump())
     us = next(r for r in regions.regions if r.name == "US915")
     assert us.sub_bands is True
+
+
+def test_energy_profile_list_comes_from_the_engine_not_from_the_interface():
+    """Les libellés exposés sont ceux du module d'énergie : les recopier les ferait dériver.
+
+    Attention aux deux `ENERGY_PROFILES` : celui du contrat est le tuple des noms admis par
+    l'API, celui du module d'énergie est la table nom -> identifiant. C'est la table qui
+    donne les libellés, et c'est elle que l'interface ne doit pas recopier.
+    """
+    from lsim.energy_report import ENERGY_PROFILES as TABLE
+    from lsim.energy_report import PROFILE_NAMES
+
+    listed = list_energy_profiles()
+    names = [p.name for p in listed.profiles]
+    assert set(names) == set(ENERGY_PROFILES) == set(TABLE), (names, ENERGY_PROFILES)
+    for p in listed.profiles:
+        assert p.label == PROFILE_NAMES[TABLE[p.name]]
+        json.dumps(p.model_dump())
 
 
 def test_schema_generation_from_the_command_line_is_reproducible(tmp_path):

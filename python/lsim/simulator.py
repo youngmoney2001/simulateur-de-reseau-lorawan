@@ -115,6 +115,11 @@ class EndDevice:
     # Frontal RF v4 du terminal (None = neutre). Un frontal déclaré ici est utilisé par
     # `simulate_uplinks_trace` quand l'appelant ne fournit pas `device_rf`.
     rf: Optional[DeviceRf] = None
+    # Modèle de matériel du terminal (None = celui du run). Deux capteurs de matériel
+    # différent ne consomment pas la même chose — mesuré : 10 à 11 % de courant moyen
+    # entre un RAK4631 et un SX1262+STM32L072, à tous les SF. Les comparer dans un même
+    # run est précisément l'intérêt ; un profil global au run l'interdisait.
+    energy_profile: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.duty_cycle <= 1.0:
