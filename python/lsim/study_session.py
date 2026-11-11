@@ -125,6 +125,11 @@ class _Study:
     attempts: deque = field(default_factory=lambda: deque(maxlen=MAX_ATTEMPTS))
     attempt_count: int = 0
     compiled: dict = field(default_factory=dict)    # run_id -> [GatewayLink] (compilation)
+    # Historique annuler/rétablir : piles de (libellé, instantané). Volontairement **non
+    # persisté** — un historique survit à la session en mémoire, pas à un redémarrage, et le
+    # faire durer gonflerait la base pour un bénéfice que personne ne réclame.
+    defaire: list = field(default_factory=list)
+    refaire: list = field(default_factory=list)
 
 
 def _adr_etat(st: _Study) -> tuple[bool, str]:
@@ -149,6 +154,57 @@ def _confirmed_etat(st: _Study) -> tuple[bool, str]:
     from lsim.study_compile import confirmed_possible
     return confirmed_possible(list(st.nodes.values()),
                               {nid: c.config for nid, c in st.cli.items()}, st.adr)
+
+
+MAX_UNDO = 50   # profondeur d'historique : au-delà, on oublie le plus ancien
+
+
+def _instantane(st: _Study) -> dict:
+    """Copie de tout ce qu'une opération peut changer, l'équipement et sa console compris.
+
+    La console est copiée **par valeur** (`_cli_to_dict`) : c'est la configuration de
+    l'équipement, et annuler une commande `region US915` doit la restaurer. Sans elle,
+    annuler remettrait la case de l'interface sans remettre l'état du CLI — deux vérités.
+    """
+    return {
+        "nodes": {nid: n.model_dump(mode="json") for nid, n in st.nodes.items()},
+        "cli": {nid: _cli_to_dict(c) for nid, c in st.cli.items()},
+        "terrain_id": st.terrain_id,
+        "environment": st.environment.model_dump(mode="json"),
+        "adr": st.adr,
+        "join": st.join,
+        "confirmed": st.confirmed,
+    }
+
+
+def _restaurer(st: _Study, instantane: dict) -> None:
+    st.nodes = {nid: Node.model_validate(n) for nid, n in instantane["nodes"].items()}
+    st.cli = {nid: _cli_from_dict(nid, c) for nid, c in instantane["cli"].items()}
+    st.terrain_id = instantane["terrain_id"]
+    st.environment = EnvironmentSettings.model_validate(instantane["environment"])
+    st.adr = instantane["adr"]
+    st.join = instantane["join"]
+    st.confirmed = instantane["confirmed"]
+
+
+def _push(st: _Study, libelle: str, instantane: Optional[dict] = None) -> None:
+    """Empile l'état courant avant une opération, et oublie le futur.
+
+    Le futur est oublié : après une opération nouvelle, il n'y a plus rien à rétablir —
+    c'est la règle de tout éditeur, et l'enfreindre rendrait « rétablir » imprévisible.
+
+    L'instantané porte le libellé de l'opération **à venir** : c'est lui que l'interface
+    annoncera (« annuler le déplacement de capteur-1 »).
+
+    `instantane` : état à retenir, quand il doit être pris **avant** l'opération alors
+    qu'on ne saura qu'après si elle comptait — c'est le cas d'une commande CLI, dont on ne
+    connaît l'effet qu'une fois exécutée.
+    """
+    libelle = libelle.strip()[:120]
+    st.defaire.append((libelle, _instantane(st) if instantane is None else instantane, None))
+    if len(st.defaire) > MAX_UNDO:
+        del st.defaire[0]
+    st.refaire.clear()
 
 
 def _encode(st: _Study) -> dict:
@@ -283,7 +339,10 @@ class StudyService:
                                 adr_possible=ok, adr_raison=raison,
                                 join=st.join, join_possible=join_ok, join_raison=join_raison,
                                 confirmed=st.confirmed, confirmed_possible=conf_ok,
-                                confirmed_raison=conf_raison)
+                                confirmed_raison=conf_raison,
+                                can_undo=bool(st.defaire), can_redo=bool(st.refaire),
+                                undo_label=st.defaire[-1][0] if st.defaire else "",
+                                redo_label=st.refaire[-1][0] if st.refaire else "")
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -301,6 +360,7 @@ class StudyService:
             if len(st.nodes) >= MAX_NODES:
                 raise StudyError(422, "limit_exceeded",
                                  f"au plus {MAX_NODES} équipements par session", "nodes")
+            _push(st, f"ajout de {node.id}")
             st.nodes[node.id] = node
             st.cli[node.id] = study_cli.new_session(node.id)
             self._save(sid, st)
@@ -312,6 +372,11 @@ class StudyService:
             node = st.nodes.get(node_id)
             if node is None:
                 raise StudyError(404, "not_found", "équipement inconnu dans cette session")
+            # Un déplacement qui ne déplace rien ne doit pas entrer dans l'historique :
+            # annuler pour découvrir qu'aucun pixel n'a bougé use la confiance dans le bouton.
+            if node.x_m == pos.x_m and node.y_m == pos.y_m:
+                return self._topology_locked(sid, st)
+            _push(st, f"déplacement de {node_id}")
             st.nodes[node_id] = node.model_copy(update={"x_m": pos.x_m, "y_m": pos.y_m})
             self._save(sid, st)
             return self._topology_locked(sid, st)
@@ -339,6 +404,7 @@ class StudyService:
             st = self._get_locked(owner, sid)
             if node_id not in st.nodes:
                 raise StudyError(404, "not_found", "équipement inconnu dans cette session")
+            _push(st, f"retrait de {node_id}")
             del st.nodes[node_id], st.cli[node_id]
             st.reports.pop(node_id, None)
             self._save(sid, st)
@@ -353,6 +419,7 @@ class StudyService:
             if node.kind != "sensor":
                 raise StudyError(422, "validation_error", "réglages capteur : équipement non capteur",
                                  "node_id")
+            _push(st, f"réglages de {node_id}")
             st.nodes[node_id] = node.model_copy(update={"sensor": settings})
             self._save(sid, st)
             return self._topology_locked(sid, st)
@@ -386,6 +453,13 @@ class StudyService:
             if settings.sub_band is not None and region not in study_cli.SUB_BAND_REGIONS:
                 raise StudyError(422, "validation_error",
                                  "sous-bande : région US915 ou AU915 requise", "sub_band")
+            # Les autres champs écrivent la configuration CLI, celle-là même que la console
+            # affiche : annuler doit la restaurer. L'instantané est pris **avant** la
+            # première écriture, une seule fois pour tous les champs de l'envoi.
+            if any(settings.model_fields_set & {"region", "sub_band", "tx_power_dbm",
+                                                "mesh_mode", "mesh_max_hops",
+                                                "mesh_bandwidth_khz"}):
+                _push(st, f"réglages de {node_id}")
             if settings.region is not None:
                 cfg.lora.region = settings.region
                 if settings.region not in study_cli.SUB_BAND_REGIONS:
@@ -405,6 +479,7 @@ class StudyService:
             # sinon une passerelle posée depuis la palette resterait au seuil de référence.
             # Vide explicite = retour à la référence ; champ absent = rien ne change.
             if "gateway_profile" in settings.model_fields_set:
+                _push(st, f"modèle de {node_id}")
                 st.nodes[node_id] = node.model_copy(
                     update={"gateway_profile": settings.gateway_profile})
             self._save(sid, st)
@@ -420,8 +495,22 @@ class StudyService:
                 raise StudyError(422, "validation_error",
                                  "pas de CLI pour ce type d'équipement", "node_id")
             cli = st.cli[node.id]
+            avant = _cli_to_dict(cli)
+            # L'instantané est pris **avant** : on ne saura qu'après si la commande comptait,
+            # et le prendre à ce moment-là retiendrait l'état d'après — une annulation qui
+            # ne remettrait rien.
+            avant_instantane = _instantane(st)
             result = study_cli.execute(cli, req.command)
             output = result.output
+            # Seule une commande qui **change la configuration** entre dans l'historique.
+            # `enable`, `configure terminal`, `interface lora 0`, `end` et les `show` ne
+            # touchent que le mode ou n'affichent rien : en faire des étapes obligerait à
+            # annuler quatre fois pour effacer une région, et l'on ne saurait jamais où
+            # s'arrêter. L'état restauré les remet de lui-même, puisque le mode fait partie
+            # de l'instantané.
+            if (_cli_to_dict(cli)["config"] != avant["config"]
+                    or _cli_to_dict(cli)["startup"] != avant["startup"]):
+                _push(st, f"{node.id} : {req.command[:60].strip()}", avant_instantane)
             if cli.closed:  # « exit » au niveau utilisateur : la console redémarre en mode utilisateur
                 cli.closed, cli.mode = False, "user"
                 output = "% Session console fermée ; retour au mode utilisateur."
@@ -458,6 +547,10 @@ class StudyService:
         """
         with self._lock:
             st = self._get_locked(owner, sid)
+            # Recliquer une case déjà cochée n'est pas une opération : l'entrer dans
+            # l'historique ferait un « annuler » qui ne change rien.
+            if (st.join, st.confirmed) != (bool(join), bool(confirmed)):
+                _push(st, "jointure et trames confirmées")
             st.join = bool(join)
             st.confirmed = bool(confirmed)
             return self._topology_locked(sid, st)
@@ -472,6 +565,8 @@ class StudyService:
         """
         with self._lock:
             st = self._get_locked(owner, sid)
+            if st.adr != bool(adr):
+                _push(st, "ADR du serveur")
             st.adr = bool(adr)
             return self._topology_locked(sid, st)
 
@@ -489,6 +584,8 @@ class StudyService:
             if terrain_id is not None and terrain_id not in known:
                 raise StudyError(422, "validation_error",
                                  f"relief « {terrain_id} » inconnu du catalogue", "terrain_id")
+            if st.terrain_id != terrain_id:
+                _push(st, "relief")
             st.terrain_id = terrain_id
             self._save(sid, st)
             return self._topology_locked(sid, st)
@@ -513,7 +610,7 @@ class StudyService:
                     raise StudyError(422, "validation_error",
                                      f"matériau inconnu : {o.material}", "obstacles")
             actuel = st.environment
-            st.environment = EnvironmentSettings(
+            suivant = EnvironmentSettings(
                 shadowing_sigma_db=settings.shadowing_sigma_db
                 if settings.shadowing_sigma_db is not None else actuel.shadowing_sigma_db,
                 gateway_height_m=settings.gateway_height_m
@@ -522,6 +619,42 @@ class StudyService:
                 if settings.device_height_m is not None else actuel.device_height_m,
                 obstacles=settings.obstacles if settings.obstacles is not None
                 else actuel.obstacles)
+            # Renvoyer l'environnement qu'on a déjà n'est pas une opération : l'entrer dans
+            # l'historique ferait un « annuler » qui ne change rien, la même règle que pour
+            # une case ADR recliquée telle quelle.
+            if suivant != actuel:
+                _push(st, "environnement radio")
+                st.environment = suivant
+                self._save(sid, st)
+            return self._topology_locked(sid, st)
+
+    def undo(self, owner: str, sid: str) -> SessionTopology:
+        """Annule la dernière opération, console de l'équipement comprise.
+
+        Une commande CLI tapée puis annulée redevient une commande jamais tapée : c'est la
+        configuration de l'équipement qui est restaurée, pas seulement ce que l'interface en
+        montrait. Rien à annuler : 409, avec un message qui le dit — c'est un état, pas une
+        erreur de l'utilisateur, mais ce n'est pas non plus un succès silencieux.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            if not st.defaire:
+                raise StudyError(409, "nothing_to_undo", "rien à annuler")
+            libelle, avant, _ = st.defaire.pop()
+            st.refaire.append((libelle, _instantane(st), None))
+            _restaurer(st, avant)
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
+
+    def redo(self, owner: str, sid: str) -> SessionTopology:
+        """Rétablit la dernière opération annulée. Rien à rétablir : 409."""
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            if not st.refaire:
+                raise StudyError(409, "nothing_to_redo", "rien à rétablir")
+            libelle, apres, _ = st.refaire.pop()
+            st.defaire.append((libelle, _instantane(st), None))
+            _restaurer(st, apres)
             self._save(sid, st)
             return self._topology_locked(sid, st)
 

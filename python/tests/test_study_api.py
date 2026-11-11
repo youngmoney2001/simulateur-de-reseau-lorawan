@@ -1175,3 +1175,216 @@ def test_the_material_catalogue_says_what_is_extrapolated(api):
     assert len(r.materials) - len(dans_la_plage) == 12   # 12 des 15 extrapolés
     beton = next(m for m in r.materials if m.name == "concrete")
     assert beton.extrapolated and beton.loss_db > 0
+
+
+# --- Annuler / rétablir -----------------------------------------------------------------------
+# L'historique vit côté serveur parce que le CLI y vit aussi : annuler « region US915 »
+# restaure la configuration de l'équipement, pas seulement ce que l'interface en montrait.
+
+def _undo(api, sid):
+    return api.call("POST", f"/api/v1/sessions/{sid}/undo")
+
+
+def _redo(api, sid):
+    return api.call("POST", f"/api/v1/sessions/{sid}/redo")
+
+
+def _taper(api, sid, node, *lignes):
+    """Tape plusieurs lignes qui doivent toutes être acceptées (rien n'est refusé ici)."""
+    dernier = None
+    for ligne in lignes:
+        status, dernier = _cli(api, sid, node, ligne)
+        assert status == 200, dernier
+        assert dernier.get("error") is None, (ligne, dernier)
+    return dernier
+
+
+def test_undo_restores_the_device_configuration_not_just_the_screen(api):
+    """Une commande CLI annulée redevient une commande jamais tapée.
+
+    C'est tout l'enjeu de porter l'historique côté serveur : la configuration de
+    l'équipement est la source, et la case de l'interface n'en est qu'une vue.
+    """
+    sid = _session(api)
+    _taper(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0",
+         "region EU868", "end")
+    _, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert next(s["region"] for s in topo["states"] if s["node_id"] == "frontiere") == "EU868"
+
+    status, out = _undo(api, sid)
+    assert status == 200, out
+    t = SessionTopology.model_validate(out)
+    assert next(s.region for s in t.states if s.node_id == "frontiere") is None
+    assert not next(s.configured for s in t.states if s.node_id == "frontiere")
+
+    status, out = _redo(api, sid)
+    assert status == 200, out
+    t = SessionTopology.model_validate(out)
+    assert next(s.region for s in t.states if s.node_id == "frontiere") == "EU868"
+
+
+def test_navigation_and_refused_commands_are_not_undo_steps(api):
+    """Taper quatre lignes pour changer une région est un seul geste.
+
+    `enable`, `configure terminal`, `interface lora 0` et `end` ne touchent que le mode ;
+    une commande refusée ne touche à rien. En faire des étapes obligerait l'utilisateur à
+    annuler à l'aveugle, sans savoir où s'arrêter.
+    """
+    sid = _session(api)
+    _taper(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0", "end")
+    status, out = _undo(api, sid)
+    assert status == 409 and out["code"] == "nothing_to_undo", out
+
+    # `end` laisse la console en mode privilégié : la suite repart de là.
+    _taper(api, sid, "frontiere", "configure terminal", "interface lora 0")
+    refuse, _ = _cli(api, sid, "frontiere", "region PAYS_IMAGINAIRE")
+    assert refuse == 200
+    status, out = _undo(api, sid)
+    assert status == 409 and out["code"] == "nothing_to_undo", out
+
+    # Seule la commande qui change la configuration compte pour une étape.
+    _cli(api, sid, "frontiere", "region EU868")
+    status, out = _undo(api, sid)
+    assert status == 200, out
+    t = SessionTopology.model_validate(out)
+    assert next(s.region for s in t.states if s.node_id == "frontiere") is None
+
+
+def test_a_removed_device_comes_back_with_its_console(api):
+    """Le retrait est annulable, et l'équipement revient avec sa configuration."""
+    sid = _session(api)
+    _taper(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0",
+         "region EU868", "end")
+    status, _ = api.call("DELETE", f"/api/v1/sessions/{sid}/nodes/frontiere")
+    assert status == 204
+    status, out = _undo(api, sid)
+    assert status == 200, out
+    t = SessionTopology.model_validate(out)
+    assert any(n.id == "frontiere" for n in t.nodes)
+    assert next(s.region for s in t.states if s.node_id == "frontiere") == "EU868"
+
+
+def test_a_new_operation_forgets_the_future(api):
+    """Après une opération nouvelle, il n'y a plus rien à rétablir.
+
+    C'est la règle de tout éditeur : laisser « rétablir » mener à un état que la dernière
+    opération a contredit rendrait le bouton imprévisible.
+    """
+    sid = _session(api)
+    _taper(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0",
+         "region EU868", "end")
+    _undo(api, sid)
+    _, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert out["can_redo"] is True
+
+    # Une opération nouvelle : le futur s'efface.
+    _ = api.call("POST", f"/api/v1/sessions/{sid}/nodes",
+                 {"id": "capteur-2", "kind": "sensor", "name": "C2", "x_m": 10, "y_m": 0})
+    _, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert out["can_redo"] is False and out["can_undo"] is True
+    assert _redo(api, sid)[0] == 409
+
+
+def test_the_topology_carries_the_history_and_its_labels(api):
+    """Chaque réponse dit ce qui est annulable, et le nomme.
+
+    « Annuler » sans objet est un bouton qu'on n'ose pas presser ; c'est le serveur qui
+    sait ce qui a été empilé, c'est donc lui qui le nomme.
+    """
+    sid = _session(api)
+    _, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert out["can_undo"] is False and out["redo_label"] == ""
+
+    _taper(api, sid, "frontiere", "enable", "configure terminal", "interface lora 0",
+         "region EU868", "end")
+    _, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert out["can_undo"] is True
+    # Le libellé nomme la commande qui a changé la configuration, pas la navigation.
+    assert out["undo_label"] == "frontiere : region EU868", out["undo_label"]
+
+
+def test_undo_restores_the_environment_and_the_adr(api):
+    """Les réglages de session sont annulables comme les autres : ce sont des gestes."""
+    sid = _session(api)
+    api.call("POST", f"/api/v1/sessions/{sid}/environment",
+             {"obstacles": [{"x_min_m": 0, "y_min_m": 0, "x_max_m": 10, "y_max_m": 10,
+                             "height_m": 12, "attenuation_db": 6}]})
+    _, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert len(out["environment"]["obstacles"]) == 1
+
+    status, out = _undo(api, sid)
+    assert status == 200, out
+    assert out["environment"]["obstacles"] == []
+    # Et l'annonce ne survit pas à l'annulation : un réglage absent ne se raconte pas.
+    assert not [n for n in out.get("notes", []) if n.startswith("environnement")]
+
+
+def test_the_history_is_bounded():
+    """Une profondeur finie : au-delà, on oublie le plus ancien, on ne grandit pas sans fin.
+
+    Un étudiant qui déplace un capteur cent fois ne doit pas faire grossir la session à
+    proportion. On passe par le service plutôt que par HTTP : la limite d'appels par minute
+    est une autre règle, elle n'a pas à se confondre avec celle-ci.
+    """
+    from lsim.study_contract import Position, SessionCreate
+    from lsim.study_session import MAX_UNDO
+    svc = StudyService()
+    try:
+        sid = svc.create("alice", SessionCreate(nodes=NODES)).session_id
+        for i in range(MAX_UNDO + 12):
+            svc.move_node("alice", sid, "capteur-1", Position(x_m=float(i), y_m=0.0))
+        assert svc.topology("alice", sid).can_undo is True
+        annulees = 0
+        while True:
+            try:
+                svc.undo("alice", sid)
+            except study_session.StudyError as exc:
+                assert (exc.status, exc.code) == (409, "nothing_to_undo")
+                break
+            annulees += 1
+            assert annulees <= MAX_UNDO, "la pile a dépassé sa borne"
+        assert annulees == MAX_UNDO
+    finally:
+        svc.close()
+
+
+def test_un_code_hors_contrat_ne_laisse_pas_la_requete_sans_reponse(api, monkeypatch):
+    """Un code absent du contrat est une erreur de serveur, pas une connexion coupée.
+
+    Les codes de `Problem` forment un ensemble fermé. Le jour où une couche basse en invente
+    un sans le déclarer, la réponse doit rester un 500 explicite : sans le repli, la
+    validation échouait *dans le traitement de l'erreur* et la connexion partait sans
+    réponse, ce qu'un navigateur ne peut pas même afficher.
+    """
+    def casse(*_args, **_kwargs):
+        raise study_session.StudyError(409, "code_qui_n_existe_pas", "message témoin")
+
+    monkeypatch.setattr(StudyService, "undo", casse)
+    sid = _session(api)
+    status, out = _undo(api, sid)
+    assert status == 500, out
+    assert out["code"] == "run_failed", out
+
+
+def test_renvoyer_le_meme_reglage_n_est_pas_une_etape(api):
+    """Une case recliquée telle quelle ne crée pas un « annuler » qui ne change rien.
+
+    Un historique qui s'allonge sur des gestes sans effet perd sa seule utilité : savoir où
+    l'on en est. Un « annuler » qui ne bouge rien use la confiance dans le bouton — on
+    recommence à compter les pressions au lieu de regarder le plan.
+    """
+    sid = _session(api)
+    _, out = api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True})
+    assert out["can_undo"] is True
+    _, out = api.call("POST", f"/api/v1/sessions/{sid}/adr", {"adr": True})
+    assert out["can_undo"] is True
+    status, out = _undo(api, sid)
+    assert status == 200 and out["can_undo"] is False, out
+
+    # Même règle pour l'environnement : renvoyer les valeurs en place n'empile rien.
+    mur = {"obstacles": [{"x_min_m": 0, "y_min_m": 0, "x_max_m": 10, "y_max_m": 10,
+                          "height_m": 12, "attenuation_db": 6}]}
+    api.call("POST", f"/api/v1/sessions/{sid}/environment", mur)
+    _, out = api.call("POST", f"/api/v1/sessions/{sid}/environment", mur)
+    assert out["can_undo"] is True
+    assert _undo(api, sid)[1]["can_undo"] is False

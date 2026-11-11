@@ -402,6 +402,76 @@ function nodeIcon(kind) {
 function refreshViews() {
   renderPlan();
   syncMap();
+  majHistorique();
+}
+
+/**
+ * Les boutons Annuler et Rétablir, depuis ce que la topologie dit de l'historique.
+ *
+ * Le serveur porte l'historique, et chaque réponse le résume : les boutons se mettent donc
+ * à jour **après chaque opération**, et pas seulement après un annuler. Grisés avec leur
+ * raison — « Rien à annuler » — plutôt que muets : un bouton désactivé sans explication
+ * passe pour un bogue.
+ *
+ * Le libellé nomme l'opération (« annuler le déplacement de capteur-1 »). C'est ce qui
+ * rend le geste sûr : on annule en sachant quoi.
+ */
+function majHistorique() {
+  const annuler = $("undo");
+  const retablir = $("redo");
+  const peutAnnuler = Boolean(state.topo?.can_undo);
+  const peutRetablir = Boolean(state.topo?.can_redo);
+  if (annuler) {
+    annuler.disabled = !peutAnnuler;
+    annuler.title = peutAnnuler
+      ? `Annuler : ${state.topo.undo_label} (Ctrl+Z)` : "Rien à annuler";
+  }
+  if (retablir) {
+    retablir.disabled = !peutRetablir;
+    retablir.title = peutRetablir
+      ? `Rétablir : ${state.topo.redo_label} (Ctrl+Maj+Z)` : "Rien à rétablir";
+  }
+}
+
+/**
+ * Un annuler ou un rétablir.
+ *
+ * Toute la vue est rafraîchie, y compris les fenêtres d'équipement ouvertes : annuler une
+ * commande `region US915` dans la console doit se voir dans la case « Région » de la
+ * fenêtre, sinon l'interface continuerait d'afficher un état que le serveur a quitté.
+ */
+async function annulerOuRetablir(sens) {
+  if (!state.sid) return;
+  if (sens === "undo" && !state.topo?.can_undo) return;
+  if (sens === "redo" && !state.topo?.can_redo) return;
+  const topo = await guard(() => (sens === "undo"
+    ? state.client.undo(state.sid) : state.client.redo(state.sid)));
+  if (!topo) return;
+  state.topo = topo;
+  // Le résultat affiché a été calculé sur un réseau qui vient de changer : le garder
+  // colorerait le plan avec des chiffres qui ne sont plus ceux d'aucun run de cette
+  // topologie. On le retire, comme à l'ouverture d'un autre chantier.
+  state.result = null;
+  state.resultats = null;
+  state.rxMatrix = null;
+  state.liens = [];
+  state.passerelles = null;
+  state.liaisonsObservees = [];
+  // La session peut avoir perdu l'équipement que la fenêtre montrait : on la ferme plutôt
+  // que de la laisser afficher un fantôme.
+  for (const id of [...deviceWindows.keys()]) {
+    if (!topo.nodes.some((n) => n.id === id)) closeDeviceWindow(id);
+  }
+  refreshTopologie();
+  renderTerrains();
+  renderDevice();
+  // Le geste qu'on vient de faire est passé dans l'autre pile : après un annuler, c'est le
+  // prochain rétablir qui le nomme, et l'inverse. Lire `undo_label` ici annoncerait
+  // l'opération **suivante**, celle qu'on n'a pas encore annulée.
+  const libelle = sens === "undo" ? topo.redo_label : topo.undo_label;
+  setStatus(sens === "undo"
+    ? (libelle ? `Annulé : ${libelle}` : "Annulé")
+    : (libelle ? `Rétabli : ${libelle}` : "Rétabli"));
 }
 
 /**
@@ -535,7 +605,7 @@ async function ecrireEnvironnement(partiel, message) {
   if (!topo) return;
   state.topo = topo;
   renderEnvironnement();
-  refreshViews();
+  refreshViews();          // met aussi l'historique à jour
   const ou = $("env-status");
   if (ou) ou.textContent = message;
 }
@@ -1883,6 +1953,7 @@ async function choisirTerrain(terrainId) {
   if (!topo) return;
   state.topo = topo;
   renderTerrains();
+  majHistorique();               // choisir un relief est un geste annulable, comme un autre
   setStatus(vide ? `Relief « ${vide} » appliqué aux prochains runs` : "Relief retiré");
 }
 
@@ -1922,6 +1993,7 @@ async function basculerProtocole(join, confirmed) {
   if (!topo) return;
   state.topo = topo;
   renderProtocole();
+  majHistorique();
   // L'ADR et la jointure s'excluent : activer l'un peut griser l'autre, donc l'ADR est
   // relu lui aussi — sans quoi sa case garderait un état que le serveur vient de changer.
   renderAdr();
@@ -1952,6 +2024,7 @@ async function basculerAdr(actif) {
   if (!topo) return;
   state.topo = topo;
   renderAdr();
+  majHistorique();
   renderProtocole();
   setStatus(adrStatut({ possible: topo.adr_possible === true, raison: topo.adr_raison ?? "",
     actif: topo.adr === true }));
@@ -2085,6 +2158,8 @@ async function prolongerRun(capteurs) {
   } finally {
     if (bouton) bouton.disabled = false;
   }
+  // Chaque capteur visité a écrit un réglage : l'historique a bougé d'autant.
+  majHistorique();
   renderDevice();               // la fenêtre ouverte chiffre le nouveau réglage
   $("sim-form").requestSubmit();
 }
@@ -2841,6 +2916,18 @@ $("chantier-file").addEventListener("change", async (ev) => {
 
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
 wireEnvironnement();
+// Annuler / rétablir : les deux boutons, et les raccourcis. Le raccourci est ignoré dans un
+// champ de saisie, où Ctrl+Z appartient à la saisie — annuler la topologie pendant qu'on
+// tape une commande effacerait la commande au lieu du réseau.
+$("undo").addEventListener("click", () => annulerOuRetablir("undo"));
+$("redo").addEventListener("click", () => annulerOuRetablir("redo"));
+document.addEventListener("keydown", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== "z") return;
+  const cible = ev.target;
+  if (cible instanceof HTMLInputElement || cible instanceof HTMLTextAreaElement) return;
+  ev.preventDefault();
+  annulerOuRetablir(ev.shiftKey ? "redo" : "undo");
+});
 for (const b of document.querySelectorAll(".tab"))
   b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
 wireTabs(document.querySelector(".tabs"));

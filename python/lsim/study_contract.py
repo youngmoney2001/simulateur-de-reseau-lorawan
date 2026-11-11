@@ -327,6 +327,18 @@ class SessionTopology(_Strict):
     # par la topologie parce que le plan le dessine — il se lit au même endroit que les
     # équipements qu'il sépare.
     environment: EnvironmentSettings = Field(default_factory=EnvironmentSettings)
+    # Historique annuler/rétablir. Il voyage avec la topologie, et non dans une route à
+    # part : ainsi **chaque** réponse met les boutons à jour, et non seulement celles
+    # d'annuler. `undo_label` nomme l'opération qui serait annulée — un « annuler » sans
+    # objet est un bouton qu'on n'ose pas presser.
+    #
+    # L'historique vit côté serveur parce que le CLI y vit aussi : annuler « region US915 »
+    # restaure la configuration de l'équipement, pas seulement la case que l'interface en
+    # montrait.
+    can_undo: bool = False
+    can_redo: bool = False
+    undo_label: str = Field("", max_length=120)
+    redo_label: str = Field("", max_length=120)
 
 
 class AdrChoice(_Strict):

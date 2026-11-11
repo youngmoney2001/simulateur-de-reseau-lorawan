@@ -312,6 +312,18 @@ scénario sans environnement reste celui d'avant, empreinte comprise.
 Le caractère extrapolé est affiché à côté du matériau, et l'atténuation saisie reste le chemin
 par défaut : à 868 MHz, seuls `air`, `wood` et `glass` sont dans la plage du Tableau 3.
 
+**Annuler et rétablir** (barre d'outils, `Ctrl+Z` / `Ctrl+Maj+Z`). L'historique vit côté serveur,
+parce que le CLI y vit aussi : annuler « region US915 » restaure la configuration de l'équipement,
+pas seulement la case que l'interface affichait. Un geste par opération — ajout, retrait,
+déplacement, ligne CLI qui change la configuration, réglages de capteur, modèle de passerelle,
+relief, environnement, ADR, protocole — et la navigation (lecture, indices, compilation) n'en est
+pas un, ni un geste sans effet : quatre lignes tapées pour régler une région s'annulent d'un
+seul coup, et déplacer un équipement sur place n'empile rien. Les deux boutons
+sont grisés **avec leur raison** (« Rien à annuler ») et nomment l'opération qu'ils vont annuler ;
+l'interface n'écrit aucun de ces libellés, c'est le serveur qui les porte dans chaque réponse.
+Profondeur 50 ; les piles ne sont pas écrites dans le fichier de runs, une session rechargée après
+redémarrage repart donc sans historique.
+
 ## 5octies. Retransmissions des uplinks confirmés
 
 Un bloc `retransmissions:` **facultatif** transforme les uplinks du scénario en uplinks confirmés :

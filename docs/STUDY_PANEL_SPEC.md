@@ -169,6 +169,8 @@ est public.
 | POST | `/api/v1/sessions/{id}/nodes/{node_id}/sensor` | Remplace les réglages d'un capteur (`SensorSettings`) |
 | POST | `/api/v1/sessions/{id}/simulate` | Compile la session et crée le run (`seed`) ; réponse : `run_id`, `links`, `notes` |
 | POST | `/api/v1/sessions/{id}/simulation` | Lie un run terminé : `run_id`, et `links` ou, pour un run de `simulate`, rien |
+| POST | `/api/v1/sessions/{id}/undo` | Annule la dernière opération et rend la topologie ; 409 `nothing_to_undo` si l'historique est vide |
+| POST | `/api/v1/sessions/{id}/redo` | Rétablit l'opération annulée et rend la topologie ; 409 `nothing_to_redo` s'il n'y a rien à rétablir |
 | POST | `/api/v1/sessions/{id}/hints` | Révèle le prochain indice de l'exercice (`exercise_id`) |
 | GET | `/api/v1/sessions/{id}/attempts` | Journal des soumissions de la session (résultats seulement) |
 | GET | `/api/v1/exercises` | Catalogue : énoncé, total de points, nombre d'indices |
@@ -182,6 +184,17 @@ Décisions (implémentées) :
   la dernière activité. Expiration après 4 h **d'inactivité**. 8 sessions par compte, 256 au total ;
   ces limites sont appliquées sous le verrou de la création (test de concurrence). 429
   `limit_exceeded` au-delà.
+- **Annuler / rétablir** : l'historique vit côté serveur, dans la session, parce que le CLI y vit
+  aussi — annuler « region US915 » restaure la configuration de l'équipement, pas seulement la case
+  que l'interface affichait. Une opération par mouvement : ajout, suppression, déplacement, ligne
+  CLI, réglages de capteur, modèle de passerelle, relief, environnement, souhait ADR, protocole.
+  La navigation (lecture, indices, compilation, liaison) n'entre pas dans l'historique, ni un geste
+  sans effet : déplacer un équipement sur place, recliquer une case déjà cochée ou renvoyer
+  l'environnement en place n'empile rien — « annuler » servirait sinon à ne rien voir changer.
+  Profondeur 50 ; les piles ne sont pas persistées : une session rechargée après redémarrage repart
+  sans historique. Chaque réponse qui rend une topologie porte `can_undo`, `can_redo`, `undo_label`
+  et `redo_label` : l'interface grise les boutons d'après le serveur et nomme l'opération sans rien
+  recopier.
 - **Simulation** (`study_compile.py`) : `simulate` transforme la topologie et les configurations CLI en
   scénario, puis crée le run par le même chemin que `POST /runs` (mêmes validations, même file). Règles :
   - chaque capteur est un groupe de simulation nommé comme lui ; ses réglages `sensor` (SF, charge,

@@ -977,8 +977,15 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             status, body = self._route(method)
         except ApiError as exc:
-            status, body = exc.status, _problem(exc.code, exc.message, exc.field)
             headers = exc.headers
+            # Les codes de problème forment un ensemble fermé : un code absent du contrat est
+            # une erreur de serveur, pas une réponse à inventer. Sans ce repli, la validation
+            # échouait dans le traitement de l'erreur et la connexion partait sans réponse.
+            try:
+                status, body = exc.status, _problem(exc.code, exc.message, exc.field)
+            except ValidationError:
+                log.error("code de problème hors contrat : %s", exc.code, exc_info=True)
+                status, body = 500, _problem("run_failed", "erreur interne")
         except Exception:
             log.error("erreur interne", exc_info=True)
             status, body = 500, _problem("run_failed", "erreur interne")
@@ -1110,6 +1117,14 @@ class _Handler(BaseHTTPRequestHandler):
             req = self._parse_body(EnvironmentChoice)
             return 200, self._study(lambda: study.set_environment(
                 owner, m_env.group(1), req)).model_dump()
+        # Annuler et rétablir. L'historique vit côté serveur parce que le CLI y vit aussi :
+        # annuler « region US915 » restaure la configuration de l'équipement, pas seulement
+        # la case que l'interface affichait.
+        m_undo = re.fullmatch(r"sessions/([^/]+)/(undo|redo)", rest)
+        if m_undo is not None and method == "POST":
+            action = m_undo.group(2)
+            return 200, self._study(lambda: (study.undo if action == "undo" else study.redo)(
+                owner, m_undo.group(1))).model_dump()
         m_adr = re.fullmatch(r"sessions/([^/]+)/adr", rest)
         if m_adr is not None and method == "POST":
             # Le souhait est enregistré quel qu'il soit ; c'est la topologie qui décide s'il est

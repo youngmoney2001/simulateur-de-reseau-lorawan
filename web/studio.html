@@ -118,6 +118,14 @@
         <button type="button" class="tool" id="new-session" title="Nouvelle session"><span>&#43;</span>Nouvelle</button>
         <button type="button" class="tool danger" id="delete-session" title="Supprimer la session"><span>&#10005;</span>Supprimer</button>
         <div class="tool-sep"></div>
+        <!-- Annuler et rétablir. Le libellé nomme l'opération concernée : « Annuler » sans
+             objet est un bouton qu'on n'ose pas presser, et l'historique sait de quoi il
+             parle puisque c'est lui qui l'a empilé. Raccourcis : Ctrl+Z, Ctrl+Maj+Z. -->
+        <button type="button" class="tool" id="undo" title="Rien à annuler" disabled>
+          <span>&#8630;</span>Annuler</button>
+        <button type="button" class="tool" id="redo" title="Rien à rétablir" disabled>
+          <span>&#8631;</span>Rétablir</button>
+        <div class="tool-sep"></div>
         <!-- Sauvegarder et charger un chantier : l'équivalent du `.pkt`. Le champ de fichier
              reste invisible, le bouton « Charger » l'actionne — un champ de fichier brut au
              milieu d'une barre d'outils n'a rien à y faire. -->

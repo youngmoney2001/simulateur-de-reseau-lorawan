@@ -42,6 +42,9 @@ RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
     "validation_error", "not_found", "limit_exceeded", "terrain_not_allowed",
     "run_failed", "conflict", "unsupported_region", "unauthorized", "rate_limited",
+    # « Rien à annuler » est un état de la session, pas une faute de l'utilisateur : le code le
+    # dit, le message reste lisible, et l'interface n'a pas à deviner d'après le seul 409.
+    "nothing_to_undo", "nothing_to_redo",
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",

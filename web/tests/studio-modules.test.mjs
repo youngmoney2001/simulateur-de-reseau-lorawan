@@ -383,3 +383,46 @@ test("le client lit le catalogue des passerelles au moteur", async () => {
   assert.equal(calls[0].url, "/api/v1/gateway-profiles");
   assert.equal(r.profiles.length, 4);
 });
+
+// Annuler et rétablir : l'historique vit côté serveur, le client ne fait qu'appeler.
+// La réponse est une topologie : c'est elle qui porte les libellés, l'interface n'en invente
+// aucun et n'a donc pas à les recopier.
+
+test("annuler et rétablir postent sur la session et rendent la topologie", async () => {
+  const topo = { session_id: "s1", nodes: [], states: [], can_undo: true, can_redo: false,
+    undo_label: "capteur-1 : region US915", redo_label: "" };
+  const { fetchImpl, calls } = fakeFetch([{ status: 200, body: topo },
+    { status: 200, body: { ...topo, can_undo: false, can_redo: true, undo_label: "",
+      redo_label: "capteur-1 : region US915" } }]);
+  const client = createClient({ token: "t", fetchImpl });
+  const premiere = await client.undo("s1");
+  assert.equal(calls[0].url, "/api/v1/sessions/s1/undo");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(premiere.undo_label, "capteur-1 : region US915");
+  const seconde = await client.redo("s1");
+  assert.equal(calls[1].url, "/api/v1/sessions/s1/redo");
+  assert.equal(calls[1].init.method, "POST");
+  // Après un annuler, le geste est passé dans l'autre pile : c'est le rétablir qui le nomme.
+  assert.equal(seconde.redo_label, "capteur-1 : region US915");
+});
+
+test("rien à annuler arrive comme une erreur au format problème, pas comme un vide", async () => {
+  const { fetchImpl } = fakeFetch([
+    { status: 409, body: { code: "nothing_to_undo", message: "rien à annuler" } }]);
+  const client = createClient({ token: "t", fetchImpl });
+  await assert.rejects(client.undo("s1"), (err) => {
+    assert.ok(err instanceof ApiError);
+    assert.equal(err.status, 409);
+    assert.equal(err.code, "nothing_to_undo");
+    return true;
+  });
+});
+
+test("l'identifiant de session est encodé dans les routes d'historique", async () => {
+  const { fetchImpl, calls } = fakeFetch([{ status: 200, body: {} }, { status: 200, body: {} }]);
+  const client = createClient({ token: "t", fetchImpl });
+  await client.undo("a/b");
+  await client.redo("a/b");
+  assert.equal(calls[0].url, "/api/v1/sessions/a%2Fb/undo");
+  assert.equal(calls[1].url, "/api/v1/sessions/a%2Fb/redo");
+});

@@ -491,6 +491,16 @@
       "title": "Adr Raison",
       "type": "string"
     },
+    "can_redo": {
+      "default": false,
+      "title": "Can Redo",
+      "type": "boolean"
+    },
+    "can_undo": {
+      "default": false,
+      "title": "Can Undo",
+      "type": "boolean"
+    },
     "confirmed": {
       "default": false,
       "title": "Confirmed",
@@ -532,6 +542,12 @@
       "title": "Nodes",
       "type": "array"
     },
+    "redo_label": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Redo Label",
+      "type": "string"
+    },
     "session_id": {
       "pattern": "^[A-Za-z0-9_-]{8,64}$",
       "title": "Session Id",
@@ -557,6 +573,12 @@
       ],
       "default": null,
       "title": "Terrain Id"
+    },
+    "undo_label": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Undo Label",
+      "type": "string"
     }
   },
   "required": [

@@ -67,6 +67,11 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     setEnvironment: (sid, settings) => request("POST", `${s(sid)}/environment`, settings),
     setTerrain: (sid, terrainId) =>
       request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
+    // Annuler et rétablir. L'historique vit côté serveur : annuler une commande CLI restaure
+    // la configuration de l'équipement, pas seulement ce que l'interface en montrait.
+    // La réponse est une topologie, comme les autres.
+    undo: (sid) => request("POST", `${s(sid)}/undo`),
+    redo: (sid) => request("POST", `${s(sid)}/redo`),
     // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,
     // et il renvoie la raison avec la topologie plutôt qu'un refus.
     setAdr: (sid, adr) => request("POST", `${s(sid)}/adr`, { adr }),

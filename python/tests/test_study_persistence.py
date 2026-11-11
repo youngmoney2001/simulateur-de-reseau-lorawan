@@ -44,10 +44,17 @@ def test_sessions_and_their_configuration_survive_a_restart(tmp_path):
     first_hint = svc.hint("alice", sid, "eu868-passerelle")
     first = svc.submit("alice", "eu868-passerelle", sid)
     before = svc.topology("alice", sid).model_dump()
+    # L'historique vit en mémoire, pas dans le fichier : c'est un choix, pas un oubli — une
+    # session rechargée repart sans gestes à annuler, comme après une fermeture de fenêtre.
+    assert before.pop("can_undo") is True and before.pop("can_redo") is False
+    assert before.pop("undo_label") != "" and before.pop("redo_label") == ""
     svc.close()
 
     restarted = _service(path, clock)
-    assert restarted.topology("alice", sid).model_dump() == before
+    apres = restarted.topology("alice", sid).model_dump()
+    assert apres.pop("can_undo") is False and apres.pop("can_redo") is False
+    assert apres.pop("undo_label") == "" and apres.pop("redo_label") == ""
+    assert apres == before
     attempts = restarted.attempts("alice", sid).items
     assert [(a.number, a.score, a.hints_used) for a in attempts] == [(1, first.score, 1)]
     assert first.score == 18                                # 20 points moins un indice
