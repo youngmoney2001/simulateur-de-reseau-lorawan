@@ -147,6 +147,10 @@
               <option value="server">Serveur</option>
             </select>
           </label>
+          <!-- Le matériel d'un capteur. Rempli depuis ce que le moteur déclare, et masqué
+               s'il n'en déclare aucun : un sélecteur vide serait une promesse non tenue.
+               Masqué aussi pour les autres types, qui n'ont pas de matériel à choisir. -->
+          <label id="add-materiel" hidden>Matériel <select name="energy_profile"></select></label>
           <!-- On saisit des degrés, pas des mètres : c'est ainsi qu'on relève un lieu, et
                c'est l'invariant D2. Les mètres partent au moteur, ils ne s'affichent pas. -->
           <div class="row">

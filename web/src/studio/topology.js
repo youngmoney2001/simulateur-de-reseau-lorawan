@@ -111,7 +111,15 @@ export function validateNewNode(form) {
   const x = num(form.x_m), y = num(form.y_m);
   if (!Number.isFinite(x) || Math.abs(x) > COORD_LIMIT) return bad("x_m", "abscisse : nombre attendu");
   if (!Number.isFinite(y) || Math.abs(y) > COORD_LIMIT) return bad("y_m", "ordonnée : nombre attendu");
-  return { ok: true, node: { id, kind: form.kind, name, x_m: x, y_m: y } };
+  const node = { id, kind: form.kind, name, x_m: x, y_m: y };
+  // Le matériel se choisit dès la pose : la palette présente les modèles que le moteur
+  // déclare, et un capteur posé en RAK4631 doit l'être avant son premier run, pas après
+  // coup. Réservé au capteur — ailleurs le serveur refuse des réglages de capteur, et ce
+  // refus est juste. Vide : celui du run.
+  if (form.kind === "sensor" && form.energy_profile) {
+    node.sensor = { energy_profile: form.energy_profile };
+  }
+  return { ok: true, node };
 }
 
 /**

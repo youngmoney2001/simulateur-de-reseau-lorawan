@@ -137,6 +137,24 @@ def test_the_material_is_set_per_device_read_back_and_refused_if_unknown(api):
     assert status == 422 and body["field"] == "energy_profile"
 
 
+def test_a_sensor_created_with_its_material_keeps_it_and_only_a_sensor(api):
+    """Le matériel posé depuis la palette part avec l'équipement, dès sa création.
+
+    C'est le chemin de la palette : on pose un RAK4631, il est RAK4631 avant son premier
+    run, sans repasser par le formulaire. Une passerelle n'a pas de matériel à porter : le
+    serveur le refuse, et ce refus est juste — pas une rigueur à contourner.
+    """
+    sid = _session(api, nodes=[_border(), _sensor(500, energy_profile="rak4631")])
+    status, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert status == 200
+    sensor = next(n for n in out["nodes"] if n["id"] == "capteur-1")["sensor"]
+    assert sensor["energy_profile"] == "rak4631"
+
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/nodes",
+                            dict(_border("gw2"), sensor={"energy_profile": "rak4631"}))
+    assert status == 422
+
+
 def test_two_materials_in_one_session_give_two_currents(api):
     """Deux capteurs de matériel différent, un seul run : le courant de chacun est le sien.
 

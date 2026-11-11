@@ -134,6 +134,11 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
+  // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
+  // générique alors que le moteur en déclare deux.
+  renderPalette();
+  renderMaterielAjout();
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -917,6 +922,14 @@ function renderDeviceInfo(node, body) {
     ligne("Configuration", st.configured ? "configuré" : "non configuré");
     if (st.region) ligne("Plan régional", st.region);
   }
+  // Le matériel, tel que le moteur le nomme : c'est lui qui décide du courant, et le voir
+  // ici évite d'aller le chercher dans l'onglet Config. Sans modèle propre, le capteur suit
+  // celui du run — il consomme donc bien quelque chose, et « aucun » serait un mensonge.
+  if (node.kind === "sensor") {
+    const nom = node.sensor?.energy_profile ?? "";
+    const modele = state.modelesMateriel.find((m) => m.name === nom);
+    ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+  }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
   // Résultat du dernier run, sur l'équipement lui-même. La carte colore, la fenêtre chiffre :
@@ -1091,6 +1104,11 @@ function renderSensorForm(node, body) {
 }
 
 // --- Ajout d'équipement --------------------------------------------------------------------
+// Le matériel n'a de sens que pour un capteur : le champ se masque pour les autres types,
+// comme la sous-bande se grise hors des plans qui en ont une. Mieux vaut un champ absent
+// qu'un champ sans objet.
+$("add-form").querySelector('[name="kind"]').addEventListener("change", appliquerMaterielAjout);
+
 $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!state.sid) return showError(new Error("aucune session"));
@@ -1107,6 +1125,8 @@ $("add-form").addEventListener("submit", async (ev) => {
     state.topo = topo;
     state.selected = checked.node.id;
     ev.target.reset();
+    // Le type est revenu à « passerelle » : le matériel n'a plus d'objet.
+    appliquerMaterielAjout();
     // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
     // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
     refreshTopologie();
@@ -1477,6 +1497,32 @@ async function chargerTerrains() {
   if (!liste) return;                       // l'erreur est déjà affichée ; on retentera plus tard
   state.terrains = liste.items ?? [];
   renderTerrains();
+}
+
+// Le matériel proposé à l'ajout : les modèles que le moteur a déclarés, et la mention
+// « celui du run » pour qui ne choisit pas. Masqué si le moteur n'en déclare aucun, et pour
+// les types qui ne sont pas des capteurs — un sélecteur sans objet serait un faux choix.
+function renderMaterielAjout() {
+  const champ = $("add-materiel");
+  const select = champ?.querySelector("select");
+  if (!champ || !select) return;
+  if (select.options.length) {            // déjà rempli : on ne reconstruit pas à chaque fois
+    appliquerMaterielAjout();
+    return;
+  }
+  if (!state.modelesMateriel.length) { champ.hidden = true; return; }
+  clear(select);
+  select.append(el("option", { value: "", text: "celui du run" }));
+  for (const m of state.modelesMateriel) {
+    select.append(el("option", { value: m.name, text: m.label }));
+  }
+  appliquerMaterielAjout();
+}
+
+function appliquerMaterielAjout() {
+  const champ = $("add-materiel");
+  const kind = $("add-form")?.querySelector('[name="kind"]')?.value;
+  if (champ) champ.hidden = kind !== "sensor" || state.modelesMateriel.length === 0;
 }
 
 function renderTerrains() {
@@ -2139,8 +2185,15 @@ function glisserDepuisPalette(ev, kind) {
   });
 }
 
-/** Crée l'équipement à la position géographique donnée. */
-async function poserEquipement(kind, ll) {
+/**
+ * Pose un équipement là où le geste s'est relâché, à la position géographique donnée.
+ *
+ * @param {string} kind type d'équipement
+ * @param {{lat: number, lon: number}} ll point de dépôt, en degrés
+ * @param {string} [modele] matériel du capteur, quand la palette en présente un. `undefined`
+ *   laisse l'équipement sans modèle propre : il suivra celui du run, comme avant.
+ */
+async function poserEquipement(kind, ll, modele) {
   const o = readOrigin();
   if (!o || !state.sid) return;
   const { x_m, y_m } = degreesToMeters(ll.lat, ll.lon, o);
@@ -2153,6 +2206,9 @@ async function poserEquipement(kind, ll) {
   }
   const id = suggererId(kind, idsPris());
   const noeud = { id, kind, name: `${KIND_LABEL[kind]} ${id.split("-").pop()}`, x_m, y_m };
+  // Le matériel posé avec le capteur, sinon rien : un capteur sans modèle propre suit celui
+  // du run, ce qui reste le comportement d'avant.
+  if (kind === "sensor" && modele) noeud.sensor = { energy_profile: modele };
   const topo = await guard(() => state.client.addNode(state.sid, noeud));
   if (!topo) return;
   state.topo = topo;
@@ -2253,15 +2309,25 @@ function selectObservationTab(name) {
 // --- Palette d'équipements (bas à gauche) ----------------------------------------------------
 // Le dessin réel remplace l'icône CSS : la palette montre l'équipement tel qu'il apparaîtra,
 // ce qui la rend reconnaissable au lieu d'obliger à lire les étiquettes.
-const PALETTE = [
-  { cat: "Passerelles", models: [
-      { kind: "border", label: "Passerelle frontière" },
-      { kind: "relay",  label: "Passerelle relais" } ] },
-  { cat: "Capteurs", models: [
-      { kind: "sensor", label: "Capteur" } ] },
-  { cat: "Serveur", models: [
-      { kind: "server", label: "Serveur de réseau" } ] },
-];
+// Les capteurs de la palette sont les matériels que le moteur déclare, et non une liste
+// recopiée ici : un modèle ajouté au moteur apparaît dans la palette sans qu'on y touche.
+// Liste illisible : un seul « Capteur » sans matériel — plutôt un seul choix vrai qu'une
+// promesse non tenue. L'étiquette courte est l'identifiant du moteur, comme Packet Tracer
+// affiche « 2911 » ; le libellé complet reste en infobulle.
+function palette() {
+  const capteurs = state.modelesMateriel.length
+    ? state.modelesMateriel.map((m) => ({ kind: "sensor", energy_profile: m.name,
+                                          label: m.name, titre: m.label }))
+    : [{ kind: "sensor", label: "Capteur" }];
+  return [
+    { cat: "Passerelles", models: [
+        { kind: "border", label: "Passerelle frontière" },
+        { kind: "relay",  label: "Passerelle relais" } ] },
+    { cat: "Capteurs", models: capteurs },
+    { cat: "Serveur", models: [
+        { kind: "server", label: "Serveur de réseau" } ] },
+  ];
+}
 
 function renderPalette() {
   const cats = $("cat-box"), models = $("model-box");
@@ -2270,29 +2336,31 @@ function renderPalette() {
     clear(models);
     for (const m of cat.models) {
       models.append(el("button", {
-        type: "button", class: "tool", title: `${m.label} — glissez sur la carte, ou cliquez`,
+        type: "button", class: "tool",
+        title: `${m.titre ?? m.label} — glissez sur la carte, ou cliquez`,
         // Le geste part du `pointerdown` : attendre le `click` interdirait de connaître la
         // position du curseur au relâchement, donc où poser l'équipement.
-        onpointerdown: (ev) => demarrerDepuisPalette(ev, m.kind),
+        onpointerdown: (ev) => demarrerDepuisPalette(ev, m),
         // Le `click` garde la voie clavier (Entrée) et le raccourci d'ajout au formulaire.
         // On l'ignore juste après un dépôt réussi, sinon un glisser créerait deux fois.
         onclick: () => {
           if (Date.now() - (state.poseRecent ?? 0) < 600) return;
-          addFromPalette(m.kind);
+          addFromPalette(m);
         },
       }, el("span", { class: "tool-art" }, drawDevice(m.kind)),
          el("span", { class: "tool-label", text: m.label })));
     }
     for (const b of cats.children) b.classList.toggle("active", b === active);
   };
-  PALETTE.forEach((cat, i) => {
+  const groupes = palette();
+  groupes.forEach((cat, i) => {
     cats.append(el("button", {
       type: "button", class: "tool",
       onclick: () => draw(cat, cats.children[i]),
     }, el("span", { class: "tool-art" }, drawDevice(cat.models[0].kind)),
        el("span", { class: "tool-label", text: cat.cat })));
   });
-  if (cats.children.length) draw(PALETTE[0], cats.children[0]);
+  if (cats.children.length) draw(groupes[0], cats.children[0]);
 }
 
 // Clic sur un modèle : on remplit le formulaire existant et on le soumet. Aucune logique
@@ -2305,17 +2373,22 @@ function renderPalette() {
  * sont disjointes : le geste ne pose que s'il aboutit, et le clic ne s'ouvre que s'il ne
  * suit pas un dépôt réussi (`poseRecent`, ci-dessous).
  */
-async function demarrerDepuisPalette(ev, kind) {
-  const r = await glisserDepuisPalette(ev, kind);
+async function demarrerDepuisPalette(ev, modele) {
+  const r = await glisserDepuisPalette(ev, modele.kind);
   if (!r.cible) return;
   state.poseRecent = Date.now();
-  await poserEquipement(kind, r.cible);
+  await poserEquipement(modele.kind, r.cible, modele.energy_profile);
 }
 
-function addFromPalette(kind) {
+function addFromPalette(modele) {
   const f = $("add-form");
-  f.querySelector('[name="kind"]').value = kind;
-  const id = suggererId(kind, idsPris());
+  f.querySelector('[name="kind"]').value = modele.kind;
+  // Le matériel du modèle choisi suit dans le formulaire : c'est lui qui porte l'ajout, et
+  // le formulaire est aussi la voie clavier. Le champ vit donc ici, pas seulement dans le
+  // geste de la souris.
+  const materiel = f.querySelector('[name="energy_profile"]');
+  if (materiel) materiel.value = modele.energy_profile ?? "";
+  const id = suggererId(modele.kind, idsPris());
   f.querySelector('[name="id"]').value = id;
   // Le formulaire propose l'origine de la zone : un nouvel équipement se pose là où la
   // scène est cadrée bien plus souvent qu'ailleurs, et des champs vides obligeraient à
