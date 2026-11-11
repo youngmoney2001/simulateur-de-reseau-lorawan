@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit-clavier.mjs`.
 
-**0 problème(s)** sur 8 états mesurés et 298 éléments atteints.
+**0 problème(s)** sur 8 états mesurés et 299 éléments atteints.
 
 ## observation · Simulation
 
@@ -39,7 +39,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab.active | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -87,7 +87,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab.active | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -135,7 +135,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab.active | tab | Trame | oui |
@@ -179,7 +179,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -224,7 +224,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -277,7 +277,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -336,7 +336,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -352,7 +352,7 @@ Aucun problème.
 
 ## passerelle · Config
 
-0 problème(s) · 43 élément(s) dans l'ordre de tabulation
+0 problème(s) · 44 élément(s) dans l'ordre de tabulation
 
 Aucun problème.
 
@@ -385,7 +385,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session xrIq6jaS · 3 équip. | oui |
+| 26 | select#session-select | select | Session P88wb-iw · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -398,11 +398,12 @@ Aucun problème.
 | 36 | button.dtab | tab | CLI | oui |
 | 37 | select | select | Plan régionalnon configuréEU868US915AU915AS923KR | oui |
 | 38 | input | input | Puissance TX (dBm)-10 à 30 | oui |
-| 39 | select | select | Modenon configurérelay — relayer vers la frontiè | oui |
-| 40 | input | input | Sauts max1 à 8 | oui |
-| 41 | select | select | Bande passante (kHz)non configuré2034068121625 | oui |
-| 42 | button.primary | button | Enregistrer | oui |
-| 43 | summary | summary | Réglages avancés | oui |
+| 39 | select | select | Modèleréférence du moteurrak7249rak5148rak5146-r | oui |
+| 40 | select | select | Modenon configurérelay — relayer vers la frontiè | oui |
+| 41 | input | input | Sauts max1 à 8 | oui |
+| 42 | select | select | Bande passante (kHz)non configuré2034068121625 | oui |
+| 43 | button.primary | button | Enregistrer | oui |
+| 44 | summary | summary | Réglages avancés | oui |
 
 </details>
 
