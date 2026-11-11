@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit-clavier.mjs`.
 
-**0 problème(s)** sur 8 états mesurés et 297 éléments atteints.
+**0 problème(s)** sur 8 états mesurés et 298 éléments atteints.
 
 ## observation · Simulation
 
@@ -39,7 +39,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab.active | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -87,7 +87,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab.active | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -135,7 +135,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab.active | tab | Trame | oui |
@@ -179,7 +179,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -224,7 +224,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -244,7 +244,7 @@ Aucun problème.
 
 ## équipement · Config
 
-0 problème(s) · 45 élément(s) dans l'ordre de tabulation
+0 problème(s) · 46 élément(s) dans l'ordre de tabulation
 
 Aucun problème.
 
@@ -277,7 +277,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -296,7 +296,8 @@ Aucun problème.
 | 42 | input | input | Dispersion du départ (s) | oui |
 | 43 | input | input | Fréquence (Hz, vide = défaut) | oui |
 | 44 | select | select | Plan régionalplan des passerellesEU868US915AU915 | oui |
-| 45 | button | button | Enregistrer les réglages | oui |
+| 45 | select | select | Matérielcelui du runRAK4631 (nRF52840 + SX1262,  | oui |
+| 46 | button | button | Enregistrer les réglages | oui |
 
 </details>
 
@@ -335,7 +336,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -384,7 +385,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session V44OvZ-l · 3 équip. | oui |
+| 26 | select#session-select | select | Session Xs-pdV5V · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |

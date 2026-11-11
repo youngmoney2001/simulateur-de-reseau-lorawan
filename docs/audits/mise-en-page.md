@@ -403,7 +403,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×335 |
+| section.device-win.active | 90 | 70 | 430×386 |
 
 </details>
 
