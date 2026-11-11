@@ -2,312 +2,9 @@
 
 Généré par `web/tests/e2e/audit-clavier.mjs`.
 
-**0 problème(s)** sur 8 états mesurés et 307 éléments atteints.
+**0 problème(s)** sur 8 états mesurés et 315 éléments atteints.
 
 ## observation · Simulation
-
-0 problème(s) · 36 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab.active | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | input#seed | input | Graine | oui |
-| 33 | button#simulate | button | Simuler | oui |
-| 34 | input#join-toggle | input | Jointure OTAA (join-request) | oui |
-| 35 | input#confirmed-toggle | input | Trames confirmées (ACK) | oui |
-| 36 | input#battery-mah | input | 2400 | oui |
-
-</details>
-
-## observation · Journal
-
-0 problème(s) · 36 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab.active | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | button#play-toggle | button | Lecture | oui |
-| 33 | select#play-speed | select | Vitesse ×1×10×60×300 | oui |
-| 34 | input#play-clock | input | Instant de la simulation | oui |
-| 35 | button.journal-head | button | 0.000 s · capteur-a · uplink · received | oui |
-| 36 | button.journal-head | button | 0.000 s · capteur-b · uplink · lost_collision | oui |
-
-</details>
-
-## observation · Trame
-
-0 problème(s) · 32 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab.active | tab | Trame | oui |
-| 30 | button.tab | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | div.tab-body | div | Trame LoRaWAN MHDR40unconfirmed_data_upDevAddr6D | oui |
-
-</details>
-
-## observation · Exercice
-
-0 problème(s) · 33 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab.active | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
-| 33 | button#start-exercise | button | Démarrer | oui |
-
-</details>
-
-## équipement · Physique
-
-0 problème(s) · 41 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab.active | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
-| 33 | button#start-exercise | button | Démarrer | oui |
-| 34 | button.close | button | Fermer | oui |
-| 35 | button.dtab.active | tab | Physique | oui |
-| 36 | button.dtab | tab | Config | oui |
-| 37 | button.dtab | tab | CLI | oui |
-| 38 | input | input | Latitude | oui |
-| 39 | input | input | Longitude | oui |
-| 40 | button | button | Déplacer | oui |
-| 41 | button.danger | button | Retirer cet équipement | oui |
-
-</details>
-
-## équipement · Config
-
-0 problème(s) · 47 élément(s) dans l'ordre de tabulation
-
-Aucun problème.
-
-<details><summary>ordre de tabulation</summary>
-
-| rang | élément | rôle | nom accessible | indicateur |
-|---|---|---|---|---|
-| 1 | select#mode-select | select | Mode Conception Étude | oui |
-| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
-| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
-| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
-| 5 | select#terrain-select | select | Relief | oui |
-| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
-| 7 | button.view-tab | tab | Carte 3D | oui |
-| 8 | button.view-tab.active | tab | Plan | oui |
-| 9 | g | button | gw-nord — Passerelle frontière | oui |
-| 10 | g | button | capteur-a — Capteur | oui |
-| 11 | g | button | capteur-b — Capteur | oui |
-| 12 | button.tool.active | button | Sélection | oui |
-| 13 | button.tool | button | Déplacer | oui |
-| 14 | button.tool | button | Supprimer | oui |
-| 15 | button.tool | button | Inspecter | oui |
-| 16 | button.tool | button | Trame | oui |
-| 17 | button.tool#new-session | button | Nouvelle session | oui |
-| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab.active | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
-| 33 | button#start-exercise | button | Démarrer | oui |
-| 34 | button.close | button | Fermer | oui |
-| 35 | button.dtab | tab | Physique | oui |
-| 36 | button.dtab.active | tab | Config | oui |
-| 37 | button.dtab | tab | CLI | oui |
-| 38 | input | input | Facteur d'étalement (SF) | oui |
-| 39 | input | input | Charge utile (octets) | oui |
-| 40 | input | input | Puissance (dBm) | oui |
-| 41 | input | input | Période (s) | oui |
-| 42 | input | input | Messages | oui |
-| 43 | input | input | Dispersion du départ (s) | oui |
-| 44 | input | input | Fréquence (Hz, vide = défaut) | oui |
-| 45 | select | select | Plan régionalplan des passerellesEU868US915AU915 | oui |
-| 46 | select | select | Matérielcelui du runRAK4631 (nRF52840 + SX1262,  | oui |
-| 47 | button | button | Enregistrer les réglages | oui |
-
-</details>
-
-## équipement · CLI
 
 0 problème(s) · 37 élément(s) dans l'ordre de tabulation
 
@@ -335,31 +32,31 @@ Aucun problème.
 | 16 | button.tool | button | Trame | oui |
 | 17 | button.tool#new-session | button | Nouvelle session | oui |
 | 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab.active | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
-| 33 | button#start-exercise | button | Démarrer | oui |
-| 34 | button.close | button | Fermer | oui |
-| 35 | button.dtab | tab | Physique | oui |
-| 36 | button.dtab | tab | Config | oui |
-| 37 | button.dtab.active | tab | CLI | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab.active | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | input#seed | input | Graine | oui |
+| 34 | button#simulate | button | Simuler | oui |
+| 35 | input#join-toggle | input | Jointure OTAA (join-request) | oui |
+| 36 | input#confirmed-toggle | input | Trames confirmées (ACK) | oui |
+| 37 | input#battery-mah | input | 2400 | oui |
 
 </details>
 
-## passerelle · Config
+## observation · Journal
 
-0 problème(s) · 45 élément(s) dans l'ordre de tabulation
+0 problème(s) · 37 élément(s) dans l'ordre de tabulation
 
 Aucun problème.
 
@@ -385,33 +82,344 @@ Aucun problème.
 | 16 | button.tool | button | Trame | oui |
 | 17 | button.tool#new-session | button | Nouvelle session | oui |
 | 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
-| 19 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
-| 20 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
-| 21 | button.tool.active | button | Passerelles | oui |
-| 22 | button.tool | button | LoRaCapteurs | oui |
-| 23 | button.tool | button | Serveur | oui |
-| 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
-| 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session wk-T1LOf · 3 équip. | oui |
-| 27 | button.tab | tab | Simulation | oui |
-| 28 | button.tab | tab | Journal | oui |
-| 29 | button.tab | tab | Trame | oui |
-| 30 | button.tab.active | tab | Exercice | oui |
-| 31 | button.tab | tab | Obstacles | oui |
-| 32 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
-| 33 | button#start-exercise | button | Démarrer | oui |
-| 34 | button.close | button | Fermer | oui |
-| 35 | button.dtab | tab | Physique | oui |
-| 36 | button.dtab.active | tab | Config | oui |
-| 37 | button.dtab | tab | CLI | oui |
-| 38 | select | select | Plan régionalnon configuréEU868US915AU915AS923KR | oui |
-| 39 | input | input | Puissance TX (dBm)-10 à 30 | oui |
-| 40 | select | select | Modèleréférence du moteurrak7249rak5148rak5146-r | oui |
-| 41 | select | select | Modenon configurérelay — relayer vers la frontiè | oui |
-| 42 | input | input | Sauts max1 à 8 | oui |
-| 43 | select | select | Bande passante (kHz)non configuré2034068121625 | oui |
-| 44 | button.primary | button | Enregistrer | oui |
-| 45 | summary | summary | Réglages avancés | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab.active | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | button#play-toggle | button | Lecture | oui |
+| 34 | select#play-speed | select | Vitesse ×1×10×60×300 | oui |
+| 35 | input#play-clock | input | Instant de la simulation | oui |
+| 36 | button.journal-head | button | 0.000 s · capteur-a · uplink · received | oui |
+| 37 | button.journal-head | button | 0.000 s · capteur-b · uplink · lost_collision | oui |
+
+</details>
+
+## observation · Trame
+
+0 problème(s) · 33 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab.active | tab | Trame | oui |
+| 31 | button.tab | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | div.tab-body | div | Trame LoRaWAN MHDR40unconfirmed_data_upDevAddr6D | oui |
+
+</details>
+
+## observation · Exercice
+
+0 problème(s) · 34 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab.active | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
+| 34 | button#start-exercise | button | Démarrer | oui |
+
+</details>
+
+## équipement · Physique
+
+0 problème(s) · 42 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab.active | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
+| 34 | button#start-exercise | button | Démarrer | oui |
+| 35 | button.close | button | Fermer | oui |
+| 36 | button.dtab.active | tab | Physique | oui |
+| 37 | button.dtab | tab | Config | oui |
+| 38 | button.dtab | tab | CLI | oui |
+| 39 | input | input | Latitude | oui |
+| 40 | input | input | Longitude | oui |
+| 41 | button | button | Déplacer | oui |
+| 42 | button.danger | button | Retirer cet équipement | oui |
+
+</details>
+
+## équipement · Config
+
+0 problème(s) · 48 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab.active | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
+| 34 | button#start-exercise | button | Démarrer | oui |
+| 35 | button.close | button | Fermer | oui |
+| 36 | button.dtab | tab | Physique | oui |
+| 37 | button.dtab.active | tab | Config | oui |
+| 38 | button.dtab | tab | CLI | oui |
+| 39 | input | input | Facteur d'étalement (SF) | oui |
+| 40 | input | input | Charge utile (octets) | oui |
+| 41 | input | input | Puissance (dBm) | oui |
+| 42 | input | input | Période (s) | oui |
+| 43 | input | input | Messages | oui |
+| 44 | input | input | Dispersion du départ (s) | oui |
+| 45 | input | input | Fréquence (Hz, vide = défaut) | oui |
+| 46 | select | select | Plan régionalplan des passerellesEU868US915AU915 | oui |
+| 47 | select | select | Matérielcelui du runRAK4631 (nRF52840 + SX1262,  | oui |
+| 48 | button | button | Enregistrer les réglages | oui |
+
+</details>
+
+## équipement · CLI
+
+0 problème(s) · 38 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab.active | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
+| 34 | button#start-exercise | button | Démarrer | oui |
+| 35 | button.close | button | Fermer | oui |
+| 36 | button.dtab | tab | Physique | oui |
+| 37 | button.dtab | tab | Config | oui |
+| 38 | button.dtab.active | tab | CLI | oui |
+
+</details>
+
+## passerelle · Config
+
+0 problème(s) · 46 élément(s) dans l'ordre de tabulation
+
+Aucun problème.
+
+<details><summary>ordre de tabulation</summary>
+
+| rang | élément | rôle | nom accessible | indicateur |
+|---|---|---|---|---|
+| 1 | select#mode-select | select | Mode Conception Étude | oui |
+| 2 | button.zone-btn#pick-origin | button | Choisir la zone en cliquant sur la carte | oui |
+| 3 | input#origin-coords | input | 4.051100, 9.767900 | oui |
+| 4 | button.zone-btn#recenter | button | Recentrer la carte sur la zone | oui |
+| 5 | select#terrain-select | select | Relief | oui |
+| 6 | a.applink#map-link | a | Situer ce réseau sur la carte 3D | oui |
+| 7 | button.view-tab | tab | Carte 3D | oui |
+| 8 | button.view-tab.active | tab | Plan | oui |
+| 9 | g | button | gw-nord — Passerelle frontière | oui |
+| 10 | g | button | capteur-a — Capteur | oui |
+| 11 | g | button | capteur-b — Capteur | oui |
+| 12 | button.tool.active | button | Sélection | oui |
+| 13 | button.tool | button | Déplacer | oui |
+| 14 | button.tool | button | Supprimer | oui |
+| 15 | button.tool | button | Inspecter | oui |
+| 16 | button.tool | button | Trame | oui |
+| 17 | button.tool#new-session | button | Nouvelle session | oui |
+| 18 | button.tool.danger#delete-session | button | Supprimer la session | oui |
+| 19 | button.tool#undo | button | Annuler : ajout de capteur-b (Ctrl+Z) | oui |
+| 20 | button.tool#save-chantier | button | Enregistrer le chantier (équipements, réglages,  | oui |
+| 21 | button.tool#load-chantier | button | Ouvrir un chantier depuis un fichier, dans une s | oui |
+| 22 | button.tool.active | button | Passerelles | oui |
+| 23 | button.tool | button | LoRaCapteurs | oui |
+| 24 | button.tool | button | Serveur | oui |
+| 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
+| 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
+| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 28 | button.tab | tab | Simulation | oui |
+| 29 | button.tab | tab | Journal | oui |
+| 30 | button.tab | tab | Trame | oui |
+| 31 | button.tab.active | tab | Exercice | oui |
+| 32 | button.tab | tab | Obstacles | oui |
+| 33 | select#exercise-start | select | Exercice Configurer une passerelle frontière sur | oui |
+| 34 | button#start-exercise | button | Démarrer | oui |
+| 35 | button.close | button | Fermer | oui |
+| 36 | button.dtab | tab | Physique | oui |
+| 37 | button.dtab.active | tab | Config | oui |
+| 38 | button.dtab | tab | CLI | oui |
+| 39 | select | select | Plan régionalnon configuréEU868US915AU915AS923KR | oui |
+| 40 | input | input | Puissance TX (dBm)-10 à 30 | oui |
+| 41 | select | select | Modèleréférence du moteurrak7249rak5148rak5146-r | oui |
+| 42 | select | select | Modenon configurérelay — relayer vers la frontiè | oui |
+| 43 | input | input | Sauts max1 à 8 | oui |
+| 44 | select | select | Bande passante (kHz)non configuré2034068121625 | oui |
+| 45 | button.primary | button | Enregistrer | oui |
+| 46 | summary | summary | Réglages avancés | oui |
 
 </details>
 
