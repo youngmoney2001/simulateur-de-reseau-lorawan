@@ -745,7 +745,7 @@ Sans elle : **1/1**. Accepter un paramètre ne prouve pas qu'il fait quelque cho
 
 ---
 
-## 7. Le verdict réglementaire — **fenêtre de mesure affichée** ; la comparaison reste à deux fenêtres
+## 7. Le verdict réglementaire — **livré** : la fenêtre est couverte, la comparaison est directe
 
 Le verdict livré cette tranche compare l'occupation **mesurée sur la fenêtre du run** à une limite
 définie sur une **fenêtre de moyennage réglementaire** (une heure chez ETSI). La réserve est
@@ -753,11 +753,50 @@ affichée, mais la comparaison reste celle de deux fenêtres différentes.
 
 Deux voies pour la rendre exacte :
 
-- **Allonger le run** jusqu'à la fenêtre réglementaire — coûteux, mais la simulation est déjà
-  hors ligne ;
+- **Allonger le run** jusqu'à la fenêtre réglementaire — **livrée** ; la réserve « coûteuse »
+  qui l'accompagnait était fausse, voir ci-dessous ;
 - **Afficher la fenêtre de mesure à côté du verdict** — **retenue et livrée**. L'utilisateur
   juge de l'écart, ce qui suppose d'exposer la durée du run en clair là où le verdict
   s'affiche.
+
+#### Couvrir la fenêtre : la règle, et deux idées reçues que la mesure a défaites
+
+Le verdict nommait l'écart entre les deux fenêtres sans dire comment le combler. Il nomme
+désormais le réglage et le nombre, et propose le geste qui les applique.
+
+La fenêtre observée vaut **`(messages − 1) × période`**, parce qu'elle court de la première
+émission à la dernière et non de zéro à la dernière. D'où `messages = ceil(cible / période) + 1`.
+
+Le piège, mesuré sur un capteur à 60 s :
+
+| messages | fenêtre | occupation | verdict |
+|---|---|---|---|
+| 10 | 540 s | 0,267 % | réserve (7 fois plus long) |
+| **60** | **3 540 s** | 0,245 % | **réserve (1 fois plus long)** |
+| **61** | **3 600 s** | 0,245 % | **directe** |
+
+`3600 / 60 = 60` paraît la réponse ; elle tombe **60 s sous l'heure**, et le verdict
+retombe dans sa réserve en annonçant « 1 fois plus long » — ce qui sonne comme « presque
+bon » sans rien dire de plus. Vérifié sur 18 configurations (périodes de 7 à 300 s, 1 à 3
+capteurs, dispersion jusqu'à 100 s) : toutes couvrent l'heure, et dans 13 cas sur 18 un
+message de moins n'aurait pas suffi.
+
+À noter : l'occupation ne bouge pas (0,245 % contre 0,267 %). **Prolonger le run ne change
+pas la valeur du verdict, il change sa validité** — c'est tout l'intérêt de la manœuvre, et
+c'est pourquoi elle ne fausse rien.
+
+Deux idées reçues que la mesure a défaites :
+
+- **« Coûteux »** — non : 1,3 ms pour trois capteurs sur une heure, contre 0,5 ms pour dix
+  messages. C'est ce coût supposé qui avait fait écarter la voie, et il n'avait jamais été
+  mesuré.
+- **La dispersion des départs n'est pas déductible.** Un capteur décalé émet plus tard,
+  jamais plus tôt : elle s'ajoute à la fenêtre, on ne la compte pas. Mesuré : deux capteurs
+  et 100 s de dispersion allongent la fenêtre de 17 s, pas de 100. La retirer du calcul
+  ferait tomber sous l'heure dès qu'elle est nulle.
+
+Le geste n'est proposé que s'il y a quelque chose à faire : rien sous un verdict annoncé
+comme direct, et rien quand le besoin dépasse la borne du champ (1 000 messages).
 
 ### Ce qui est affiché
 
