@@ -208,8 +208,15 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         gw = {"name": n.id, "x_m": n.x_m, "y_m": n.y_m,
               "antenna_gain_dbi": cfg.lora.antenna_gain_dbi or 0.0}
         if n in mesh_nodes:
-            gw["profile"] = MESH_PROFILE
+            # Le modèle du relais : celui de l'équipement s'il est choisi, sinon la valeur
+            # historique. Le scénario refuse de lui-même un modèle sans radio mesh
+            # documentée — le refus Remonte tel quel, avec le nom du modèle fautif.
+            gw["profile"] = n.gateway_profile or MESH_PROFILE
             gw["mesh"] = True
+        elif n.gateway_profile is not None:
+            # Passerelle d'accès : le modèle décale le seuil de réception de la différence
+            # entre la sensibilité publiée et la référence du moteur au même point.
+            gw["profile"] = n.gateway_profile
         scenario_gateways.append(gw)
 
     # L'ADR n'existe que sur la forme `gateway` (une seule passerelle, sans mesh). On ne
@@ -295,16 +302,26 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
     if mesh_block is not None:
         scenario["mesh"] = mesh_block
     if mesh_nodes:
-        prof = get_profile(MESH_PROFILE)
-        if not prof.software_validated:
-            notes.append(f"relais : profil {MESH_PROFILE} ({software_status(prof)}) : compatibilité "
-                         "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
+        retenus = {(n.gateway_profile or MESH_PROFILE) for n in mesh_nodes}
+        for cle in sorted(retenus):
+            prof = get_profile(cle)
+            if not prof.software_validated:
+                notes.append(f"relais : profil {cle} ({software_status(prof)}) : compatibilité "
+                             "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
     notes.append("non modélisés (ignorés) : " + ", ".join(NOT_MODELLED))
-    # Le courant moyen est calculé sur ce matériel, pas sur celui de l'utilisateur. Le dire
-    # évite qu'un chiffre de consommation passe pour une mesure de son propre capteur.
+    # Le matériel du run, puis ceux qui s'en écartent : depuis qu'un capteur peut porter le
+    # sien, annoncer seulement le profil du run décrit un run qui n'est plus le sien. Les
+    # écarts sont nommés — un courant moyen se vérifie en sachant de quel matériel il vient.
     nom = energy_profile_by_name(ENERGY_PROFILES[ENERGY_PROFILE]).name
-    notes.append(f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
-                 "moyen est celui de ce matériel")
+    propres = [(s.id, (s.sensor.energy_profile if s.sensor else None)) for s in sensors]
+    propres = [(sid, p) for sid, p in propres if p is not None and p != ENERGY_PROFILE]
+    note = (f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
+            "moyen est celui de ce matériel")
+    if propres:
+        noms = ", ".join(f"{sid} : {p} ({energy_profile_by_name(ENERGY_PROFILES[p]).name})"
+                         for sid, p in propres)
+        note += f" ; matériel propre à {noms}"
+    notes.append(note)
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
     # Le protocole effectif, pas le protocole demandé : une jointure demandée alors que l'ADR
     # est actif ne serait pas simulée, et l'écrire dans le corps laisserait croire à un run

@@ -53,7 +53,7 @@ from lsim.api_contract import (
     DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
     RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
-    ValidateResponse, list_energy_profiles, list_regions,
+    ValidateResponse, list_energy_profiles, list_gateway_profiles, list_regions,
 )
 from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
@@ -1062,6 +1062,10 @@ class _Handler(BaseHTTPRequestHandler):
         # choix par équipement, et les libellés doivent venir du moteur, pas de lui.
         if method == "GET" and rest == "energy-profiles":
             return 200, list_energy_profiles().model_dump()
+        # Modèles de passerelle du catalogue, avec ce que chacun change : sans cela,
+        # présenter trois modèles au seuil identique ferait croire à un choix.
+        if method == "GET" and rest == "gateway-profiles":
+            return 200, list_gateway_profiles().model_dump()
         if method == "GET" and rest == "terrains":
             return 200, svc.terrains.listing()
         if method == "POST" and rest == "scenarios/validate":

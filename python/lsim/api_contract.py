@@ -33,6 +33,7 @@ MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
 # Dérivé du `Literal` de la couche basse : une seule liste, donc pas de divergence.
 ENERGY_PROFILES = typing.get_args(_study_constants.EnergyProfileName)
+GATEWAY_PROFILES = typing.get_args(_study_constants.GatewayProfileName)
 # Défini dans `study_contract`, couche basse : `api_contract` l'importe déjà, l'inverse
 # créerait un cycle.
 TERRAIN_ID_PATTERN = _study_constants.TERRAIN_ID_PATTERN
@@ -405,6 +406,48 @@ class EnergyProfileList(_Strict):
 def list_energy_profiles() -> EnergyProfileList:
     return EnergyProfileList(profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
                                        for name in ENERGY_PROFILES])
+
+
+class GatewayProfileInfo(_Strict):
+    """Un modèle de passerelle du catalogue, et **ce qu'il change** — pas seulement son nom.
+
+    Trois des quatre modèles ne décalent pas le seuil de réception, leur fiche ne publiant
+    pas le point (SF, bande) auquel la sensibilité est mesurée. Les présenter comme un choix
+    sans le dire serait faire croire à une différence que le run ne calcule pas.
+    """
+
+    name: str = Field(max_length=32)
+    vendor: str = Field(max_length=64)
+    model: str = Field(max_length=128)
+    sensitivity_offset_db: float = Field(ge=-60.0, le=60.0)   # décalage du seuil montant
+    sensitivity_published: bool        # la fiche publie-t-elle le point (SF, bande) ?
+    can_relay: bool                    # radio mesh documentée : peut-il être relais ?
+    can_simulate_radio: bool           # radio d'accès publiée : sans elle, le scénario refuse
+    access_bands: list[str] = Field(max_length=16)   # régions d'accès capteurs
+    max_channels: Optional[int] = Field(None, ge=1, le=64)
+    tx_power_max_dbm: Optional[float] = Field(None, ge=-10.0, le=30.0)
+    software_status: str = Field(max_length=32)
+
+
+class GatewayProfileList(_Strict):
+    profiles: list[GatewayProfileInfo] = Field(max_length=16)
+
+
+def list_gateway_profiles() -> GatewayProfileList:
+    from lsim.gateway_profiles import (CATALOG, can_relay, can_simulate_radio,
+                                       rx_sensitivity_offset_db, software_status)
+    items = []
+    for p in CATALOG:
+        decalage = rx_sensitivity_offset_db(p)
+        items.append(GatewayProfileInfo(
+            name=p.key, vendor=p.vendor, model=p.model,
+            sensitivity_offset_db=decalage,
+            sensitivity_published=p.rx_sensitivity_point is not None,
+            can_relay=can_relay(p), can_simulate_radio=can_simulate_radio(p),
+            access_bands=list(p.access_bands),
+            max_channels=p.max_channels, tx_power_max_dbm=p.tx_power_max_dbm,
+            software_status=software_status(p)))
+    return GatewayProfileList(profiles=items)
 
 
 # --- Schémas publiés --------------------------------------------------------------------------

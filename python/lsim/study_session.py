@@ -390,6 +390,13 @@ class StudyService:
                 cfg.mesh.max_hops = settings.mesh_max_hops
             if settings.mesh_bandwidth_khz is not None:
                 cfg.mesh.bandwidth_khz = settings.mesh_bandwidth_khz
+            # Le modèle n'est pas un réglage du CLI : c'est le matériel, il vit sur le nœud.
+            # Il se règle ici quand même, même endroit que les autres réglages passerelle,
+            # sinon une passerelle posée depuis la palette resterait au seuil de référence.
+            # Vide explicite = retour à la référence ; champ absent = rien ne change.
+            if "gateway_profile" in settings.model_fields_set:
+                st.nodes[node_id] = node.model_copy(
+                    update={"gateway_profile": settings.gateway_profile})
             self._save(sid, st)
             return self._topology_locked(sid, st)
 

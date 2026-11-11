@@ -39,6 +39,10 @@ Region = Literal["EU868", "US915", "AU915", "AS923", "KR920", "IN865", "RU864"]
 # dérive son tuple au lieu de le recopier — deux listes séparées finissent par diverger.
 EnergyProfileName = Literal["rak4631", "sx1262-stm32l072"]
 
+# Modèles de passerelle du catalogue (`lsim.gateway_profiles`), couche basse : l'API en dérive
+# sa liste au lieu de la recopier. Un test verrouille la concordance avec le catalogue.
+GatewayProfileName = Literal["rak7249", "rak5148", "rak5146-rak5148", "rak7391"]
+
 
 class SensorSettings(_Strict):
     """Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario."""
@@ -80,6 +84,11 @@ class GatewaySettings(_Strict):
     mesh_mode: Optional[Literal["relay", "border"]] = None
     mesh_max_hops: Optional[int] = Field(None, ge=1, le=8)
     mesh_bandwidth_khz: Optional[MeshBandwidth] = None
+    # Modèle de la passerelle, dans le catalogue `lsim.gateway_profiles`. Il n'appartient pas
+    # à la configuration CLI — c'est le matériel — mais il se règle au même endroit, faute de
+    # quoi une passerelle posée depuis la palette resterait au seuil de référence sans
+    # pouvoir en changer. `None` : aucun modèle appliqué, comportement d'avant.
+    gateway_profile: Optional[GatewayProfileName] = None
 
 
 class Node(_Strict):
@@ -89,6 +98,22 @@ class Node(_Strict):
     x_m: float = Field(ge=-1_000_000, le=1_000_000)
     y_m: float = Field(ge=-1_000_000, le=1_000_000)
     sensor: Optional[SensorSettings] = None      # seulement pour un capteur
+    # Modèle de passerelle du catalogue. `None` : le run n'en applique aucun, et le seuil de
+    # réception reste la référence du moteur — le comportement d'avant. Mesuré : un modèle
+    # qui publie son point de sensibilité décale le seuil de 3 dB, et un run à la limite
+    # passe alors de 0 à 20 trames reçues sur 20. Les fiches qui ne publient pas le point
+    # (SF et bande) ne décalent rien : le catalogue le dit, l'interface doit le redire.
+    gateway_profile: Optional[GatewayProfileName] = None
+
+    @model_validator(mode="after")
+    def _gateway_profile_only_on_gateways(self) -> "Node":
+        if self.gateway_profile is not None and self.kind not in ("relay", "border"):
+            # Le nom du modèle fautif : sans lui, l'apprenant voit un refus sans savoir
+            # quel équipement ni quelle valeur le cause.
+            raise ValueError(
+                f"modèle de passerelle « {self.gateway_profile} » sur un équipement "
+                f"qui n'est pas une passerelle (kind={self.kind})")
+        return self
 
     @model_validator(mode="after")
     def _sensor_settings_only_on_sensors(self) -> "Node":

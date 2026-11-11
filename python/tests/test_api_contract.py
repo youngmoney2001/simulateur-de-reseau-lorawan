@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from lsim.api_contract import (
     ApiScenario, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, RunCreate, TraceEvent,
     ENERGY_PROFILES, list_energy_profiles, list_regions, schemas,
+    list_gateway_profiles,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +93,35 @@ def test_energy_profile_list_comes_from_the_engine_not_from_the_interface():
     for p in listed.profiles:
         assert p.label == PROFILE_NAMES[TABLE[p.name]]
         json.dumps(p.model_dump())
+
+
+def test_gateway_profile_list_comes_from_the_catalog_not_from_the_interface():
+    """Le catalogue exposé est celui des fiches constructeur, avec ce que chacune change.
+
+    Deux pièges : `CATALOG` est un **tuple** (pas un dict), et le décalage de sensibilité
+    n'existe que si la fiche publie son point de mesure. Trois des quatre modèles ne
+    décalent rien — le dire ici évite que l'interface ne vende un choix qui n'en est pas un.
+    """
+    from lsim.gateway_profiles import (CATALOG, can_relay, can_simulate_radio,
+                                       rx_sensitivity_offset_db, software_status)
+
+    listed = list_gateway_profiles()
+    assert [p.name for p in listed.profiles] == [p.key for p in CATALOG]
+    for p in listed.profiles:
+        src = next(c for c in CATALOG if c.key == p.name)
+        assert p.model == src.model                    # libellé : celui de la fiche
+        assert p.sensitivity_offset_db == rx_sensitivity_offset_db(src)
+        assert p.can_relay is can_relay(src)
+        assert p.can_simulate_radio is can_simulate_radio(src)
+        assert list(p.access_bands) == list(src.access_bands)
+        assert p.software_status == software_status(src)
+        json.dumps(p.model_dump())
+    # Le décalage n'est réel que si la fiche publie son point de mesure : c'est la seule
+    # différence entre un modèle qui change le run et un modèle qui le calcule à l'identique.
+    decales = [p.name for p in listed.profiles if p.sensitivity_published]
+    assert decales, "aucun modèle ne publie son point de mesure : le réglage ne servirait à rien"
+    for p in listed.profiles:
+        assert (p.sensitivity_offset_db != 0.0) == (p.name in decales)
 
 
 def test_schema_generation_from_the_command_line_is_reproducible(tmp_path):

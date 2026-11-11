@@ -5,7 +5,7 @@ import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
-  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut,
+  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut, modelesAdmis, aideModele,
 } from "./topology.js";
 import { protocoleMessage, protocoleStatut } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
@@ -57,6 +57,7 @@ const state = {
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
+  modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
@@ -136,11 +137,14 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  const passerelles = await guard(() => state.client.gatewayProfiles());
+  if (passerelles) state.modelesPasserelle = passerelles.profiles ?? [];
   // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
   // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
   // générique alors que le moteur en déclare deux.
   renderPalette();
   renderMaterielAjout();
+  renderModeleAjout();
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -802,6 +806,29 @@ function renderGatewayConfig(node, body) {
   fields.mesh_max_hops = sautsMesh.querySelector("input");
   fields.mesh_bandwidth_khz = bandeMesh.querySelector("select");
 
+  // Le modèle, et ce qu'il change. Il vient du catalogue du moteur, filtré sur ce que le
+  // rôle permet : un relais exige une radio mesh documentée, un hôte sans radio publiée
+  // n'entre pas dans une passerelle. Masqué si le moteur n'en déclare aucun.
+  const modeleChamp = el("div", {});
+  const modeleAide = el("p", { class: "gw-aide", text: "" });
+  if (state.modelesPasserelle.length) {
+    const admis = modelesAdmis(state.modelesPasserelle, node.kind);
+    const modele = el("select", { name: "gateway_profile" },
+      el("option", { value: "", text: "référence du moteur" }));
+    for (const m of admis) {
+      modele.append(el("option", { value: m.name, text: m.name,
+        selected: node.gateway_profile === m.name ? "selected" : undefined }));
+    }
+    const dire = () => {
+      modeleAide.textContent = aideModele(admis.find((m) => m.name === modele.value));
+    };
+    modele.addEventListener("change", dire);
+    dire();
+    fields.gateway_profile = modele;
+    modeleChamp.append(el("label", {}, "Modèle", modele), modeleAide);
+  }
+
+  if (modeleChamp.childNodes.length) grid.append(sectionChamps("Matériel", modeleChamp));
   grid.append(sectionChamps("Relais (mesh)",
     modeMesh, sautsMesh, bandeMesh,
     el("p", { class: "gw-aide gw-aide-bloc",
@@ -931,6 +958,25 @@ function renderDeviceInfo(node, body) {
     const nom = node.sensor?.energy_profile ?? "";
     const modele = state.modelesMateriel.find((m) => m.name === nom);
     ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+  }
+  // Le serveur se pose et se dessine, mais le run ne le simule pas : le LNS est implicite
+  // derrière la passerelle frontière. Le dire ici, parce que son rôle et ses ports, en haut
+  // de cette fenêtre, décrivent un équipement qui a l'air de participer — et qu'un élève
+  // conclurait qu'une trame lui arrive vraiment.
+  if (node.kind === "server") {
+    ligne("Dans le run", "représenté, non simulé : le serveur est implicite derrière la frontière");
+  }
+  // Le modèle de la passerelle, et surtout ce qu'il change : trois des quatre modèles du
+  // catalogue ne décalent pas le seuil, leur fiche ne publiant pas le point de mesure. Le
+  // voir ici évite de croire qu'un choix a été fait alors que le run calcule la référence.
+  if (node.kind === "relay" || node.kind === "border") {
+    const m = state.modelesPasserelle.find((x) => x.name === (node.gateway_profile ?? ""));
+    ligne("Modèle", m ? `${m.name} (${m.model})` : "référence du moteur");
+    if (m) {
+      ligne("Seuil de réception", m.sensitivity_published
+        ? `${m.sensitivity_offset_db.toFixed(1).replace("-", "−")} dB par rapport à la référence`
+        : "référence : la fiche ne publie pas le point de mesure");
+    }
   }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
@@ -1109,7 +1155,13 @@ function renderSensorForm(node, body) {
 // Le matériel n'a de sens que pour un capteur : le champ se masque pour les autres types,
 // comme la sous-bande se grise hors des plans qui en ont une. Mieux vaut un champ absent
 // qu'un champ sans objet.
-$("add-form").querySelector('[name="kind"]').addEventListener("change", appliquerMaterielAjout);
+$("add-form").querySelector('[name="kind"]').addEventListener("change", () => {
+  appliquerMaterielAjout();
+  // Le rôle a pu changer : un relais n'accepte pas les mêmes modèles qu'une frontière.
+  renderModeleAjout();
+});
+$("add-form").querySelector('[name="gateway_profile"]')
+  .addEventListener("change", appliquerModeleAjout);
 
 $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1129,6 +1181,7 @@ $("add-form").addEventListener("submit", async (ev) => {
     ev.target.reset();
     // Le type est revenu à « passerelle » : le matériel n'a plus d'objet.
     appliquerMaterielAjout();
+    appliquerModeleAjout();
     // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
     // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
     refreshTopologie();
@@ -1532,6 +1585,41 @@ function renderMaterielAjout() {
     select.append(el("option", { value: m.name, text: m.label }));
   }
   appliquerMaterielAjout();
+}
+
+function renderModeleAjout() {
+  const champ = $("add-modele");
+  const select = champ?.querySelector("select");
+  if (!champ || !select) return;
+  if (!state.modelesPasserelle.length) { champ.hidden = true; return; }
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  // Un relais exige une radio mesh documentée : le scénario le refuse sinon, autant ne pas
+  // le proposer. Et un hôte sans radio publiée n'a rien à faire dans une passerelle.
+  const admis = modelesAdmis(state.modelesPasserelle, role);
+  clear(select);
+  select.append(el("option", { value: "", text: "référence du moteur" }));
+  for (const m of admis) select.append(el("option", { value: m.name, text: m.name }));
+  const garde = select.value;
+  appliquerModeleAjout();
+  select.value = garde;
+  appliquerModeleAjout();
+}
+
+function appliquerModeleAjout() {
+  const champ = $("add-modele");
+  const aide = $("add-modele-aide");
+  const select = champ?.querySelector("select");
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  if (!champ || !select) return;
+  const passerelle = role === "relay" || role === "border";
+  champ.hidden = !passerelle || state.modelesPasserelle.length === 0;
+  if (aide) {
+    const m = state.modelesPasserelle.find((x) => x.name === select.value);
+    // L'aide ne s'affiche que si le champ est visible : une explication orpheline décrirait
+    // un réglage absent.
+    aide.hidden = champ.hidden;
+    aide.textContent = champ.hidden ? "" : aideModele(m);
+  }
 }
 
 function appliquerMaterielAjout() {

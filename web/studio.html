@@ -151,6 +151,13 @@
                s'il n'en déclare aucun : un sélecteur vide serait une promesse non tenue.
                Masqué aussi pour les autres types, qui n'ont pas de matériel à choisir. -->
           <label id="add-materiel" hidden>Matériel <select name="energy_profile"></select></label>
+          <!-- Le modèle de la passerelle. Rempli depuis le catalogue du moteur, filtré sur
+               ce que le rôle permet (un relais exige une radio mesh documentée), et masqué
+               pour les types qui n'en ont pas. Ce que le modèle change est rappelé dessous :
+               trois des quatre modèles ne décalent pas le seuil, leur fiche ne publiant pas
+               le point de mesure. -->
+          <label id="add-modele" hidden>Modèle <select name="gateway_profile"></select></label>
+          <p id="add-modele-aide" class="hint" hidden></p>
           <!-- On saisit des degrés, pas des mètres : c'est ainsi qu'on relève un lieu, et
                c'est l'invariant D2. Les mètres partent au moteur, ils ne s'affichent pas. -->
           <div class="row">

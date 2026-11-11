@@ -119,6 +119,11 @@ export function validateNewNode(form) {
   if (form.kind === "sensor" && form.energy_profile) {
     node.sensor = { energy_profile: form.energy_profile };
   }
+  // Le modèle de passerelle, de même. Réservé aux passerelles : un capteur n'en a pas, et
+  // le serveur le refuse avec raison. Vide : seuil de référence du moteur, comme avant.
+  if (KINDS_GATEWAY.includes(form.kind) && form.gateway_profile) {
+    node.gateway_profile = form.gateway_profile;
+  }
   return { ok: true, node };
 }
 
@@ -176,6 +181,35 @@ export function sensorFormFrom(node) {
     channel_freq_hz: s.channel_freq_hz ?? "",
     energy_profile: s.energy_profile ?? "",
   };
+}
+
+/** Les types qui sont des passerelles : seuls eux portent un modèle du catalogue. */
+export const KINDS_GATEWAY = ["border", "relay"];
+
+/**
+ * Les modèles du catalogue qu'un rôle peut porter. Un relais exige une radio mesh
+ * documentée, et un hôte sans radio publiée n'entre dans aucune passerelle : le scénario
+ * refuserait les deux, autant ne pas les proposer. La liste vient du moteur, jamais
+ * recopiée — c'est ce qui la garde d'accord avec les fiches constructeur.
+ */
+export function modelesAdmis(catalogue, kind) {
+  return catalogue.filter((m) => m.can_simulate_radio
+    && (kind !== "relay" || m.can_relay));
+}
+
+/**
+ * Ce que le modèle choisi change réellement. Trois des quatre modèles du catalogue ne
+ * décalent pas le seuil de réception : leur fiche donne une sensibilité sans dire à quel
+ * facteur d'étalement ni sur quelle bande elle est mesurée, et le moteur n'applique alors
+ * aucun décalage. L'écrire évite un choix qui n'en est pas un.
+ */
+export function aideModele(m) {
+  if (!m) return "";
+  const seuil = m.sensitivity_published
+    ? `seuil ${m.sensitivity_offset_db.toFixed(1).replace("-", "−")} dB par rapport à la référence du moteur`
+    : "seuil de référence : la fiche ne publie pas le point de mesure (SF et bande), aucun décalage appliqué";
+  const relais = m.can_relay ? " · radio mesh documentée, peut relayer" : " · ne peut pas relayer";
+  return `${m.vendor} ${m.model} — ${seuil}${relais}`;
 }
 
 const INTEGER_SENSOR_KEYS = new Set(["spreading_factor", "payload_bytes", "messages", "channel_freq_hz"]);
@@ -254,6 +288,14 @@ export function validateGateway(form) {
       return bad(key, `${key} : entre ${lo} et ${hi}`);
     }
     out[key] = key === "mesh_max_hops" ? Math.trunc(v) : v;
+  }
+  // Le modèle de passerelle : transmis tel quel. La liste vient du catalogue du moteur, et
+  // c'est lui qui la valide — la recopier ici la laisserait dériver des fiches constructeur.
+  // Vide = seuil de référence du moteur.
+  if (form.gateway_profile != null && form.gateway_profile !== "") {
+    out.gateway_profile = form.gateway_profile;
+  } else if (form.gateway_profile === "") {
+    out.gateway_profile = null;      // retour explicite à la référence
   }
   if (form.mesh_mode) {
     if (!MODES_MESH.includes(form.mesh_mode)) return bad("mesh_mode", "mode de relais inconnu");

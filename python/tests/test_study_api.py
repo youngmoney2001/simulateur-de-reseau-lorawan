@@ -11,7 +11,7 @@ import pytest
 
 from lsim import study_session
 from lsim.study_contract import (
-    CliResponse, SessionOut, SessionTopology, SimulationBound,
+    CliResponse, GatewaySettings, SessionOut, SessionTopology, SimulationBound,
 )
 from lsim.study_session import StudyService
 from test_api_server import _make_api, _scenario, _wait_done
@@ -1060,3 +1060,55 @@ def test_adr_produit_des_linkadrreq_observables(api):
     assert linkadr(False) == [], "sans ADR, aucune commande LinkADRReq"
     reqs = linkadr(True)
     assert reqs, "avec ADR, le serveur émet des LinkADRReq"
+
+
+# --- Modèle de passerelle --------------------------------------------------------------------
+# Le modèle vit sur le nœud, pas dans la configuration CLI : c'est le matériel. Mais il se
+# règle au même endroit que les autres réglages passerelle (`POST .../gateway`), sinon une
+# passerelle posée depuis la palette resterait au seuil de référence sans pouvoir en changer.
+
+def _gateway(api, sid, noeud, body):
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{noeud}/gateway", body)
+    if status == 200:
+        SessionTopology.model_validate(out)
+    return status, out
+
+
+def _modele_de(api, sid, noeud):
+    status, topo = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    assert status == 200, topo
+    return next((n.get("gateway_profile") for n in topo["nodes"] if n["id"] == noeud), None)
+
+
+def test_gateway_profile_is_set_read_and_cleared_through_the_same_route(api):
+    sid = _session(api)
+
+    status, _ = _gateway(api, sid, "frontiere", {"gateway_profile": "rak7249"})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") == "rak7249"
+
+    # Vide explicite : retour à la référence du moteur.
+    status, _ = _gateway(api, sid, "frontiere", {"gateway_profile": None})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") is None
+
+    # Champ absent : rien ne change — un envoi partiel ne doit pas effacer le modèle posé.
+    _gateway(api, sid, "frontiere", {"gateway_profile": "rak7249"})
+    status, _ = _gateway(api, sid, "frontiere", {"region": "EU868"})
+    assert status == 200
+    assert _modele_de(api, sid, "frontiere") == "rak7249"
+
+
+def test_gateway_profile_is_refused_on_a_sensor(api):
+    """Les réglages passerelle n'existent que sur une passerelle — un capteur n'en a pas."""
+    sid = _session(api)
+    status, out = _gateway(api, sid, "capteur-1", {"gateway_profile": "rak7249"})
+    assert status == 422, out
+
+
+def test_an_unknown_gateway_profile_is_refused_by_the_route(api):
+    """Un modèle hors catalogue est refusé ici, pas au run : l'erreur nomme le champ."""
+    sid = _session(api)
+    status, out = _gateway(api, sid, "frontiere", {"gateway_profile": "invente"})
+    assert status == 422, out
+    assert "gateway_profile" in str(out)
