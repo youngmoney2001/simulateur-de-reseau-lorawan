@@ -147,6 +147,22 @@ test("validation capteur : bornes, entiers, plan régional optionnel", () => {
   assert.equal(sensorFormFrom({ kind: "sensor" }).spreading_factor, 7);
 });
 
+test("matériel par équipement : transmis tel quel, absent = celui du run", () => {
+  const base = { spreading_factor: "9", payload_bytes: "20", tx_power_dbm: "14.5", period_s: "600",
+    messages: "2", start_spread_s: "0", region: "", channel_freq_hz: "" };
+  // La liste vient du moteur : le studio la transmet sans la recopier, et le vide signifie
+  // « celui du run » — il ne doit donc pas apparaître dans les réglages envoyés.
+  const avec = validateSensor({ ...base, energy_profile: "sx1262-stm32l072" });
+  assert.equal(avec.ok, true);
+  assert.equal(avec.settings.energy_profile, "sx1262-stm32l072");
+  assert.equal("energy_profile" in validateSensor({ ...base, energy_profile: "" }).settings, false);
+  assert.equal("energy_profile" in validateSensor(base).settings, false);
+  // Le formulaire se remplit depuis l'équipement, et le vide y est le défaut.
+  assert.equal(sensorFormFrom({ kind: "sensor", sensor: { period_s: 60 } }).energy_profile, "");
+  assert.equal(sensorFormFrom({ kind: "sensor",
+    sensor: { period_s: 60, energy_profile: "rak4631" } }).energy_profile, "rak4631");
+});
+
 test("historique de console : flèches haut/bas, pas de doublons consécutifs", () => {
   const h = createHistory();
   h.push("enable"); h.push("enable"); h.push("show version");

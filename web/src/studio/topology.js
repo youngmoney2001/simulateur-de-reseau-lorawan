@@ -166,6 +166,7 @@ export function sensorFormFrom(node) {
     start_spread_s: s.start_spread_s,
     region: s.region ?? "",
     channel_freq_hz: s.channel_freq_hz ?? "",
+    energy_profile: s.energy_profile ?? "",
   };
 }
 
@@ -187,6 +188,9 @@ export function validateSensor(form) {
     if (!REGIONS.includes(form.region)) return bad("region", "plan régional inconnu");
     out.region = form.region;
   }
+  // Le matériel n'a pas de bornes : la liste vient du moteur et c'est lui qui la valide —
+  // la recopier ici la laisserait dériver du matériel modélisé. Vide = celui du run.
+  if (form.energy_profile) out.energy_profile = form.energy_profile;
   return { ok: true, settings: out };
 }
 

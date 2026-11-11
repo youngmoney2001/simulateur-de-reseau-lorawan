@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import typing
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lsim import study_contract as _study_constants
+from lsim.energy_report import profile_name
 from lsim.plan import Plan, get_plan, plan_names
 from lsim.scenario import ScenarioModel
 
@@ -29,7 +31,8 @@ MAX_BODY_BYTES = 262_144                 # corps de requête et réponses JSON n
 MAX_TRACE_EVENTS_PER_RUN = 200_000       # au-delà, le run est refusé (pas tronqué en silence)
 MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
-ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
+# Dérivé du `Literal` de la couche basse : une seule liste, donc pas de divergence.
+ENERGY_PROFILES = typing.get_args(_study_constants.EnergyProfileName)
 # Défini dans `study_contract`, couche basse : `api_contract` l'importe déjà, l'inverse
 # créerait un cycle.
 TERRAIN_ID_PATTERN = _study_constants.TERRAIN_ID_PATTERN
@@ -382,6 +385,26 @@ def region_info(plan: Plan) -> RegionInfo:
 
 def list_regions() -> RegionList:
     return RegionList(regions=[region_info(get_plan(name)) for name in plan_names()])
+
+
+class EnergyProfileInfo(_Strict):
+    """Un modèle de matériel connu du moteur, pour les fenêtres de configuration.
+
+    Le libellé vient du module d'énergie, seule source : le recopier dans l'interface le
+    laisserait dériver du matériel réellement modélisé.
+    """
+
+    name: str = Field(max_length=32)
+    label: str = Field(max_length=128)
+
+
+class EnergyProfileList(_Strict):
+    profiles: list[EnergyProfileInfo] = Field(max_length=16)
+
+
+def list_energy_profiles() -> EnergyProfileList:
+    return EnergyProfileList(profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
+                                       for name in ENERGY_PROFILES])
 
 
 # --- Schémas publiés --------------------------------------------------------------------------

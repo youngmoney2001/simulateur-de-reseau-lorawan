@@ -267,6 +267,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         }
         if sub_band is not None:
             group["sub_band"] = sub_band
+        # Modèle de matériel : posé seulement s'il est choisi. Sans lui, le groupe ne porte
+        # rien et le profil du run s'applique — ce qui garde à un chantier antérieur ses
+        # chiffres et son empreinte.
+        if r.energy_profile is not None:
+            group["energy"] = {"profile": r.energy_profile}
         groups.append(group)
 
     scenario: dict = {

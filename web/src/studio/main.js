@@ -56,6 +56,7 @@ const state = {
   passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
+  modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
@@ -128,6 +129,11 @@ async function connect() {
     state.exercises = exercises.items;
     renderExerciseChoices();
   }
+  // Les modèles de matériel se lisent au moteur : leurs libellés sont les siens, et les
+  // recopier ici les laisserait dériver du matériel réellement modélisé. Liste vide si la
+  // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
+  const modeles = await guard(() => state.client.energyProfiles());
+  if (modeles) state.modelesMateriel = modeles.profiles ?? [];
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -1043,6 +1049,20 @@ function renderSensorForm(node, body) {
   for (const r of REGIONS) regionSelect.append(el("option", { value: r, text: r, selected: values.region === r ? "selected" : undefined }));
   fields.region = regionSelect;
   grid.append(el("label", {}, "Plan régional", regionSelect));
+  // Le matériel, par équipement. Deux capteurs de matériel différent ne consomment pas la
+  // même chose (mesuré : 10 à 11 % de courant moyen), et pouvoir les comparer dans un même
+  // run est précisément l'intérêt du réglage. « celui du run » est le défaut : un chantier
+  // écrit avant cette distinction garde ses chiffres.
+  if (state.modelesMateriel.length) {
+    const modeleSelect = el("select", { name: "energy_profile" },
+      el("option", { value: "", text: "celui du run" }));
+    for (const m of state.modelesMateriel) {
+      modeleSelect.append(el("option", { value: m.name, text: m.label,
+        selected: values.energy_profile === m.name ? "selected" : undefined }));
+    }
+    fields.energy_profile = modeleSelect;
+    grid.append(el("label", {}, "Matériel", modeleSelect));
+  }
   const message = el("p", { class: "muted", text: "" });
   const form = el("form", {
     novalidate: "",   // les messages de validation sont ceux du studio, pas ceux du navigateur

@@ -246,6 +246,22 @@
           "default": null,
           "title": "Channel Freq Hz"
         },
+        "energy_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak4631",
+                "sx1262-stm32l072"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Profile"
+        },
         "messages": {
           "default": 1,
           "maximum": 1000,

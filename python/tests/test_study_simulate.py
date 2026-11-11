@@ -114,6 +114,56 @@ def test_nodes_can_be_added_configured_and_removed(api):
     assert [n["id"] for n in out["nodes"]] == ["frontiere"]
 
 
+def test_the_material_is_set_per_device_read_back_and_refused_if_unknown(api):
+    """Le matériel se règle par équipement, se relit, et n'accepte que les modèles du moteur.
+
+    C'est le chemin de l'atelier : la fenêtre capteur envoie le nom, la topologie le rend, et
+    la compilation le pose sur le groupe. Un nom inconnu est refusé ici avec le même mot que
+    partout ailleurs — la liste n'est recopiée dans aucune interface.
+    """
+    sid = _session(api, nodes=[_border(), _sensor(x=300)])
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/nodes/capteur-1/sensor",
+                           {"spreading_factor": 9, "energy_profile": "sx1262-stm32l072"})
+    assert status == 200, out
+    sensor = next(n for n in out["nodes"] if n["id"] == "capteur-1")["sensor"]
+    assert sensor["energy_profile"] == "sx1262-stm32l072"
+
+    status, out = api.call("GET", f"/api/v1/sessions/{sid}/topology")
+    sensor = next(n for n in out["nodes"] if n["id"] == "capteur-1")["sensor"]
+    assert sensor["energy_profile"] == "sx1262-stm32l072", "le réglage survit à une relecture"
+
+    status, body = api.call("POST", f"/api/v1/sessions/{sid}/nodes/capteur-1/sensor",
+                            {"spreading_factor": 9, "energy_profile": "esp32-bricole"})
+    assert status == 422 and body["field"] == "energy_profile"
+
+
+def test_two_materials_in_one_session_give_two_currents(api):
+    """Deux capteurs de matériel différent, un seul run : le courant de chacun est le sien.
+
+    C'est la raison d'être du réglage — mesuré à 10 ou 11 % d'écart, assez pour changer une
+    estimation d'autonomie. Sans modèle propre, un équipement suit celui du run.
+    """
+    sid = _session(api, nodes=[_border(),
+                               _sensor(500, energy_profile="rak4631"),
+                               dict(_sensor(700, energy_profile="sx1262-stm32l072"),
+                                    id="capteur-2", name="Capteur 2")])
+    for node in ("capteur-1", "capteur-2"):
+        status, out = api.call("POST", f"/api/v1/sessions/{sid}/nodes/{node}/sensor",
+                               {"spreading_factor": 9, "payload_bytes": 20, "period_s": 60,
+                                "messages": 20,
+                                "energy_profile": "rak4631" if node == "capteur-1"
+                                else "sx1262-stm32l072"})
+        assert status == 200, out
+    status, out = _simulate(api, sid)
+    assert status == 202, out
+    run_id = out["run_id"]
+    _wait_done(api, run_id)
+    status, lignes = api.call("GET", f"/api/v1/runs/{run_id}/devices?limit=50")
+    assert status == 200
+    courants = {d["group"]: d["average_current_ua"] for d in lignes["items"]}
+    assert courants["capteur-1"] > courants["capteur-2"], courants
+
+
 def test_node_ids_are_unique_and_sensor_settings_only_on_sensors(api):
     sid = _session(api, nodes=[_border()])
     status, body = api.call("POST", f"/api/v1/sessions/{sid}/nodes", _border())
