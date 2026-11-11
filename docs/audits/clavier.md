@@ -39,7 +39,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab.active | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -87,7 +87,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab.active | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -135,7 +135,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab.active | tab | Trame | oui |
@@ -179,7 +179,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -224,7 +224,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -277,7 +277,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -335,7 +335,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
@@ -384,7 +384,7 @@ Aucun problème.
 | 23 | button.tool | button | Serveur | oui |
 | 24 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 25 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 26 | select#session-select | select | Session oQrXJgdp · 3 équip. | oui |
+| 26 | select#session-select | select | Session lilaGFvy · 3 équip. | oui |
 | 27 | button.tab | tab | Simulation | oui |
 | 28 | button.tab | tab | Journal | oui |
 | 29 | button.tab | tab | Trame | oui |
