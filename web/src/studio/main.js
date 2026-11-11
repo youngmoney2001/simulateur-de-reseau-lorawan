@@ -12,7 +12,7 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, fenetreVerdictTexte, autonomieAns, autonomieTexte,
+  limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, autonomieAns, autonomieTexte,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
@@ -1608,6 +1608,14 @@ function renderMetrics(summary, deviceRows) {
     // forcément celle du texte » laissait l'utilisateur sans moyen d'évaluer l'écart ; dire
     // « mesuré sur 6 min 40 s, quand le texte moyenne sur 1 h » le lui donne.
     note.append(el("span", { text: fenetreVerdictTexte(fenetreObservationNs(summary)) }));
+    // Dire l'écart entre les deux fenêtres sans dire comment le combler laisse
+    // l'utilisateur avec un constat. On nomme donc le réglage et le nombre — à 60 s il
+    // faut 61 messages et non 60, détail qui ne se devine pas et coûte un run entier.
+    const capteurs = (state.topo?.nodes ?? [])
+      .filter((n) => n.kind === "sensor")
+      .map((n) => ({ periodeS: n.sensor?.period_s ?? null, messages: n.sensor?.messages ?? null }));
+    const aCouvrir = texteFenetreACouvrir(fenetreObservationNs(summary), capteurs);
+    if (aCouvrir) note.append(el("span", { text: " " + aCouvrir }));
   }
   note.hidden = sources.size === 0;
 }

@@ -627,6 +627,30 @@ export function autonomieTexte(ans) {
 export const FENETRE_ETSI_S = 3600;
 
 /**
+ * Combien de messages pour qu'un run **couvre** la fenêtre de moyennage réglementaire.
+ *
+ * La règle n'est pas `cible / période`, et la mesure le montre : la fenêtre observée vaut
+ * `(messages - 1) × période`, parce qu'elle court de la première émission à la dernière et
+ * non de zéro à la dernière. À 60 s, 60 messages donnent donc 3 540 s — **60 s sous
+ * l'heure** — et le verdict retomberait dans sa réserve alors que l'utilisateur a cru
+ * faire juste. D'où le `+ 1`.
+ *
+ * La dispersion des départs s'ajoute à la fenêtre sans jamais la réduire : un capteur
+ * décalé émet plus tard, jamais plus tôt. Elle est donc acquise, et non à compenser —
+ * compter dessus reviendrait à prédire un tirage pseudo-aléatoire, et à tomber juste
+ * une fois sur deux. Mesuré : 2 capteurs, `start_spread_s` de 100 s, la fenêtre s'allonge
+ * de 17 s et non de 100.
+ *
+ * @param {number|null} periodeS période d'émission du capteur, en secondes
+ * @param {number} [cibleS] fenêtre à couvrir, en secondes
+ * @returns {number|null} nombre de messages, ou `null` si la période est inutilisable.
+ */
+export function messagesPourFenetre(periodeS, cibleS = FENETRE_ETSI_S) {
+  if (!Number.isFinite(periodeS) || periodeS <= 0 || !Number.isFinite(cibleS)) return null;
+  return Math.ceil(cibleS / periodeS) + 1;
+}
+
+/**
  * Durée lisible, depuis des nanosecondes. « 6 min 40 s » se confronte à une limite mieux que
  * « 400 s » ou que « 4,0e+11 ns » : c'est l'unité dans laquelle on parle d'une fenêtre.
  */
@@ -670,6 +694,45 @@ export function fenetreVerdictTexte(ns) {
   return `Mesuré sur ${duree}, quand la fenêtre de moyennage du texte réglementaire est de `
     + `1 h (ETSI) — soit environ ${rapport} fois plus long. Le verdict porte sur la fenêtre `
     + `du run : sur une heure, l'occupation moyenne peut être plus basse comme plus haute.`;
+}
+
+/**
+ * Ce qu'il faudrait changer pour que le run **couvre** la fenêtre réglementaire.
+ *
+ * Le verdict dit l'écart entre les deux fenêtres ; il ne dit pas comment le combler, et
+ * l'utilisateur reste avec un constat. On nomme donc le réglage et le nombre, mesurés par
+ * ailleurs : à 60 s il faut 61 messages, et non 60 — le genre de détail qui ne se devine
+ * pas et qui fait perdre un run entier.
+ *
+ * Une phrase vide quand le run couvre déjà la fenêtre : ajouter « il faudrait… » sous un
+ * verdict annoncé comme direct le décrédibiliserait.
+ *
+ * @param {number|null} fenetreNs fenêtre d'observation du run, en nanosecondes
+ * @param {Array<{periodeS: number|null, messages: number|null}>} capteurs réglages actuels
+ * @returns {string} une phrase complète, ou une chaîne vide s'il n'y a rien à dire.
+ */
+export function texteFenetreACouvrir(fenetreNs, capteurs = []) {
+  if (!Number.isFinite(fenetreNs)) return "";
+  if (fenetreNs / 1e9 >= FENETRE_ETSI_S) return "";
+  const periodes = [...new Set(
+    capteurs.map((c) => c.periodeS).filter((p) => Number.isFinite(p) && p > 0))];
+  if (periodes.length === 0) return "";
+  const besoins = periodes.map((p) => ({ periode: p, messages: messagesPourFenetre(p) }));
+  const actuel = capteurs.map((c) => c.messages).filter((m) => Number.isFinite(m));
+  const plusPetit = actuel.length ? Math.min(...actuel) : null;
+
+  if (besoins.length === 1) {
+    const { periode, messages } = besoins[0];
+    const aujourdhui = actuel.length && new Set(actuel).size === 1 ? actuel[0] : plusPetit;
+    return `Pour couvrir l'heure réglementaire : ${messages} messages par capteur `
+      + `(période ${periode} s)${aujourdhui != null ? `, au lieu de ${aujourdhui}` : ""}.`;
+  }
+  // Périodes différentes : le besoin le plus haut est porté par la période la plus courte.
+  // Le dire par le maximum plutôt que par une liste garde la phrase lisible ; le détail
+  // reste dans la fenêtre de chaque capteur.
+  const max = besoins.reduce((a, b) => (b.messages > a.messages ? b : a));
+  return `Pour couvrir l'heure réglementaire : jusqu'à ${max.messages} messages `
+    + `(période la plus courte, ${max.periode} s)${plusPetit != null ? `, au lieu de ${plusPetit}` : ""}.`;
 }
 
 /**
