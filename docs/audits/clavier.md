@@ -40,7 +40,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab.active | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -90,7 +90,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab.active | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -140,7 +140,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab.active | tab | Trame | oui |
@@ -186,7 +186,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -233,7 +233,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -288,7 +288,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -349,7 +349,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -400,7 +400,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session LemsaaZe · 3 équip. | oui |
+| 27 | select#session-select | select | Session xjF0KXnt · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
