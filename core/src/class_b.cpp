@@ -205,4 +205,66 @@ ClassBStatus next_ping_slot(const DeviceClassB& d, std::uint64_t now_ns, PingSlo
     return ClassBStatus::InvalidParameter;  // inatteignable
 }
 
+ClassBStatus ping_slot_at(const DeviceClassB& d, std::uint64_t now_ns, PingSlot& out) {
+    if (!d.synchronized) return ClassBStatus::NotSynchronized;
+    if (now_ns < d.last_beacon_rx_ns) return ClassBStatus::InvalidParameter;
+    if (now_ns - d.last_beacon_rx_ns >= kBeaconlessNs) return ClassBStatus::BeaconLost;
+    if (d.clock_drift_ppm > kMaxDriftPpm) return ClassBStatus::InvalidParameter;
+
+    std::uint32_t ping_nb = 0;
+    std::uint32_t ping_period = 0;
+    if (ping_slot_count(d.periodicity, ping_nb, ping_period) != ClassBStatus::Ok) {
+        return ClassBStatus::InvalidParameter;
+    }
+
+    const std::int64_t slot = static_cast<std::int64_t>(kSlotNs);
+    const std::int64_t periode = static_cast<std::int64_t>(ping_period);
+    const std::uint64_t k = (now_ns - d.last_beacon_rx_ns) / kBeaconPeriodNs;
+
+    // Trois périodes : la fenêtre élargie d'un slot voisin peut couvrir `now_ns` alors que
+    // l'instant appartient à la période courante, et réciproquement.
+    for (std::int64_t delta = -1; delta <= 1; ++delta) {
+        const std::int64_t j = static_cast<std::int64_t>(k) + delta;
+        if (j < 0) continue;
+        const std::uint64_t period_start =
+            d.last_beacon_rx_ns + static_cast<std::uint64_t>(j) * kBeaconPeriodNs;
+        const std::uint32_t beacon_time =
+            d.last_beacon_time_s + static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(j) * (kBeaconPeriodNs / 1'000'000'000ull));
+        std::uint32_t offset = 0;
+        if (ping_offset(beacon_time, d.dev_addr, d.periodicity, offset) != ClassBStatus::Ok) {
+            return ClassBStatus::InvalidParameter;
+        }
+        // Rang dans la période, en slots (négatif avant le premier slot utile).
+        const std::int64_t pos = static_cast<std::int64_t>(now_ns)
+            - static_cast<std::int64_t>(period_start)
+            - static_cast<std::int64_t>(kBeaconReservedNs);
+        // Le candidat est le plus grand `m` de début nominal <= now_ns ; ses deux voisins
+        // couvrent la marge de dérive. La troncature vers zéro remplace ici un plancher :
+        // l'écart est d'au plus 1, absorbé par l'encadrement.
+        const std::int64_t centre = static_cast<std::int64_t>(pos / slot
+            - static_cast<std::int64_t>(offset)) / periode;
+        for (std::int64_t dm = -1; dm <= 1; ++dm) {
+            const std::int64_t m = centre + dm;
+            if (m < 0 || m >= static_cast<std::int64_t>(ping_nb)) continue;
+            const std::uint32_t n = offset + static_cast<std::uint32_t>(m) * ping_period;
+            const std::uint64_t start = period_start + kBeaconReservedNs
+                + static_cast<std::uint64_t>(n) * kSlotNs;
+            const std::uint64_t elapsed = start - d.last_beacon_rx_ns;
+            const std::uint64_t margin =
+                (elapsed * d.clock_drift_ppm + 999'999ull) / 1'000'000ull;
+            // Fenêtre demi-ouverte [start - margin, start + 30 ms + margin).
+            if (now_ns + margin < start) continue;
+            if (now_ns >= start + kSlotNs + margin) continue;
+            out.start_ns = start;
+            out.slot_index = n;
+            out.beacon_time_s = beacon_time;
+            out.beacon_period_start_ns = period_start;
+            out.window_half_ns = margin;
+            return ClassBStatus::Ok;
+        }
+    }
+    return ClassBStatus::NoSlot;
+}
+
 }  // namespace lsim::lorawan::classb

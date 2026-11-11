@@ -33,6 +33,7 @@ enum class ClassBStatus : std::int32_t {
     CrcError = 2,          // CRC-16 du beacon (partie commune ou GwSpecific) fausse
     NotSynchronized = 3,   // aucun beacon reçu
     BeaconLost = 4,        // plus de beacon depuis 2 h : quitter la classe B
+    NoSlot = 5,            // aucun ping slot ne couvre l'instant demandé (voir `ping_slot_at`)
 };
 
 enum class BeaconState : std::uint8_t {
@@ -122,5 +123,15 @@ ClassBStatus beacon_state(const DeviceClassB& d, std::uint64_t now_ns, BeaconSta
 // sans beacon. Le beaconTime d'une période sans beacon est celui du dernier beacon + 128 s
 // par période écoulée (horloge du dispositif).
 ClassBStatus next_ping_slot(const DeviceClassB& d, std::uint64_t now_ns, PingSlot& out);
+
+// Le ping slot dont la fenêtre — slot de 30 ms élargi de `window_half_ns` de chaque côté —
+// contient `now_ns` ; `NoSlot` si aucun ne le couvre. C'est la question inverse de
+// `next_ping_slot` : celle que pose un terminal qui doit décider s'il écoute **à cet
+// instant**, et non celle d'un réseau qui choisit quand émettre.
+//
+// Les trois périodes voisines sont examinées : la fenêtre élargie par la dérive peut
+// appartenir à la période précédente ou suivante alors que l'instant, lui, est dans
+// celle-ci. Au plus trois candidats par période, sans balayage des 128 slots.
+ClassBStatus ping_slot_at(const DeviceClassB& d, std::uint64_t now_ns, PingSlot& out);
 
 }  // namespace lsim::lorawan::classb

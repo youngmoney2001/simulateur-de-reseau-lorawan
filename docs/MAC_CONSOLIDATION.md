@@ -79,6 +79,42 @@ des premières tentatives sont identiques dans les trois cas, et seules les ré�
 réception de l'ACK) diffèrent. C'est la boucle de bout en bout, pas une fuite de la règle d'écoute
 dans la radio.
 
+## 3 bis. Pourquoi la classe B se comporte comme A
+
+Ce n'est pas une approximation : c'est une conséquence du modèle de descente, et il vaut mieux
+l'énoncer que laisser croire à un chantier inachevé.
+
+**Toutes les descentes du moteur sont déclenchées par un uplink.** L'ACK d'une trame confirmée, la
+charge utile de `downlink_every`, le `LinkCheckAns`, le `DevStatusAns` : chacune est la réponse à
+une trame montante, planifiée dans RX1 ou RX2. Or **une descente déclenchée par un uplink tombe
+toujours dans RX1 ou RX2** par construction — il n'y a rien à rattraper. Un ping slot ne sert donc
+à rien ici : il ne peut que recevoir par hasard une descente que le réseau n'a pas mise à son
+heure, ce qui arrive environ une fois sur trente en périodicité 0 (un slot de 30 ms toutes les
+0,96 s) et une fois sur quatre mille en périodicité 7.
+
+**Le ping slot est un mécanisme d'ordonnancement, pas une écoute opportuniste.** Le réseau *garde*
+la descente et l'émet au prochain ping slot du terminal ; il n'émet pas au hasard en espérant
+qu'une fenêtre soit ouverte. C'est ce que calcule `core/src/downlink.cpp`
+(`lsim::lorawan::downlink::next_class_b`) et ce qu'expose `lsim.simulator.DownlinkRequests`.
+
+Faire différer la classe B demande donc **des descentes à l'initiative du réseau** : une demande
+née à un instant que le terminal n'a pas choisi. La latence devient alors la grandeur qui
+distingue les trois classes — A attend le prochain uplink du terminal (jusqu'à une période), B
+attend le prochain ping slot (0,96 s en périodicité 0, 128 s en périodicité 7), C émet presque
+aussitôt. C'est la mesure que le simulateur ne sait pas encore produire, et c'est elle qui rendrait
+le choix d'une classe dans l'atelier autre chose qu'un libellé.
+
+Le moteur, lui, est prêt des deux côtés :
+
+| Question | Fonction | Disponible |
+|---|---|---|
+| quand le réseau peut-il émettre ? | `next_ping_slot` (`core/src/class_b.cpp`, `ClassBDevice.next_ping_slot`) | oui |
+| le terminal écoute-t-il à cet instant ? | `ping_slot_at` (idem, `ClassBDevice.ping_slot_at`), fenêtre = 30 ms élargie de la dérive | oui, ajouté pour cela |
+| combien de temps jusqu'à la prochaine fenêtre ? | `next_class_a` / `next_class_b` / `next_class_c` (`core/src/downlink.cpp`) | oui |
+
+Hypothèse commune aux trois, inchangée : la passerelle émet une balise à chaque période de 128 s
+depuis l'origine du run et le terminal la reçoit. Le mode *beacon-less* n'est pas déclenché.
+
 ## 4. Cohérence planificateur / moteur causal / réémissions / traces
 
 | Élément | État |
@@ -160,7 +196,9 @@ puisqu'elles n'en ont pas.
    zéro, mais aucun scénario ne déclenche de `Join-Accept` dans cette couche.
 2. Brancher la classe C sur le moteur d'opportunités existant (`lsim.simulator.DownlinkRequests`)
    au lieu de la règle locale d'écoute continue.
-3. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
+3. **Pourquoi la classe B se comporte comme A, et ce qui la ferait différer** : voir §3 bis.
+   Ce n'est pas un oubli : c'est une conséquence du modèle de descente.
+4. Appliquer les commandes aujourd'hui « codec seul » une par une, avec leurs tests de
    comportement, en commençant par `RxParamSetupReq` (elle change RX2, donc la réception de l'ACK).
 
 ## 7. Compteurs complets : rejeu, désynchronisation, débordement

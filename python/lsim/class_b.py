@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Optional
 
 from lsim._native import (
     LIB,
@@ -19,6 +20,14 @@ from lsim._native import (
     _U8P,
 )
 from lsim.lora import StatusError
+
+# « Aucun ping slot ne couvre cet instant » : un état de la réponse, pas une faute — un
+# terminal de classe B passe l'essentiel de son temps hors de ses ping slots. 800 est la base
+# des statuts de classe B (`LSIM_STATUS_CLASSB_BASE`, `core/include/lsim/c_api.h`).
+_NO_SLOT = 800 + 5
+
+# Base des statuts du moteur de classe B (voir `core/include/lsim/c_api.h`).
+_CLASSB_STATUS_BASE = int(_native_status("LSIM_STATUS_CLASSB_BASE")) if False else 800
 
 BEACON_PERIOD_NS = 128_000_000_000
 BEACON_RESERVED_NS = 2_120_000_000
@@ -114,6 +123,28 @@ class ClassBDevice:
         c = self._native()
         out = _CClassBPingSlot()
         status = LIB.lsim_classb_next_ping_slot(ctypes.byref(c), now_ns, ctypes.byref(out))
+        if status != 0:
+            raise StatusError(status)
+        return PingSlot(
+            start_ns=int(out.start_ns),
+            slot_index=int(out.slot_index),
+            beacon_time_s=int(out.beacon_time_s),
+            beacon_period_start_ns=int(out.beacon_period_start_ns),
+            window_half_ns=int(out.window_half_ns),
+        )
+
+    def ping_slot_at(self, now_ns: int) -> Optional[PingSlot]:
+        """Le ping slot dont la fenêtre contient `now_ns`, ou `None` s'il n'y en a aucun.
+
+        C'est la question que pose un terminal : non pas « quand émettre ? » (`next_ping_slot`)
+        mais « est-ce que j'écoute à cet instant ? ». La fenêtre est le slot de 30 ms élargi
+        de la dérive de chaque côté ; sans dérive, elle est exacte.
+        """
+        c = self._native()
+        out = _CClassBPingSlot()
+        status = LIB.lsim_classb_ping_slot_at(ctypes.byref(c), now_ns, ctypes.byref(out))
+        if status == _NO_SLOT:
+            return None
         if status != 0:
             raise StatusError(status)
         return PingSlot(
