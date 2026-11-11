@@ -91,7 +91,7 @@ Aucun problème.
 | button.tool | 324 | 911 | 129×38 |
 | button.tool | 17 | 955 | 225×38 |
 | button.tool | 248 | 955 | 198×38 |
-| div.observation | 8 | 1049 | 1084×1098 |
+| div.observation | 8 | 1049 | 1084×1114 |
 | footer.statusbar | 0 | 974 | 1100×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
@@ -122,7 +122,7 @@ Aucun problème.
 | button.tool | 324 | 871 | 129×38 |
 | button.tool | 17 | 915 | 225×38 |
 | button.tool | 248 | 915 | 198×38 |
-| div.observation | 8 | 1009 | 1024×1053 |
+| div.observation | 8 | 1009 | 1024×1070 |
 | footer.statusbar | 0 | 974 | 1040×26 |
 | section.device-win.active | 90 | 70 | 430×760 |
 
