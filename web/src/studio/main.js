@@ -12,7 +12,8 @@ import { createHistory, promptText } from "./console.js";
 import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
-  limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, autonomieAns, autonomieTexte,
+  limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, messagesPourFenetre,
+  autonomieAns, autonomieTexte,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
@@ -1613,11 +1614,23 @@ function renderMetrics(summary, deviceRows) {
     // faut 61 messages et non 60, détail qui ne se devine pas et coûte un run entier.
     const capteurs = (state.topo?.nodes ?? [])
       .filter((n) => n.kind === "sensor")
-      .map((n) => ({ periodeS: n.sensor?.period_s ?? null, messages: n.sensor?.messages ?? null }));
+      .map((n) => ({ id: n.id, periodeS: n.sensor?.period_s ?? null,
+        messages: n.sensor?.messages ?? null }));
     const aCouvrir = texteFenetreACouvrir(fenetreObservationNs(summary), capteurs);
     if (aCouvrir) note.append(el("span", { text: " " + aCouvrir }));
+    // Un constat sans geste laisse l'utilisateur refaire à la main ce qu'on vient de
+    // calculer. Le bouton ne raccourcit jamais un run déjà assez long : il ne fait que
+    // porter chaque capteur au nombre de messages qui couvre l'heure.
+    const aProlonger = capteurs.filter(
+      (c) => Number.isFinite(c.periodeS) && c.periodeS > 0
+        && Number.isFinite(c.messages) && c.messages < messagesPourFenetre(c.periodeS)
+        && messagesPourFenetre(c.periodeS) <= SENSOR_LIMITS.messages[1]);
+    const bouton = $("prolonger-run");
+    bouton.hidden = aProlonger.length === 0;
+    bouton.onclick = () => prolongerRun(aProlonger);
   }
   note.hidden = sources.size === 0;
+  if (note.hidden) $("prolonger-run").hidden = true;   // pas de verdict, pas de geste
 }
 
 /**
@@ -1627,6 +1640,44 @@ function renderMetrics(summary, deviceRows) {
  * résultat décrirait des couleurs absentes. Le nom de chaque palier vient de `metrics.js`,
  * seule source de l'échelle — le recopier ici le laisserait dériver de la couleur réelle.
  */
+/**
+ * Porter chaque capteur au nombre de messages qui couvre la fenêtre réglementaire, puis
+ * relancer le run.
+ *
+ * Le réglage est un **remplacement complet** côté serveur (`set_sensor` recopie l'objet
+ * entier) : envoyer seulement `messages` remettrait la période, la charge utile et le SF à
+ * leurs défauts. On renvoie donc la configuration lue dans la topologie, avec un seul champ
+ * changé.
+ *
+ * Le run est relancé par le formulaire lui-même, et non par un second appel : c'est le même
+ * chemin que le bouton « Simuler », donc le même statut, la même attente et le même rendu.
+ * Le dupliquer donnerait deux façons de simuler, donc deux façons de se contredire.
+ *
+ * @param {Array<{id: string, periodeS: number, messages: number}>} capteurs à prolonger
+ */
+async function prolongerRun(capteurs) {
+  if (!state.sid || state.busy) return;
+  const bouton = $("prolonger-run");
+  if (bouton) bouton.disabled = true;
+  try {
+    for (const c of capteurs) {
+      const node = state.topo?.nodes.find((n) => n.id === c.id);
+      if (!node?.sensor) continue;
+      const vise = messagesPourFenetre(c.periodeS);
+      if (!Number.isFinite(vise)) continue;
+      const topo = await guard(
+        () => state.client.setSensor(state.sid, c.id, { ...node.sensor, messages: vise }));
+      // La topologie revient avec le run : la garder évite de relire un état qu'on vient
+      // d'écrire, et le champ `messages` affiché dans la fenêtre du capteur suit.
+      if (topo) state.topo = topo;
+    }
+  } finally {
+    if (bouton) bouton.disabled = false;
+  }
+  renderDevice();               // la fenêtre ouverte chiffre le nouveau réglage
+  $("sim-form").requestSubmit();
+}
+
 function renderLegend() {
   const boite = $("pdr-legend");
   clear(boite);

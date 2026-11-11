@@ -239,6 +239,13 @@
             <tbody></tbody>
           </table>
           <p id="sim-duty-note" class="hint" hidden></p>
+          <!-- Prolonger le run jusqu'à la fenêtre réglementaire. Masqué tant que le run la
+               couvre déjà : un geste proposé sous un verdict annoncé comme direct
+               laisserait croire qu'il manque quelque chose. -->
+          <button type="button" id="prolonger-run" class="zone-btn" hidden
+            title="Porter chaque capteur au nombre de messages qui couvre l'heure réglementaire, puis relancer le run">
+            Prolonger le run jusqu'à 1 h
+          </button>
         </div>
 
         <div class="tab-body" data-panel="journal" hidden>
