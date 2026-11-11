@@ -480,8 +480,10 @@ def list_materials(frequency_hz: float, thickness_m: float = 0.2) -> MaterialLis
     items = []
     for name in MATERIAL_NAMES:
         perte, extra = traversal_loss(name, frequency_hz, thickness_m)
+        # `+ 0.0` : « air » renvoie -0.0, et un JSON qui affiche « -0.0 dB » pour une
+        # traversée d'air se lit comme une erreur de signe.
         items.append(MaterialInfo(name=name,
-                                  loss_db=round(max(perte, 0.0), 3),
+                                  loss_db=round(max(perte, 0.0), 3) + 0.0,
                                   extrapolated=extra))
     return MaterialList(frequency_hz=frequency_hz, thickness_m=thickness_m,
                         materials=items)
