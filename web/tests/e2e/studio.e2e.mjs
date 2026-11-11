@@ -997,11 +997,16 @@ try {
     if (await page.$eval("#prolonger-run", (b) => b.hidden))
       throw new Error("geste absent alors que le run ne couvre pas l'heure");
 
+    // L'identifiant à remplacer est celui du run **courant**, pas celui d'avant le premier :
+    // ce dernier est déjà remplacé, donc l'attente passerait aussitôt sans rien attendre —
+    // et on relirait la note du run qu'on cherche justement à remplacer. Lu avant le clic,
+    // pour ne pas dépendre de la vitesse à laquelle le gestionnaire écrit le statut.
+    const runProlonger = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
     await page.click("#prolonger-run");
     await page.waitForFunction((avant) => {
       const t = document.getElementById("sim-status").textContent;
       return t.includes("terminé") && (!avant || !t.includes(avant));
-    }, { timeout: 120_000 }, runAvant);
+    }, { timeout: 120_000 }, runProlonger);
 
     const apres = await textOf("#sim-duty-note");
     if (!/comparaison est directe/.test(apres))
