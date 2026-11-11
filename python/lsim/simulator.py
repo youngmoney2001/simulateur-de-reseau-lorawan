@@ -221,6 +221,41 @@ class GatewayLoad:
     utilization: float = 0.0    # busy_ns / observation_ns, dans [0, 1]
 
 
+def downlink_summary(per_device) -> "Optional[DownlinkSummary]":
+    """Agrège les compteurs de descente d'un run ; `None` si aucune n'a été demandée.
+
+    `None` plutôt qu'un objet de zéros : des zéros diraient « aucune descente livrée », ce
+    qui est faux d'un run qui n'en a jamais demandé. La distinction porte sur `requested`,
+    pas sur `delivered` — une descente demandée et jamais acheminée est un résultat, pas
+    une absence de résultat.
+    """
+    requested = sum(c.requested for c in per_device)
+    if not requested:
+        return None
+    return DownlinkSummary(
+        requested=requested,
+        delivered=sum(c.delivered for c in per_device),
+        latency_mean_s=sum(c.latency_sum_ns for c in per_device) / 1e9 / requested,
+        latency_max_s=max((c.latency_max_ns for c in per_device if c.requested),
+                          default=0) / 1e9,
+    )
+
+
+@dataclass(frozen=True)
+class DownlinkSummary:
+    """Descentes **à l'initiative du réseau** : combien, livrées, et à quelle latence.
+
+    La latence est le délai entre l'instant où le réseau veut envoyer et l'instant où la
+    passerelle émet. C'est la seule grandeur du simulateur que la classe d'écoute détermine
+    à elle seule : un ACK, lui, est déclenché par un uplink et tombe toujours en RX1/RX2.
+    """
+
+    requested: int = 0
+    delivered: int = 0
+    latency_mean_s: Optional[float] = None
+    latency_max_s: Optional[float] = None
+
+
 @dataclass(frozen=True)
 class SimulationResult:
     per_device: tuple[Counters, ...]

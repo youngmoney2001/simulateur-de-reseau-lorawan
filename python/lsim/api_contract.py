@@ -253,6 +253,29 @@ class DutyCycleOut(_Strict):
     source: Optional[str] = None
 
 
+class DownlinkOut(_Strict):
+    """Descentes **à l'initiative du réseau** : le serveur veut envoyer à un instant donné.
+
+    Ce n'est pas un ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou RX2, et la
+    classe d'écoute n'y change rien. Ici la demande naît au moment choisi par le réseau, et
+    c'est la classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du
+    simulateur que la classe détermine à elle seule.
+
+    `latency_mean_s` / `latency_max_s` : délai entre l'instant voulu et l'instant d'émission.
+    """
+
+    requested: int = Field(ge=0)
+    delivered: int = Field(ge=0)
+    latency_mean_s: Optional[float] = Field(default=None, ge=0.0)
+    latency_max_s: Optional[float] = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _delivered_at_most_requested(self) -> "DownlinkOut":
+        if self.delivered > self.requested:
+            raise ValueError("delivered ne peut pas dépasser requested")
+        return self
+
+
 class RunSummary(_Strict):
     """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
     depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
@@ -291,6 +314,10 @@ class RunSummary(_Strict):
     # C'est ce qui permet de répondre à « les quatre capteurs ont-ils obtenu leur join-accept ? »
     # par ce que le run a produit, jamais par ce que le formulaire a demandé.
     event_kinds: Optional[dict[str, int]] = Field(default=None, max_length=32)
+    # Descentes à l'initiative du réseau. Absent si le run n'en a planifié aucune : un objet
+    # de zéros dirait « aucune descente livrée », ce qui serait faux d'un run qui n'en a
+    # jamais demandé. Voir `DownlinkOut`.
+    downlink: Optional[DownlinkOut] = None
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":

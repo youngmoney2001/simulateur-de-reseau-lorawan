@@ -50,7 +50,8 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
-    DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
+    DevicePage, DeviceRowOut, DownlinkOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut,
+    Problem,
     RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
     ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
@@ -511,9 +512,38 @@ def _sf_final_par_dispositif(records) -> dict[int, int]:
     return out
 
 
+def _descentes_reseau(devices, scenario: Scenario) -> Optional[dict[str, Any]]:
+    """Descentes à l'initiative du réseau : latence par classe, calculée par le moteur.
+
+    Pourquoi un second passage natif plutôt qu'un greffon sur la trace : le seul point
+    d'entrée qui planifie ces descentes (`lsim_simulate_downlinks_env`) recalcule les
+    uplinks dont il a besoin — il ne se greffe pas sur une trace déjà produite. On ne lui
+    emprunte donc **que** les compteurs de descente ; ses compteurs d'uplink sont jetés,
+    le run gardant ceux de la trace.
+
+    Ce que ce passage ne voit pas, et pourquoi c'est sans conséquence mesurable : la charge
+    MAC réservée et l'ADR allongent les trames **sans décaler leur début** (vérifié par
+    `test_mac_does_not_move_transmission_starts`), or l'attente se compte sur les instants
+    de début. Reste RX1, qui s'ouvre après la **fin** de l'émission : une trame allongée
+    décale donc la latence d'au plus la durée ajoutée — 15 ms pour 10 octets à SF7, soit
+    0,03 % des 51 s que la classe A attend.
+
+    `None` si aucun terminal n'en déclare, ou hors mono-passerelle : un objet de zéros
+    dirait « aucune descente livrée », ce qui serait faux d'un run qui n'en a pas demandé.
+    """
+    # Même fabrique que l'export : un scénario donne les mêmes chiffres par les deux chemins.
+    from lsim.export import descentes_reseau
+    resume = descentes_reseau(devices, scenario)
+    return None if resume is None else DownlinkOut(
+        requested=resume.requested, delivered=resume.delivered,
+        latency_mean_s=resume.latency_mean_s,
+        latency_max_s=resume.latency_max_s).model_dump(exclude_none=True)
+
+
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
-                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None) -> dict[str, Any]:
+                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None,
+                 downlink: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -525,6 +555,7 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
         duty_cycle=_duty_cycle_out(scenario),
         rx_matrix=rx_matrix,
         event_kinds=event_kinds or None,
+        downlink=downlink,
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(
@@ -724,6 +755,7 @@ class RunService:
             totals, per_device, events = mt.totals, mt.per_device, mt.events
             mesh_lost_total, mesh_lost_by_device = mt.lost_mesh, mt.lost_mesh_by_device
             loads = mt.mesh_loads if mt.mesh_loads is not None else [None] * len(mt.gateway_names)
+            descentes = None
             metrics = gateway_metrics(events, mt.gateway_names)
             gateway_load, gateways = None, [
                 GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
@@ -739,6 +771,10 @@ class RunService:
             tr = build_trace(scenario, job.options)
             totals, per_device, events = tr.totals, tr.per_device, tr.events
             gateway_load, gateways = tr.gateway, None
+            # Descentes réseau : mono-passerelle seulement, comme `rx_matrix` — hors de ce
+            # chemin le second passage ne verrait pas les autres passerelles et publierait
+            # une latence calculée sur une topologie qui n'est pas celle du run.
+            descentes = _descentes_reseau(devices, scenario)
             # Seule la voie mono porte les enregistrements d'émission, et c'est aussi la seule
             # où l'ADR est simulé : le SF final n'a de sens que là. Sur la voie multi il reste
             # absent, plutôt que de recopier le SF initial en laissant croire à une observation.
@@ -804,7 +840,8 @@ class RunService:
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total,
-                               mt.rx_matrix if job.multi else None, event_kinds=natures)
+                               mt.rx_matrix if job.multi else None, event_kinds=natures,
+                               downlink=descentes)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {

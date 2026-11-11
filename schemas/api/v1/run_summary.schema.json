@@ -1,5 +1,53 @@
 {
   "$defs": {
+    "DownlinkOut": {
+      "additionalProperties": false,
+      "description": "Descentes **à l'initiative du réseau** : le serveur veut envoyer à un instant donné.\n\nCe n'est pas un ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou RX2, et la\nclasse d'écoute n'y change rien. Ici la demande naît au moment choisi par le réseau, et\nc'est la classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du\nsimulateur que la classe détermine à elle seule.\n\n`latency_mean_s` / `latency_max_s` : délai entre l'instant voulu et l'instant d'émission.",
+      "properties": {
+        "delivered": {
+          "minimum": 0,
+          "title": "Delivered",
+          "type": "integer"
+        },
+        "latency_max_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Max S"
+        },
+        "latency_mean_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Mean S"
+        },
+        "requested": {
+          "minimum": 0,
+          "title": "Requested",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requested",
+        "delivered"
+      ],
+      "title": "DownlinkOut",
+      "type": "object"
+    },
     "DutyCycleOut": {
       "additionalProperties": false,
       "description": "Rapport cyclique d'un groupe : la limite réglementaire et sa source, pas le verdict.\n\nLe verdict est laissé à l'interface, et pour une raison mesurée : la limite se compare à une\noccupation **moyennée sur la fenêtre du texte réglementaire** (une heure chez ETSI), alors que\nle run s'observe sur sa propre fenêtre. Publier ici « conforme » ou « non conforme » donnerait\nà une comparaison de deux fenêtres différentes l'autorité du serveur. On publie donc la\nlimite, sa source, la fréquence et la région : les deux termes de la comparaison, rien de plus.\n\n`limit` est **absente** (clé retirée, convention `exclude_none` de l'API) quand le plan\nrégional ne déclare aucune sous-bande — cinq régions sur huit sont dans ce cas (US915,\nAU915, AS923, KR920, IN865). Ce n'est pas une limite permissive, c'est une limite absente :\nl'interface ne doit pas la traduire par « 100 % ».",
@@ -362,6 +410,17 @@
   "additionalProperties": false,
   "description": "Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent\ndepuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent).",
   "properties": {
+    "downlink": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DownlinkOut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "duty_cycle": {
       "anyOf": [
         {

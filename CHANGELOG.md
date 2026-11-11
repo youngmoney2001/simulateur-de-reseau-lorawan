@@ -2,6 +2,54 @@
 
 ## 0.1.0 (non publiée)
 
+### Descentes à l'initiative du réseau — la classe d'écoute décide de l'attente
+
+Un scénario peut désormais dire « le serveur veut envoyer une commande à cet instant », et le
+résultat dit **quand elle est arrivée**. Bloc `downlink:` optionnel par groupe, résumé
+`RunResult.downlink` / `RunSummary.downlink`, colonnes par dispositif.
+
+**Ce que ça n'est pas.** Un ACK, une réponse MAC ou une charge `downlink_every` sont déclenchés
+par un uplink : ils tombent dans RX1 ou RX2, et la classe n'y change rien (§3 bis de
+`docs/MAC_CONSOLIDATION.md`). Ici la demande naît au moment choisi par le réseau, et c'est la
+classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du simulateur que
+la classe détermine à elle seule.
+
+**Aucune ligne de C++ n'a été écrite.** Le moteur savait déjà planifier ces descentes
+(`lsim_simulate_downlinks_env`, `core/src/downlink.cpp`). Ce qui manquait était le chaînon
+scénario → déploiement → export : `Scenario.deploy()` ne renseignait jamais `downlink=`, et
+`RunResult` jetait les compteurs que le moteur renvoyait.
+
+**Mesuré** (terminal unique à 100 m, 3 messages espacés de 60 s, une demande à t = 10 s) :
+
+| classe | attente | pourquoi |
+|---|---|---|
+| C | 0,00 s | la fenêtre est ouverte en permanence |
+| B, `periodicity: 0` | 0,94 s | slot de ping toutes les ~0,96 s |
+| A | 51,04 s | prochain uplink (60 s) puis RX1 |
+| B, `periodicity: 7` | 64,30 s | un slot par période de 128 s |
+
+**L'idée reçue à ne pas propager : la classe B n'est pas « meilleure que A », elle est de part et
+d'autre.** Avec un slot fréquent elle fait mieux que A (0,94 s contre 51 s) ; avec un slot rare
+elle fait **moins bien** (64 s). C'est la périodicité qui décide, pas l'étiquette. Un test
+(`test_class_b_is_not_published_as_faster_than_a`) garde cette relation dans les deux sens.
+
+**Le résumé est absent, pas à zéro, quand aucune descente n'est demandée.** Un objet de zéros
+dirait « aucune descente livrée », ce qui est faux d'un run qui n'en a jamais demandé. La
+distinction porte sur `requested`, pas sur `delivered` : une descente demandée et jamais
+acheminée est un résultat, pas une absence de résultat.
+
+**Pourquoi un passage natif dédié côté API.** Le seul point d'entrée qui planifie ces descentes
+recalcule les uplinks dont il a besoin ; il ne se greffe pas sur une trace déjà produite. On ne
+lui emprunte donc que les compteurs de descente. Ce qu'il ne voit pas : la charge MAC et l'ADR.
+Mesuré — les réservations MAC allongent les trames (41,2 → 56,6 ms pour 10 octets à SF7) **sans
+décaler leur début**. Reste RX1, qui s'ouvre après la fin de l'émission : l'écart induit est donc
+de l'ordre de 15 ms, soit 0,03 % des 51 s de la classe A. Gardé par
+`test_mac_payload_does_not_move_transmission_starts`.
+
+**Compatibilité.** Champ optionnel partout : un scénario écrit avant garde ses chiffres **et**
+son empreinte (`downlink` quitte le hachage quand il est absent, comme `device_class` valant
+`"A"`). Colonnes Parquet et lignes de rapport ajoutées seulement si le run en planifie.
+
 ### U0.5 — Convergence du point fixe : budget de réémissions cumulé
 
 Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre

@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import random
+from dataclasses import replace
 import warnings
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
@@ -30,7 +31,8 @@ from lsim.environment import (
     Terrain,
     load_dem_csv,
 )
-from lsim.simulator import EndDevice, Gateway, Propagation
+from lsim.simulator import (DownlinkRequests, EndDevice, Gateway, Propagation,
+                             MAX_DOWNLINKS_PER_DEVICE, MAX_DRIFT_PPM, MAX_PERIODICITY)
 from lsim.gateway_sensitivity import (CATALOG, MODEL_ID, SF5_REGION, AbsoluteSensitivity,
                                      SensitivityError)
 from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
@@ -287,6 +289,40 @@ class RfModel(_Strict):
         return GatewayRf(antenna_gain_dbi=self.antenna_gain_dbi, cable_loss_db=self.cable_loss_db)
 
 
+class DownlinkRequestsModel(_Strict):
+    """Descentes **à l'initiative du réseau** : le serveur veut envoyer, le terminal n'a rien
+    demandé.
+
+    C'est le seul réglage qui distingue vraiment les trois classes, et la raison d'être de ce
+    bloc : un ACK ou une réponse MAC est déclenché par un uplink et tombe donc toujours dans
+    RX1 ou RX2 — la classe n'y change rien. Ici la demande naît à un instant que le terminal
+    n'a pas choisi, et la latence devient la grandeur que la classe détermine :
+
+    - A : le réseau attend le prochain uplink du terminal, puis répond dans RX1 (jusqu'à une
+      période d'attente) ;
+    - B : il attend le prochain ping slot (`periodicity`, 0 = un slot toutes les 0,96 s,
+      7 = un slot par période de 128 s) ;
+    - C : il émet presque aussitôt, hors des propres émissions du terminal et de son RX1.
+
+    La classe du terminal est celle du groupe (`device_class`) : ce n'est pas la demande qui
+    décide de la classe, c'est l'équipement.
+    """
+
+    count: int = Field(1, ge=0, le=MAX_DOWNLINKS_PER_DEVICE)
+    first_request_s: float = Field(0.0, ge=0)
+    # Exigé dès que `count > 1` : la k-ième demande part à `first + k × period`.
+    request_period_s: float = Field(0.0, ge=0)
+    rx_window_s: float = Field(1.0, ge=0, le=10.0)
+    periodicity: int = Field(0, ge=0, le=MAX_PERIODICITY)
+    clock_drift_ppm: int = Field(0, ge=0, le=MAX_DRIFT_PPM)
+
+    @model_validator(mode="after")
+    def _une_periode_si_plusieurs(self) -> "DownlinkRequestsModel":
+        if self.count > 1 and self.request_period_s <= 0:
+            raise ValueError("request_period_s doit être strictement positif si count > 1")
+        return self
+
+
 class GroupModel(_Strict):
     name: str = Field(min_length=1, max_length=64)
     count: Optional[int] = Field(default=None, ge=1, le=MAX_DEVICES)
@@ -306,9 +342,17 @@ class GroupModel(_Strict):
     sub_band: Optional[int] = Field(default=None, ge=1, le=8)
     start_spread_s: float = Field(0.0, ge=0)
     # Classe LoRaWAN du terminal : A et B ouvrent RX1/RX2 après chaque uplink ; C écoute en
-    # continu. Les ping slots de la classe B ne sont pas modélisés ici : seul l'ACK (descente de
-    # classe A) dépend de ce champ.
+    # continu.
+    #
+    # Ce champ ne change **rien** à un ACK, une réponse MAC ou une charge `downlink_every` :
+    # tout cela est déclenché par un uplink et retombe dans RX1/RX2 quelle que soit la classe.
+    # Il ne pèse que sur les descentes à l'initiative du réseau (`downlink` ci-dessous), où il
+    # décide de la fenêtre — donc de l'attente. Le dire autrefois (« les ping slots de la
+    # classe B ne sont pas modélisés ») était vrai tant que ces descentes n'existaient pas.
     device_class: Literal["A", "B", "C"] = "A"
+    # Descentes à l'initiative du réseau. `None` : aucune, et le run est exactement celui
+    # d'avant — empreinte comprise, puisque la clé est alors absente du hachage.
+    downlink: Optional[DownlinkRequestsModel] = None
     # Frontal RF v4 commun aux terminaux du groupe (None = neutre).
     rf: Optional[RfModel] = None
     # RX1DROffset des terminaux du groupe (RP002-1.0.4). 0 = réglage du serveur, valeur
@@ -649,6 +693,25 @@ class ScenarioModel(_Strict):
         return self
 
 
+def _demande_descente(g: "GroupModel") -> Optional[DownlinkRequests]:
+    """Les demandes de descente d'un groupe, ou `None` s'il n'en déclare aucune.
+
+    Le `dev_addr` n'est pas posé ici mais par terminal au déploiement : il sert à la classe B
+    à placer ses ping slots, et deux terminaux du même groupe n'en partagent donc pas un.
+    """
+    d = g.downlink
+    if d is None or d.count == 0:
+        return None
+    return DownlinkRequests(
+        device_class={"A": 0, "B": 1, "C": 2}[g.device_class],
+        count=d.count,
+        first_request_ns=int(round(d.first_request_s * _NS_PER_S)),
+        request_period_ns=int(round(d.request_period_s * _NS_PER_S)),
+        rx_window_ns=int(round(d.rx_window_s * _NS_PER_S)),
+        periodicity=d.periodicity,
+        clock_drift_ppm=d.clock_drift_ppm)
+
+
 class Scenario:
     """Scénario validé, prêt à être déployé et simulé."""
 
@@ -717,6 +780,11 @@ class Scenario:
                 group.pop("channel_freq_hz", None)
             if group.get("device_class") == "A":
                 group.pop("device_class", None)
+            # Aucune descente déclarée : la clé quitte le hachage, donc un scénario écrit
+            # avant cette possibilité garde exactement son empreinte — et ses chiffres,
+            # puisque le moteur n'émet alors aucune descente de plus.
+            if group.get("downlink") is None:
+                group.pop("downlink", None)
             # RX1DROffset à 0 = réglage du serveur, donc absent du hash : un scénario écrit
             # avant l'introduction du champ garde exactement la même empreinte.
             if group.get("rx1_dr_offset") == 0:
@@ -773,15 +841,21 @@ class Scenario:
             positions = _positions(g, rng)
             spread_ns = int(g.start_spread_s * _NS_PER_S)
             period_ns = int(round(g.period_s * _NS_PER_S))
+            demande = _demande_descente(g) if g.downlink else None
             for i, (x, y) in enumerate(positions):
                 offset = int(rng.random() * spread_ns) if spread_ns > 0 else 0
+                # `dev_addr` : le simulateur n'alloue pas d'adresse réseau. L'indice du
+                # terminal dans le déploiement en tient lieu — il est stable, distinct par
+                # terminal, et c'est tout ce que demande `pingOffset` pour les séparer.
                 devices.append(EndDevice(
                     x_m=x, y_m=y, spreading_factor=g.spreading_factor,
                     payload_bytes=g.payload_bytes, tx_power_dbm=g.tx_power_dbm,
                     start_offset_ns=offset, period_ns=period_ns, messages=g.messages,
                     duty_cycle=g.effective_duty_cycle,
                     rf=g.rf.device() if g.rf is not None else None,
-                    energy_profile=(g.energy.profile if g.energy is not None else None)))
+                    energy_profile=(g.energy.profile if g.energy is not None else None),
+                    downlink=(None if demande is None
+                              else replace(demande, dev_addr=len(devices)))))
                 group_of.append(g.name)
                 index_in_group.append(i)
         return devices, group_of, index_in_group

@@ -72,6 +72,18 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
             ("Mesh : descente dans RX2 seulement", m.dl_rx2),
             ("Mesh : descente hors fenêtres", m.dl_missed),
         ] + [(f"Mesh : sauts perdus ({reason})", n) for reason, n in m.hop_losses]
+    d = result.downlink
+    if d is not None:
+        # Présent seulement si le run en a planifié : un run sans descente ne gagne pas
+        # quatre lignes de zéros qui laisseraient croire à une mesure.
+        rows += [
+            ("Descentes réseau : demandées", d.requested),
+            ("Descentes réseau : livrées", d.delivered),
+            ("Descentes réseau : latence moyenne (s)",
+             round(d.latency_mean_s, 6) if d.latency_mean_s is not None else "n/a"),
+            ("Descentes réseau : latence maximale (s)",
+             round(d.latency_max_s, 6) if d.latency_max_s is not None else "n/a"),
+        ]
     if result.energy_profile is not None:
         rows.append((_ENERGY_SUMMARY_LABEL, profile_name(result.energy_profile)))
     return rows
