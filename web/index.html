@@ -9,6 +9,17 @@
     <div id="cesiumContainer"></div>
     <aside id="panel" aria-label="Résultats">
       <h1>Résultats de simulation</h1>
+      <p id="applink"><a href="/studio.html">&#8592; Studio LoRaWAN</a></p>
+      <p id="sample-note" class="sample-note" hidden>
+        <strong>Jeu d'exemple</strong> — ces résultats ne viennent pas de votre simulation.
+        Chargez un GeoJSON pour afficher les vôtres.
+      </p>
+      <!-- Affiché quand rien n'est demandé : la carte ne substitue plus un exemple, elle
+           explique comment obtenir des résultats à elle. -->
+      <p id="empty-note" class="sample-note" hidden>
+        <strong>Aucun résultat à afficher.</strong> Lancez une simulation dans le studio puis
+        suivez le lien «&nbsp;Carte des résultats&nbsp;», ou chargez un GeoJSON ci-dessous.
+      </p>
       <label class="file">
         Charger un GeoJSON
         <input id="file" type="file" accept=".geojson,.json,application/geo+json,application/json" />

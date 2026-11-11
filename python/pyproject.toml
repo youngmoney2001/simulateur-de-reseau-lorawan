@@ -22,6 +22,7 @@ packages = ["lsim", "lsim.reference"]
 
 [tool.setuptools.package-data]
 "lsim.reference" = ["*.json"]
+"lsim" = ["web_dist/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

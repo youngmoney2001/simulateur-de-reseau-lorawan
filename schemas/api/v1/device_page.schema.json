@@ -20,10 +20,41 @@
           "default": null,
           "title": "Average Current Ua"
         },
+        "channel_dr_masks": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel Dr Masks"
+        },
         "device_index": {
           "minimum": 0,
           "title": "Device Index",
           "type": "integer"
+        },
+        "enabled_channels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enabled Channels"
         },
         "energy_per_message_j": {
           "anyOf": [
@@ -36,6 +67,34 @@
           ],
           "default": null,
           "title": "Energy Per Message J"
+        },
+        "final_power_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Power Index"
+        },
+        "final_spreading_factor": {
+          "anyOf": [
+            {
+              "maximum": 12,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Spreading Factor"
         },
         "group": {
           "maxLength": 64,
@@ -69,6 +128,34 @@
           "minimum": 0,
           "title": "Lost Sensitivity",
           "type": "integer"
+        },
+        "power_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power Index"
+        },
+        "power_step_db": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power Step Db"
         },
         "received": {
           "minimum": 0,

@@ -50,7 +50,8 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
-    DevicePage, DeviceRowOut, GatewayLoadOut, GatewayReportOut, Problem, RunCreate, RunStatus,
+    DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
+    RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
     ValidateResponse, list_regions,
 )
@@ -58,17 +59,21 @@ from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
-    CliRequest, GatewayLink, HintRequest, Node, Position, SensorSettings, SessionCreate,
-    SimulateOut, SimulateRequest, SimulationBind, SubmitRequest,
+    CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
+    AdrChoice, ProtocoleChoice, SessionCreate, SimulateOut, SimulateRequest, SimulationBind,
+    SubmitRequest, TerrainChoice,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
+from lsim.studio_static import content_type, find_dist, resolve_asset
 from lsim.environment import Terrain, load_dem_csv
 from lsim.scenario import Scenario, _build_environment
+from lsim.scenario import EnvironmentModel
 from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
 )
+from lsim.frame_view import frames_for_run
 
 log = logging.getLogger("lsim.api")
 
@@ -79,6 +84,9 @@ MAX_ACTIVE_PER_OWNER = 4
 DEFAULT_PAGE = 100
 DEFAULT_RATE_PER_MIN = 120      # requêtes authentifiées soutenues, par jeton
 DEFAULT_RATE_BURST = 60         # rafale tolérée
+# Borne de lecture des lignes de dispositifs quand on n'en veut qu'un champ (SF de fin, pour
+# noter un exercice). Au-delà, on ne lit pas : un run peut compter des milliers de dispositifs.
+SF_READ_LIMIT = 2000
 _RUN_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _TERMINAL = ("done", "failed", "cancelled")
 _LOOPBACK = ("127.0.0.1", "::1", "localhost")
@@ -334,6 +342,26 @@ class RunStore:
         nxt = rows[limit][0] if len(rows) > limit else None
         return [json.loads(b) for _, b in rows[:limit]], nxt
 
+    def sf_par_equipement(self, run_id: str) -> dict[str, dict]:
+        """Facteur d'étalement de départ et de fin, par groupe, pour noter un exercice.
+
+        Une session d'étude compile un groupe par capteur (`explicit`, une position) : le nom du
+        groupe est donc l'identifiant de l'équipement. On ne lit que les deux champs utiles, et
+        bornés : noter un exercice d'atelier ne justifie pas de charger des milliers de lignes.
+        """
+        rows = self._conn.execute(
+            "SELECT body FROM devices WHERE run_id = ? ORDER BY idx LIMIT ?",
+            (run_id, SF_READ_LIMIT)).fetchall()
+        out: dict[str, dict] = {}
+        for (body,) in rows:
+            d = json.loads(body)
+            groupe = d.get("group")
+            if groupe is None:
+                continue
+            out[groupe] = {"spreading_factor": d.get("spreading_factor"),
+                           "final_spreading_factor": d.get("final_spreading_factor")}
+        return out
+
     def events_page(self, run_id: str, cursor: int, limit: int) -> tuple[list, Optional[int]]:
         rows = self._conn.execute(
             "SELECT seq, body FROM events WHERE run_id = ? AND seq >= ? ORDER BY seq LIMIT ?",
@@ -408,7 +436,14 @@ def _build_scenario(model: Any, terrain: Optional[Terrain] = None) -> Scenario:
     """Scénario d'API. Avec relief, l'environnement doit être déclaré : son empreinte entre alors
     dans `scenario.sha256` (un même scénario avec un autre relief a un autre identifiant)."""
     if terrain is not None and model.environment is None:
-        model = type(model).model_validate({**model.model_dump(), "environment": {}})
+        # `model_copy` et non `model_validate({**model.model_dump(), ...})` : la revalidation
+        # par `model_dump` transforme les valeurs par defaut en champs **explicitement
+        # fournis**, et `gateway` en a une. La regle « gateway » ou « gateways », pas les deux,
+        # se lit sur les champs fournis : elle se declenchait alors pour tout scenario
+        # multi-passerelles. Le relief rendait donc la simulation impossible precisement
+        # dans le cas ou il a le plus d'interet — et personne ne l'avait jamais vu, faute
+        # d'avoir pu choisir un relief depuis l'atelier.
+        model = model.model_copy(update={"environment": EnvironmentModel()})
     env = None
     if model.environment is not None:
         env = _build_environment(model.environment, Path("."), model.propagation.frequency_hz)
@@ -425,8 +460,59 @@ def _scenario_for(model: Any, terrain_id: Optional[str], catalog: TerrainCatalog
         raise ApiError(422, "validation_error", str(exc)) from None
 
 
+def _duty_cycle_out(scenario: Scenario) -> Optional[list[dict[str, Any]]]:
+    """Limites de rapport cyclique, une ligne par groupe **qui déclare une région**.
+
+    Sans région, le plan est inconnu : publier une limite reviendrait à la deviner. Aucun
+    groupe n'en déclarant, le champ est absent — un scénario antérieur garde ainsi son
+    résumé inchangé.
+    """
+    from lsim.regions import PROFILES
+
+    rows = []
+    for g in scenario.model.groups:
+        if g.region is None:
+            continue
+        profil = PROFILES.get(g.region)
+        if profil is None:                        # région inconnue : ne rien inventer
+            continue
+        try:
+            limite = profil.duty_cycle_limit(g.channel_freq_hz, g.tx_power_dbm)
+        except ValueError:
+            # Fréquence ou PIRE hors plan : le scénario a déjà été validé en amont, mais un
+            # plan dont les sous-bandes ne couvrent pas la fréquence ne doit pas faire échouer
+            # le run. On publie la ligne sans limite plutôt que de lever.
+            limite = None
+        rows.append(DutyCycleOut(group=g.name, region=g.region,
+                                 channel_freq_hz=g.channel_freq_hz, eirp_dbm=g.tx_power_dbm,
+                                 limit=limite, source=profil.source).model_dump(exclude_none=True))
+    return rows or None
+
+
+def _sf_final_par_dispositif(records) -> dict[int, int]:
+    """Facteur d'étalement de la **dernière** émission de chaque dispositif.
+
+    `records` est trié par émission ; on garde donc le dernier SF vu par dispositif, sans
+    présumer de l'ordre dans lequel le moteur les range. C'est le seul endroit où se lit un
+    changement de débit commandé par l'ADR : le moteur l'applique en cours de run, et rien
+    d'autre ne le rapporte.
+
+    Vide quand le run ne porte pas d'enregistrements : plutôt un champ absent qu'une valeur
+    qui recopierait le SF initial en laissant croire à une observation.
+    """
+    if not records:
+        return {}
+    out: dict[int, int] = {}
+    for r in records:
+        sf = getattr(r, "spreading_factor", None)
+        if sf is not None:
+            out[r.device_index] = sf
+    return out
+
+
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
-                 energy_profile: Optional[str], lost_mesh: Optional[int] = None) -> dict[str, Any]:
+                 energy_profile: Optional[str], lost_mesh: Optional[int] = None,
+                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -435,6 +521,9 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
                       lost_gateway_busy=totals.lost_gateway_busy, lost_mesh=lost_mesh).model_dump(),
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
+        duty_cycle=_duty_cycle_out(scenario),
+        rx_matrix=rx_matrix,
+        event_kinds=event_kinds or None,
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(
@@ -565,6 +654,12 @@ class RunService:
             items, nxt = self._store.devices_page(run_id, cursor, limit)
         return DevicePage(items=items, next_cursor=nxt).model_dump()
 
+    def sf_par_equipement(self, owner: str, run_id: str) -> dict[str, dict]:
+        """SF de départ et de fin par équipement, pour noter un exercice (propriétaire vérifié)."""
+        with self._lock:
+            self._done(owner, run_id)
+            return self._store.sf_par_equipement(run_id)
+
     def events_page(self, owner: str, run_id: str, cursor: int, limit: int) -> dict[str, Any]:
         with self._lock:
             self._done(owner, run_id)
@@ -620,6 +715,9 @@ class RunService:
         energy_rows: dict[int, Any] = {}
         mesh_lost_total: Optional[int] = None
         mesh_lost_by_device: Optional[tuple[int, ...]] = None
+        sf_finaux: dict[int, int] = {}
+        puissances: dict[int, Any] = {}          # boucle fermée seulement : DevicePower
+        canaux: dict[int, Any] = {}              # boucle fermée seulement : TerminalChannels
         if job.multi:
             mt = build_multi_trace(scenario, job.options)
             totals, per_device, events = mt.totals, mt.per_device, mt.events
@@ -640,6 +738,18 @@ class RunService:
             tr = build_trace(scenario, job.options)
             totals, per_device, events = tr.totals, tr.per_device, tr.events
             gateway_load, gateways = tr.gateway, None
+            # Seule la voie mono porte les enregistrements d'émission, et c'est aussi la seule
+            # où l'ADR est simulé : le SF final n'a de sens que là. Sur la voie multi il reste
+            # absent, plutôt que de recopier le SF initial en laissant croire à une observation.
+            sf_finaux = _sf_final_par_dispositif(tr.records)
+            # Puissance appliquée par l'ADR : même source, même garde. Vide hors boucle
+            # fermée, donc les champs restent absents plutôt que de recopier l'index de
+            # départ en laissant croire à une décision du serveur.
+            puissances = dict(tr.device_power or {})
+            # Canaux laissés au terminal : même source et même garde que la puissance. Vides
+            # hors boucle fermée, donc les champs restent absents plutôt que de recopier la
+            # configuration de départ en laissant croire à une décision du serveur.
+            canaux = dict(tr.device_channels or {})
         self._set(run_id, 0.7)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
@@ -657,6 +767,12 @@ class RunService:
             rows.append(DeviceRowOut(
                 device_index=i, group=group_of[i], index_in_group=index_in_group[i],
                 x_m=dev.x_m, y_m=dev.y_m, spreading_factor=dev.spreading_factor,
+                final_spreading_factor=sf_finaux.get(i),
+                power_index=(puissances[i].first_index if i in puissances else None),
+                final_power_index=(puissances[i].last_index if i in puissances else None),
+                power_step_db=(puissances[i].step_db if i in puissances else None),
+                enabled_channels=(list(canaux[i].enabled) if i in canaux else None),
+                channel_dr_masks=(dict(canaux[i].dr_masks) if i in canaux else None),
                 sent=c.sent, received=c.received, lost_sensitivity=c.lost_sensitivity,
                 lost_collision=c.lost_collision, airtime_ns=c.airtime_ns,
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),
@@ -669,17 +785,25 @@ class RunService:
                 or (mesh_lost_total is not None
                     and sum(r.get("lost_mesh", 0) for r in rows) != mesh_lost_total)):
             raise RuntimeError("compteurs par dispositif et totaux ne concordent pas")
+        _run_obj = mt if job.multi else tr
+        _vues = frames_for_run(_run_obj, scenario)
         events_out = []
-        for ev in events:
+        natures: dict[str, int] = {}
+        for _i, ev in enumerate(events):
+            # Compté ici, dans la passe qui sérialise déjà : un second parcours serait un coût
+            # pour rien, et un comptage à la demande relirait les corps (borné, donc faux).
+            natures[ev.kind] = natures.get(ev.kind, 0) + 1
             events_out.append(TraceEvent(
                 seq=ev.seq, t_ns=ev.t_ns, kind=ev.kind, device_index=ev.device_index,
                 gateway_index=ev.gateway_index, outcome=ev.outcome,
                 hops=[{"from_id": h.from_id, "to_id": h.to_id, "t_ns": h.t_ns,
                        "freq_hz": h.freq_hz, "dr": h.dr, "rssi_dbm": h.rssi_dbm,
                        "outcome": h.outcome} for h in ev.hops],
+                frame=(_vues[_i].couches() if _vues[_i] is not None else None),
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
-                               job.energy_profile, mesh_lost_total)
+                               job.energy_profile, mesh_lost_total,
+                               mt.rx_matrix if job.multi else None, event_kinds=natures)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {
@@ -742,13 +866,19 @@ class ApiServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], tokens: TokenStore, service: RunService,
                  tls_context: Optional[ssl.SSLContext] = None,
                  study: Optional[StudyService] = None,
-                 db_lock: Optional[DatabaseLock] = None) -> None:
+                 db_lock: Optional[DatabaseLock] = None,
+                 studio_root: Optional[Path] = None,
+                 auto_token: Optional[str] = None) -> None:
         super().__init__(address, _Handler)
         self.tokens = tokens
         self.service = service
         self.study = study if study is not None else StudyService()
         self._tls = tls_context
         self._db_lock = db_lock
+        self.studio_root = studio_root
+        # Jeton émis au démarrage pour que le studio n'ait pas à le réclamer à la main.
+        # None hors option --auto-token : le comportement par défaut reste la saisie manuelle.
+        self.auto_token = auto_token
 
     def server_close(self) -> None:
         super().server_close()
@@ -766,6 +896,20 @@ class ApiServer(ThreadingHTTPServer):
         log.debug("connexion refusée ou interrompue", exc_info=True)
 
 
+_TOKEN_SUR = re.compile(r"\A[A-Za-z0-9_-]{1,256}\Z")
+_INJECT = b'<script>window.LSIM_TOKEN="%s";</script>'
+
+def _inject_token(data: bytes, token: Optional[str]) -> bytes:
+    """Inscrit le jeton automatique dans la page, juste avant </head>. Sans jeton : page intacte."""
+    if not token or not _TOKEN_SUR.match(token):
+        return data
+    # Le jeton est émis par secrets.token_urlsafe : ni guillemet ni chevron, aucune échappatoire.
+    # Le motif ci-dessus le reverifie : on n'insère jamais une chaîne non conforme.
+    marque = data.lower().rfind(b"</head>")
+    if marque < 0:
+        return data
+    return data[:marque] + (_INJECT % token.encode("ascii")) + data[marque:]
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "lsim-api"
@@ -781,6 +925,38 @@ class _Handler(BaseHTTPRequestHandler):
         return  # pas de journal d'accès : les en-têtes contiennent des jetons
 
     def do_GET(self) -> None:
+        if not self._serve_static():
+            self._handle("GET")
+
+    def _serve_static(self) -> bool:
+        """Sert le studio precompile. Rend la main (False) si l URL n est pas un fichier du studio."""
+        root = getattr(self.server, "studio_root", None)
+        if root is None:
+            return False
+        path = urlsplit(self.path).path
+        fichier = resolve_asset(root, path)
+        if fichier is None:
+            return False
+        try:
+            data = fichier.read_bytes()
+        except OSError:
+            return False
+        cache = "no-store" if fichier.suffix == ".html" else "public, max-age=3600"
+        # En production le serveur sert lui-même le studio : il glisse le jeton dans la page,
+        # ce qui évite un aller-retour et surtout de l'exposer dans une URL.
+        # Seul le studio reçoit le jeton : la carte des résultats n'appelle pas l'API et n'a
+        # donc aucune raison d'y avoir accès.
+        if fichier.suffix == ".html" and fichier.name.startswith("studio"):
+            data = _inject_token(data, getattr(self.server, "auto_token", None))
+        self.send_response(200)
+        self.send_header("Content-Type", content_type(fichier))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
         self._handle("GET")
 
     def do_POST(self) -> None:
@@ -857,7 +1033,18 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(parts.query, keep_blank_values=True)
         base = f"/api/{API_VERSION}"
         if method == "GET" and path == f"{base}/health":
-            return 200, {"status": "ok", "api_version": API_VERSION}
+            # Indique si le jeton automatique est disponible : le client consulte /health
+            # au lieu de sonder /auto-token, ce qui évitait un 404 attendu mais bruyant.
+            return 200, {"status": "ok", "api_version": API_VERSION,
+                         "auto_token": bool(getattr(self.server, "auto_token", None))}
+
+        # Jeton automatique : volontairement non authentifié (c'est lui qui sert à s'authentifier),
+        # et inexistant — 404 — tant que l'option --auto-token n'est pas activée au démarrage.
+        if method == "GET" and path == f"{base}/auto-token":
+            tok = getattr(self.server, "auto_token", None)
+            if not tok:
+                raise ApiError(404, "not_found", "route inconnue")
+            return 200, {"token": tok}
 
         if not path.startswith(base + "/"):
             raise ApiError(404, "not_found", "route inconnue")
@@ -878,9 +1065,31 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and rest == "runs":
             return 202, svc.create(owner, self._json_body())
         study: StudyService = self.server.study  # type: ignore[attr-defined]
-        m = re.fullmatch(r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/position)?)?", rest)
+        m = re.fullmatch(
+            r"sessions/([^/]+)/nodes(?:/([^/]+)(/sensor|/gateway|/position)?)?", rest)
         if m is not None:
             return self._nodes(method, study, owner, m.group(1), m.group(2), m.group(3))
+        m_terrain = re.fullmatch(r"sessions/([^/]+)/terrain", rest)
+        if m_terrain is not None and method == "POST":
+            req = self._parse_body(TerrainChoice)
+            # Le catalogue vient du service des runs : lui seul sait quels reliefs existent.
+            connus = svc.terrains.ids()
+            return 200, self._study(lambda: study.set_terrain(
+                owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        m_adr = re.fullmatch(r"sessions/([^/]+)/adr", rest)
+        if m_adr is not None and method == "POST":
+            # Le souhait est enregistré quel qu'il soit ; c'est la topologie qui décide s'il est
+            # simulable, et la raison revient dans la réponse plutôt que dans un refus.
+            req = self._parse_body(AdrChoice)
+            return 200, self._study(lambda: study.set_adr(
+                owner, m_adr.group(1), req.adr)).model_dump()
+        m_prot = re.fullmatch(r"sessions/([^/]+)/protocol", rest)
+        if m_prot is not None and method == "POST":
+            # Même règle que l'ADR : le souhait est enregistré quel qu'il soit, c'est le
+            # moteur qui décide s'il est simulable, et la raison revient dans la réponse.
+            req = self._parse_body(ProtocoleChoice)
+            return 200, self._study(lambda: study.set_protocol(
+                owner, m_prot.group(1), req.join, req.confirmed)).model_dump()
         if method == "POST" and rest == "sessions":
             req = self._parse_body(SessionCreate)
             created = self._study(lambda: study.create(owner, req))
@@ -922,8 +1131,12 @@ class _Handler(BaseHTTPRequestHandler):
             if method == "POST" and action == "simulation":
                 req = self._parse_body(SimulationBind)
                 summary = svc.summary(owner, req.run_id)  # propriétaire vérifié ; 409 si non fini
+                # Le SF de fin n'est pas dans le résumé : il se lit dans les lignes de
+                # dispositifs. Sans lui, un exercice sur l'ADR ne pourrait pas être noté sur
+                # ce que le run a observé.
+                sf = svc.sf_par_equipement(owner, req.run_id)
                 return 200, self._study(
-                    lambda: study.bind_run(owner, sid, req, summary)).model_dump()
+                    lambda: study.bind_run(owner, sid, req, summary, sf)).model_dump()
 
         m = re.fullmatch(r"runs/([^/]+)(?:/(summary|devices|events))?", rest)
         if m is None:
@@ -944,21 +1157,27 @@ class _Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "not_found", "route inconnue")
 
     def _nodes(self, method: str, study: StudyService, owner: str, sid: str,
-               node_id: Optional[str], sensor: Optional[str]) -> tuple[int, Optional[dict[str, Any]]]:
+               node_id: Optional[str], sub: Optional[str]) -> tuple[int, Optional[dict[str, Any]]]:
+        # `sub` est la sous-route après l'identifiant d'équipement, pas « un capteur » :
+        # l'ancien nom laissait croire que `/gateway` n'avait pas sa place ici.
         if node_id is None:
             if method == "POST":
                 req = self._parse_body(Node)
                 return 201, self._study(lambda: study.add_node(owner, sid, req)).model_dump()
             raise ApiError(404, "not_found", "route inconnue")
-        if sensor == "/position" and method == "POST":
+        if sub == "/position" and method == "POST":
             req = self._parse_body(Position)
             return 200, self._study(
                 lambda: study.move_node(owner, sid, node_id, req)).model_dump()
-        if sensor is not None and method == "POST":      # remplace les réglages (pas de PUT)
+        if sub == "/gateway" and method == "POST":     # réglages passerelle de l'atelier 3D
+            req = self._parse_body(GatewaySettings)
+            return 200, self._study(
+                lambda: study.set_gateway(owner, sid, node_id, req)).model_dump()
+        if sub == "/sensor" and method == "POST":     # remplace les réglages (pas de PUT)
             req = self._parse_body(SensorSettings)
             return 200, self._study(
                 lambda: study.set_sensor(owner, sid, node_id, req)).model_dump()
-        if sensor is None and method == "DELETE":
+        if sub is None and method == "DELETE":
             self._study(lambda: study.remove_node(owner, sid, node_id))
             return 204, None
         raise ApiError(404, "not_found", "route inconnue")
@@ -1023,15 +1242,22 @@ def make_tls_context(cert: Path, key: Path) -> ssl.SSLContext:
 def make_server(host: str, port: int, tokens_path: Path, *, runs_db: str = ":memory:",
                 max_queue: int = MAX_QUEUE, rate_per_min: int = DEFAULT_RATE_PER_MIN,
                 tls: Optional[ssl.SSLContext] = None,
-                terrain_dir: Optional[Path] = None) -> ApiServer:
+                terrain_dir: Optional[Path] = None,
+                dist: Optional[Path] = None,
+                auto_token_owner: Optional[str] = None) -> ApiServer:
     lock = DatabaseLock(runs_db) if runs_db != ":memory:" else None
     try:
+        # --auto-token : un jeton est émis une fois au démarrage, pour un propriétaire nommé.
+        # Le serveur ne stockant que l'empreinte des jetons, il ne peut pas restituer un jeton
+        # déjà émis : il faut en émettre un nouveau, d'où cette option explicite.
+        auto = TokenStore(tokens_path).issue(auto_token_owner) if auto_token_owner else None
         service = RunService(RunStore(runs_db), max_queue=max_queue,
                              limiter=RateLimiter(per_minute=rate_per_min),
                              terrains=TerrainCatalog(terrain_dir))
         study = StudyService(store=StudyStore(runs_db))
         return ApiServer((host, port), TokenStore(tokens_path), service, tls_context=tls,
-                         study=study, db_lock=lock)
+                         study=study, db_lock=lock,
+                         studio_root=find_dist(dist), auto_token=auto)
     except BaseException:
         if lock is not None:
             lock.release()
@@ -1058,6 +1284,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_serve.add_argument("--rate-per-minute", type=int, default=DEFAULT_RATE_PER_MIN)
     p_serve.add_argument("--terrain-catalog", type=Path, default=None,
                          help="dossier de reliefs <id>.csv (optionnel)")
+    p_serve.add_argument("--dist", type=Path, default=None,
+                         help="dossier du studio precompile a servir sur la meme origine que l API")
+    p_serve.add_argument("--auto-token", metavar="PROPRIETAIRE", default=None,
+                         help="emet un jeton au demarrage pour ce proprietaire : le studio se "
+                              "connecte sans saisie. Desactive par defaut. L'authentification "
+                              "disparait : reserve a une instance locale.")
     args = parser.parse_args(argv)
 
     if args.cmd == "issue-token":
@@ -1071,13 +1303,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--tls-cert et --tls-key vont ensemble")
     if args.host not in _LOOPBACK and args.tls_cert is None:
         parser.error("adresse non locale sans TLS : fournir --tls-cert et --tls-key")
+    # Le jeton automatique supprime la frontiere d'authentification : toute personne atteignant
+    # le port obtient l'acces. On l'interdit donc sur une adresse non locale.
+    if args.auto_token and args.host not in _LOOPBACK:
+        parser.error("--auto-token exige une adresse locale (127.0.0.1, ::1, localhost) : "
+                     "sur le reseau, emettez des jetons avec issue-token")
     tls = make_tls_context(args.tls_cert, args.tls_key) if args.tls_cert else None
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
-                         rate_per_min=args.rate_per_minute, tls=tls,
-                         terrain_dir=args.terrain_catalog)
+    try:
+        server = make_server(args.host, args.port, args.tokens, runs_db=args.runs_db,
+                             rate_per_min=args.rate_per_minute, tls=tls,
+                             terrain_dir=args.terrain_catalog, dist=args.dist,
+                             auto_token_owner=args.auto_token)
+    except ValueError as exc:
+        parser.error(str(exc))
     scheme = "https" if tls else "http"
     log.info("API %s sur %s://%s:%d", API_VERSION, scheme, args.host, args.port)
+    if args.auto_token:
+        log.warning("jeton automatique actif pour %r : authentification desactivee, "
+                    "instance locale uniquement", args.auto_token)
+    if server.studio_root is not None:
+        log.info("studio servi depuis %s", server.studio_root)
+    else:
+        log.info("studio non servi : aucun dossier dist trouve (--dist pour le precise)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

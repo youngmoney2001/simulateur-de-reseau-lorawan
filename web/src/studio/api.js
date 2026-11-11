@@ -46,6 +46,8 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     removeNode: (sid, nodeId) => request("DELETE", `${s(sid)}/nodes/${enc(nodeId)}`),
     setSensor: (sid, nodeId, settings) =>
       request("POST", `${s(sid)}/nodes/${enc(nodeId)}/sensor`, settings),
+    setGateway: (sid, nodeId, settings) =>
+      request("POST", `${s(sid)}/nodes/${enc(nodeId)}/gateway`, settings),
     moveNode: (sid, nodeId, pos) => request("POST", `${s(sid)}/nodes/${enc(nodeId)}/position`, pos),
     cli: (sid, nodeId, command) => request("POST", `${s(sid)}/cli`, { node_id: nodeId, command }),
     simulate: (sid, seed) => request("POST", `${s(sid)}/simulate`, { seed }),
@@ -53,6 +55,16 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     hint: (sid, exerciseId) => request("POST", `${s(sid)}/hints`, { exercise_id: exerciseId }),
     attempts: (sid) => request("GET", `${s(sid)}/attempts`),
     exercises: () => request("GET", "/api/v1/exercises"),
+    terrains: () => request("GET", "/api/v1/terrains"),
+    setTerrain: (sid, terrainId) =>
+      request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
+    // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,
+    // et il renvoie la raison avec la topologie plutôt qu'un refus.
+    setAdr: (sid, adr) => request("POST", `${s(sid)}/adr`, { adr }),
+    // Jointure OTAA et trames confirmées : mêmes règles que l'ADR (souhait envoyé tel quel,
+    // raison renvoyée par le serveur). La jointure et l'ADR s'excluent côté moteur.
+    setProtocole: (sid, join, confirmed) =>
+      request("POST", `${s(sid)}/protocol`, { join, confirmed }),
     submit: (exerciseId, sid) =>
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),

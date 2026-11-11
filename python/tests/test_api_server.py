@@ -135,7 +135,10 @@ def test_missing_or_wrong_token_is_401_without_detail(api):
 
 def test_health_needs_no_token(api):
     status, body = api.call("GET", "/api/v1/health", token=None)
-    assert status == 200 and body == {"status": "ok", "api_version": "v1"}
+    assert status == 200
+    assert body["status"] == "ok" and body["api_version"] == "v1"
+    # Indique au client si un jeton automatique existe, pour éviter de sonder une route absente.
+    assert body["auto_token"] is False
 
 
 def test_revoked_and_expired_tokens_are_refused(api):
@@ -366,6 +369,86 @@ def test_devices_are_paginated_and_complete(finished_run):
     assert [d["device_index"] for d in seen] == list(range(30))
     _, summary = call("GET", f"/api/v1/runs/{rid}/summary")
     assert sum(d["sent"] for d in seen) == summary["totals"]["sent"]
+
+
+def test_final_spreading_factor_says_what_the_server_left_the_device_at(api):
+    """Le SF final est une observation : il ne recopie jamais le SF de départ.
+
+    Deux runs de trois capteurs partis de SF12, assez proches pour que l'ADR les fasse monter.
+    Sans ADR rien ne peut changer le débit : le champ recopierait donc le SF de départ, ce qui
+    laisserait croire à une observation — il est laissé absent. Avec ADR, il porte le SF que le
+    terminal avait **au dernier uplink**, seul endroit où le changement se lit (les sauts d'un
+    événement uplink portent le DR de départ, figé, et une commande MAC ne porte que son nom).
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test sf final", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _sf(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [d_["spreading_factor"] for d_ in page["items"]], \
+               [d_["final_spreading_factor"] for d_ in page["items"]]
+
+    # --- Voie multi-passerelles : pas d'enregistrements d'émission, donc rien à observer ------
+    departs, finaux = _sf({**base, "gateways": [
+        {"name": "gw-a", "x_m": 0, "y_m": 0}, {"name": "gw-b", "x_m": 400, "y_m": 0}]})
+    assert departs == [12, 12, 12]
+    assert finaux == [None, None, None]
+
+    # --- Avec ADR : le serveur commande un changement, et la trace le porte -------------------
+    departs, finaux = _sf({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert departs == [12, 12, 12]                      # le départ est inchangé dans le rapport
+    assert all(f is not None for f in finaux), finaux   # la voie mono observe la fin du run
+    assert min(finaux) < 12, finaux                     # au moins un terminal a été fait monter
+
+
+def test_power_index_says_what_the_server_did_to_the_transmit_power(api):
+    """La puissance que le serveur a fait appliquer, observée — jamais recopiée.
+
+    Même règle que le SF final, et pour la même raison : l'index de puissance n'existe que
+    si la boucle fermée l'a réellement décidé. Hors ADR, le champ est absent plutôt que de
+    recopier l'index de départ, ce qui laisserait croire à une décision du serveur.
+
+    La réduction affichable est `(final - départ) × pas` : une **réduction** en décibels, et
+    non une puissance absolue. La base du calcul est la puissance configurée du dispositif,
+    pas la PIRE du plan — un capteur réglé sur 14 dBm émet le RSSI de 14 dBm à l'index 0.
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test puissance", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _puissances(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [(x.get("power_index"), x.get("final_power_index"), x.get("power_step_db"))
+                for x in page["items"]]
+
+    # --- Sans ADR : le moteur ne commande aucune puissance, les champs restent absents -----
+    for ligne in _puissances({**base, "gateway": {"x_m": 0, "y_m": 0}}):
+        assert ligne == (None, None, None), ligne
+
+    # --- Avec ADR : le serveur commande, et la trace porte ce qui a été appliqué -----------
+    lignes = _puissances({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert len(lignes) == 3
+    for depart, fin, pas in lignes:
+        assert depart is not None and fin is not None and pas is not None, lignes
+        assert pas > 0
+    # Au moins un terminal a été fait baisser : c'est le sens d'un ADR sur un lien qui le permet.
+    reductions = [(fin - depart) * pas for depart, fin, pas in lignes]
+    assert max(reductions) > 0, (lignes, reductions)
 
 
 def test_events_are_ordered_paginated_and_hops_are_bounded(finished_run):
@@ -884,3 +967,102 @@ def test_validate_refuses_mesh_payloads_only_when_protocol_is_given(api):
     assert status == 200 and body["valid"] is False  # erreur de format : problème, pas de 422
     status, body = api.call("POST", "/api/v1/scenarios/validate", {"scenario": d})
     assert status == 200 and body["valid"] is True
+
+
+@contextlib.contextmanager
+def _api_avec_studio(tmp_path, dist):
+    """Un serveur qui sert aussi le studio precompile (option `dist`)."""
+    tokens = tmp_path / "tokens.json"
+    alice = srv.TokenStore(tokens).issue("alice")
+    server = srv.make_server("127.0.0.1", 0, tokens, dist=Path(dist))
+    server.studio_root = Path(dist).resolve()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    def brut(path):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        corps = resp.read()
+        conn.close()
+        return resp.status, corps
+
+    try:
+        yield brut, alice
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class TestStudioServi:
+    """Le studio precompile est servi sur la meme origine que l API."""
+
+
+    def test_studio_html_servi(self, tmp_path):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "studio.html").write_text("<html>studio</html>", encoding="utf-8")
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            status, corps = brut("/studio.html")
+        assert status == 200
+        assert corps == b"<html>studio</html>"
+
+    def test_api_toujours_vivante(self, tmp_path):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "studio.html").write_text("<html>", encoding="utf-8")
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            status, _ = brut("/api/v1/health")
+        assert status == 200
+
+    def test_traversee_refusee(self, tmp_path):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOPSECRET", encoding="utf-8")
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "studio.html").write_text("<html>", encoding="utf-8")
+        with _api_avec_studio(tmp_path, dist) as (brut, _):
+            for chemin in ("/../secret.txt", "/%2e%2e/secret.txt", "//etc/passwd"):
+                status, corps = brut(chemin)
+                assert status == 404
+                assert b"TOPSECRET" not in corps
+
+
+def test_device_row_carries_the_channels_the_server_left(api):
+    """Les canaux du terminal, publiés par l'API — et absents quand rien ne les a décidés.
+
+    Même règle que le SF final et la puissance : le champ n'existe que si la boucle fermée
+    l'a observé. Sans ADR, il est **absent** — le recopier depuis la configuration de départ
+    publierait un plan de canaux que le serveur n'a pas arrêté.
+    """
+    groupe = {"name": "c", "count": 3, "placement": {"type": "disk", "radius_m": 120},
+              "spreading_factor": 12, "payload_bytes": 10, "tx_power_dbm": 14,
+              "period_s": 60, "messages": 130, "start_spread_s": 20, "region": "EU868"}
+    base = {"schema_version": 1, "name": "test canaux", "seed": 7,
+            "propagation": {"frequency_hz": 868100000, "exponent": 2.7},
+            "groups": [groupe]}
+
+    def _canaux(d):
+        _, cree = api.call("POST", "/api/v1/runs", {"scenario": d})
+        assert cree["state"] in ("queued", "running"), cree
+        _wait_done(api, cree["run_id"])
+        _, page = api.call("GET", f"/api/v1/runs/{cree['run_id']}/devices")
+        DevicePage.model_validate(page)
+        return [(x.get("enabled_channels"), x.get("channel_dr_masks")) for x in page["items"]]
+
+    # --- Sans ADR : aucun canal n'est arrêté par le serveur, les champs restent absents -------
+    for actifs, masques in _canaux({**base, "gateway": {"x_m": 0, "y_m": 0}}):
+        assert (actifs, masques) == (None, None), (actifs, masques)
+
+    # --- Avec ADR : la boucle fermée rapporte ce qu'elle a laissé au terminal ----------------
+    lignes = _canaux({**base, "gateway": {"x_m": 0, "y_m": 0}, "mac": {"link_adr": True}})
+    assert len(lignes) == 3
+    for actifs, masques in lignes:
+        assert actifs and masques, lignes
+        # Un canal actif est défini, et porte un masque de débits non nul : sinon le terminal
+        # émettrait sur un canal où aucun débit n'est admis.
+        for ch in actifs:
+            assert masques.get(str(ch), masques.get(ch)) is not None, (ch, masques)
+            assert masques.get(str(ch), masques.get(ch)) != 0, (ch, masques)

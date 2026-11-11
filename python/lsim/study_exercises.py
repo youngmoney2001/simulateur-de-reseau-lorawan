@@ -7,7 +7,10 @@ total de points et le nombre d'indices. La note est calculée sur l'état que la
 Vérifications disponibles :
 - configuration (région, sous-bande, serveur, mode mesh, nombre de sauts) ;
 - simulation liée : trames reçues, lien mesh observé entre deux passerelles, latence p95 remise
-  au LNS par une passerelle (indicateurs publiés dans le résumé du run, `trace_metrics`).
+  au LNS par une passerelle (indicateurs publiés dans le résumé du run, `trace_metrics`) ;
+- débit observé : SF de départ et SF du dernier uplink d'un capteur (`State.sf_final`). C'est la
+  seule pièce qui dise si le serveur a *effectivement* changé le débit — une case cochée dans le
+  formulaire dit ce qui a été demandé, pas ce qui a été commandé.
 
 Indices : chaque exercice en a deux, révélés un à un à la demande. Chaque indice révélé retire
 `HINT_PENALTY` points de la note (plancher 0). Le texte d'un indice ne quitte le serveur qu'à la
@@ -16,7 +19,7 @@ demande.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from lsim.study_cli import GatewayConfig
@@ -32,9 +35,30 @@ class State:
 
     configs: dict            # id -> GatewayConfig
     reports: dict            # id -> rapport de passerelle (seulement pour les équipements liés)
+    # groupe (identifiant de l'équipement) -> {"spreading_factor", "final_spreading_factor"}
+    # Vide avant la liaison d'un run, et sur la voie multi-passerelles qui n'observe pas la fin.
+    devices: dict = field(default_factory=dict)
+    adr: bool = False            # ADR demandé sur la session (le souhait, pas son effet)
+    join: bool = False           # jointure OTAA demandée (le souhait, pas son effet)
+    # Nature des événements du run lié : {"join_request": n, "join_accept": n, "uplink": n, ...}
+    # Vide avant la liaison d'un run. Compté par le serveur, donc exact et non borné.
+    echanges: dict = field(default_factory=dict)
 
     def config(self, node: str) -> Optional[GatewayConfig]:
         return self.configs.get(node)
+
+    def sf_final(self, node: str) -> Optional[int]:
+        """SF du dernier uplink de l'équipement, tel que le run l'a laissé.
+
+        `None` quand le run n'observe pas la fin : ce n'est pas « pas de changement », c'est
+        « rien de mesuré ». Un critère qui confondrait les deux noterait à côté.
+        """
+        d = self.devices.get(node)
+        return None if d is None else d.get("final_spreading_factor")
+
+    def sf_depart(self, node: str) -> Optional[int]:
+        d = self.devices.get(node)
+        return None if d is None else d.get("spreading_factor")
 
 
 @dataclass(frozen=True)
@@ -84,6 +108,16 @@ def _max_hops_at_most(node: str, limit: int) -> Callable[[State], bool]:
     return check
 
 
+def _mesh_bandwidth(node: str, value: str) -> Callable[[State], bool]:
+    """Bande passante du mesh en kHz, telle que la rapporte la CLI (203, 406, 812, 1625)."""
+
+    def check(st: State) -> bool:
+        cfg = st.config(node)
+        return cfg is not None and cfg.mesh.bandwidth_khz == value
+
+    return check
+
+
 def _received_at_least(node: str, count: int) -> Callable[[State], bool]:
     def check(st: State) -> bool:
         report = st.reports.get(node)
@@ -115,16 +149,88 @@ def _latency_p95_at_most(node: str, limit_ms: float) -> Callable[[State], bool]:
     return check
 
 
+def _adr_active() -> Callable[[State], bool]:
+    """L'ADR est demandé sur la session. C'est le souhait : son effet se lit dans `sf_final`."""
+    return lambda st: st.adr
+
+
+def _jointure_active() -> Callable[[State], bool]:
+    """La jointure est demandée sur la session. Son effet, lui, se lit dans `echanges`."""
+    return lambda st: st.join
+
+
+def _jointures_acceptees(au_moins: int) -> Callable[[State], bool]:
+    """Au moins `au_moins` join-accept **observés** dans le run.
+
+    On compte les acceptations, pas les demandes : un terminal qui n'obtient pas son
+    join-accept recommence, et un run peut porter trente demandes pour une seule jointure
+    aboutie. Noter sur les demandes donnerait le point à une flotte qui n'a jamais joint.
+    """
+    def check(st: State) -> bool:
+        return int(st.echanges.get("join_accept") or 0) >= au_moins
+
+    return check
+
+
+def _uplinks_de_donnees(au_moins: int) -> Callable[[State], bool]:
+    """Au moins `au_moins` uplinks de **données** observés dans le run.
+
+    C'est la conséquence qui compte, et elle ne se déduit pas de la jointure : un capteur
+    peut avoir joint et ne rien émettre. Avec la jointure activée, chaque capteur perd son
+    premier message au profit du join-request — le compte attendu n'est donc pas
+    « messages x capteurs ».
+    """
+    def check(st: State) -> bool:
+        return int(st.echanges.get("uplink") or 0) >= au_moins
+
+    return check
+
+
+def _sf_a_baisse(node: str) -> Callable[[State], bool]:
+    """Le run **observe** un débit plus rapide à la fin qu'au départ, sur cet équipement.
+
+    C'est la pièce qui distingue « la case est cochée » de « le serveur a commandé » : une
+    commande MAC ne porte que son nom, et les sauts d'un uplink portent le DR de départ figé.
+    Seul le SF du dernier uplink le dit.
+
+    Renvoie False quand le SF final est absent : rien de mesuré n'est pas « pas de changement »,
+    et noter True sur une absence reviendrait à donner le point sans la preuve.
+    """
+    def check(st: State) -> bool:
+        depart, fin = st.sf_depart(node), st.sf_final(node)
+        if not isinstance(depart, int) or not isinstance(fin, int):
+            return False
+        return fin < depart      # SF plus bas = débit plus rapide
+
+    return check
+
+
 def _node(id_: str, kind: str, name: str, x: float, y: float) -> Node:
     return Node(id=id_, kind=kind, name=name, x_m=x, y_m=y)
 
 
-def _sensor(x: float, tx_power_dbm: float = 14.0, messages: int = 1) -> Node:
+def _sensor(x: float, tx_power_dbm: float = 14.0, messages: int = 1,
+            spreading_factor: int = 7, start_spread_s: float = 0.0) -> Node:
     """Capteur de départ. Avec un relais, il émet à -10 dBm à 1500 m : la frontière ne l'entend
     pas, le relais (à 300 m) si, et la trame n'arrive au LNS que par le mesh."""
     return Node(id="capteur-1", kind="sensor", name="Capteur 1", x_m=x, y_m=0,
                 sensor=SensorSettings(tx_power_dbm=tx_power_dbm, messages=messages,
+                                      spreading_factor=spreading_factor,
+                                      start_spread_s=start_spread_s,
                                       period_s=60.0 if messages > 1 else 600.0))
+
+
+def _flotte(ids: tuple[str, ...], x0: float = 400.0, pas: float = 200.0, messages: int = 6,
+            start_spread_s: float = 0.0) -> tuple[Node, ...]:
+    """Plusieurs capteurs alignés, réglés de la même façon.
+
+    `start_spread_s` vaut 0 par défaut : c'est le piège que l'exercice sur la jointure veut
+    faire rencontrer — tout le monde émet au même instant.
+    """
+    return tuple(Node(id=i, kind="sensor", name=i, x_m=x0 + pas * n, y_m=0,
+                      sensor=SensorSettings(messages=messages, period_s=300.0,
+                                            start_spread_s=start_spread_s))
+                 for n, i in enumerate(ids))
 
 
 EXERCISES: tuple[Exercise, ...] = (
@@ -194,6 +300,113 @@ EXERCISES: tuple[Exercise, ...] = (
                "Le délai d'une trame relayée dépend de la durée d'émission sur le mesh : la commande "
                "« bandwidth » de l'interface mesh (203, 406, 812 ou 1625 kHz) la raccourcit."),
     ),
+    Exercise(
+        id="au915-sous-bande",
+        title="Configurer AU915 sur la sous-bande 5",
+        statement=("Configurez la passerelle frontiere sur le plan AU915, sous-bande 5. Liez une "
+                   "simulation : la frontiere doit recevoir au moins une trame."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
+        criteria=(
+            Criterion("region", "Plan régional AU915", 10, _region("frontiere", "AU915")),
+            Criterion("sous-bande", "Sous-bande 5", 10, _sub_band("frontiere", 5)),
+            Criterion("reception", "Au moins une trame reçue par la frontière", 10,
+                      _received_at_least("frontiere", 1)),
+        ),
+        hints=("AU915 partage avec US915 la particularité des sous-bandes : la commande "
+               "« sub-band » n'a d'effet que sur ces deux plans.",
+               "Sous « int lora 0 » : « region AU915 » puis « sub-band 5 ». La réception se lit "
+               "dans le run lié à la session."),
+    ),
+    Exercise(
+        id="as923-sans-sous-bande",
+        title="Configurer AS923 et son serveur réseau",
+        statement=("Configurez la passerelle frontiere sur le plan AS923, puis déclarez son "
+                   "serveur réseau : adresse 10.0.0.9, port montant 1700, port descendant 1701. "
+                   "Liez une simulation : la frontiere doit recevoir au moins une trame."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0), _sensor(500)),
+        criteria=(
+            Criterion("region", "Plan régional AS923", 10, _region("frontiere", "AS923")),
+            Criterion("serveur", "Serveur réseau 10.0.0.9, ports 1700 et 1701", 10,
+                      _lorawan_server("frontiere", "10.0.0.9", 1700, 1701)),
+            Criterion("reception", "Au moins une trame reçue par la frontière", 10,
+                      _received_at_least("frontiere", 1)),
+        ),
+        hints=("AS923 n'a pas de sous-bande : la commande « sub-band » y est sans effet, ce plan "
+               "ne la porte pas.",
+               "La commande complète est « lorawan server <adresse> up-port <n> down-port <n> », "
+               "depuis le mode configuration."),
+    ),
+    Exercise(
+        id="relais-bande-large",
+        title="Réduire la durée d'émission du mesh",
+        statement=("Configurez le relais relais-1 en mode relay avec la bande passante la plus "
+                   "large (1625 kHz). Liez une simulation : la frontière doit recevoir par le mesh "
+                   "des trames de relais-1."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     _node("relais-1", "relay", "Relais 1", 1200, 0),
+                     _sensor(1500, tx_power_dbm=-10.0)),
+        criteria=(
+            Criterion("mode", "Relais en mode relay", 10, _mesh_mode("relais-1", "relay")),
+            Criterion("bande", "Bande passante du mesh à 1625 kHz", 10,
+                      _mesh_bandwidth("relais-1", "1625")),
+            Criterion("lien", "Lien mesh observé : relais-1 vers la frontière", 10,
+                      _mesh_inbound("frontiere", "relais-1")),
+        ),
+        hints=("La bande passante se règle sous « int mesh 0 » ; les valeurs acceptées sont 203, "
+               "406, 812 et 1625 kHz.",
+               "Une bande plus large raccourcit l'émission mais réduit la portée : c'est le "
+               "compromis que cet exercice demande d'appliquer à la valeur extrême."),
+    ),
+    Exercise(
+        id="join-flotte-etalee",
+        title="Une flotte qui joint au même instant n'émet rien",
+        statement=("Activez la jointure OTAA. Quatre capteurs démarrent tous au même instant : "
+                   "lancez une simulation et regardez combien de jointures aboutissent — et "
+                   "combien de données sortent. Étalez ensuite les départs (champ "
+                   "« Dispersion du départ » de chaque capteur) jusqu'à ce que les quatre "
+                   "capteurs émettent leurs données."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     *_flotte(("c0", "c1", "c2", "c3"), messages=6, start_spread_s=0.0)),
+        criteria=(
+            Criterion("join", "Jointure OTAA activée sur la session", 10, _jointure_active()),
+            Criterion("acceptees", "Les quatre jointures sont acceptées dans le run", 20,
+                      _jointures_acceptees(4)),
+            # 4 capteurs x 5 messages de données (le premier part en join-request) = 20.
+            # Mesuré à 19 ou 20 selon la graine : une trame peut se perdre en route, et le
+            # seuil la tolère sans rien exiger de moins que « la flotte émet ».
+            Criterion("donnees", "Les quatre capteurs émettent leurs données", 10,
+                      _uplinks_de_donnees(18)),
+        ),
+        hints=("Le join-request est une trame comme une autre : quatre émises au même instant "
+               "sur le même canal se collisionnent, et personne n'est accepté.",
+               "Le champ « Dispersion du départ » du capteur étale les premières émissions. "
+               "10 secondes suffisent ici — et le run passe alors de 0 à 20 uplinks de données."),
+    ),
+    Exercise(
+        id="adr-debit-observe",
+        title="Faire changer le débit par le serveur, et le prouver",
+        statement=("Réglez le plan régional EU868 sur la passerelle frontiere, puis activez l'ADR "
+                   "du serveur. Le capteur capteur-1 émet à 150 m, il part de SF12 et n'émet que "
+                   "20 messages : est-ce assez pour que le serveur commande un changement ? "
+                   "Lancez une simulation et lisez ce que le run a observé — le débit du dernier "
+                   "uplink doit être plus rapide que celui du départ. La fenêtre du capteur porte "
+                   "de quoi allonger l'observation si rien ne bouge."),
+        start_nodes=(_node("frontiere", "border", "Frontière", 0, 0),
+                     _sensor(150, messages=20, spreading_factor=12)),
+        criteria=(
+            Criterion("region", "Plan régional EU868 sur la passerelle frontière", 10,
+                      _region("frontiere", "EU868")),
+            Criterion("adr", "ADR activé sur la session", 10, _adr_active()),
+            Criterion("debit", "Le run observe un débit plus rapide à la fin qu'au départ", 20,
+                      _sf_a_baisse("capteur-1")),
+        ),
+        hints=("Une commande LinkADRReq ne porte que son nom : pour savoir si le débit a changé, "
+               "lisez le SF du dernier uplink dans les résultats du run, pas la case ADR.",
+               "Le serveur décide sur l'historique des uplinks reçus : à 20 messages la commande "
+               "part mais le terminal ne l'applique pas encore. Augmentez le nombre de messages "
+               "du capteur (40 suffisent à 150 m) et relancez."),
+    ),
+
 )
 
 _BY_ID = {e.id: e for e in EXERCISES}

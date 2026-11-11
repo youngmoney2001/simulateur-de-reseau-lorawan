@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
@@ -45,6 +47,30 @@ class SensorSettings(_Strict):
     start_spread_s: float = Field(0.0, ge=0, le=86400)
     region: Optional[Region] = None               # None : plan des passerelles
     channel_freq_hz: Optional[int] = Field(None, ge=137_000_000, le=3_000_000_000)
+
+
+MeshBandwidth = Literal["203", "406", "812", "1625"]      # comme `MeshModel` (scénario)
+
+
+class GatewaySettings(_Strict):
+    """Réglages d'une passerelle exposés dans l'atelier 3D.
+
+    Ce n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur
+    d'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit
+    explicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux
+    que réclament les exercices, les autres relèvent du dépannage.
+
+    Les bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans
+    la fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent
+    au même endroit (`Session.config`), ils ne peuvent pas diverger.
+    """
+
+    region: Optional[Region] = None
+    sub_band: Optional[int] = Field(None, ge=1, le=8)      # US915 / AU915 seulement
+    tx_power_dbm: Optional[float] = Field(None, ge=-10.0, le=30.0)
+    mesh_mode: Optional[Literal["relay", "border"]] = None
+    mesh_max_hops: Optional[int] = Field(None, ge=1, le=8)
+    mesh_bandwidth_khz: Optional[MeshBandwidth] = None
 
 
 class Node(_Strict):
@@ -102,6 +128,9 @@ class NodeState(_Strict):
     region: Optional[str] = Field(default=None, max_length=16)
     configured: bool
     keys: Optional[Literal["******"]] = None
+    # Réglages exposés dans la fenêtre de configuration, relus tels qu'ils sont.
+    # `None` sur un capteur ou un serveur : rien à exposer, pas « réglages par défaut ».
+    gateway: Optional[GatewaySettings] = None
 
 
 class GatewayLink(_Strict):
@@ -168,6 +197,55 @@ class SessionTopology(_Strict):
     session_id: str = Field(pattern=SESSION_PATTERN)
     nodes: list[Node] = Field(max_length=MAX_NODES)
     states: list[NodeState] = Field(max_length=MAX_NODES)
+    # Relief appliqué aux runs de cette session. `None` : le relief n'a pas été choisi, ce qui
+    # n'est pas la même chose que « terrain plat » — le moteur ne simule rien de particulier,
+    # et l'atelier doit pouvoir dire laquelle des deux situations se présente.
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
+    # ADR du serveur (LinkADRReq) : demande de l'utilisateur, et ce qu'il en est.
+    # `adr` dit ce qui est **demandé**, `adr_possible` et `adr_raison` ce que la session peut.
+    # Les porter séparément évite qu'une session qui veut l'ADR se présente comme le simulant.
+    adr: bool = False
+    adr_possible: bool = False
+    adr_raison: str = ""
+    # Jointure OTAA et trames confirmées : même forme que l'ADR, et pour la même raison —
+    # chacun dit ce qui est **demandé**, et `*_possible` / `*_raison` ce que le run fera.
+    # Ce sont des options de protocole du run (`RunCreate.protocol`), pas des réglages
+    # d'équipement : le moteur les applique à tous les dispositifs, ou à aucun.
+    join: bool = False
+    join_possible: bool = False
+    join_raison: str = ""
+    confirmed: bool = False
+    confirmed_possible: bool = False
+    confirmed_raison: str = ""
+
+
+class AdrChoice(_Strict):
+    """Demande d'activation de l'ADR du serveur sur une session.
+
+    Le client n'indique que son souhait : c'est le serveur qui sait si la topologie le permet
+    (une seule passerelle, pas de relais, un plan régional), et qui dit pourquoi sinon.
+    """
+
+    adr: bool = False
+
+
+class ProtocoleChoice(_Strict):
+    """Demande de réglage protocolaire d'une session : jointure OTAA, trames confirmées.
+
+    Comme `AdrChoice`, le client n'indique que son souhait. La jointure et l'ADR s'excluent
+    (le moteur refuse le couple — `mac_loop.check_closed_loop`), et c'est le serveur qui le
+    dit, avec la raison, plutôt que de laisser le run échouer.
+    """
+
+    join: bool = False
+    confirmed: bool = False
+
+
+class TerrainChoice(_Strict):
+    """Choix du relief d'une session. Le client ne fournit jamais de chemin : le relief est
+    résolu dans le catalogue du serveur, et un identifiant inconnu est refusé."""
+
+    terrain_id: Optional[str] = Field(default=None, pattern=TERRAIN_ID_PATTERN)
 
 
 class ExerciseSummary(_Strict):

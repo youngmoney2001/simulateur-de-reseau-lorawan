@@ -20,6 +20,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lsim import study_contract as _study_constants
 from lsim.plan import Plan, get_plan, plan_names
 from lsim.scenario import ScenarioModel
 
@@ -29,7 +30,9 @@ MAX_TRACE_EVENTS_PER_RUN = 200_000       # au-delà, le run est refusé (pas tro
 MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
 ENERGY_PROFILES = ("rak4631", "sx1262-stm32l072")
-TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
+# Défini dans `study_contract`, couche basse : `api_contract` l'importe déjà, l'inverse
+# créerait un cycle.
+TERRAIN_ID_PATTERN = _study_constants.TERRAIN_ID_PATTERN
 
 RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
@@ -143,6 +146,36 @@ class DeviceRowOut(_Strict):
     x_m: float
     y_m: float
     spreading_factor: int = Field(ge=5, le=12)
+    # Facteur d'étalement **à la fin du run**. Il ne diffère de `spreading_factor` que si le
+    # serveur a commandé un changement de débit (ADR) et que le terminal l'a appliqué — c'est
+    # donc la seule pièce qui réponde à « pourquoi ce capteur est-il passé de SF12 à SF7 ? ».
+    #
+    # Absent quand le run ne porte pas d'enregistrements d'émission (chemin multi-passerelles,
+    # où l'ADR n'est de toute façon pas simulé) : un champ absent plutôt qu'une valeur qui
+    # recopierait `spreading_factor` en laissant croire à une observation.
+    final_spreading_factor: Optional[int] = Field(default=None, ge=5, le=12)
+    # Puissance d'émission **appliquée** par la boucle fermée, en indices de puissance.
+    # Même règle que le débit : ces champs n'existent que si le run les a observés, donc
+    # absents hors ADR, plutôt que recopiés en laissant croire à une observation.
+    #
+    # La réduction affichable est `(final_power_index - power_index) * power_step_db`
+    # décibels. C'est une **réduction**, jamais une puissance absolue : la base est la
+    # puissance configurée du dispositif, et non la PIRE du plan (mesuré : un capteur réglé
+    # sur 14 dBm émet le RSSI de 14 dBm à l'index 0, pas celui de 16 dBm).
+    power_index: Optional[int] = Field(default=None, ge=0, le=15)
+    final_power_index: Optional[int] = Field(default=None, ge=0, le=15)
+    power_step_db: Optional[float] = Field(default=None, gt=0, le=10)
+    # Canaux que le serveur a **laissés** au terminal à la fin du run. Même règle que le
+    # débit et la puissance : ces champs n'existent que si la boucle fermée les a observés,
+    # donc absents ailleurs, plutôt que recopiés depuis la configuration de départ — ce qui
+    # publierait un plan de canaux que le serveur n'a pas arrêté.
+    #
+    # `enabled_channels` : canaux actifs. `channel_dr_masks` : canal -> masque des débits
+    # DR0..DR7 (bit k = DRk admis), publié avec des clés textuelles, la JSON n'ayant pas de
+    # clé entière. Un canal peut être défini sans être actif : c'est `enabled_channels` qui
+    # dit ce que la trame suivante empruntera réellement.
+    enabled_channels: Optional[list[int]] = Field(default=None, max_length=16)
+    channel_dr_masks: Optional[dict[int, int]] = None
     sent: int = Field(ge=0)
     received: int = Field(ge=0)
     lost_sensitivity: int = Field(ge=0)
@@ -188,6 +221,31 @@ class GatewayReportOut(_Strict):
     mesh_inbound: Optional[list[MeshInboundOut]] = Field(default=None, max_length=64)
 
 
+class DutyCycleOut(_Strict):
+    """Rapport cyclique d'un groupe : la limite réglementaire et sa source, pas le verdict.
+
+    Le verdict est laissé à l'interface, et pour une raison mesurée : la limite se compare à une
+    occupation **moyennée sur la fenêtre du texte réglementaire** (une heure chez ETSI), alors que
+    le run s'observe sur sa propre fenêtre. Publier ici « conforme » ou « non conforme » donnerait
+    à une comparaison de deux fenêtres différentes l'autorité du serveur. On publie donc la
+    limite, sa source, la fréquence et la région : les deux termes de la comparaison, rien de plus.
+
+    `limit` est **absente** (clé retirée, convention `exclude_none` de l'API) quand le plan
+    régional ne déclare aucune sous-bande — cinq régions sur huit sont dans ce cas (US915,
+    AU915, AS923, KR920, IN865). Ce n'est pas une limite permissive, c'est une limite absente :
+    l'interface ne doit pas la traduire par « 100 % ».
+    """
+
+    group: str = Field(min_length=1, max_length=64)
+    region: Optional[str] = Field(default=None, max_length=16)
+    channel_freq_hz: int = Field(gt=0)
+    eirp_dbm: float
+    # None : aucune sous-bande déclarée pour cette fréquence dans ce plan.
+    limit: Optional[float] = Field(default=None, gt=0.0, le=1.0)
+    # Source officielle du plan régional ; absente seulement sans région déclarée.
+    source: Optional[str] = None
+
+
 class RunSummary(_Strict):
     """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
     depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
@@ -200,11 +258,56 @@ class RunSummary(_Strict):
     gateway: Optional[GatewayLoadOut] = None
     gateways: Optional[list[GatewayReportOut]] = Field(default=None, max_length=64)
     energy_profile: Optional[str] = None
+    # Rapport cyclique par groupe. Absent si aucun groupe ne déclare de région : c'est le
+    # cas de tout scénario écrit avant l'introduction du champ, dont l'empreinte ne bouge pas.
+    duty_cycle: Optional[list[DutyCycleOut]] = Field(default=None, max_length=64)
+    # Réceptions par couple (dispositif, passerelle) : `rx_matrix[d][g]` trames décodées par la
+    # passerelle `g` pour le dispositif `d`, l'ordre des colonnes étant celui de `gateways`.
+    #
+    # C'est la seule grandeur publiée qui dise « qui a entendu qui ». L'événement servi ne
+    # porte que la **meilleure** passerelle : s'en servir pour tracer les liaisons radio
+    # dessinerait un trait là où trois passerelles ont décodé.
+    #
+    # Dispositifs dans l'ordre de `GET /runs/{id}/devices` (`device_index`), passerelles dans
+    # celui de `gateways` — deux ordres que rien ne garantit égaux, d'où leur mention ici.
+    # Absent sur un run mono-passerelle : l'unique colonne ne dirait rien de plus que le PDR.
+    # Une ligne par dispositif (jusqu'à `MAX_DEVICES`), une colonne par passerelle
+    # (jusqu'à `MAX_GATEWAYS`) : borner les lignes à 64 casserait tout run un peu peuplé.
+    rx_matrix: Optional[list[list[int]]] = None
+    # Nature des événements du run, comptée **à la fin du calcul** — quand ils sont encore
+    # en mémoire, donc exacte et sans borne de lecture.
+    #
+    # Pourquoi un compte plutôt qu'un parcours à la demande : les événements sont stockés en
+    # JSON, sans colonne de nature. Les recompter à la demande obligerait à relire les corps,
+    # donc à borner — et un compte borné noterait un exercice sur un run tronqué sans le dire.
+    #
+    # C'est ce qui permet de répondre à « les quatre capteurs ont-ils obtenu leur join-accept ? »
+    # par ce que le run a produit, jamais par ce que le formulaire a demandé.
+    event_kinds: Optional[dict[str, int]] = Field(default=None, max_length=32)
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":
         if (self.gateway is None) == (self.gateways is None):
             raise ValueError("exactement un de gateway ou gateways")
+        return self
+
+    @model_validator(mode="after")
+    def _rx_matrix_carree(self) -> "RunSummary":
+        """Une colonne par passerelle, ou pas de matrice du tout.
+
+        Le tracé lit `rx_matrix[d][g]` à l'aveugle, en supposant qu'il y a autant de colonnes
+        que de passerelles. Laisser passer une matrice bancale produirait des traits décalés
+        d'un cran — une erreur impossible à voir sur la carte, et donc impossible à corriger.
+        """
+        if self.rx_matrix is None:
+            return self
+        if self.gateways is None:
+            raise ValueError("rx_matrix sans gateways : une colonne unique ne dirait rien de plus")
+        attendu = len(self.gateways)
+        for d, ligne in enumerate(self.rx_matrix):
+            if len(ligne) != attendu:
+                raise ValueError(
+                    f"rx_matrix[{d}] : {len(ligne)} colonnes pour {attendu} passerelles")
         return self
 
 
@@ -233,6 +336,7 @@ class TraceEvent(_Strict):
     gateway_index: int = Field(default=0, ge=0)
     hops: list[Hop] = Field(default_factory=list, max_length=MAX_HOPS_PER_EVENT)
     outcome: str = Field(max_length=64)
+    frame: Optional[dict] = Field(default=None)  # trame LoRaWAN reconstruite (frame_view)
 
 
 class TracePage(_Strict):

@@ -4,7 +4,12 @@ import assert from "node:assert/strict";
 import { createClient, ApiError } from "../src/studio/api.js";
 import {
   planBounds, toScreen, toMeters, validateNewNode, validateSensor, sensorFormFrom,
+  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL, validateNewNodeGeo,
 } from "../src/studio/topology.js";
+import { degresVersMetres, metresVersDegres } from "../src/studio/geo.js";
+// Seules les données sont testées ici (le dessin exige le DOM). Ce sont elles qui engagent
+// la conformité de ce que l'interface annonce.
+import { DEVICE_SPECS, DEVICE_KINDS, hasArt } from "../src/studio/device-art.js";
 import { createHistory } from "../src/studio/console.js";
 import { gatewayRows, formatMs, scoreLine, criteriaRows } from "../src/studio/results.js";
 
@@ -62,7 +67,63 @@ test("les coordonnées aller-retour restent cohérentes et la boîte englobe les
   const p = toScreen({ x_m: 100, y_m: 50 }, b, 800, 520);
   const back = toMeters(p, b, 800, 520);
   assert.ok(Math.abs(back.x_m - 100) < 0.2 && Math.abs(back.y_m - 50) < 0.2);
-  assert.ok(planBounds([]).maxX - planBounds([]).minX >= 1000);
+  // Cadrage resserré : le plan vide fait maintenant 60 m, contre 1000 m avant. Une
+  // portée minimale aussi grande noyait les petits réseaux dans un vide blanc.
+  assert.ok(planBounds([]).maxX - planBounds([]).minX === 60);
+});
+
+test("le pas de grille reste un palier 1, 2 ou 5 et cadre entre 5 et 12 lignes", () => {
+  const palierValide = (s) => {
+    const p = Math.pow(10, Math.floor(Math.log10(s)));
+    return [1, 2, 5, 10].some((m) => Math.abs(s - m * p) < 1e-9 * Math.max(1, s));
+  };
+  // De 60 m (plan vide) à 12 km : le pas doit toujours être lisible et le nombre de
+  // lignes raisonnable, sinon la grille devient un quadrillage illisible.
+  for (const portee of [60, 120, 300, 800, 1_500, 4_000, 12_000]) {
+    const pas = gridStep(portee);
+    assert.ok(palierValide(pas), `pas ${pas} pour ${portee} m n'est pas un palier 1/2/5`);
+    const lignes = portee / pas;
+    assert.ok(lignes >= 4 && lignes <= 16, `${lignes} lignes pour ${portee} m`);
+  }
+  assert.equal(gridStep(PLAN_MIN_SPAN_M) > 0, true);
+  // Entrées dégénérées : jamais NaN, sinon le rendu produit des coordonnées invalides.
+  for (const mauvais of [0, -5, NaN, Infinity]) {
+    assert.ok(Number.isFinite(gridStep(mauvais)), `pas non fini pour ${mauvais}`);
+  }
+});
+
+test("chaque type d'équipement a une illustration et une description complète", () => {
+  // Un type sans illustration retomberait sur un dessin d'emprunt : on le refuse.
+  for (const kind of Object.keys(KIND_LABEL)) {
+    assert.ok(hasArt(kind), `${kind} n'a pas d'illustration propre`);
+    const s = DEVICE_SPECS[kind];
+    assert.ok(s, `${kind} n'a pas de description`);
+    assert.ok(s.role && s.role.length > 10, `${kind} : rôle trop vague`);
+    assert.ok(s.ports.length > 0, `${kind} : aucun port déclaré`);
+    assert.ok(s.leds.length > 0, `${kind} : aucun voyant déclaré`);
+    for (const p of s.ports) assert.ok(p.id && p.label, `${kind} : port incomplet`);
+    for (const l of s.leds) assert.ok(l.id && l.label, `${kind} : voyant incomplet`);
+  }
+  assert.deepEqual([...DEVICE_KINDS].sort(), Object.keys(KIND_LABEL).sort());
+});
+
+test("les fenêtres n'annoncent aucun réglage que le moteur ne simule pas", () => {
+  // Règle D6 de la conception : on peut montrer, jamais proposer à la saisie, ce qui n'est
+  // pas calculé. Ce test est la barrière qui empêche de glisser vers une interface décorative
+  // qui mentirait sur ses capacités.
+  const interdits = [/\bADR\b/i, /classe\s+[ABC]/i, /\bOTAA\b/i, /\bABP\b/i,
+    /\bcoding rate\b/i, /largeur de bande/i, /\bbandwidth\b/i];
+  for (const kind of DEVICE_KINDS) {
+    const s = DEVICE_SPECS[kind];
+    const champs = [s.role, ...s.ports.map((p) => `${p.label} ${p.note ?? ""}`),
+      ...s.leds.map((l) => `${l.label} ${l.etat ?? ""}`)];
+    for (const texte of champs) {
+      for (const motif of interdits) {
+        assert.ok(!motif.test(texte),
+          `${kind} annonce « ${texte} », qui n'est pas simulé par le moteur`);
+      }
+    }
+  }
 });
 
 test("validation d'un équipement : identifiant, type, coordonnées", () => {
@@ -113,4 +174,106 @@ test("mise en forme : latence absente, lien non lié, score avec indices", () =>
   assert.equal(rows[1].mesh, "—");
   assert.equal(scoreLine({ score: 18, max_score: 20, hints_used: 1 }), "18 / 20 points · 1 indice(s)");
   assert.deepEqual(criteriaRows({ criteria: [{ label: "x", passed: true, points: 5, max_points: 5 }] })[0].points, "5 / 5");
+});
+
+// --- Ajout par coordonnées géographiques (phase H) -------------------------------------------
+// L'utilisateur saisit des degrés ; le moteur reçoit des mètres. Le test porte sur la
+// jonction : ce qui part au serveur doit être la conversion exacte de ce qui a été tapé.
+
+const ORIGINE = { lat: 4.0511, lon: 9.7679 };
+
+test("un ajout par coordonnées produit les mètres correspondants", () => {
+  const r = validateNewNodeGeo(
+    { id: "capt-sud", name: "", kind: "sensor", lat: "4.0600", lon: "9.7800" },
+    ORIGINE,
+  );
+  assert.equal(r.ok, true, r.message);
+  // Mêmes nombres que `degresVersMetres` : la validation ne doit pas refaire le calcul.
+  const m = degresVersMetres(4.06, 9.78, ORIGINE);
+  assert.equal(r.node.x_m, m.x_m);
+  assert.equal(r.node.y_m, m.y_m);
+  assert.equal(r.node.id, "capt-sud");
+  assert.equal(r.node.name, "capt-sud");   // nom vide : l'identifiant sert de nom
+  assert.equal(r.node.kind, "sensor");
+});
+
+test("saisir l'origine place l'équipement au point zéro", () => {
+  const r = validateNewNodeGeo(
+    { id: "gw-0", kind: "border", lat: "4.0511", lon: "9.7679" },
+    ORIGINE,
+  );
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.node.x_m, 0);
+  assert.equal(r.node.y_m, 0);
+});
+
+test("une coordonnée hors domaine est refusée avec le champ fautif", () => {
+  const cas = [
+    ["lat", { lat: "91", lon: "9.7679" }, /latitude/],
+    ["lon", { lat: "4.0511", lon: "181" }, /longitude/],
+    ["lat", { lat: "", lon: "9.7679" }, /latitude/],
+    ["lon", { lat: "4.0511", lon: "abc" }, /longitude/],
+  ];
+  for (const [champ, coords, motif] of cas) {
+    const r = validateNewNodeGeo({ id: "x", kind: "sensor", ...coords }, ORIGINE);
+    assert.equal(r.ok, false, `accepté à tort : ${JSON.stringify(coords)}`);
+    assert.equal(r.field, champ);
+    assert.match(r.message, motif);
+  }
+});
+
+test("une coordonnée très lointaine est refusée au lieu de sortir de l'échelle", () => {
+  // À l'autre bout du monde : la conversion donnerait des millions de mètres, hors de
+  // l'échelle du plan. Mieux vaut refuser que d'afficher un équipement introuvable.
+  const r = validateNewNodeGeo(
+    { id: "loin", kind: "sensor", lat: "-33.8688", lon: "151.2093" }, ORIGINE);
+  assert.equal(r.ok, false);
+  assert.match(r.message, /trop éloignée/);
+});
+
+test("des coordonnées vides posent l'équipement à l'origine", () => {
+  // Cas le plus courant : on identifie l'équipement et on le place plus tard, en le tirant
+  // sur la carte. Exiger des degrés ici obligerait à recopier l'origine qu'on vient de
+  // choisir — et c'est exactement ce qui a cassé l'ajout en une étape.
+  for (const vide of [{ lat: "", lon: "" }, { lat: "  ", lon: "  " }, { lat: null, lon: "" }]) {
+    const r = validateNewNodeGeo({ id: "n", kind: "sensor", ...vide }, ORIGINE);
+    assert.equal(r.ok, true, `refusé à tort : ${JSON.stringify(vide)}`);
+    assert.equal(r.node.x_m, 0);
+    assert.equal(r.node.y_m, 0);
+  }
+});
+
+test("une seule coordonnée fournie est refusée", () => {
+  // À moitié vide, ce n'est plus « je placerai plus tard » : c'est une saisie incomplète,
+  // et la dire complète poserait l'équipement à un endroit qui n'a pas été voulu.
+  for (const partiel of [{ lat: "4.0511", lon: "" }, { lat: "", lon: "9.7679" }]) {
+    const r = validateNewNodeGeo({ id: "n", kind: "sensor", ...partiel }, ORIGINE);
+    assert.equal(r.ok, false, `accepté à tort : ${JSON.stringify(partiel)}`);
+  }
+});
+
+test("les champs communs restent validés à l'identique", () => {
+  // L'identifiant est refusé de la même manière que par `validateNewNode` : la variante
+  // géographique ne doit pas ouvrir une brèche dans les règles communes.
+  const r = validateNewNodeGeo({ id: "MAUVAIS", kind: "sensor", lat: "4.05", lon: "9.76" }, ORIGINE);
+  assert.equal(r.ok, false);
+  assert.equal(r.field, "id");
+  assert.equal(
+    validateNewNodeGeo({ id: "ok", kind: "inexistant", lat: "4.05", lon: "9.76" }, ORIGINE).field,
+    "kind",
+  );
+});
+
+test("aller-retour : une position posée au clic se relit à l'identique", () => {
+  // Le scénario réel de la phase H : on clique la carte, la position part en mètres, et la
+  // fenêtre la réaffiche en degrés. Le nombre montré doit être celui du clic, sinon
+  // l'équipement « saute » à chaque ouverture.
+  for (const [x, y] of [[0, 0], [1500, -2200], [-800, 377.5], [12345.6, -9876.5]]) {
+    const d = metresVersDegres(x, y, ORIGINE);
+    const r = validateNewNodeGeo(
+      { id: "n", kind: "sensor", lat: String(d.lat), lon: String(d.lon) }, ORIGINE);
+    assert.equal(r.ok, true, r.message);
+    assert.ok(Math.abs(r.node.x_m - x) < 1e-6, `x : ${r.node.x_m} au lieu de ${x}`);
+    assert.ok(Math.abs(r.node.y_m - y) < 1e-6, `y : ${r.node.y_m} au lieu de ${y}`);
+  }
 });

@@ -23,14 +23,15 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Container, Optional
 
 from lsim import study_cli, study_exercises
 from lsim.study_compile import CompileError, Compiled, compile_session
 from lsim.study_contract import (
     MAX_NODES, AttemptList, AttemptOut, CliError, CliRequest, CliResponse, CriterionResult,
-    GatewayLink, HintOut, Node, NodeState, Position, SensorSettings, SessionCreate, SessionList,
-    SessionOut, SessionSummary, SessionTopology, SimulationBind, SimulationBound, SubmitResult,
+    GatewayLink, GatewaySettings, HintOut, Node, NodeState, Position, SensorSettings,
+    SessionCreate, SessionList, SessionOut, SessionSummary, SessionTopology, SimulationBind,
+    SimulationBound, SubmitResult,
 )
 from lsim.study_store import StudyStore
 
@@ -102,11 +103,48 @@ class _Study:
     nodes: dict = field(default_factory=dict)       # id -> Node
     cli: dict = field(default_factory=dict)         # id -> study_cli.Session
     reports: dict = field(default_factory=dict)     # id -> rapport de passerelle lié
+    sf_par_equipement: dict = field(default_factory=dict)  # groupe -> {SF depart, SF final}
+    # Options de protocole du run. Demandées ici, **effectivement simulées** selon ce que le
+    # moteur accepte : la jointure et l'ADR s'excluent (`mac_loop.check_closed_loop`).
+    join: bool = False
+    confirmed: bool = False
+    # Nature des événements du dernier run lié (`join_request`, `join_accept`, `uplink`, `ack`).
+    # Comptée par le serveur à la fin du run, donc exacte : noter un exercice sur un compte
+    # partiel reviendrait à noter un run qu'on n'a pas entièrement lu.
+    echanges: dict = field(default_factory=dict)
     run_id: Optional[str] = None
+    terrain_id: Optional[str] = None   # relief applique aux runs ; None = pas choisi, pas « plat »
+    # ADR du serveur (LinkADRReq). Demande de l'utilisateur, pas un constat : la session peut
+    # le vouloir sans qu'il soit possible, et la raison est alors affichée, pas tue.
+    adr: bool = False
     hints_revealed: dict = field(default_factory=dict)   # exercice -> nombre d'indices révélés
     attempts: deque = field(default_factory=lambda: deque(maxlen=MAX_ATTEMPTS))
     attempt_count: int = 0
     compiled: dict = field(default_factory=dict)    # run_id -> [GatewayLink] (compilation)
+
+
+def _adr_etat(st: _Study) -> tuple[bool, str]:
+    """L'ADR est-il simulable sur cette session, et sinon pourquoi.
+
+    Sorti de `compile_session` pour être lisible **avant** le run : l'atelier grise le réglage
+    avec sa raison au lieu de laisser l'utilisateur compiler pour découvrir le refus.
+    """
+    from lsim.study_compile import adr_possible
+    return adr_possible(list(st.nodes.values()), {nid: c.config for nid, c in st.cli.items()})
+
+
+def _join_etat(st: _Study) -> tuple[bool, str]:
+    """La jointure OTAA est-elle simulable, et sinon pourquoi. Lisible **avant** le run."""
+    from lsim.study_compile import join_possible
+    return join_possible(list(st.nodes.values()), {nid: c.config for nid, c in st.cli.items()},
+                         st.adr)
+
+
+def _confirmed_etat(st: _Study) -> tuple[bool, str]:
+    """Les trames confirmées sont-elles simulables, et sinon pourquoi."""
+    from lsim.study_compile import confirmed_possible
+    return confirmed_possible(list(st.nodes.values()),
+                              {nid: c.config for nid, c in st.cli.items()}, st.adr)
 
 
 def _encode(st: _Study) -> dict:
@@ -115,7 +153,13 @@ def _encode(st: _Study) -> dict:
         "nodes": {nid: n.model_dump(mode="json") for nid, n in st.nodes.items()},
         "cli": {nid: _cli_to_dict(c) for nid, c in st.cli.items()},
         "reports": st.reports,
+        "sf_par_equipement": st.sf_par_equipement,
         "run_id": st.run_id,
+        "terrain_id": st.terrain_id,
+        "adr": st.adr,
+        "join": st.join,
+        "confirmed": st.confirmed,
+        "echanges": st.echanges,
         "hints_revealed": st.hints_revealed,
         "attempt_count": st.attempt_count,
         "compiled": {rid: [link.model_dump(mode="json") for link in links]
@@ -129,9 +173,13 @@ def _decode(owner: str, last_used: float, body: dict, attempts: list[dict]) -> _
                 nodes={nid: Node.model_validate(n) for nid, n in body["nodes"].items()},
                 cli={nid: _cli_from_dict(nid, c) for nid, c in body["cli"].items()},
                 reports=body["reports"], run_id=body["run_id"],
+                sf_par_equipement=body.get("sf_par_equipement") or {},
+                join=bool(body.get("join")), confirmed=bool(body.get("confirmed")),
+                echanges=dict(body.get("echanges") or {}),
                 hints_revealed=body["hints_revealed"], attempt_count=body["attempt_count"],
                 compiled={rid: [GatewayLink.model_validate(x) for x in links]
-                          for rid, links in body["compiled"].items()})
+                          for rid, links in body["compiled"].items()},
+                terrain_id=body.get("terrain_id"), adr=body.get("adr", False))
     st.attempts.extend(AttemptOut.model_validate(a) for a in attempts)
     return st
 
@@ -215,8 +263,17 @@ class StudyService:
             states.append(NodeState(
                 node_id=node.id, hostname=cli.config.hostname,
                 region=cli.config.lora.region,
-                configured=cli.config != study_cli.new_session(node.id).config))
-        return SessionTopology(session_id=sid, nodes=nodes, states=states)
+                configured=cli.config != study_cli.new_session(node.id).config,
+                gateway=_gateway_state(node, cli)))
+        ok, raison = _adr_etat(st)
+        join_ok, join_raison = _join_etat(st)
+        conf_ok, conf_raison = _confirmed_etat(st)
+        return SessionTopology(session_id=sid, nodes=nodes, states=states,
+                                terrain_id=st.terrain_id, adr=st.adr,
+                                adr_possible=ok, adr_raison=raison,
+                                join=st.join, join_possible=join_ok, join_raison=join_raison,
+                                confirmed=st.confirmed, confirmed_possible=conf_ok,
+                                confirmed_raison=conf_raison)
 
     def topology(self, owner: str, sid: str) -> SessionTopology:
         with self._lock:
@@ -290,6 +347,52 @@ class StudyService:
             self._save(sid, st)
             return self._topology_locked(sid, st)
 
+    def set_gateway(self, owner: str, sid: str, node_id: str,
+                    settings: GatewaySettings) -> SessionTopology:
+        """Réglages passerelle depuis l'atelier 3D.
+
+        Écrit dans `Session.config`, c'est-à-dire **la même configuration que le CLI** : un
+        réglage posé dans la fenêtre apparaît dans `show running-config`, et réciproquement.
+        Les deux chemins ne divergent pas parce qu'il n'y a qu'un seul état.
+
+        Seuls les champs présents sont appliqués : une fenêtre qui n'affiche pas l'antenne ne
+        doit pas pouvoir l'effacer.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            node = st.nodes.get(node_id)
+            if node is None:
+                raise StudyError(404, "not_found", "équipement inconnu dans cette session")
+            if node.kind not in CLI_NODE_KINDS:
+                raise StudyError(422, "validation_error",
+                                 "réglages passerelle : équipement sans interface configurable",
+                                 "node_id")
+            cfg = st.cli[node_id].config
+            # Une sous-bande n'existe que sur US915 / AU915 : même refus, mêmes mots que le
+            # CLI, pour que l'apprenant n'ait pas deux vérités selon le chemin emprunté.
+            # La région retenue est celle du payload si elle y est, sinon celle déjà posée :
+            # c'est ce qui permet d'écrire la sous-bande après la région en deux envois.
+            region = settings.region if settings.region is not None else cfg.lora.region
+            if settings.sub_band is not None and region not in study_cli.SUB_BAND_REGIONS:
+                raise StudyError(422, "validation_error",
+                                 "sous-bande : région US915 ou AU915 requise", "sub_band")
+            if settings.region is not None:
+                cfg.lora.region = settings.region
+                if settings.region not in study_cli.SUB_BAND_REGIONS:
+                    cfg.lora.sub_band = None   # la sous-bande n'a plus de sens hors US915/AU915
+            if settings.sub_band is not None:
+                cfg.lora.sub_band = settings.sub_band
+            if settings.tx_power_dbm is not None:
+                cfg.lora.tx_power_dbm = settings.tx_power_dbm
+            if settings.mesh_mode is not None:
+                cfg.mesh.mode = settings.mesh_mode
+            if settings.mesh_max_hops is not None:
+                cfg.mesh.max_hops = settings.mesh_max_hops
+            if settings.mesh_bandwidth_khz is not None:
+                cfg.mesh.bandwidth_khz = settings.mesh_bandwidth_khz
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
+
     def cli(self, owner: str, sid: str, req: CliRequest) -> CliResponse:
         with self._lock:
             st = self._get_locked(owner, sid)
@@ -324,9 +427,53 @@ class StudyService:
             nodes = list(st.nodes.values())
             configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
         try:
-            return compile_session(nodes, configs, seed)
+            return compile_session(nodes, configs, seed, terrain_id=st.terrain_id,
+                                        adr=st.adr, join=st.join, confirmed=st.confirmed)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
+
+    def set_protocol(self, owner: str, sid: str, join: bool, confirmed: bool) -> SessionTopology:
+        """Règle la jointure OTAA et les trames confirmées.
+
+        Comme pour l'ADR, le souhait est gardé même quand il n'est pas simulable, et c'est la
+        topologie qui décide : la raison revient dans la réponse plutôt que dans un refus.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            st.join = bool(join)
+            st.confirmed = bool(confirmed)
+            return self._topology_locked(sid, st)
+
+    def set_adr(self, owner: str, sid: str, adr: bool) -> SessionTopology:
+        """Active ou désactive l'ADR du serveur.
+
+        Le souhait est toujours enregistré, même quand la topologie ne le permet pas : la
+        session garde l'intention et la raison est affichée. Effacer le souhait au motif qu'il
+        n'est pas réalisable ferait perdre à l'utilisateur ce qu'il voulait faire, sans rien lui
+        apprendre de plus.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            st.adr = bool(adr)
+            return self._topology_locked(sid, st)
+
+    def set_terrain(self, owner: str, sid: str, terrain_id: Optional[str],
+                    known: Container[str]) -> SessionTopology:
+        """Relief appliqué aux runs de la session.
+
+        `known` est l'ensemble des identifiants du catalogue serveur, injecté par l'appelant :
+        le service d'étude n'a pas à connaître le service des runs. Un relief inconnu est
+        refusé ici, et non au moment du run — une erreur au lancement d'une simulation
+        arrive trop tard, elle laisse croire que le reste est prêt.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            if terrain_id is not None and terrain_id not in known:
+                raise StudyError(422, "validation_error",
+                                 f"relief « {terrain_id} » inconnu du catalogue", "terrain_id")
+            st.terrain_id = terrain_id
+            self._save(sid, st)
+            return self._topology_locked(sid, st)
 
     def record_simulation(self, owner: str, sid: str, run_id: str, links: list[dict]) -> None:
         """Mémorise les liaisons d'un run créé par `compile` (appelé après sa création)."""
@@ -340,20 +487,43 @@ class StudyService:
 
     # Liaison à une simulation -------------------------------------------------------------------
 
-    def bind_run(self, owner: str, sid: str, req: SimulationBind, summary: dict) -> SimulationBound:
+    def bind_run(self, owner: str, sid: str, req: SimulationBind, summary: dict,
+                 sf_par_equipement: Optional[dict] = None) -> SimulationBound:
         """Lie le résumé d'un run terminé selon les associations de la requête, ou, sans
         association, selon la compilation de la session si le run en vient.
 
         Tout est validé avant la moindre modification : une association invalide ne laisse aucun
         équipement à moitié lié. `summary` vient de `RunService.summary` (propriétaire vérifié).
+
+        `sf_par_equipement` : SF de départ et de fin par groupe, lu dans les lignes de
+        dispositifs. Il n'est pas dans le résumé, et c'est pourtant la seule pièce qui dise si
+        le serveur a changé le débit d'un capteur — donc la seule qui permette de noter un
+        exercice sur l'ADR sans interroger une case de formulaire.
+
+        `summary["event_kinds"]` : nature des événements, comptée par le serveur à la fin du
+        run. C'est ce qui permet de noter une jointure sur les join-accept **observés**.
         """
         gateways = {g["name"]: g for g in summary.get("gateways") or []}
+        # Un run ADR n'a **aucune passerelle nommée** : la session y compile en forme
+        # `gateway` (singulier), seule forme que le moteur accepte avec un MAC actif. Il n'y a
+        # donc rien à lier, et ce n'est pas une erreur de l'utilisateur — c'est le coût assumé
+        # de l'ADR. On accepte la liaison sans lien plutôt que de la refuser : sinon l'atelier
+        # échouerait sur **chaque** run ADR, y compris celui qui vient d'être lancé.
+        #
+        # En revanche, un run qui nomme des passerelles reste strict : un nom absent du run est
+        # une faute de l'utilisateur, et le refus le lui dit.
+        sans_passerele_nommee = not gateways
         seen_nodes: set[str] = set()
         seen_gateways: set[str] = set()
         with self._lock:
             st = self._get_locked(owner, sid)
             if req.links:
+                # Liaison explicite : jamais avalée en silence. Un nom absent du run est une
+                # faute de l'utilisateur, et le refus le lui dit — même si le run n'en nomme
+                # aucun. C'est la seule voie qui doive rester stricte.
                 links = list(req.links)
+            elif sans_passerele_nommee:
+                links = []          # rien à lier : le run ne nomme aucune passerelle
             else:
                 links = [link for link in st.compiled.get(req.run_id, [])
                          if link.node_id in st.nodes]
@@ -384,6 +554,8 @@ class StudyService:
                 if node_id not in seen_nodes:
                     cli.simulation = None
             st.run_id = req.run_id
+            st.sf_par_equipement = dict(sf_par_equipement or {})
+            st.echanges = dict(summary.get("event_kinds") or {})
             unlinked = [n for n in st.nodes if n not in seen_nodes]
             self._save(sid, st)
         return SimulationBound(session_id=sid, run_id=req.run_id, linked=linked, unlinked=unlinked)
@@ -424,7 +596,9 @@ class StudyService:
             exercise = self._exercise_for_session(st, exercise_id, "session_id")
             state = study_exercises.State(
                 configs={nid: cli.config.copy() for nid, cli in st.cli.items()},
-                reports={nid: dict(r) for nid, r in st.reports.items()})
+                reports={nid: dict(r) for nid, r in st.reports.items()},
+                devices={k: dict(v) for k, v in st.sf_par_equipement.items()},
+                adr=st.adr, join=st.join, echanges=dict(st.echanges))
             hints_used = st.hints_revealed.get(exercise_id, 0)
         graded = study_exercises.grade(exercise, state)
         criteria = [CriterionResult(id=c.id, label=c.label, passed=ok,
@@ -453,3 +627,19 @@ class StudyService:
             st = self._get_locked(owner, sid)
             items = list(st.attempts)
         return AttemptList(items=items)
+
+
+def _gateway_state(node: Any, cli: Any) -> Optional["GatewaySettings"]:
+    """Réglages exposés d'un équipement, relus depuis la configuration du CLI.
+
+    `None` pour un capteur ou un serveur : ils n'ont pas d'interface configurable, ce qui
+    n'est pas la même chose que « configuré par défaut ». La fenêtre s'appuie sur cette
+    distinction pour ne pas afficher de formulaire vide là où il n'y a rien à régler.
+    """
+    if node.kind not in CLI_NODE_KINDS:
+        return None
+    return GatewaySettings(
+        region=cli.config.lora.region, sub_band=cli.config.lora.sub_band,
+        tx_power_dbm=cli.config.lora.tx_power_dbm, mesh_mode=cli.config.mesh.mode,
+        mesh_max_hops=cli.config.mesh.max_hops,
+        mesh_bandwidth_khz=cli.config.mesh.bandwidth_khz)

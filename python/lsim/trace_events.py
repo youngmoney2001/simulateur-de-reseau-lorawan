@@ -41,7 +41,7 @@ import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 from lsim.gwmp_server import JOIN_ACCEPT_DELAY1_US
 from lsim.lora import RadioConfig, time_on_air_ns
@@ -209,6 +209,49 @@ class ProtocolEvent:
 
 
 @dataclass(frozen=True)
+class DevicePower:
+    """Puissance d'émission d'un dispositif, telle que la boucle fermée l'a **appliquée**.
+
+    `first_index` / `last_index` : index de puissance du premier et du dernier uplink. Un
+    index plus haut est une puissance plus basse (`adr.cpp` : l'index monte tant qu'il
+    reste de la marge). `step_db` est le pas du plan régional.
+
+    La réduction vaut donc `(last_index - first_index) * step_db` décibels. C'est une
+    **réduction**, et non une puissance absolue : la base est la puissance configurée du
+    dispositif, pas la PIRE du plan — mesuré à 300 m, un capteur réglé sur 14 dBm émet à
+    l'index 0 le RSSI de 14 dBm, et non celui de 16 dBm. Afficher « 16 dBm → 2 dBm »
+    serait donc faux de 2 dB au départ, et le bas de l'échelle descend sous le minimum
+    régional (0 dBm mesuré pour l'index 7 en EU868, dont le plan s'arrête à 2 dBm).
+    """
+
+    first_index: int
+    last_index: int
+    step_db: float
+
+    @property
+    def reduction_db(self) -> float:
+        """Décibels retirés entre le premier et le dernier uplink (négatif si hausse)."""
+        return (self.last_index - self.first_index) * self.step_db
+
+
+@dataclass(frozen=True)
+class TerminalChannels:
+    """Canaux que le serveur a **laissés** au terminal à la fin du run.
+
+    `dr_masks` : canal -> masque des débits DR0..DR7 (bit k = DRk admis sur ce canal).
+    `enabled` : canaux actifs, sous-ensemble des canaux définis.
+
+    Distinction qui compte, et qui est celle du moteur : un canal **défini** mais non
+    **activé** existe dans la configuration du terminal sans servir à l'émission. Afficher
+    l'un pour l'autre ferait croire à un plan de canaux qui n'est pas celui que la trame
+    suivante va réellement emprunter.
+    """
+
+    dr_masks: Mapping[int, int]
+    enabled: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class TraceRun:
     per_device: tuple[Counters, ...]
     totals: Counters
@@ -221,6 +264,14 @@ class TraceRun:
     mac_bytes: Optional[MacByteAccounting] = None  # octets réservés / émis / confirmés
     # Retransmissions seulement (None sinon) : détail des essais, des ACK et des doublons.
     retransmissions: Optional[object] = None
+    # Boucle fermée seulement : puissance d'émission appliquée, par dispositif. Absente
+    # ailleurs — le chemin historique ne décide d'aucune puissance, et recopier l'index de
+    # départ ferait croire à une observation là où le moteur n'a rien commandé.
+    device_power: Optional[Mapping[int, DevicePower]] = None
+    # Boucle fermée seulement : canaux laissés au terminal, par dispositif. Absent ailleurs,
+    # pour la même raison que la puissance : l'ABI v2 ne les porte pas, et les recopier
+    # depuis la configuration de départ publierait un plan que le serveur n'a pas arrêté.
+    device_channels: Optional[Mapping[int, TerminalChannels]] = None
 
 
 @dataclass(frozen=True)
@@ -1202,23 +1253,55 @@ def build_trace_closed_loop(scenario: Scenario, options: ProtocolOptions = Proto
 def _build_trace_closed_loop(scenario, devices, group_of, radios, gateway, propagation, environment,
                              options: ProtocolOptions) -> TraceRun:
     """Boucle fermée S2/S3 : une exécution, uplinks, réservations MAC et descentes du moteur natif."""
-    from lsim.closed_loop import OUTCOME_CODES, simulate_closed_loop
+    from lsim.closed_loop import OUTCOME_CODES
+    from lsim.closed_loop_v3 import simulate_closed_loop_v3
     from lsim.mac_loop import (
         check_closed_loop, loop_options, loop_regions, mac_byte_accounting, mac_slots,
     )
     check_closed_loop(scenario, options)
     schedule = _schedule_of(scenario)
-    out = simulate_closed_loop(devices, gateway, propagation, environment, radios,
-                               loop_regions(scenario, group_of), loop_options(scenario, options),
-                               mac=mac_slots(schedule, devices))
+    regions = loop_regions(scenario, group_of)
+    # ABI v3, et non v2 : c'est la seule qui rapporte les canaux laissés au terminal
+    # (`terminals`), que la v2 ne porte pas. L'équivalence sur les champs communs a été
+    # mesurée avant la bascule — comptages, uplinks, descendantes, occupations et file MAC
+    # identiques sur six scénarios — sinon ce ne serait pas une migration mais une
+    # régression silencieuse de toutes les mesures existantes.
+    out = simulate_closed_loop_v3(devices, gateway, propagation, radios,
+                                  regions, loop_options(scenario, options),
+                                  mac=mac_slots(schedule, devices),
+                                  environment=environment)
     records = tuple(
         TxRecord(u.device, u.start_ns, u.end_ns, u.spreading_factor, u.rssi_dbm,
                  OUTCOME_CODES[u.outcome])
         for u in out.uplinks)
+    # Canaux laissés au terminal par le serveur. Ils ne sont lisibles que sur la v3 : l'ABI
+    # v2 ne les porte pas, et c'est la raison d'être de la bascule. `terminals` est vide
+    # quand le moteur n'a rien à en dire — le champ reste alors absent plutôt que de
+    # publier une liste vide qui ferait croire à une observation.
+    canaux = {t.device: TerminalChannels(
+        dr_masks={ch: mask for ch, mask in sorted(t.dr_masks.items())},
+        enabled=tuple(t.enabled)) for t in (out.terminals or ())}
+    # Puissance appliquée, un relevé par dispositif. `u.power_index` existe sur chaque
+    # uplink de la boucle fermée : il était simplement jeté à la ligne ci-dessus, si bien
+    # que l'atelier montrait le débit commandé par le serveur sans jamais dire qu'il avait
+    # aussi baissé la puissance — le versant « autonomie » de la même décision.
+    # Le pas est lu par dispositif : un plan par passerelle, et non une moyenne qui
+    # donnerait une réduction en décibels n'appartenant à aucun des deux.
+    puissances: dict[int, DevicePower] = {}
+    for u in out.uplinks:
+        connue = puissances.get(u.device)
+        pas_db = regions[u.device].power_step_tenth_db / 10.0 if u.device < len(regions) else None
+        if pas_db is None:
+            continue
+        puissances[u.device] = DevicePower(
+            first_index=connue.first_index if connue is not None else u.power_index,
+            last_index=u.power_index, step_db=pas_db)
     events = _closed_loop_events(out, radios, options, schedule)
     return TraceRun(per_device=out.per_device, totals=out.totals, gateway=out.load, records=records,
                     events=events, gateway_tx=out.busy, mac_queue=out.mac_queue,
-                    mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks))
+                    mac_bytes=mac_byte_accounting(schedule, devices, out.uplinks),
+                    device_power=puissances or None,
+                    device_channels=canaux or None)
 
 
 def _closed_loop_events(out, radios: Sequence[DeviceRadio], options: ProtocolOptions,
@@ -1431,6 +1514,11 @@ class MultiTraceRun:
     lost_mesh: Optional[int] = None
     lost_mesh_by_device: Optional[tuple[int, ...]] = None
     mesh_loads: Optional[tuple[Optional[MeshLoad], ...]] = None  # `gateway_names` ; None sans mesh
+    # Réceptions par couple (dispositif, passerelle) : `rx_matrix[d][g]` trames décodées par la
+    # passerelle `g` pour le dispositif `d`. C'est la seule grandeur qui dise « qui a entendu
+    # qui » : l'événement servi ne porte que `gateway_index`, c'est-à-dire la **meilleure**
+    # passerelle, et tracer depuis là dessinerait un trait là où trois passerelles ont décodé.
+    rx_matrix: Optional[tuple[tuple[int, ...], ...]] = None
 
 
 def _finite_or_none(x: float) -> Optional[float]:
@@ -1557,6 +1645,33 @@ def _direct_deliverer(decoded_mask: int, models, border: str) -> Optional[int]:
         if not models[g].mesh:
             return g
     return None
+
+
+def _rx_matrix(trace, n_devices: int, n_gateways: int) -> Optional[tuple[tuple[int, ...], ...]]:
+    """Réceptions par couple (dispositif, passerelle), depuis le masque de décodage.
+
+    Une seule passe sur la trace : la construire par couple coûterait `dispositifs × passerelles`
+    parcours, ce qui se paie sur les gros scénarios.
+
+    Le masque dit « a décodé », pas « a entendu » : c'est la granularité à laquelle une liaison
+    radio est significative. Une trame reçue par trois passerelles compte trois fois — une fois
+    par liaison, et non une fois pour la trame.
+    """
+    if not trace or n_devices <= 0 or n_gateways <= 0:
+        return None
+    matrice = [[0] * n_gateways for _ in range(n_devices)]
+    for r in trace:
+        masque = r.decoded_mask
+        if not masque:
+            continue
+        ligne = matrice[r.device_index]
+        g = 0
+        while masque:
+            if masque & 1:
+                ligne[g] += 1
+            masque >>= 1
+            g += 1
+    return tuple(tuple(l) for l in matrice)
 
 
 def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOptions()) -> MultiTraceRun:
@@ -1751,11 +1866,13 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
         for k, (t, _order, kind, d, g, hops, outcome) in enumerate(pending)
     )
     net = result.network
+    rx = _rx_matrix(result.trace, len(devices), len(names))
     if mesh is None:
         totals = Counters(net.sent, net.received, net.lost_sensitivity, net.lost_collision,
                           net.airtime_ns, net.lost_gateway_busy)
         return MultiTraceRun(per_device=result.per_device, totals=totals,
-                             per_gateway=result.per_gateway, gateway_names=names, events=events)
+                             per_gateway=result.per_gateway, gateway_names=names, events=events,
+                             rx_matrix=rx)
     # Mesh : remises au LNS par dispositif ; le reste des trames décodées est « lost_mesh ».
     per_device, lost_by_device = [], []
     for d, c in enumerate(result.per_device):
@@ -1772,7 +1889,7 @@ def build_multi_trace(scenario: Scenario, options: ProtocolOptions = ProtocolOpt
                          per_gateway=result.per_gateway, gateway_names=names, events=events,
                          lost_mesh=net.received - received,
                          lost_mesh_by_device=tuple(lost_by_device),
-                         mesh_loads=_mesh_loads(models, mesh))
+                         mesh_loads=_mesh_loads(models, mesh), rx_matrix=rx)
 
 
 # Descentes reçues par le dispositif (ce qui consomme sa réception).

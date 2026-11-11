@@ -1,5 +1,110 @@
 {
   "$defs": {
+    "GatewaySettings": {
+      "additionalProperties": false,
+      "description": "Réglages d'une passerelle exposés dans l'atelier 3D.\n\nCe n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur\nd'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit\nexplicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux\nque réclament les exercices, les autres relèvent du dépannage.\n\nLes bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans\nla fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent\nau même endroit (`Session.config`), ils ne peuvent pas diverger.",
+      "properties": {
+        "mesh_bandwidth_khz": {
+          "anyOf": [
+            {
+              "enum": [
+                "203",
+                "406",
+                "812",
+                "1625"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Bandwidth Khz"
+        },
+        "mesh_max_hops": {
+          "anyOf": [
+            {
+              "maximum": 8,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Max Hops"
+        },
+        "mesh_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "relay",
+                "border"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh Mode"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "enum": [
+                "EU868",
+                "US915",
+                "AU915",
+                "AS923",
+                "KR920",
+                "IN865",
+                "RU864"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "sub_band": {
+          "anyOf": [
+            {
+              "maximum": 8,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sub Band"
+        },
+        "tx_power_dbm": {
+          "anyOf": [
+            {
+              "maximum": 30.0,
+              "minimum": -10.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Power Dbm"
+        }
+      },
+      "title": "GatewaySettings",
+      "type": "object"
+    },
     "Node": {
       "additionalProperties": false,
       "properties": {
@@ -65,6 +170,17 @@
         "configured": {
           "title": "Configured",
           "type": "boolean"
+        },
+        "gateway": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GatewaySettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "hostname": {
           "maxLength": 64,
@@ -200,6 +316,51 @@
   },
   "additionalProperties": false,
   "properties": {
+    "adr": {
+      "default": false,
+      "title": "Adr",
+      "type": "boolean"
+    },
+    "adr_possible": {
+      "default": false,
+      "title": "Adr Possible",
+      "type": "boolean"
+    },
+    "adr_raison": {
+      "default": "",
+      "title": "Adr Raison",
+      "type": "string"
+    },
+    "confirmed": {
+      "default": false,
+      "title": "Confirmed",
+      "type": "boolean"
+    },
+    "confirmed_possible": {
+      "default": false,
+      "title": "Confirmed Possible",
+      "type": "boolean"
+    },
+    "confirmed_raison": {
+      "default": "",
+      "title": "Confirmed Raison",
+      "type": "string"
+    },
+    "join": {
+      "default": false,
+      "title": "Join",
+      "type": "boolean"
+    },
+    "join_possible": {
+      "default": false,
+      "title": "Join Possible",
+      "type": "boolean"
+    },
+    "join_raison": {
+      "default": "",
+      "title": "Join Raison",
+      "type": "string"
+    },
     "nodes": {
       "items": {
         "$ref": "#/$defs/Node"
@@ -220,6 +381,19 @@
       "maxItems": 64,
       "title": "States",
       "type": "array"
+    },
+    "terrain_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terrain Id"
     }
   },
   "required": [
