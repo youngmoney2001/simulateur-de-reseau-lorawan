@@ -698,6 +698,28 @@ Trois états, et ils ne se confondent pas : sans capacité saisie, rien n'est af
 nomme au lieu de convertir de force ; les deux présents, les deux termes sont rappelés et la
 limite est dite — une pile ne rend pas ce que le calcul promet.
 
+### Le courant moyen d'appareils qui ne se ressemblent pas
+
+Le raisonnement ci-dessus tient si le run ne mesure **qu'un** courant. Ce n'est pas le cas
+dès que les capteurs diffèrent, et ils diffèrent bien avant qu'on ne choisisse leur matériel :
+mesuré sur le jeu d'essai des indicateurs, **16 µA en SF7** contre **2 503 µA en SF12**, et
+**15,9 mJ** contre **495,6 mJ** par message. La moyenne des 22 dispositifs, **1 146 µA**,
+n'est la consommation d'aucun d'eux — elle en a pourtant l'air, ce qui est pire qu'une
+absence : un nombre qui a l'air mesuré se lit comme un fait.
+
+Les deux indicateurs d'énergie publient donc désormais l'**intervalle** dès que les
+dispositifs divergent à l'affichage, et un seul chiffre quand ils concordent — un run
+homogène ne doit pas devenir « 52 à 52 µA ». L'intitulé change avec (« Courant par
+dispositif » au lieu de « Courant moyen »), et l'infobulle dit pourquoi : matériel, facteur
+d'étalement et période diffèrent. L'autonomie suit la même règle, du plus gourmand au plus
+sobre : « 1 mois à 17 ans — 2 400 mAh pour 16 à 2 503 µA ».
+
+Deux raisons de le faire maintenant plutôt que plus tard. Le réglage du matériel par
+équipement venait d'être livré : sans cela, comparer un RAK4631 et un SX1262 dans un même
+run aurait abouti à un courant moyen décrivant un matériel intermédiaire qui n'existe pas —
+la comparaison rendue possible aurait été effacée par l'affichage. Et la moyenne mentait
+déjà, avant tout matériel, dès que deux facteurs d'étalement cohabitaient.
+
 ---
 
 ## 6. Relief — **livré** : choisissable depuis l'atelier, et sa voie réparée

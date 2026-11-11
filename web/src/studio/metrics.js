@@ -41,8 +41,49 @@ function fixe(valeur, decimales) {
   return valeur == null ? "—" : valeur.toFixed(decimales);
 }
 
-function entier(valeur) {
+/** Arrondi à l'affichage, sans décimale : une grandeur de run n'en a pas besoin. */
+export function entier(valeur) {
   return valeur == null ? "—" : String(Math.round(valeur));
+}
+
+/**
+ * Étendue d'une grandeur par dispositif : le plus sobre, le plus gourmand, et la moyenne.
+ *
+ * `null` si aucune valeur n'est exploitable — la grandeur n'a alors pas été mesurée, ce qui
+ * n'est pas la même chose que « mesurée à zéro ».
+ */
+export function etendue(valeurs = []) {
+  const definies = valeurs.filter((v) => Number.isFinite(v));
+  if (!definies.length) return null;
+  return { min: Math.min(...definies), max: Math.max(...definies), moyenne: moyenne(definies) };
+}
+
+/**
+ * Texte d'une grandeur par dispositif : l'intervalle quand ils divergent, la valeur seule
+ * quand ils concordent.
+ *
+ * Une moyenne ne vaut que si les dispositifs se ressemblent. Ils peuvent différer par le
+ * matériel, le facteur d'étalement ou la période : mesuré sur le jeu d'essai, 16 µA en SF7
+ * contre 2 503 µA en SF12, et 15,9 mJ contre 495,6 mJ par message. Leur moyenne — 1 146 µA,
+ * 233,9 mJ — n'est la consommation d'aucun dispositif du run, alors qu'elle en a l'air. Un
+ * nombre qui a l'air mesuré et ne l'est pas est pire qu'une absence : il se lit comme un fait.
+ *
+ * La borne basse se formate avant la comparaison : deux dispositifs à 16,06 et 16,4 µA
+ * s'affichent tous deux « 16 µA », et un intervalle « 16 à 16 µA » serait du bruit.
+ *
+ * @param {{min: number, max: number, moyenne: number}|null} et l'étendue
+ * @param {(v: number) => string} formater mise en forme d'une valeur
+ * @returns {string|null} intervalle ou valeur, `null` sans mesure.
+ */
+export function texteEtendue(et, formater = entier) {
+  if (!et) return null;
+  const bas = formater(et.min), haut = formater(et.max);
+  return bas === haut ? bas : `${bas} à ${haut}`;
+}
+
+/** Vrai si les dispositifs, une fois arrondis à l'affichage, ne concordent pas. */
+export function etendueVisible(et, formater = entier) {
+  return !!et && formater(et.min) !== formater(et.max);
 }
 
 // Énergie : le joule seul donne des nombres à rallonge sur des trames de 20 mJ.
@@ -101,8 +142,12 @@ export function indicateursReseau(summary, lignes = []) {
 
   // Énergie : absente sans profil (`energy_profile`), ou si la période est trop courte pour
   // la trame (`energy_per_message_j` vaut alors null sur la ligne concernée).
-  const energieParMessage = moyenne(lignes.map((l) => l.energy_per_message_j));
-  const courantMoyen = moyenne(lignes.map((l) => l.average_current_ua));
+  const energieMessage = etendue(lignes.map((l) => l.energy_per_message_j));
+  const courants = etendue(lignes.map((l) => l.average_current_ua));
+  const energieParMessage = energieMessage?.moyenne ?? null;
+  const courantMoyen = courants?.moyenne ?? null;
+  const energieEtalee = etendueVisible(energieMessage, energie);
+  const courantEtale = etendueVisible(courants);
   // Sans profil énergie, `somme` renverrait 0 et l'indicateur afficherait « 0.000 J » — un
   // nombre fabriqué, indiscernable d'une mesure nulle. L'absence de mesure doit rester
   // invisible : l'indicateur est alors écarté, pas affiché à zéro.
@@ -171,10 +216,14 @@ export function indicateursReseau(summary, lignes = []) {
   if (energieParMessage != null) {
     out.push({
       id: "energie_message",
-      label: "Énergie par message",
+      label: energieEtalee ? "Énergie par message, par dispositif" : "Énergie par message",
       value: energieParMessage,
-      text: energie(energieParMessage),
-      hint: "moyenne des dispositifs — émission, écoute RX1/RX2 et veille ramenés à un message",
+      text: texteEtendue(energieMessage, energie),
+      min: energieMessage.min,
+      max: energieMessage.max,
+      hint: energieEtalee
+        ? "les dispositifs ne dépensent pas la même chose : matériel, facteur d'étalement et période diffèrent — la moyenne ne serait la dépense d'aucun d'eux"
+        : "émission, écoute RX1/RX2 et veille ramenés à un message — même valeur sur tous les dispositifs",
     });
   }
   if (energieRun != null) {
@@ -189,10 +238,14 @@ export function indicateursReseau(summary, lignes = []) {
   if (courantMoyen != null) {
     out.push({
       id: "courant",
-      label: "Courant moyen",
+      label: courantEtale ? "Courant par dispositif" : "Courant moyen",
       value: courantMoyen,
-      text: `${entier(courantMoyen)} µA`,
-      hint: "moyenne des dispositifs — courant moyen sur la période d'émission, veille comprise",
+      text: `${texteEtendue(courants)} µA`,
+      min: courants.min,
+      max: courants.max,
+      hint: courantEtale
+        ? "les dispositifs ne consomment pas la même chose : matériel, facteur d'étalement et période diffèrent — la moyenne ne serait le courant d'aucun d'eux"
+        : "courant moyen sur la période d'émission, veille comprise — même valeur sur tous les dispositifs",
     });
   }
 

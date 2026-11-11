@@ -97,10 +97,25 @@ test("indicateurs réseau : parité avec les compteurs du run", () => {
   // 152 reçues sur 1 742,5 s d'observation.
   assert.equal(i.debit.text, "0.09 trame/s");
   assert.equal(i.simultaneite.text, "3 trames");
-  // Profil énergie présent : moyenne des 22 dispositifs.
-  assert.equal(i.energie_message.text, "233.94 mJ");
+  // Profil énergie présent. Les 22 dispositifs ne se ressemblent pas : 12 en SF7 à 15,90 mJ
+  // et 16 µA, 10 en SF12 à 495,58 mJ et 2 503 µA. Leur moyenne — 233,94 mJ et 1 146 µA —
+  // n'est la dépense d'aucun d'eux, alors qu'elle en a l'air : d'où l'intervalle publié.
+  assert.equal(i.energie_message.text, "15.90 mJ à 495.58 mJ");
   assert.equal(i.energie_run.text, "50.703 J");
-  assert.equal(i.courant.text, "1146 µA");
+  assert.equal(i.courant.text, "16 à 2503 µA");
+});
+
+test("courant et énergie : un seul chiffre quand les dispositifs concordent", () => {
+  // Une moyenne ne ment que si les dispositifs diffèrent. Tous identiques, elle est une
+  // mesure : l'indicateur reste un chiffre et reprend son intitulé d'origine. Sans cela,
+  // la correction précédente transformerait chaque run en intervalle « 52 à 52 µA ».
+  const memes = devices.map((d) => ({ ...d, average_current_ua: 51.96,
+                                      energy_per_message_j: 0.0002 }));
+  const i = parId(indicateursReseau(summary, memes));
+  assert.equal(i.courant.text, "52 µA");
+  assert.equal(i.courant.label, "Courant moyen");
+  assert.equal(i.energie_message.text, "0.20 mJ");
+  assert.equal(i.energie_message.label, "Énergie par message");
 });
 
 test("charge offerte et occupation sont deux grandeurs distinctes", () => {

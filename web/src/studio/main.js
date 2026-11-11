@@ -13,7 +13,7 @@ import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
   limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, messagesPourFenetre,
-  autonomieAns, autonomieTexte,
+  autonomieAns, autonomieTexte, entier,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
 import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
 import { createPlayer } from "./player.js";
@@ -60,6 +60,8 @@ const state = {
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
+  courantMinUA: null,   // bornes du meme run : une moyenne ne decrit personne si elles divergent
+  courantMaxUA: null,
   capaciteMAh: null,    // l'autre terme est enonce par l'utilisateur, jamais devine ici
   terrains: [],         // catalogue du serveur : vide la plupart du temps, et c'est un fait
   terrainCharge: false, // le catalogue n'est demande qu'une fois, pas a chaque session
@@ -1474,10 +1476,23 @@ function renderAutonomie() {
     out.textContent = "courant moyen non simulé";
     return;
   }
+  // Même règle que pour le courant affiché : si les dispositifs ne consomment pas la même
+  // chose, une autonomie unique serait celle d'un matériel qui n'existe pas. On donne
+  // l'intervalle, du plus gourmand au plus sobre — et non l'inverse, la plus forte
+  // consommation donnant la plus courte autonomie.
+  const etale = entier(state.courantMinUA) !== entier(state.courantMaxUA);
+  const duree = etale
+    ? `${autonomieTexte(autonomieAns(mAh, state.courantMaxUA))} à `
+      + autonomieTexte(autonomieAns(mAh, state.courantMinUA))
+    : autonomieTexte(ans);
+  // « pour » et non « à » : « 2 400 mAh à de 16 à 2 503 µA » se télescope.
+  const courantTexte = etale
+    ? `pour ${entier(state.courantMinUA)} à ${entier(state.courantMaxUA)} µA`
+    : `à ${entier(state.courantMoyenUA)} µA`;
   // Les deux termes sont rappelés : une autonomie sans son courant ni sa capacité ne se
   // vérifie pas. Et la limite est dite — une pile ne rend pas ce que le calcul promet.
-  out.textContent = `${autonomieTexte(ans)} — ${mAh} mAh à `
-    + `${Math.round(state.courantMoyenUA)} µA, hors vieillissement et hors autodécharge`;
+  out.textContent = `${duree} — ${mAh} mAh ${courantTexte}, `
+    + "hors vieillissement et hors autodécharge";
 }
 
 /**
@@ -1634,8 +1649,14 @@ function renderMetrics(summary, deviceRows) {
   // capacite inviterait a calculer quelque chose a partir de rien.
   // La valeur est reprise de l'indicateur deja calcule, pas recalculee : deux chemins vers
   // le meme chiffre finiraient par diverger sans que rien ne le signale.
-  const courant = liste.find((i) => i.id === "courant")?.value ?? null;
+  const bloc = liste.find((i) => i.id === "courant");
+  const courant = bloc?.value ?? null;
   state.courantMoyenUA = courant;
+  // Les bornes voyagent avec le courant : l'autonomie se calcule sur elles quand les
+  // dispositifs ne consomment pas la même chose, sans quoi elle décrirait un matériel
+  // intermédiaire qui n'existe pas.
+  state.courantMinUA = bloc?.min ?? courant;
+  state.courantMaxUA = bloc?.max ?? courant;
   $("sim-autonomie").hidden = courant == null;
   if (courant != null) {
     const champ = $("battery-mah");
