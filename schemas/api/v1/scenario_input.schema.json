@@ -286,6 +286,17 @@
           "title": "Duty Cycle",
           "type": "number"
         },
+        "energy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnergyModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "messages": {
           "default": 1,
           "minimum": 1,
