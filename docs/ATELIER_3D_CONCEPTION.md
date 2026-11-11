@@ -17,7 +17,7 @@ L'utilisateur décrit son attente ainsi :
 
 | # | Étape | État | Écart restant |
 |---|---|---|---|
-| 1 | Choisir la zone | **à faire (I)** | aucun choix de lieu ; il faut taper des degrés |
+| 1 | Choisir la zone | **fait (I)** | geste armé sur la carte (un clic nu ne déplace rien), coordonnées saisissables, recentrage |
 | 2 | Carte 3D comme plan de travail | **fait (G)** | — |
 | 3a | Pose par glisser-déposer | **fait (H)** | — |
 | 3b | Pose par coordonnées | **fait (H)** | — |
