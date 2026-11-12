@@ -745,14 +745,28 @@ try {
     await obsTab("Runs");
     await page.waitForSelector("#runs-table tbody tr", { timeout: 20_000 });
     const lire = () => page.$$eval("#runs-table tbody tr", (trs) => trs.map((tr) => ({
-      graine: tr.children[0].textContent.trim(),
-      etat: tr.children[2].textContent.trim(),
-      recues: tr.children[3].textContent.trim(),
+      graine: tr.children[0]?.textContent.trim() ?? "(vide)",
+      etat: tr.children[2]?.textContent.trim() ?? "(vide)",
+      recues: tr.children[3]?.textContent.trim() ?? "(vide)",
       affiche: tr.classList.contains("affiche"),
     })));
+    // Ce que le panneau contient réellement au moment de l'échec : lire « aucune ligne »
+    // sans cela oblige à deviner entre un rendu en cours, une réponse vide et un panneau
+    // masqué — trois causes qui ne se ressemblent pas.
+    const etatPanneauRuns = async () => await page.evaluate(() => {
+      const p = document.querySelector('.tab-body[data-panel="runs"]');
+      const t = document.getElementById("runs-table");
+      return `panneau masqué : ${p?.hidden} · table masquée : ${t?.hidden} · `
+        + `note : ${document.getElementById("runs-note")?.textContent ?? "(absente)"} · `
+        + `vide : ${document.getElementById("runs-vide")?.textContent ?? "(absent)"} · `
+        + `onglet actif : ${document.querySelector(".tab.active")?.textContent?.trim()} · `
+        + `statut : ${document.getElementById("sim-status")?.textContent ?? "(vide)"} · `
+        + `html : ${(t?.innerHTML ?? "").slice(0, 600)}`;
+    });
     const lignes = await lire();
     if (lignes.length < 2) {
-      throw new Error(`historique trop court pour comparer : ${JSON.stringify(lignes)}`);
+      throw new Error(`historique trop court pour comparer : ${JSON.stringify(lignes)}\n`
+        + `${await etatPanneauRuns()}`);
     }
     // Le plus récent d'abord, et c'est celui qu'on vient de faire qui est marqué affiché.
     if (!lignes[0].affiche) throw new Error(`run affiché non marqué : ${JSON.stringify(lignes)}`);
@@ -777,10 +791,20 @@ try {
     // croire qu'on lit l'autre.
     await obsTab("Runs");
     // La liste est relue à l'ouverture de l'onglet : les lignes reviennent avec le serveur.
-    await page.waitForSelector("#runs-table tbody tr", { timeout: 20_000 });
+    // On attend le compte attendu, pas une seule ligne : une lecture faite entre deux rendus
+    // verrait un tableau à moitié refait.
+    try {
+      await page.waitForFunction(
+        (n) => document.querySelectorAll("#runs-table tbody tr").length >= n,
+        { timeout: 20_000 }, lignes.length);
+    } catch (err) {
+      throw new Error(`lignes non revenues : ${JSON.stringify(await lire())}\n`
+        + `${await etatPanneauRuns()}`);
+    }
     const marques = (await lire()).map((l) => l.affiche);
     if (marques.filter(Boolean).length !== 1 || !marques[marques.length - 1]) {
-      throw new Error(`marquage de la ligne affichée : ${JSON.stringify(marques)}`);
+      throw new Error(`marquage de la ligne affichée : ${JSON.stringify(marques)}\n`
+        + `${await etatPanneauRuns()}`);
     }
     await obsTab("Simulation");
   });
