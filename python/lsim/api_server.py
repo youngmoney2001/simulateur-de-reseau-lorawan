@@ -53,8 +53,7 @@ from lsim.api_contract import (
     DevicePage, DeviceRowOut, DownlinkOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut,
     Problem, classes_ecoute,
     RunCreate, RunStatus,
-    RunSummary, SessionRunList, SessionRunOut, TerrainInfo, TerrainList, Totals, TracePage,
-    TraceEvent, ValidateRequest,
+    RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
     ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
     list_regions,
 )
@@ -690,32 +689,6 @@ class RunService:
             raise ApiError(409, "conflict", "run non terminé avec succès")
         return row
 
-    def resume(self, owner: str, run_id: str) -> Optional[dict[str, Any]]:
-        """De quoi reconnaître un run sans l'ouvrir : état, graine, date, grands nombres.
-
-        `None` si le run est inconnu du demandeur. Un run évincé du stockage n'est pas une
-        erreur et ne doit pas faire échouer la liste entière : il n'est simplement plus là.
-        Les grands nombres ne sont publiés que sur un run **terminé** — un run en cours n'a
-        pas de résultat, et des zéros se liraient comme une mesure nulle.
-        """
-        with self._lock:
-            row = self._store.get_run(run_id)
-            if row is None or row["owner"] != owner:
-                return None
-            out: dict[str, Any] = {"run_id": run_id, "state": row["state"],
-                                   "seed": row["seed"], "created_at": row["created_at"]}
-            if row["problem"]:
-                out["problem"] = row["problem"]
-            if row["state"] == "done" and row["summary"]:
-                s = row["summary"]
-                totals = s.get("totals") or {}
-                out["pdr"] = s.get("pdr")
-                out["sent"] = totals.get("sent")
-                out["received"] = totals.get("received")
-                out["energy_profile"] = s.get("energy_profile")
-                out["downlink"] = s.get("downlink")   # absent si le run n'en planifie pas
-            return out
-
     def summary(self, owner: str, run_id: str) -> dict[str, Any]:
         with self._lock:
             return dict(self._done(owner, run_id)["summary"])
@@ -1245,7 +1218,7 @@ class _Handler(BaseHTTPRequestHandler):
             result = self._study(lambda: study.submit(owner, exercise_id, req.session_id))
             return 200, result.model_dump()
 
-        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation|simulate|hints|attempts|runs)", rest)
+        m = re.fullmatch(r"sessions/([^/]+)/(topology|cli|simulation|simulate|hints|attempts)", rest)
         if m is not None:
             sid, action = m.group(1), m.group(2)
             if method == "GET" and action == "attempts":
@@ -1254,23 +1227,6 @@ class _Handler(BaseHTTPRequestHandler):
                 req = self._parse_body(HintRequest)
                 return 200, self._study(
                     lambda: study.hint(owner, sid, req.exercise_id)).model_dump()
-            if method == "GET" and action == "runs":
-                # Les runs de ce chantier, du plus récent au plus ancien. Un run absent du
-                # stockage est sauté : l'historique du chantier n'est pas le stockage, et un
-                # run évincé ne doit pas faire échouer les autres.
-                # `study.runs` passe par `_study` : une session d'un autre propriétaire lève
-                # « session inconnue », qui doit sortir en 404 et non en erreur de serveur.
-                ids = self._study(lambda: study.runs(owner, sid))
-                items = []
-                for rid in ids:
-                    r = svc.resume(owner, rid)
-                    if r is None:
-                        continue
-                    r["links"] = [x.model_dump() for x in study.compiled_links(owner, sid, rid)]
-                    items.append(r)
-                return 200, SessionRunList(
-                    items=[SessionRunOut.model_validate(r) for r in items]).model_dump(
-                        exclude_none=True)
             if method == "GET" and action == "topology":
                 return 200, self._study(lambda: study.topology(owner, sid)).model_dump()
             if method == "POST" and action == "cli":

@@ -305,6 +305,17 @@ try {
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }
+  // Un serveur de réseau, posé à l'écart : sa fenêtre porte un tableau de cinq colonnes
+  // dans 430 px, une géométrie que rien d'autre ne mesure. Il n'entre pas dans la
+  // compilation (`compile_session` ne retient que les passerelles et les capteurs), donc le
+  // run mesuré plus bas n'en est pas changé.
+  await setValue('#add-form [name="id"]', "lns");
+  await page.select('#add-form [name="kind"]', "server");
+  await setValue('#add-form [name="lat"]', "4.049000");
+  await setValue('#add-form [name="lon"]', "9.765000");
+  await submitForm("#add-form");
+  await page.waitForSelector('g.node[data-id="lns"]');
+
   // Sans WebGL, Cesium ne peut rien peindre : le globe reste une surface unie, ce qui n'est
   // pas un défaut de l'application mais une limite de l'environnement. On le mesure pour ne
   // pas attribuer à tort un globe vide à un défaut de code.
@@ -480,6 +491,18 @@ try {
     // ne mesure ici que celle d'un capteur : la nouvelle fenêtre serait la seule partie de
     // l'interface jamais passée au gabarit. On ferme donc le capteur et on ouvre la
     // passerelle — le formulaire le plus dense de l'atelier.
+    // Le serveur ne se configure pas : sa fenêtre dit ce qu'il a vu du run, dans un tableau
+    // par équipement. Cinq colonnes en 430 px : un débordement y passerait inaperçu sans
+    // cet état.
+    { nom: "serveur · Config", action: async () => {
+      await page.evaluate(() => {
+        document.querySelector('.device-win[data-node-id="gw-nord"] .close')?.click();
+      });
+      await pause(300);
+      await page.click('g.node[data-id="lns"] rect');
+      await page.waitForSelector('.device-win[data-node-id="lns"]');
+      return cliquerTexte('.device-win[data-node-id="lns"] .dtab', "Config");
+    } },
     { nom: "passerelle · Config", action: async () => {
       await page.evaluate(() => {
         document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();

@@ -273,6 +273,13 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .device-win .console pre { max-height:none; }
 .frame-panel { margin-top:0; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
 .frame-panel h3 { margin:0 0 6px; font-size:13px; }
+/* --- Ce que le serveur a vu ------------------------------------------------------------- */
+/* Le serveur ne se configure pas : sa fenêtre est un constat, pas un formulaire. Le tableau
+   y est plus serré qu'ailleurs — cinq colonnes dans 430 px — d'où des chiffres de largeur
+   fixe, pour que deux équipements se comparent d'un coup d'œil. */
+.serveur-vu p { margin:0 0 4px; }
+.device-win table td, .device-win table th { font-variant-numeric:tabular-nums; }
+
 /* --- Runs déjà lancés ------------------------------------------------------------------ */
 /* La ligne entière est cliquable : c'est le run qu'on veut revoir, pas une cellule. Le
    survol le dit, et la ligne du run affiché reste marquée — sans quoi on ne sait plus

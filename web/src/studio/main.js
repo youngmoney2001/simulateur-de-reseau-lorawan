@@ -460,6 +460,9 @@ async function annulerOuRetablir(sens) {
   // topologie. On le retire, comme à l'ouverture d'un autre chantier.
   state.result = null;
   state.resultats = null;
+  // Le résumé est celui d'un run calculé sur un autre réseau : le garder ferait dire au
+  // serveur ce qu'il a vu d'un chantier qui n'existe plus.
+  state.resume = null;
   state.rxMatrix = null;
   state.liens = [];
   state.passerelles = null;
@@ -1011,6 +1014,7 @@ function renderDevice() {
       }));
     } else if (w.tab === "config") {
       if (node.kind === "sensor") renderSensorForm(node, body);
+      else if (node.kind === "server") renderServeurConfig(node, body);
       else renderGatewayConfig(node, body);
     } else if (w.tab === "cli") {
       if (CLI_KINDS.includes(node.kind)) renderConsole(node, body);
@@ -1198,6 +1202,73 @@ function renderGatewayConfig(node, body) {
 }
 
 // Pourquoi cet equipement n a pas de console, au lieu de masquer l onglet.
+/**
+ * Le serveur de réseau ne se configure pas : c'est lui qui commande.
+ *
+ * Sa fenêtre montre donc ce qu'il a **vu** du dernier run, par équipement : le débit qu'il a
+ * commandé, les canaux qu'il a laissés, les commandes qu'il a envoyées. Rien n'y est recopié
+ * depuis les formulaires — un champ que le run n'a pas observé reste vide, plutôt
+ * d'afficher une valeur que personne n'a mesurée.
+ */
+function renderServeurConfig(node, body) {
+  body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
+  const rows = state.deviceRows ?? [];
+  if (!rows.length) {
+    body.append(el("p", { class: "no-cli",
+      text: "Le serveur n'a encore rien observé : lancez une simulation. Il ne se configure "
+        + "pas — c'est lui qui commande le débit, les canaux et les descentes." }));
+    return;
+  }
+  const noeuds = state.topo?.nodes ?? [];
+  const nomDe = (row) => {
+    const n = noeuds.find((x) => x.id === row.group);
+    return n ? (n.name || n.id) : row.group;
+  };
+  const envoyees = rows.reduce((a, r) => a + (r.sent ?? 0), 0);
+  const remises = rows.reduce((a, r) => a + (r.received ?? 0), 0);
+  const bloc = el("div", { class: "serveur-vu" });
+  bloc.append(el("p", { class: "muted",
+    text: `${remises} trame(s) remise(s) au serveur sur ${envoyees} émise(s), `
+      + `par ${rows.length} équipement(s).` }));
+  // Les commandes sont l'action du serveur lui-même : c'est le seul endroit qui les compte
+  // du point de vue de celui qui les envoie.
+  const dl = state.resume?.downlink;
+  if (dl) {
+    bloc.append(el("p", { class: "muted",
+      text: `Commandes envoyées : ${dl.delivered} sur ${dl.requested}`
+        + (dl.latency_mean_s === null || dl.latency_mean_s === undefined
+          ? "." : `, attendue ${formatSecondes(dl.latency_mean_s)} en moyenne.`) }));
+  }
+  body.append(bloc);
+
+  const corps = el("tbody");
+  for (const r of rows) {
+    // Une flèche seulement si le serveur a commandé un changement **et** que le terminal
+    // l'a appliqué : sinon le débit affiché recopierait le réglage de départ en laissant
+    // croire à une décision du serveur.
+    const commande = r.final_spreading_factor !== null && r.final_spreading_factor !== undefined
+      && r.final_spreading_factor !== r.spreading_factor;
+    corps.append(el("tr", {},
+      el("th", { scope: "row", text: nomDe(r) }),
+      el("td", { text: `${r.received} / ${r.sent}` }),
+      el("td", { text: `${r.lost_sensitivity} / ${r.lost_collision}` }),
+      el("td", { text: commande
+        ? `SF${r.spreading_factor} → SF${r.final_spreading_factor}` : `SF${r.spreading_factor}` }),
+      el("td", { text: r.enabled_channels?.length ? r.enabled_channels.join(" ") : "—" })));
+  }
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { scope: "col", text: "Équipement" }),
+      el("th", { scope: "col", text: "Reçues" }),
+      el("th", { scope: "col", text: "Pertes" }),
+      el("th", { scope: "col", text: "Débit" }),
+      el("th", { scope: "col", text: "Canaux" }))), corps);
+  body.append(table, el("p", { class: "gw-aide",
+    text: "Reçues : remises sur émises. Pertes : hors portée, puis en collision. Canaux : "
+      + "ceux que le serveur a laissés au terminal à la fin du run — vide si le run ne les a "
+      + "pas observés." }));
+}
+
 function cliAbsentMessage(kind) {
   if (kind === "sensor") return "Un capteur ne se configure pas en ligne de commande : utilisez l'onglet Config pour ses réglages radio.";
   if (kind === "server") return "Le serveur de réseau n'expose pas de console dans cette version.";
@@ -1939,6 +2010,7 @@ async function ouvrirRun(r) {
     state.passerelles = summary.gateways ?? null;
     state.rxMatrix = summary.rx_matrix ?? null;
     state.liaisonsObservees = calculerLiaisons();
+    state.resume = summary;
     renderResults(summary, (r.links ?? []).map((l) => l.gateway), rows);
     renderLegend();
     renderDevice();
@@ -2015,6 +2087,7 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // Un seul calcul pour les deux vues : si le plan et la carte le refaisaient chacun,
     // ils pourraient diverger sans que rien ne le signale.
     state.liaisonsObservees = calculerLiaisons();
+    state.resume = summary;
     renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
     renderLegend();
     renderDevice();             // la fenêtre ouverte chiffre le résultat

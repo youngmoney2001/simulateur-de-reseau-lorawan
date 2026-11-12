@@ -658,24 +658,6 @@ class StudyService:
             self._save(sid, st)
             return self._topology_locked(sid, st)
 
-    def runs(self, owner: str, sid: str) -> list[str]:
-        """Les runs lancés depuis ce chantier, du plus récent au plus ancien.
-
-        Le chantier ne garde que `MAX_COMPILED` compilations : c'est donc aussi la profondeur
-        de son historique. Un run plus ancien n'est pas un run effacé, c'est un run que ce
-        chantier ne rattache plus — le distinguo compte, parce que le run reste consultable
-        par son identifiant.
-        """
-        with self._lock:
-            st = self._get_locked(owner, sid)
-            return list(reversed(list(st.compiled)))
-
-    def compiled_links(self, owner: str, sid: str, run_id: str) -> list[GatewayLink]:
-        """Les liaisons gardées pour un run de ce chantier, vides s'il n'en garde aucune."""
-        with self._lock:
-            st = self._get_locked(owner, sid)
-            return list(st.compiled.get(run_id) or [])
-
     def record_simulation(self, owner: str, sid: str, run_id: str, links: list[dict]) -> None:
         """Mémorise les liaisons d'un run créé par `compile` (appelé après sa création)."""
         with self._lock:

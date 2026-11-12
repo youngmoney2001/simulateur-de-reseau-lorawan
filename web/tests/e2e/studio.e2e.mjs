@@ -932,6 +932,56 @@ try {
     await viewTab("Plan");
   });
 
+  // Le serveur de réseau ne se configure pas : c'est lui qui commande le débit, les canaux et
+  // les descentes. Sa fenêtre dit donc ce qu'il a **vu** du run, par équipement — le seul
+  // endroit de l'atelier qui montre le réseau du point de vue de celui qui décide.
+  //
+  // L'équipement est retiré à la fin : les étapes suivantes ont été écrites pour un réseau
+  // précis, et un nœud de plus les ferait dérailler.
+  await step("serveur : la fenêtre dit ce que le serveur a vu du run", async () => {
+    await setValue('#add-form [name="id"]', "lns");
+    await page.select('#add-form [name="kind"]', "server");
+    // À l'écart des autres : deux nœuds au même endroit se recouvriraient, et le clic
+    // ouvrirait la fenêtre du voisin.
+    await setValue('#add-form [name="lat"]', "4.053500");
+    await setValue('#add-form [name="lon"]', "9.770000");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="lns"]');
+
+    // Le run de l'étape mesh est terminé : la fenêtre se lit sur son résultat, sans relancer.
+    await page.click('g.node[data-id="lns"] rect');
+    await page.waitForSelector('.device-win[data-node-id="lns"]', { timeout: 20_000 });
+    await deviceTab("Config", "lns");
+    await page.waitForSelector('.device-win[data-node-id="lns"] table tbody tr',
+      { timeout: 20_000 });
+    const lignes = await page.$$eval('.device-win[data-node-id="lns"] table tbody tr',
+      (trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent.trim())));
+    if (!lignes.some((l) => l[0] === "capt-mesh")) {
+      throw new Error(`le capteur du run ne figure pas : ${JSON.stringify(lignes)}`);
+    }
+    for (const l of lignes) {
+      // Des chiffres, ou rien : une case vide plutôt qu'un zéro que personne n'a mesuré.
+      if (!/^\d+ \/ \d+$/.test(l[1])) {
+        throw new Error(`reçues illisibles : ${JSON.stringify(lignes)}`);
+      }
+      if (!/^SF\d+( → SF\d+)?$/.test(l[3])) {
+        throw new Error(`débit illisible : ${JSON.stringify(lignes)}`);
+      }
+    }
+    const synthese = await textOf('.device-win[data-node-id="lns"] .serveur-vu');
+    if (!/\d+ trame\(s\) remise\(s\)/.test(synthese)) {
+      throw new Error(`synthèse du serveur illisible : « ${synthese} »`);
+    }
+    console.log(`Serveur : ${synthese.trim()} · ${JSON.stringify(lignes)}`);
+
+    await deviceTab("Physique", "lns");
+    await page.click('.device-win[data-node-id="lns"] button.danger');
+    await page.waitForFunction(() => !document.querySelector('.device-win[data-node-id="lns"]'),
+      { timeout: 20_000 });
+    await page.waitForFunction(() => !document.querySelector('g.node[data-id="lns"]'),
+      { timeout: 20_000 });
+  });
+
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {
     await obsTab("Exercice");
     await page.select("#exercise-start", "eu868-passerelle");
