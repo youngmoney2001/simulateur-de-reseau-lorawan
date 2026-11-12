@@ -121,7 +121,11 @@ try {
         { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
       const n = (topo.nodes ?? []).find((x) => x.id === nodeId);
       vu = n?.sensor ?? null;
-      if (vu && Object.entries(attendus).every(([k, v]) => vu[k] === v)) return;
+      // Comparaison par valeur, pas par référence : un réglage imbriqué (`downlink`) est un
+      // objet, et `===` le dirait toujours différent de l'attendu — le test échouerait alors
+      // que le serveur a exactement ce qu'on lui a demandé.
+      if (vu && Object.entries(attendus)
+        .every(([k, v]) => JSON.stringify(vu[k]) === JSON.stringify(v))) return;
       if (Date.now() > fin) break;
       await new Promise((r) => setTimeout(r, 250));
     }
