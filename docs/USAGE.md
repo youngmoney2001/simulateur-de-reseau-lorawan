@@ -586,9 +586,10 @@ moteur : une limite qui n'existe plus en est retirée, une limite levable par un
   l'émission effective, attente de la fenêtre RX comprise. Manquent le backhaul IP et les délais
   du réseau fixe : la latence publiée est un **plancher**, pas un temps de bout en bout.
 - **énergie** : les deux profils (`rak4631`, `sx1262-stm32l072`) reprennent les courants des
-  fiches constructeur. **Aucune mesure de terrain n'a été faite**, et le moteur n'accepte pas
-  encore un profil mesuré : c'est aujourd'hui la limite la plus sérieuse pour qui dimensionne une
-  pile. C'est aussi la seule de cette liste qu'on ne lève pas par un réglage.
+  fiches constructeur. **Aucune mesure de terrain n'a été faite par ce projet** — les valeurs
+  du moteur restent des fiches, et le dimensionnement d'une pile demande un relevé. Celui-ci
+  s'entre désormais dans le scénario (`energy.measured`, §4.1) : la limite n'est plus
+  l'absence de mesure possible, elle est que **le projet n'en fournit aucune**.
 - **pénétration** : la perte d'un matériau suit UIT-R P.2040-4 (diélectriques), non calibrée sur
   mesures. À 868,1 MHz, **12 des 15 matériaux** sortent de la plage documentée : la valeur est
   alors extrapolée, et le serveur le signale (`extrapolated`). Un relevé de mesure se saisit

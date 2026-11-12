@@ -516,9 +516,61 @@ class EnvironmentModel(_Strict):
     obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
 
 
+class TxPointModel(_Strict):
+    """Point du profil d'émission mesuré : puissance demandée (dBm) et courant (mA)."""
+
+    dbm: float
+    ma: float = Field(ge=0)
+
+
+class MeasuredEnergyModel(_Strict):
+    """Courants **mesurés**, au lieu d'un profil du catalogue.
+
+    Les deux profils du moteur viennent de fiches constructeur : bons pour comparer deux
+    architectures, insuffisants pour garantir une autonomie. Ce bloc est là pour qui a
+    sorti la pince ampèremétrique.
+
+    `provenance` est obligatoire : un rapport qui afficherait ces chiffres sans dire d'où
+    ils viennent les présenterait comme une donnée du moteur. `tx_points` : 1 à 4 couples
+    (dBm, mA), puissances strictement croissantes — la règle d'émission est celle du
+    catalogue (point de puissance ≥ demandée, refus au-delà du dernier).
+    """
+
+    supply_v: float = Field(gt=0)
+    rx_ma_125khz: float = Field(ge=0)
+    rx_ma_250khz: float = Field(ge=0)
+    rx_ma_500khz: float = Field(ge=0)
+    sleep_ua: float = Field(ge=0)
+    provenance: str = Field(min_length=1, max_length=200)
+    tx_points: list[TxPointModel] = Field(min_length=1, max_length=4)
+    mcu_run_ma: float = Field(0.0, ge=0)
+
+    @model_validator(mode="after")
+    def _tx_points_croissants(self) -> "MeasuredEnergyModel":
+        dbm = [p.dbm for p in self.tx_points]
+        if any(b <= a for a, b in zip(dbm, dbm[1:])):
+            raise ValueError("energy.measured.tx_points : puissances strictement croissantes")
+        if not self.provenance.strip():
+            raise ValueError("energy.measured.provenance : d'où viennent ces courants ?")
+        return self
+
+
 class EnergyModel(_Strict):
-    """Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace)."""
-    profile: Literal["rak4631", "sx1262-stm32l072"]
+    """Profil énergie du scénario (optionnel ; la ligne de commande le remplace).
+
+    Soit un profil du catalogue (`profile`), soit un relevé (`measured`). Renseigner les
+    deux n'a pas de sens : lequel le rapport aurait-il utilisé ?
+    """
+
+    profile: Optional[Literal["rak4631", "sx1262-stm32l072"]] = None
+    measured: Optional[MeasuredEnergyModel] = None
+
+    @model_validator(mode="after")
+    def _un_seul_choix(self) -> "EnergyModel":
+        if (self.profile is None) == (self.measured is None):
+            raise ValueError(
+                "energy : renseigner soit `profile` (catalogue), soit `measured` (relevé)")
+        return self
 
 
 class ChannelDefModel(_Strict):
@@ -830,6 +882,24 @@ class Scenario:
     def energy_profile(self) -> Optional[str]:
         """Profil énergie déclaré dans le YAML, ou None."""
         return self.model.energy.profile if self.model.energy is not None else None
+
+    def measured_energy(self) -> Optional["MeasuredProfile"]:
+        """Le relevé déclaré dans le YAML, ou None.
+
+        Un relevé se distingue d'un profil du catalogue par sa provenance, qui voyage
+        avec le résultat : un rapport doit pouvoir dire que ces courants sont mesurés,
+        et par qui.
+        """
+        from lsim.energy import MeasuredProfile
+
+        m = self.model.energy.measured if self.model.energy is not None else None
+        if m is None:
+            return None
+        return MeasuredProfile(
+            supply_v=m.supply_v, rx_ma_125khz=m.rx_ma_125khz, rx_ma_250khz=m.rx_ma_250khz,
+            rx_ma_500khz=m.rx_ma_500khz, sleep_ua=m.sleep_ua, mcu_run_ma=m.mcu_run_ma,
+            provenance=m.provenance,
+            tx_points=tuple((tp.dbm, tp.ma) for tp in m.tx_points))
 
     def device_classes(self) -> list[str]:
         """Classe LoRaWAN de chaque terminal déployé, dans l'ordre de `deploy()`.

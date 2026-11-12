@@ -2,6 +2,27 @@
 
 ## 0.1.0 (non publiée)
 
+### Énergie : un relevé peut remplacer la fiche constructeur
+
+Les deux profils du moteur venaient de fiches : utiles pour comparer deux architectures,
+insuffisants pour garantir une autonomie, et aucun moyen d'entrer une mesure. C'était la
+limite la plus sérieuse de la liste, et la seule qu'aucun réglage ne levait. `energy.measured`
+la lève : on déclare ses courants dans le scénario, et le rapport les utilise.
+
+Une garde-fou porte là où ça compte. La `provenance` est **obligatoire** : le résumé du
+rapport affiche « relevé — *votre texte* » au lieu du nom d'un profil, et un relevé sans
+provenance serait présenté comme une donnée du moteur. Deux pièges ont été fermés au
+passage, tous deux vérifiés par un test : le défaut du catalogue (`report` choisit
+`rak4631` sans option) écrasait la provenance et affichait « RAK4631 » en face de chiffres
+mesurés ; et un profil nommé explicitement doit primer sur le relevé, sinon
+`--energy-profile` serait ignoré en silence — la provenance ne voyage alors pas avec le
+résultat, puisque ce ne sont pas ces courants qui ont servi.
+
+La preuve que le nouveau chemin calcule la bonne grandeur tient en un chiffre : un relevé
+reproduisant exactement les courants du RAK4631 rend la même énergie à 1e-12 près, en
+classe A comme en bilan simple.
+
+
 ### Les SF différents ne sont plus réputés orthogonaux — si on le demande
 
 Le moteur faisait comme si deux trames de spreading factors différents ne pouvaient pas se

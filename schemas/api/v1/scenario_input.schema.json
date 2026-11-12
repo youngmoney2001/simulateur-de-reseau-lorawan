@@ -112,20 +112,36 @@
     },
     "EnergyModel": {
       "additionalProperties": false,
-      "description": "Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace).",
+      "description": "Profil énergie du scénario (optionnel ; la ligne de commande le remplace).\n\nSoit un profil du catalogue (`profile`), soit un relevé (`measured`). Renseigner les\ndeux n'a pas de sens : lequel le rapport aurait-il utilisé ?",
       "properties": {
-        "profile": {
-          "enum": [
-            "rak4631",
-            "sx1262-stm32l072"
+        "measured": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MeasuredEnergyModel"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Profile",
-          "type": "string"
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak4631",
+                "sx1262-stm32l072"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
         }
       },
-      "required": [
-        "profile"
-      ],
       "title": "EnergyModel",
       "type": "object"
     },
@@ -554,6 +570,69 @@
         }
       },
       "title": "MacModel",
+      "type": "object"
+    },
+    "MeasuredEnergyModel": {
+      "additionalProperties": false,
+      "description": "Courants **mesurés**, au lieu d'un profil du catalogue.\n\nLes deux profils du moteur viennent de fiches constructeur : bons pour comparer deux\narchitectures, insuffisants pour garantir une autonomie. Ce bloc est là pour qui a\nsorti la pince ampèremétrique.\n\n`provenance` est obligatoire : un rapport qui afficherait ces chiffres sans dire d'où\nils viennent les présenterait comme une donnée du moteur. `tx_points` : 1 à 4 couples\n(dBm, mA), puissances strictement croissantes — la règle d'émission est celle du\ncatalogue (point de puissance ≥ demandée, refus au-delà du dernier).",
+      "properties": {
+        "mcu_run_ma": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Mcu Run Ma",
+          "type": "number"
+        },
+        "provenance": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "rx_ma_125khz": {
+          "minimum": 0,
+          "title": "Rx Ma 125Khz",
+          "type": "number"
+        },
+        "rx_ma_250khz": {
+          "minimum": 0,
+          "title": "Rx Ma 250Khz",
+          "type": "number"
+        },
+        "rx_ma_500khz": {
+          "minimum": 0,
+          "title": "Rx Ma 500Khz",
+          "type": "number"
+        },
+        "sleep_ua": {
+          "minimum": 0,
+          "title": "Sleep Ua",
+          "type": "number"
+        },
+        "supply_v": {
+          "exclusiveMinimum": 0,
+          "title": "Supply V",
+          "type": "number"
+        },
+        "tx_points": {
+          "items": {
+            "$ref": "#/$defs/TxPointModel"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Tx Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "supply_v",
+        "rx_ma_125khz",
+        "rx_ma_250khz",
+        "rx_ma_500khz",
+        "sleep_ua",
+        "provenance",
+        "tx_points"
+      ],
+      "title": "MeasuredEnergyModel",
       "type": "object"
     },
     "MeshModel": {
@@ -1055,6 +1134,27 @@
         "path"
       ],
       "title": "TerrainModel",
+      "type": "object"
+    },
+    "TxPointModel": {
+      "additionalProperties": false,
+      "description": "Point du profil d'émission mesuré : puissance demandée (dBm) et courant (mA).",
+      "properties": {
+        "dbm": {
+          "title": "Dbm",
+          "type": "number"
+        },
+        "ma": {
+          "minimum": 0,
+          "title": "Ma",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dbm",
+        "ma"
+      ],
+      "title": "TxPointModel",
       "type": "object"
     }
   },

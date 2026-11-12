@@ -631,6 +631,19 @@ LIB.lsim_energy_device_class_a.argtypes = [
     ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
     ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
     ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_measured.restype = ctypes.c_int32
+LIB.lsim_energy_device_measured.argtypes = [
+    ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+    ctypes.c_double, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.c_size_t, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_class_a_measured.restype = ctypes.c_int32
+LIB.lsim_energy_device_class_a_measured.argtypes = [
+    ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+    ctypes.c_double, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.c_size_t, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, _DBL, _DBL]
 LIB.lsim_energy_tx_current_ma.restype = ctypes.c_int32
 LIB.lsim_energy_tx_current_ma.argtypes = [ctypes.c_uint32, ctypes.c_double, _DBL]
 LIB.lsim_energy_profile.restype = ctypes.c_int32

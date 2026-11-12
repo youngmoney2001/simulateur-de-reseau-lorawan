@@ -146,7 +146,12 @@ def _report(args: argparse.Namespace) -> int:
         return 2
     try:
         scenario = load_scenario(args.scenario)
-        profile = args.energy_profile or scenario.energy_profile or DEFAULT_ENERGY_PROFILE
+        # Le défaut du catalogue ne s'applique que si le scénario ne déclare **pas** de
+        # relevé. Sinon il écraserait la provenance : le rapport afficherait « RAK4631 »
+        # en face de chiffres mesurés, et un relevé passerait pour une fiche constructeur.
+        profile = args.energy_profile or scenario.energy_profile
+        if profile is None and scenario.measured_energy() is None:
+            profile = DEFAULT_ENERGY_PROFILE
         result = run_scenario(scenario, energy_profile=profile)
         if suffix == ".pdf":
             write_pdf(result, args.output)

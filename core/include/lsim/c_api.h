@@ -103,6 +103,29 @@ LSIM_API int32_t lsim_energy_device_class_a(uint32_t profile_id, double tx_power
 LSIM_API int32_t lsim_energy_tx_current_ma(uint32_t profile_id, double tx_power_dbm,
                                            double* out_ma);
 
+/* Bilan énergétique avec un profil **mesuré**, fourni par l'appelant au lieu d'être
+ * choisi parmi les profils constructeur — c'est le seul moyen d'entrer un relevé de
+ * banc ou de terrain. `tx_dbm` / `tx_ma` : points (puissance, courant) triés par
+ * puissance croissante, `tx_count` dans [1, 4]. La règle d'émission est la même que
+ * pour un profil du catalogue : point de puissance >= demandée, refus au-delà du
+ * dernier. Les courants sont de la responsabilité de l'appelant : le moteur ne
+ * calibre rien, il applique les nombres qu'on lui donne. */
+LSIM_API int32_t lsim_energy_device_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint64_t tx_ns,
+    uint64_t rx_ns, uint64_t mcu_active_ns, uint64_t total_ns, double* out_energy_j,
+    double* out_avg_current_ua);
+
+/* Même chose, classe A (deux fenêtres RX par uplink). */
+LSIM_API int32_t lsim_energy_device_class_a_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint8_t spreading_factor,
+    uint16_t preamble_symbols, uint64_t uplinks, uint64_t airtime_ns, uint64_t rx_window_ns,
+    uint64_t downlink_ns_total, uint64_t mcu_ns_per_uplink, uint64_t total_ns,
+    double* out_energy_j, double* out_avg_current_ua);
+
 /* Paramètres d'un profil (transparence : sources dans energy.hpp). */
 LSIM_API int32_t lsim_energy_profile(uint32_t profile_id, double* supply_v,
                                      double* rx_ma_125khz, double* rx_ma_250khz,
