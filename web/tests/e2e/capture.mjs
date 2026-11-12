@@ -301,6 +301,51 @@ try {
   // la session capturée ne reste pas dans une configuration que personne n'a choisie.
   await basculer("#adr-toggle", false);
 
+  // 8. Ce que la session a produit, relu : la liste des runs, puis deux d'entre eux face à
+  // face. Trois runs viennent d'être lancés — la liste a donc de quoi se comparer, et une
+  // liste d'une seule ligne ne montrerait rien de ce qui fait l'intérêt de l'onglet.
+  await obsTab("Runs");
+  await page.waitForFunction(() => document.querySelectorAll("#runs-table tbody tr").length >= 3,
+    { timeout: 20_000 });
+  await pause(400);
+  await shoot("runs-liste");
+
+  // Le comparé est la **deuxième** ligne : la première est le run affiché, et le comparer à
+  // lui-même donnerait un écart de zéro partout — une image qui ne prouve rien.
+  await page.evaluate(() => {
+    const trs = document.querySelectorAll("#runs-table tbody tr");
+    const bouton = [...trs[1].querySelectorAll("button")]
+      .find((b) => b.textContent.trim() === "Comparer");
+    if (!bouton) throw new Error("bouton Comparer introuvable sur la deuxième ligne");
+    bouton.click();
+  });
+  await page.waitForFunction(() => !document.getElementById("runs-compare").hidden,
+    { timeout: 10_000 });
+  await pause(400);
+  await shoot("runs-comparaison");
+
+  // 9. Le serveur, tel qu'il a vu le run qu'on vient de lancer. Sa fenêtre ne se remplit
+  // qu'avec des mesures : sans run, elle dirait « rien d'observé » — une image d'une case
+  // vide. L'attente porte donc sur la table, pas sur la fenêtre.
+  await setValue('#add-form [name="id"]', "lns");
+  await page.select('#add-form [name="kind"]', "server");
+  // Dans la boîte que les autres occupent déjà : un nœud posé au-delà élargit la boîte et
+  // change l'échelle du plan, ce qui décalerait toutes les autres captures.
+  await setValue('#add-form [name="lat"]', "4.050000");
+  await setValue('#add-form [name="lon"]', "9.769500");
+  await submitForm("#add-form");
+  await page.waitForSelector('g.node[data-id="lns"]');
+  // Au clavier : la fenêtre d'un équipement ouverte plus haut recouvre le nœud, et le clic
+  // ouvrirait alors tout sauf celle du serveur.
+  await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('.device-win[data-node-id="lns"]', { timeout: 20_000 });
+  await deviceTab("Config", "lns");
+  await page.waitForSelector('.device-win[data-node-id="lns"] table tbody tr',
+    { timeout: 20_000 });
+  await pause(400);
+  await shoot("serveur-ce-qu-il-a-vu");
+
   console.log(`${n} captures dans ${outDir}`);
 } finally {
   for (const c of children) { try { c.kill("SIGTERM"); } catch { /* déjà arrêté */ } }
