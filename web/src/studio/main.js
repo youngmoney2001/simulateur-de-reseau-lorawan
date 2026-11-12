@@ -59,6 +59,7 @@ const state = {
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
+  defautMateriel: "",    // le materiel du run, annonce par le moteur : « celui du run », dit
   modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
   materiaux: [],         // catalogue du moteur : perte et caractere extrapole, a 868 MHz
   classesEcoute: [],     // classes d'ecoute : libelles, ouverture et creneaux viennent du moteur
@@ -142,6 +143,10 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  // Le matériel du run, annoncé par le moteur. L'écrire ici le recopierait, et il cesserait
+  // de suivre le moteur le jour où celui-ci en change. Vide si la réponse ne le porte pas
+  // (moteur plus ancien) : l'aide ne s'affiche pas, plutôt que d'afficher une devinette.
+  if (modeles) state.defautMateriel = modeles.default ?? "";
   const passerelles = await guard(() => state.client.gatewayProfiles());
   if (passerelles) state.modelesPasserelle = passerelles.profiles ?? [];
   // Les matériaux se lisent à la fréquence de la bande : la perte dépend de la fréquence, et
@@ -1351,7 +1356,12 @@ function renderDeviceInfo(node, body) {
   if (node.kind === "sensor") {
     const nom = node.sensor?.energy_profile ?? "";
     const modele = state.modelesMateriel.find((m) => m.name === nom);
-    ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+    // Sans modèle propre, on nomme celui du run au lieu de laisser « celui du run » en
+    // suspens : c'est le matériel qui décide du courant, et le lecteur a besoin de savoir
+    // lequel avant d'avoir lancé quoi que ce soit.
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    ligne("Matériel", modele?.label
+      ?? (nom || (defaut ? `celui du run (${defaut.label})` : "celui du run")));
   }
   // Le serveur se pose et se dessine, mais le run ne le simule pas : le LNS est implicite
   // derrière la passerelle frontière. Le dire ici, parce que son rôle et ses ports, en haut
@@ -1647,6 +1657,12 @@ function renderSensorForm(node, body) {
     }
     fields.energy_profile = modeleSelect;
     grid.append(el("label", {}, "Matériel", modeleSelect));
+    // « Celui du run » sans dire lequel est une devinette : les deux matériels diffèrent de
+    // 10 % de courant moyen, et choisir entre eux sans savoir lequel on aura n'est pas
+    // choisir. Le nom vient du moteur (`default`), seul à savoir ce que le run calcule.
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    if (defaut) grid.append(el("p", { class: "hint",
+      text: `« celui du run » : ${defaut.label}` }));
   }
   const message = el("p", { class: "muted", text: "" });
   const form = el("form", {
@@ -2486,8 +2502,17 @@ function appliquerModeleAjout() {
 
 function appliquerMaterielAjout() {
   const champ = $("add-materiel");
+  const aide = $("add-materiel-aide");
   const kind = $("add-form")?.querySelector('[name="kind"]')?.value;
   if (champ) champ.hidden = kind !== "sensor" || state.modelesMateriel.length === 0;
+  if (aide) {
+    // Même discipline que l'aide du modèle de passerelle : elle ne s'affiche que si le champ
+    // est visible, une explication orpheline décrivant un réglage absent. Et elle se tait si
+    // le moteur n'a pas annoncé de défaut, plutôt que d'inventer un nom.
+    aide.hidden = Boolean(champ?.hidden);
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    aide.textContent = (aide.hidden || !defaut) ? "" : `« celui du run » : ${defaut.label}`;
+  }
 }
 
 function renderTerrains() {

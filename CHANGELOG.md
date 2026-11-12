@@ -85,6 +85,25 @@ les a pas relevés s'écrivent « — », pas « aucun ». Le débit ne porte un
 (`SF7 → SF9`) que si le serveur a commandé un changement **et** que le terminal l'a appliqué ;
 sinon il recopierait le réglage de départ en laissant croire à une décision du réseau.
 
+### « Celui du run » nomme enfin de quel matériel il s'agit
+
+Un capteur peut porter son propre modèle de matériel, ou dire « celui du run ». La seconde
+option ne valait que si le run **avait** un profil — et l'atelier le proposait sans jamais
+dire lequel. Choisir entre deux matériels qui diffèrent de 10 % de courant moyen, sans savoir
+lequel on aura, n'est pas choisir.
+
+**Mesuré d'abord, plutôt que cru.** La dette était notée « `_simulate` ne transmet aucun
+`energy_profile` au run créé depuis l'atelier ». Elle n'existe pas : `compile_session` écrit
+le profil du run dans le corps, `scenario.py` porte le modèle propre du groupe jusqu'au
+dispositif, et le modèle de l'équipement prime sur celui du run. Cinq tests le prouvent, et
+chacun a été vérifié discriminant par mutation : retirer le profil du corps en fait échouer
+deux, retirer celui du groupe en fait échouer deux autres.
+
+Ce qui manquait vraiment : **le moteur n'exposait pas ce défaut**. `GET /energy-profiles`
+publie désormais `default`, et l'atelier l'écrit sous le sélecteur — à l'ajout d'un capteur
+comme dans sa fenêtre — au lieu de le recopier, ce qui l'aurait laissé dériver. Un test lie
+les deux : le défaut annoncé par le catalogue est celui que le corps compilé écrit.
+
 ### Les runs d'un chantier — revoir une simulation au lieu de n'avoir que la dernière
 
 Comparer deux réglages suppose de revoir le premier. Or l'atelier ne connaissait que le

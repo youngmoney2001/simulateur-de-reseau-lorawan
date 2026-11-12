@@ -22,7 +22,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lsim import study_contract as _study_constants
-from lsim.energy_report import profile_name
+from lsim.energy_report import DEFAULT_ENERGY_PROFILE, profile_name
 from lsim.plan import Plan, get_plan, plan_names
 from lsim.scenario import ScenarioModel
 
@@ -577,11 +577,19 @@ class EnergyProfileInfo(_Strict):
 
 class EnergyProfileList(_Strict):
     profiles: list[EnergyProfileInfo] = Field(max_length=16)
+    # Celui du run : le matériel qu'un capteur consomme quand il n'en a pas choisi. Sans lui,
+    # l'interface propose « celui du run » sans pouvoir dire lequel, et elle ne peut pas
+    # l'écrire elle-même — une constante recopiée cesserait de suivre le moteur le jour où il
+    # en change. Le choix entre deux matériels se fait alors à l'aveugle, alors qu'ils
+    # diffèrent de 10 % de courant moyen.
+    default: str = Field(max_length=32)
 
 
 def list_energy_profiles() -> EnergyProfileList:
-    return EnergyProfileList(profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
-                                       for name in ENERGY_PROFILES])
+    return EnergyProfileList(
+        profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
+                  for name in ENERGY_PROFILES],
+        default=DEFAULT_ENERGY_PROFILE)
 
 
 class GatewayProfileInfo(_Strict):

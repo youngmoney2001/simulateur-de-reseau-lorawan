@@ -393,6 +393,9 @@ table.runs th { color:var(--muted); font-weight:600; }
    propre, et son libellé se met en ligne à côté d'elle. */
 .sensor-form label.case { flex-direction:row; align-items:center; gap:6px; cursor:pointer;
   grid-column:1 / -1; }
+/* Une aide dans une grille à deux colonnes : sans la largeur entière, elle se glisserait
+   dans une case et tronquerait le nom du matériel — précisément ce qu'elle est venue dire. */
+.sensor-form .hint { grid-column:1 / -1; margin:0; }
 .sensor-form input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
 
 /* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */

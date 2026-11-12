@@ -876,6 +876,16 @@ try {
     await page.waitForSelector('.device-win[data-node-id="capt-mesh"]');
     await deviceTab("Config", "capt-mesh");
     await page.waitForSelector('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]');
+    // « Celui du run » sans dire lequel est une devinette : les deux matériels diffèrent de
+    // 10 % de courant moyen, et choisir entre eux sans savoir lequel on aura n'est pas
+    // choisir. L'aide le nomme — et le nom vient du moteur, seul à savoir ce que le run
+    // calcule. Une aide absente échoue ici : `$eval` lève.
+    const aide = await page.$eval('.device-win[data-node-id="capt-mesh"] .sensor-form .hint',
+      (n) => n.textContent.trim());
+    if (!/^« celui du run » : \S/.test(aide)) {
+      throw new Error(`aide du matériel illisible : « ${aide} »`);
+    }
+    console.log(`Matériel du run : ${aide}`);
     await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]', "4");
     await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="start_spread_s"]', "30");
     await submitForm('.device-win[data-node-id="capt-mesh"] form');
