@@ -62,8 +62,38 @@ distance fixe par débit — 15 à 25 km en SF9 et 40 km en SF12 dans la configu
 
 Deux trames de même débit qui se chevauchent entrent en collision ; la plus forte n'est reçue que
 si elle dépasse l'autre d'au moins `propagation.capture_threshold_db` (6 dB par défaut, frontière
-**inclusive** : un écart exactement égal au seuil est capturé). Des débits différents ne
-collisionnent pas.
+**inclusive** : un écart exactement égal au seuil est capturé).
+
+Des débits différents **ne collisionnent pas par défaut** : les spreading factors sont réputés
+orthogonaux. C'est un choix, pas une propriété d'un vrai récepteur. `propagation.inter_sf:
+sx1276` le lève.
+
+### 4.1 Collisions entre SF différents (`propagation.inter_sf`)
+
+`orthogonal` (défaut) : deux trames de SF différents qui se chevauchent ne se gênent jamais.
+Un scénario qui ne mentionne pas la clé garde exactement ses chiffres **et** son empreinte.
+
+`sx1276` : un interférent d'un SF différent est compté. La trame voulue, de SF `s`, survit si
+
+    P_voulue − P_interférent ≥ SNR_s
+
+où `SNR_s` est la valeur de la table « LoRa Demodulator SNR » du SX1276 (datasheet Rev. 4),
+celle-là même qui sert à l'ADR et à la sensibilité : −7,5 dB en SF7, −10 en SF8, −12,5 en SF9,
+−15 en SF10, −17,5 en SF11, −20 en SF12. Ces valeurs sont négatives : plus le SF voulu est
+élevé, plus il tolère un interférent fort. Ainsi un SF12 supporte un SF7 reçu 20 dB au-dessus
+de lui, alors qu'un SF7 cède dès 7,5 dB.
+
+Deux réserves, qui valent d'être lues avant d'exploiter un résultat :
+
+- **le seuil ne dépend que du SF voulu**, jamais de la paire (voulu, interférent). Une vraie
+  isolation se mesure entre deux SF : c'est une matrice, pas une droite.
+- **c'est l'approximation de la littérature, pas une mesure.** Les valeurs viennent d'une
+  datasheet (seuil de démodulation face au bruit), et sont employées ici comme seuil
+  d'interférence. Une matrice d'isolement crédible viendrait d'une campagne de mesures.
+
+Quand plusieurs interférents se cumulent, la contrainte la plus sévère l'emporte : la trame
+survit si elle respecte le seuil de **chacun**, les mêmes-SF face au seuil de capture et les
+SF-différents face au seuil inter-SF.
 
 ## 5. Descente : réciprocité
 
@@ -120,6 +150,12 @@ donnée RF de frontal** :
 Les frontaux se déclarent **uniquement dans l'API Python** (`DeviceRf`, `GatewayRf`), au niveau des
 fonctions du §7. Un scénario chargé depuis YAML décrit donc une population **sans frontal** : pour
 mesurer un gain d'antenne, il faut passer par l'API et fournir la table correspondante.
+
+Le bloc `propagation` porte les réglages du canal, tous facultatifs : `frequency_hz`,
+`reference_distance_m`, `exponent`, `capture_threshold_db`, `shadowing_sigma_db`,
+`shadowing_seed` et `inter_sf`. Ce dernier vaut `orthogonal` ou `sx1276` (§4.1) ; à
+`orthogonal`, sa valeur par défaut, la clé quitte le hachage du scénario — un scénario écrit
+avant son introduction garde donc exactement la même empreinte.
 
 ## 9. Géographie et radio : séparation
 

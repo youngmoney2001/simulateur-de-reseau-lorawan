@@ -347,6 +347,7 @@ class _CPropagation(ctypes.Structure):
         ("capture_threshold_db", ctypes.c_double),
         ("shadowing_sigma_db", ctypes.c_double),
         ("shadowing_seed", ctypes.c_uint64),
+        ("inter_sf_collisions", ctypes.c_bool),
     ]
 
 

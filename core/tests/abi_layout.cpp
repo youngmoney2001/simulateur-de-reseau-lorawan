@@ -137,13 +137,14 @@ namespace expected {
     inline constexpr size_t off_lsim_gateway_v2__present = 36;
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_dbm = 40;
     // lsim_propagation
-    inline constexpr size_t size_lsim_propagation = 48;
+    inline constexpr size_t size_lsim_propagation = 52;
     inline constexpr size_t off_lsim_propagation__frequency_hz = 0;
     inline constexpr size_t off_lsim_propagation__reference_distance_m = 8;
     inline constexpr size_t off_lsim_propagation__exponent = 16;
     inline constexpr size_t off_lsim_propagation__capture_threshold_db = 24;
     inline constexpr size_t off_lsim_propagation__shadowing_sigma_db = 32;
     inline constexpr size_t off_lsim_propagation__shadowing_seed = 40;
+    inline constexpr size_t off_lsim_propagation__inter_sf_collisions = 48;
     // lsim_device_stats
     inline constexpr size_t size_lsim_device_stats = 48;
     inline constexpr size_t off_lsim_device_stats__sent = 0;
@@ -762,13 +763,14 @@ namespace expected {
     inline constexpr size_t off_lsim_gateway_v2__present = 36;
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_dbm = 40;
     // lsim_propagation
-    inline constexpr size_t size_lsim_propagation = 48;
+    inline constexpr size_t size_lsim_propagation = 56;
     inline constexpr size_t off_lsim_propagation__frequency_hz = 0;
     inline constexpr size_t off_lsim_propagation__reference_distance_m = 8;
     inline constexpr size_t off_lsim_propagation__exponent = 16;
     inline constexpr size_t off_lsim_propagation__capture_threshold_db = 24;
     inline constexpr size_t off_lsim_propagation__shadowing_sigma_db = 32;
     inline constexpr size_t off_lsim_propagation__shadowing_seed = 40;
+    inline constexpr size_t off_lsim_propagation__inter_sf_collisions = 48;
     // lsim_device_stats
     inline constexpr size_t size_lsim_device_stats = 48;
     inline constexpr size_t off_lsim_device_stats__sent = 0;

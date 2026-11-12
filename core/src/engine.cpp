@@ -41,6 +41,33 @@ bool overlap(const Tx& a, const Tx& b) {
     return a.start < b.end && b.start < a.end;
 }
 
+// Seuil de SIR (dB) qu'un interférent doit respecter pour laisser passer la trame voulue :
+// la trame survit si P_voulue − P_interférent ≥ seuil.
+//
+// Même SF : seuil de capture du scénario. SF différent : orthogonalité parfaite par
+// défaut — l'interférent n'est pas compté du tout, ce qui est le comportement
+// historique qu'un scénario déjà écrit doit continuer de produire trait pour trait.
+// Si les collisions inter-SF sont activées, le seuil est pris dans la table
+// « LoRa Demodulator SNR » du SX1276 (adr::required_snr_tenth_db), celle-là même qui
+// sert déjà à l'ADR. Ces valeurs sont négatives : plus le SF voulu est élevé, plus il
+// tolère un interférent fort (SF12 supporte −20 dB, SF7 seulement −7,5 dB).
+//
+// Le seuil ne dépend que du SF **voulu** : c'est l'approximation de la littérature,
+// pas une mesure d'isolement entre deux SF. Renvoie false si l'interférent ne doit
+// pas être compté.
+bool sir_threshold_db(const PropagationSpec& prop, std::uint8_t sf_voulu,
+                      std::uint8_t sf_interferent, double& seuil) {
+    if (sf_interferent == sf_voulu) {
+        seuil = prop.capture_threshold_db;
+        return true;
+    }
+    if (!prop.inter_sf_collisions) return false;
+    std::int32_t dixieme_db = 0;
+    if (!lorawan::adr::required_snr_tenth_db(sf_voulu, dixieme_db)) return false;
+    seuil = static_cast<double>(dixieme_db) / 10.0;
+    return true;
+}
+
 // Temps d'antenne réservés : table par émission (dispositif, rang) construite à partir du
 // calendrier. Vide si aucune réservation : le temps d'antenne est alors constant par dispositif.
 struct ReservedAirtime {
@@ -518,13 +545,24 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
             ++totals.lost_gateway_busy;
             outcome = TxOutcome::LostGatewayBusy;
         } else {
-            // Interférence maximale parmi les émissions simultanées de même SF.
-            bool interfered = false;
-            double max_interf = -1e300;
+            // Interférence maximale, seuil par seuil. Les deux familles sont tenues
+            // séparément — même SF face au seuil de capture, SF différent face au
+            // seuil inter-SF — pour que le chemin historique (orthogonalité parfaite)
+            // reste identique au bit près.
+            bool meme_sf = false;
+            bool autre_sf = false;
+            double max_interf = -1e300;   // même SF
+            double pire_inter = -1e300;   // SF différent, seuil déjà additionné
             auto consider = [&](const Tx& tb) {
-                if (tb.sf == ta.sf && overlap(ta, tb)) {
-                    interfered = true;
+                if (!overlap(ta, tb)) return;
+                double seuil = 0.0;
+                if (!sir_threshold_db(prop, ta.sf, tb.sf, seuil)) return;
+                if (tb.sf == ta.sf) {
+                    meme_sf = true;
                     max_interf = std::max(max_interf, tb.rssi_dbm);
+                } else {
+                    autre_sf = true;
+                    pire_inter = std::max(pire_inter, tb.rssi_dbm + seuil);
                 }
             };
             for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
@@ -537,7 +575,10 @@ SimStatus simulate_uplinks(const EndDeviceSpec* devices, std::size_t device_coun
                 consider(txs[b]);
             }
 
-            const bool captured = !interfered || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
+            const bool capture_ok = !meme_sf
+                || (ta.rssi_dbm - max_interf >= prop.capture_threshold_db);
+            const bool inter_sf_ok = !autre_sf || (ta.rssi_dbm - pire_inter >= 0.0);
+            const bool captured = capture_ok && inter_sf_ok;
             if (captured) {
                 ++st.received;
                 ++totals.received;
@@ -898,13 +939,21 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
                 any_busy = true;
                 continue;
             }
-            // Interférence maximale à cette passerelle parmi les émissions simultanées de même SF.
-            bool interfered = false;
-            double max_interf = -1e300;
+            // Interférence maximale à cette passerelle, seuil par seuil (cf. sir_threshold_db).
+            bool meme_sf = false;
+            bool autre_sf = false;
+            double max_interf = -1e300;   // même SF
+            double pire_inter = -1e300;   // SF différent, seuil déjà additionné
             auto consider = [&](const Tx& tb) {
-                if (tb.sf == ta.sf && overlap(ta, tb)) {
-                    interfered = true;
+                if (!overlap(ta, tb)) return;
+                double seuil = 0.0;
+                if (!sir_threshold_db(prop, ta.sf, tb.sf, seuil)) return;
+                if (tb.sf == ta.sf) {
+                    meme_sf = true;
                     max_interf = std::max(max_interf, rssi[tb.device * G + g]);
+                } else {
+                    autre_sf = true;
+                    pire_inter = std::max(pire_inter, rssi[tb.device * G + g] + seuil);
                 }
             };
             for (std::size_t b = a + 1; b < txs.size() && txs[b].start < ta.end; ++b) {
@@ -914,7 +963,10 @@ SimStatus simulate_uplinks_multi(const EndDeviceSpec* devices, std::size_t devic
                 if (txs[b].start + max_airtime <= ta.start) break;
                 consider(txs[b]);
             }
-            const bool captured = !interfered || (r - max_interf >= prop.capture_threshold_db);
+            const bool capture_ok = !meme_sf
+                || (r - max_interf >= prop.capture_threshold_db);
+            const bool inter_sf_ok = !autre_sf || (r - pire_inter >= 0.0);
+            const bool captured = capture_ok && inter_sf_ok;
             if (captured) {
                 ++per_gateway[g].received;
                 ++out.receivers;

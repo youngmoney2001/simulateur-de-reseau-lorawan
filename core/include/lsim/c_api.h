@@ -358,6 +358,7 @@ typedef struct lsim_propagation {
     double capture_threshold_db; /* >= 0 */
     double shadowing_sigma_db;   /* 0..30 ; 0 = pas de shadowing */
     uint64_t shadowing_seed;     /* graine du tirage par dispositif */
+    bool inter_sf_collisions;    /* 0 = SF orthogonaux (défaut), 1 = seuils SX1276 */
 } lsim_propagation;
 
 typedef struct lsim_device_stats {

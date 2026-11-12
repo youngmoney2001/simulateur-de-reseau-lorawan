@@ -152,6 +152,16 @@ class PropagationModel(_Strict):
     # graine du scénario est utilisée, ce qui rend le tirage reproductible.
     shadowing_sigma_db: float = Field(0.0, ge=0, le=30.0)
     shadowing_seed: Optional[int] = Field(None, ge=0, le=2**64 - 1)
+    # Collisions entre SF différents. « orthogonal » (défaut) : deux trames de SF
+    # différents ne se gênent jamais — c'est le comportement historique, et un
+    # scénario écrit avant cette option le conserve trait pour trait. « sx1276 » :
+    # un interférent d'un autre SF est compté, avec le seuil de la table
+    # « LoRa Demodulator SNR » du SX1276 (celle qui sert déjà à l'ADR).
+    #
+    # Ce seuil ne dépend que du SF de la trame voulue : c'est l'approximation de la
+    # littérature, pas une mesure d'isolement entre deux SF. Une matrice mesurée
+    # viendrait d'une campagne, pas d'une datasheet.
+    inter_sf: Literal["orthogonal", "sx1276"] = "orthogonal"
 
 
 class DiskPlacement(_Strict):
@@ -804,6 +814,11 @@ class Scenario:
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
             prop.pop("shadowing_seed", None)
+        # SF orthogonaux = comportement d'avant l'option : hors du hash, donc un
+        # scénario écrit avant garde exactement la même empreinte — et les mêmes
+        # chiffres, puisque le moteur ne compte alors aucun interférent de plus.
+        if prop.get("inter_sf") == "orthogonal":
+            prop.pop("inter_sf", None)
         canonical = json.dumps(dumped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         self.sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -933,7 +948,8 @@ class Scenario:
         seed = p.shadowing_seed if p.shadowing_seed is not None else self.model.seed
         return Propagation(frequency_hz=p.frequency_hz, reference_distance_m=p.reference_distance_m,
                            exponent=p.exponent, capture_threshold_db=p.capture_threshold_db,
-                           shadowing_sigma_db=p.shadowing_sigma_db, shadowing_seed=seed)
+                           shadowing_sigma_db=p.shadowing_sigma_db, shadowing_seed=seed,
+                           inter_sf=p.inter_sf)
 
 
 def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:

@@ -99,6 +99,7 @@
             "capture_threshold_db": 6.0,
             "exponent": 2.7,
             "frequency_hz": 868100000.0,
+            "inter_sf": "orthogonal",
             "reference_distance_m": 1.0,
             "shadowing_seed": null,
             "shadowing_sigma_db": 0.0
@@ -873,6 +874,15 @@
           "default": 868100000.0,
           "title": "Frequency Hz",
           "type": "number"
+        },
+        "inter_sf": {
+          "default": "orthogonal",
+          "enum": [
+            "orthogonal",
+            "sx1276"
+          ],
+          "title": "Inter Sf",
+          "type": "string"
         },
         "reference_distance_m": {
           "default": 1.0,

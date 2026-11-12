@@ -2,6 +2,41 @@
 
 ## 0.1.0 (non publiée)
 
+### Les SF différents ne sont plus réputés orthogonaux — si on le demande
+
+Le moteur faisait comme si deux trames de spreading factors différents ne pouvaient pas se
+gêner : elles se croisaient sans se voir. C'était une limite annoncée, et fausse d'un vrai
+récepteur. `propagation.inter_sf: sx1276` la lève.
+
+Le seuil vient de la table « LoRa Demodulator SNR » du SX1276 (datasheet Rev. 4) — **la même
+que l'ADR et la sensibilité**, pas une table de plus : la trame voulue tolère un interférent
+d'autant plus fort que son SF est élevé (−7,5 dB en SF7, −20 dB en SF12). Deux réserves sont
+écrites dans `docs/RF_MODEL.md` §4.1 et ne doivent pas se perdre : le seuil ne dépend que du
+SF **voulu**, jamais de la paire ; et c'est l'approximation de la littérature, pas une
+mesure. Une matrice d'isolement crédible viendrait d'une campagne, pas d'une datasheet.
+
+Le défaut `orthogonal` conserve le comportement d'origine **au bit près** : les deux seuils
+sont évalués séparément, et la clé quitte le hachage quand elle vaut sa valeur par défaut —
+un scénario écrit avant l'introduction de l'option garde exactement ses chiffres **et** son
+empreinte. Vérifié par dix tests, dont un sur le chemin multi-passerelles, qui a sa propre
+boucle de collision et aurait pu diverger sans que rien ne le voie.
+
+La structure C `lsim_propagation` gagne un champ : 56 octets en x86-64, 52 en i386
+(valeurs mesurées au compilateur, pas déduites).
+
+### Limites connues : trois qui n'existaient plus, une qui est levable
+
+`docs/USAGE.md` §6 annonçait « une seule passerelle » : c'était périmé, le moteur évalue
+chaque passerelle pour elle-même depuis des versions. Mention corrigée dans `USAGE.md`,
+`API_CONTRACT.md` et `ROADMAP.md`, où elle détournait d'une fonctionnalité qui existe. Deux
+autres affirmations étaient fausses : le gain d'antenne du dispositif n'est pas bloqué à
+0 dBi (`device_antenna_gain_dbi`, réglable de −10 à +10), et la latence publiée n'est plus
+le temps d'antenne (elle couvre l'attente de fenêtre RX en descente et le saut mesh en
+montée ; le backhaul IP reste absent, donc la valeur est un plancher). Enfin, la pénétration
+n'était pas une impasse : une atténuation mesurée se saisit directement sur un obstacle
+(`attenuation_db`), sans passer par un matériau.
+
+
 ### Descentes à l'initiative du réseau — la classe d'écoute décide de l'attente
 
 Un scénario peut désormais dire « le serveur veut envoyer une commande à cet instant », et le

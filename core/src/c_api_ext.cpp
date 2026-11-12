@@ -502,6 +502,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -626,6 +627,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1282,6 +1284,7 @@ int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1436,6 +1439,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1767,6 +1771,7 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1902,6 +1907,7 @@ int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 

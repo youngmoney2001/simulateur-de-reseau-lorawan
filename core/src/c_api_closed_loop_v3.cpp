@@ -216,6 +216,7 @@ int32_t run_closed_loop_v3(const lsim_closed_loop_v3_args& a, const lsim_device_
     p.reference_distance_m = a.prop->reference_distance_m;
     p.exponent = a.prop->exponent;
     p.capture_threshold_db = a.prop->capture_threshold_db;
+    p.inter_sf_collisions = a.prop->inter_sf_collisions;
     p.shadowing_sigma_db = a.prop->shadowing_sigma_db;
     p.shadowing_seed = a.prop->shadowing_seed;
 

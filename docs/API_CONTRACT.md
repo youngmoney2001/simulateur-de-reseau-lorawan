@@ -112,7 +112,8 @@ Conséquence : l'horloge ne pilote pas le moteur. Un run sans horloge temps rée
   Aucune donnée n'est émise avant le join. Les descendantes d'une passerelle ne se chevauchent jamais.
 - Limites assumées : le backhaul passerelle → serveur et le join-accept transmis par le serveur
   sont sans perte (`delivered`) ; sensibilité du récepteur de référence (SX1276) plus
-  `device_rx_offset_db` ; une seule passerelle.
+  `device_rx_offset_db`. La réception multi-passerelles n'est **plus** une limite : chaque
+  passerelle est évaluée pour elle-même (charge, trames perdues, meilleure passerelle).
 - Options applicatives dans `RunCreate.protocol` : `join`, `confirmed_uplinks`, `downlink_every`,
   `downlink_payload_bytes`, `gateway_tx_power_dbm`, `device_antenna_gain_dbi`, `device_rx_offset_db`
   (par défaut : aucune charge ; seuls uplinks, pertes et ACK/join-accept sont produits quand les
