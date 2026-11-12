@@ -84,6 +84,12 @@ noter un exercice sur l'état courant, pas à regarder un résultat passé).
 ses colonnes restent vides plutôt qu'à zéro, et « 0 reçu » ne se lit pas comme un résultat.
 Même règle pour l'attente des descentes, absente d'un run qui n'en a pas planifié.
 
+**Comparer, pas seulement revoir.** Chaque ligne porte un bouton « Comparer » qui met le run
+choisi face au run affiché : taux de réception, trames reçues, attente des descentes, avec
+l'écart lu de l'un vers l'autre. Seules les grandeurs **mesurées par les deux** runs sont
+comparées — un écart calculé contre une case vide inventerait une différence, l'attente des
+descentes ne se comparant qu'entre deux runs qui en ont planifié.
+
 **L'historique est celui du chantier, pas du stockage.** Le chantier rattache ses 16 derniers
 runs (`MAX_COMPILED`) ; un run évincé est sauté sans faire échouer la liste, et un run plus
 ancien n'est pas effacé — il cesse d'être rattaché, et reste consultable par son identifiant.
