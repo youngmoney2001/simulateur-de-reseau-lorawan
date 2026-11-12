@@ -154,3 +154,13 @@ test("une durée se lit sans fausse précision, et une attente inconnue n'est pa
   assert.equal(formatSecondes(128), "2 min 8 s");
   assert.equal(formatSecondes(600), "10 min");
 });
+
+test("un intervalle rond s'écrit rond", () => {
+  // « un créneau toutes les 1.0 s » se lit comme une mesure de précision qu'on n'a pas :
+  // 2**(7-0) créneaux par période de 128 s, c'est exactement 1 s. Au-delà de 10 s la
+  // décimale disparaît aussi — une attente de 51 s ne s'écrit pas « 51.0 s ».
+  assert.equal(formatSecondes(1), "1 s");
+  assert.equal(formatSecondes(2), "2 s");
+  assert.equal(formatSecondes(1.5), "1.5 s");
+  assert.equal(formatSecondes(51.041216), "51 s");
+});

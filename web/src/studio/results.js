@@ -19,7 +19,12 @@ export function formatSecondes(value) {
   if (value == null || !Number.isFinite(value)) return "—";
   if (value === 0) return "0 s";
   if (value < 1) return `${value.toFixed(2)} s`;
-  if (value < 90) return `${value.toFixed(value < 10 ? 1 : 0)} s`;
+  // Sous 10 s, la décimale dit quelque chose (1,5 s ≠ 1 s) ; au-delà, elle encombre : une
+  // attente de 51 s s'écrit « 51 s », pas « 51.0 s ». Un intervalle rond reste rond.
+  if (value < 10) {
+    return Number.isInteger(value) ? `${value} s` : `${value.toFixed(1)} s`;
+  }
+  if (value < 90) return `${Math.round(value)} s`;
   const min = Math.floor(value / 60);
   const sec = Math.round(value - min * 60);
   return sec ? `${min} min ${sec} s` : `${min} min`;
