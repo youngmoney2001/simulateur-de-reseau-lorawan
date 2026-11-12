@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "DownlinkOut": {
+      "additionalProperties": false,
+      "description": "Descentes **à l'initiative du réseau** : le serveur veut envoyer à un instant donné.\n\nCe n'est pas un ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou RX2, et la\nclasse d'écoute n'y change rien. Ici la demande naît au moment choisi par le réseau, et\nc'est la classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du\nsimulateur que la classe détermine à elle seule.\n\n`latency_mean_s` / `latency_max_s` : délai entre l'instant voulu et l'instant d'émission.",
+      "properties": {
+        "delivered": {
+          "minimum": 0,
+          "title": "Delivered",
+          "type": "integer"
+        },
+        "latency_max_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Max S"
+        },
+        "latency_mean_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Mean S"
+        },
+        "requested": {
+          "minimum": 0,
+          "title": "Requested",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requested",
+        "delivered"
+      ],
+      "title": "DownlinkOut",
+      "type": "object"
+    },
+    "GatewayLink": {
+      "additionalProperties": false,
+      "description": "Association explicite : un équipement de la session et une passerelle du run (par nom,\nunique dans le scénario). Un équipement ou une passerelle n'apparaît qu'une fois.",
+      "properties": {
+        "gateway": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Gateway",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "title": "Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "gateway"
+      ],
+      "title": "GatewayLink",
+      "type": "object"
+    },
+    "Problem": {
+      "additionalProperties": false,
+      "description": "Erreur au format problème (code stable, message lisible, champ éventuel).",
+      "properties": {
+        "code": {
+          "enum": [
+            "validation_error",
+            "not_found",
+            "limit_exceeded",
+            "terrain_not_allowed",
+            "run_failed",
+            "conflict",
+            "unsupported_region",
+            "unauthorized",
+            "rate_limited",
+            "nothing_to_undo",
+            "nothing_to_redo"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "message": {
+          "maxLength": 500,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Problem",
+      "type": "object"
+    },
+    "SessionRunOut": {
+      "additionalProperties": false,
+      "description": "Un run lancé depuis un chantier, avec de quoi le reconnaître et le comparer.\n\nLes grands nombres (`pdr`, `sent`, `received`, `downlink`) ne sont présents que si le run\nest **terminé** : un run en cours n'a pas de résultat, et publier des zéros le ferait\ncroire mesuré à zéro plutôt que pas encore mesuré.",
+      "properties": {
+        "created_at": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "downlink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DownlinkOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "energy_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Profile"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/GatewayLink"
+          },
+          "maxItems": 64,
+          "title": "Links",
+          "type": "array"
+        },
+        "pdr": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pdr"
+        },
+        "problem": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Problem"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "received": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Received"
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "sent": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sent"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "done",
+            "failed",
+            "cancelled"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "state"
+      ],
+      "title": "SessionRunOut",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Les runs d'un chantier, du plus récent au plus ancien.\n\nBorné à `MAX_COMPILED` (16) : c'est la profondeur de ce que le chantier rattache, et non\nune limite d'affichage. Un run plus ancien n'est pas effacé, il n'est plus rattaché.",
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/SessionRunOut"
+      },
+      "maxItems": 32,
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "SessionRunList",
+  "type": "object"
+}
