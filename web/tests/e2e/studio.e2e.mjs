@@ -660,6 +660,18 @@ try {
     // les 60 messages ni le SF12. On attend un « terminé » portant un autre numéro de run.
     await setValue("#seed", "7");
     const runAvant = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
+    // Un clic qui n'atteint pas le bouton ne produit aucun run et aucun message : la seule
+    // trace est un statut qui ne bouge pas. On regarde donc ce qui se trouve au point de
+    // clic avant de cliquer — un recouvrement silencieux se lit ici, pas dans un délai expiré.
+    const devant = await page.evaluate(() => {
+      const b = document.getElementById("simulate");
+      const r = b.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const e = document.elementFromPoint(x, y);
+      return { x, y, bouton: b.id, devant: e ? (e.id || e.className || e.tagName) : null,
+        recouvre: e !== b && !b.contains(e) };
+    });
+    if (devant.recouvre) throw new Error(`bouton Simuler recouvert par « ${devant.devant} »`);
     await page.click("#simulate");
     try {
       await page.waitForFunction((avant) => {
