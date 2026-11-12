@@ -514,11 +514,15 @@ try {
       return cliquerTexte('.device-win[data-node-id="lns"] .dtab', "Config");
     } },
     { nom: "passerelle · Config", action: async () => {
+      // Même précaution que pour le serveur, et pour la même raison : la fenêtre laissée
+      // ouverte par l'état précédent recouvre le nœud visé. Fermer « capteur-a » ne suffit
+      // pas — c'est désormais la fenêtre du serveur qui est là.
       await page.evaluate(() => {
-        document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
+        for (const w of document.querySelectorAll(".device-win .close")) w.click();
       });
       await pause(300);
-      await page.click('g.node[data-id="gw-nord"] rect');
+      await page.evaluate(() => document.querySelector('g.node[data-id="gw-nord"]').focus());
+      await page.keyboard.press("Enter");
       await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
       return cliquerTexte('.device-win[data-node-id="gw-nord"] .dtab', "Config");
     } },
