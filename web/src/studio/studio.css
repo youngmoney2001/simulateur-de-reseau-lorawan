@@ -440,8 +440,13 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 @media (max-width:1180px) {
   body { height:auto; min-height:100vh; }
   .workspace { flex-direction:column; }
+  /* En ligne, la barre se replie au lieu de défiler : à 760 px les huit commandes
+     couraient jusqu'à 867 px, si bien que « Sauvegarder » sortait de 37 px et « Charger »
+     de 107 px. Le défilement les rendait atteignables, mais il cache les dernières
+     commandes sans rien signaler — le repli les montre toutes, et la barre prend la
+     hauteur qu'il faut. À 900 px rien ne change : les boutons tiennent sur une ligne. */
   .toolbar { flex-direction:row; flex:0 0 auto; border-left:none; border-top:1px solid var(--menu-line);
-    margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; }
+    margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; flex-wrap:wrap; row-gap:4px; }
   .tool { flex-direction:row; gap:4px; font-size:11px; white-space:nowrap; }
   .plan-area { margin:8px; min-height:320px; }
   .bottom-dock { flex-direction:column; flex:0 0 auto; }
