@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "description": "Lien mesh observé : sauts livrés depuis `from_gateway` vers cette passerelle.",
+  "properties": {
+    "delivered": {
+      "minimum": 0,
+      "title": "Delivered",
+      "type": "integer"
+    },
+    "from_gateway": {
+      "maxLength": 64,
+      "title": "From Gateway",
+      "type": "string"
+    }
+  },
+  "required": [
+    "from_gateway",
+    "delivered"
+  ],
+  "title": "MeshInboundOut",
+  "type": "object"
+}

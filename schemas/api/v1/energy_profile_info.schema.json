@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "description": "Un modèle de matériel connu du moteur, pour les fenêtres de configuration.\n\nLe libellé vient du module d'énergie, seule source : le recopier dans l'interface le\nlaisserait dériver du matériel réellement modélisé.",
+  "properties": {
+    "label": {
+      "maxLength": 128,
+      "title": "Label",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 32,
+      "title": "Name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "label"
+  ],
+  "title": "EnergyProfileInfo",
+  "type": "object"
+}

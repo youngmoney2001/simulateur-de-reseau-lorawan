@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "DownlinkSettings": {
+      "additionalProperties": false,
+      "description": "Le serveur veut envoyer une commande au terminal, sans que le terminal l'ait demandée.\n\nC'est le seul réglage de l'atelier que la classe d'écoute change vraiment. Un ACK est\ndéclenché par un uplink : il tombe dans RX1 ou RX2 quelle que soit la classe. Ici la\ndemande naît à un instant que le terminal n'a pas choisi, et la classe décide de la\nfenêtre — donc de l'attente.\n\n`count` > 1 exige `request_period_s` : sinon toutes les demandes partiraient au même\ninstant, ce qui n'a pas de sens et que le moteur refuse.",
+      "properties": {
+        "clock_drift_ppm": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Clock Drift Ppm",
+          "type": "integer"
+        },
+        "count": {
+          "default": 1,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "first_request_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "First Request S",
+          "type": "number"
+        },
+        "periodicity": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Periodicity",
+          "type": "integer"
+        },
+        "request_period_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "Request Period S",
+          "type": "number"
+        }
+      },
+      "title": "DownlinkSettings",
+      "type": "object"
+    },
+    "SensorSettings": {
+      "additionalProperties": false,
+      "description": "Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario.",
+      "properties": {
+        "channel_freq_hz": {
+          "anyOf": [
+            {
+              "maximum": 3000000000,
+              "minimum": 137000000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel Freq Hz"
+        },
+        "device_class": {
+          "default": "A",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Device Class",
+          "type": "string"
+        },
+        "downlink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DownlinkSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "energy_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak4631",
+                "sx1262-stm32l072"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Profile"
+        },
+        "messages": {
+          "default": 1,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Messages",
+          "type": "integer"
+        },
+        "payload_bytes": {
+          "default": 10,
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "period_s": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Period S",
+          "type": "number"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "enum": [
+                "EU868",
+                "US915",
+                "AU915",
+                "AS923",
+                "KR920",
+                "IN865",
+                "RU864"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "spreading_factor": {
+          "default": 7,
+          "maximum": 12,
+          "minimum": 7,
+          "title": "Spreading Factor",
+          "type": "integer"
+        },
+        "start_spread_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "Start Spread S",
+          "type": "number"
+        },
+        "tx_power_dbm": {
+          "default": 14.0,
+          "maximum": 30.0,
+          "minimum": -10.0,
+          "title": "Tx Power Dbm",
+          "type": "number"
+        }
+      },
+      "title": "SensorSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "gateway_profile": {
+      "anyOf": [
+        {
+          "enum": [
+            "rak7249",
+            "rak5148",
+            "rak5146-rak5148",
+            "rak7391"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateway Profile"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9-]{0,31}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "sensor",
+        "relay",
+        "border",
+        "server"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "sensor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SensorSettings"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "x_m": {
+      "maximum": 1000000,
+      "minimum": -1000000,
+      "title": "X M",
+      "type": "number"
+    },
+    "y_m": {
+      "maximum": 1000000,
+      "minimum": -1000000,
+      "title": "Y M",
+      "type": "number"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "name",
+    "x_m",
+    "y_m"
+  ],
+  "title": "Node",
+  "type": "object"
+}

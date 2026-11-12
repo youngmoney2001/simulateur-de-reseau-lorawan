@@ -1,0 +1,18 @@
+{
+  "additionalProperties": false,
+  "description": "Demande de réglage protocolaire d'une session : jointure OTAA, trames confirmées.\n\nComme `AdrChoice`, le client n'indique que son souhait. La jointure et l'ADR s'excluent\n(le moteur refuse le couple — `mac_loop.check_closed_loop`), et c'est le serveur qui le\ndit, avec la raison, plutôt que de laisser le run échouer.",
+  "properties": {
+    "confirmed": {
+      "default": false,
+      "title": "Confirmed",
+      "type": "boolean"
+    },
+    "join": {
+      "default": false,
+      "title": "Join",
+      "type": "boolean"
+    }
+  },
+  "title": "ProtocoleChoice",
+  "type": "object"
+}

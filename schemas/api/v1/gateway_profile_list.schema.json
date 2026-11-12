@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "GatewayProfileInfo": {
+      "additionalProperties": false,
+      "description": "Un modèle de passerelle du catalogue, et **ce qu'il change** — pas seulement son nom.\n\nTrois des quatre modèles ne décalent pas le seuil de réception, leur fiche ne publiant\npas le point (SF, bande) auquel la sensibilité est mesurée. Les présenter comme un choix\nsans le dire serait faire croire à une différence que le run ne calcule pas.",
+      "properties": {
+        "access_bands": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Access Bands",
+          "type": "array"
+        },
+        "can_relay": {
+          "title": "Can Relay",
+          "type": "boolean"
+        },
+        "can_simulate_radio": {
+          "title": "Can Simulate Radio",
+          "type": "boolean"
+        },
+        "max_channels": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Channels"
+        },
+        "model": {
+          "maxLength": 128,
+          "title": "Model",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 32,
+          "title": "Name",
+          "type": "string"
+        },
+        "sensitivity_offset_db": {
+          "maximum": 60.0,
+          "minimum": -60.0,
+          "title": "Sensitivity Offset Db",
+          "type": "number"
+        },
+        "sensitivity_published": {
+          "title": "Sensitivity Published",
+          "type": "boolean"
+        },
+        "software_status": {
+          "maxLength": 32,
+          "title": "Software Status",
+          "type": "string"
+        },
+        "tx_power_max_dbm": {
+          "anyOf": [
+            {
+              "maximum": 30.0,
+              "minimum": -10.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Power Max Dbm"
+        },
+        "vendor": {
+          "maxLength": 64,
+          "title": "Vendor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "vendor",
+        "model",
+        "sensitivity_offset_db",
+        "sensitivity_published",
+        "can_relay",
+        "can_simulate_radio",
+        "access_bands",
+        "software_status"
+      ],
+      "title": "GatewayProfileInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "profiles": {
+      "items": {
+        "$ref": "#/$defs/GatewayProfileInfo"
+      },
+      "maxItems": 16,
+      "title": "Profiles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "profiles"
+  ],
+  "title": "GatewayProfileList",
+  "type": "object"
+}

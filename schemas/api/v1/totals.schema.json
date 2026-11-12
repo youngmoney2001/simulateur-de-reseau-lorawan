@@ -1,0 +1,58 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "airtime_ns": {
+      "minimum": 0,
+      "title": "Airtime Ns",
+      "type": "integer"
+    },
+    "lost_collision": {
+      "minimum": 0,
+      "title": "Lost Collision",
+      "type": "integer"
+    },
+    "lost_gateway_busy": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Lost Gateway Busy",
+      "type": "integer"
+    },
+    "lost_mesh": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lost Mesh"
+    },
+    "lost_sensitivity": {
+      "minimum": 0,
+      "title": "Lost Sensitivity",
+      "type": "integer"
+    },
+    "received": {
+      "minimum": 0,
+      "title": "Received",
+      "type": "integer"
+    },
+    "sent": {
+      "minimum": 0,
+      "title": "Sent",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "sent",
+    "received",
+    "lost_sensitivity",
+    "lost_collision",
+    "airtime_ns"
+  ],
+  "title": "Totals",
+  "type": "object"
+}

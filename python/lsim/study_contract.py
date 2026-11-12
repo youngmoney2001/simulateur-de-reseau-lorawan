@@ -496,6 +496,22 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_environment": EnvironmentSettings,
     "study_environment_choice": EnvironmentChoice,
     "study_obstacle": Obstacle,
+    # Le reste du contrat, publié pour lui-même : un client qui lit un nœud, un état
+    # résumé, un critère ou un rebond de passerelle doit pouvoir le valider sans
+    # reconstruire la session entière.
+    "study_node": Node,
+    "study_node_state": NodeState,
+    "study_gateway_settings": GatewaySettings,
+    "study_downlink_settings": DownlinkSettings,
+    "study_gateway_link": GatewayLink,
+    "study_cli_error": CliError,
+    "study_session_summary": SessionSummary,
+    "study_adr_choice": AdrChoice,
+    "study_protocole_choice": ProtocoleChoice,
+    "study_terrain_choice": TerrainChoice,
+    "study_exercise_summary": ExerciseSummary,
+    "study_criterion_result": CriterionResult,
+    "study_attempt_out": AttemptOut,
 }
 
 

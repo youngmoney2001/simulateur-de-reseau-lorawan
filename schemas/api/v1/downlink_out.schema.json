@@ -1,0 +1,48 @@
+{
+  "additionalProperties": false,
+  "description": "Descentes **à l'initiative du réseau** : le serveur veut envoyer à un instant donné.\n\nCe n'est pas un ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou RX2, et la\nclasse d'écoute n'y change rien. Ici la demande naît au moment choisi par le réseau, et\nc'est la classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du\nsimulateur que la classe détermine à elle seule.\n\n`latency_mean_s` / `latency_max_s` : délai entre l'instant voulu et l'instant d'émission.",
+  "properties": {
+    "delivered": {
+      "minimum": 0,
+      "title": "Delivered",
+      "type": "integer"
+    },
+    "latency_max_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latency Max S"
+    },
+    "latency_mean_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latency Mean S"
+    },
+    "requested": {
+      "minimum": 0,
+      "title": "Requested",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "requested",
+    "delivered"
+  ],
+  "title": "DownlinkOut",
+  "type": "object"
+}

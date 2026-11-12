@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "description": "Le serveur veut envoyer une commande au terminal, sans que le terminal l'ait demandée.\n\nC'est le seul réglage de l'atelier que la classe d'écoute change vraiment. Un ACK est\ndéclenché par un uplink : il tombe dans RX1 ou RX2 quelle que soit la classe. Ici la\ndemande naît à un instant que le terminal n'a pas choisi, et la classe décide de la\nfenêtre — donc de l'attente.\n\n`count` > 1 exige `request_period_s` : sinon toutes les demandes partiraient au même\ninstant, ce qui n'a pas de sens et que le moteur refuse.",
+  "properties": {
+    "clock_drift_ppm": {
+      "default": 0,
+      "maximum": 1000,
+      "minimum": 0,
+      "title": "Clock Drift Ppm",
+      "type": "integer"
+    },
+    "count": {
+      "default": 1,
+      "maximum": 100000,
+      "minimum": 1,
+      "title": "Count",
+      "type": "integer"
+    },
+    "first_request_s": {
+      "default": 0.0,
+      "maximum": 86400,
+      "minimum": 0,
+      "title": "First Request S",
+      "type": "number"
+    },
+    "periodicity": {
+      "default": 0,
+      "maximum": 7,
+      "minimum": 0,
+      "title": "Periodicity",
+      "type": "integer"
+    },
+    "request_period_s": {
+      "default": 0.0,
+      "maximum": 86400,
+      "minimum": 0,
+      "title": "Request Period S",
+      "type": "number"
+    }
+  },
+  "title": "DownlinkSettings",
+  "type": "object"
+}

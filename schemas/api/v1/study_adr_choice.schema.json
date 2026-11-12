@@ -1,0 +1,13 @@
+{
+  "additionalProperties": false,
+  "description": "Demande d'activation de l'ADR du serveur sur une session.\n\nLe client n'indique que son souhait : c'est le serveur qui sait si la topologie le permet\n(une seule passerelle, pas de relais, un plan régional), et qui dit pourquoi sinon.",
+  "properties": {
+    "adr": {
+      "default": false,
+      "title": "Adr",
+      "type": "boolean"
+    }
+  },
+  "title": "AdrChoice",
+  "type": "object"
+}

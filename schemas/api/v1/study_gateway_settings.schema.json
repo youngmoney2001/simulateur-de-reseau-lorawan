@@ -1,0 +1,123 @@
+{
+  "additionalProperties": false,
+  "description": "Réglages d'une passerelle exposés dans l'atelier 3D.\n\nCe n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur\nd'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit\nexplicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux\nque réclament les exercices, les autres relèvent du dépannage.\n\nLes bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans\nla fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent\nau même endroit (`Session.config`), ils ne peuvent pas diverger.",
+  "properties": {
+    "gateway_profile": {
+      "anyOf": [
+        {
+          "enum": [
+            "rak7249",
+            "rak5148",
+            "rak5146-rak5148",
+            "rak7391"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gateway Profile"
+    },
+    "mesh_bandwidth_khz": {
+      "anyOf": [
+        {
+          "enum": [
+            "203",
+            "406",
+            "812",
+            "1625"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mesh Bandwidth Khz"
+    },
+    "mesh_max_hops": {
+      "anyOf": [
+        {
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mesh Max Hops"
+    },
+    "mesh_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "relay",
+            "border"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mesh Mode"
+    },
+    "region": {
+      "anyOf": [
+        {
+          "enum": [
+            "EU868",
+            "US915",
+            "AU915",
+            "AS923",
+            "KR920",
+            "IN865",
+            "RU864"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Region"
+    },
+    "sub_band": {
+      "anyOf": [
+        {
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sub Band"
+    },
+    "tx_power_dbm": {
+      "anyOf": [
+        {
+          "maximum": 30.0,
+          "minimum": -10.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tx Power Dbm"
+    }
+  },
+  "title": "GatewaySettings",
+  "type": "object"
+}

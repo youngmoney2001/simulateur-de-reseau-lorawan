@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "description": "Choix du relief d'une session. Le client ne fournit jamais de chemin : le relief est\nrésolu dans le catalogue du serveur, et un identifiant inconnu est refusé.",
+  "properties": {
+    "terrain_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terrain Id"
+    }
+  },
+  "title": "TerrainChoice",
+  "type": "object"
+}
