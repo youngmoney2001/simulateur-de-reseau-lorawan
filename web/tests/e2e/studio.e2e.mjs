@@ -553,6 +553,54 @@ try {
     if (st2.sub_band !== null) throw new Error(`sous-bande conservée : ${st2.sub_band}`);
   });
 
+  // Le réglage « le serveur envoie une commande » n'existe que dans le formulaire : aucune
+  // vérification de module pur ne peut dire s'il s'enregistre, faute de DOM. Et le défaut
+  // qu'il guette est silencieux — un champ manquant dans le corps envoyé fait refuser la
+  // case par le validateur, sans que rien n'indique lequel.
+  //
+  // La périodicité est ce champ-là : c'est un choix (`select`), pas un nombre, et un bloc
+  // construit autour de champs `input` l'oublie. On l'exerce donc ici, dans un navigateur.
+  await step("descente réseau : le réglage s'enregistre et la périodicité suit la classe", async () => {
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-1"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-1"]');
+    await deviceTab("Config", "capt-1");
+    const q = '.device-win[data-node-id="capt-1"]';
+    await page.waitForSelector(`${q} select[name="device_class"]`);
+    // La périodicité n'a d'effet qu'en classe B : en A, le champ n'est pas affiché du tout —
+    // un champ sans effet ne se grise pas, il disparaît.
+    await page.select(`${q} select[name="device_class"]`, "A");
+    await page.click(`${q} input[name="downlink_on"]`);
+    await page.waitForFunction((s) => {
+      const l = [...document.querySelectorAll(`${s} label`)]
+        .find((e) => e.textContent.includes("Fréquence des créneaux"));
+      return l?.hidden === true;
+    }, { timeout: 5_000 }, q);
+    await page.select(`${q} select[name="device_class"]`, "B");
+    await page.waitForFunction((s) => {
+      const l = [...document.querySelectorAll(`${s} label`)]
+        .find((e) => e.textContent.includes("Fréquence des créneaux"));
+      return l?.hidden === false && l.querySelector("select")?.options.length === 8;
+    }, { timeout: 5_000 }, q);
+    // Huit périodicités, servies par le moteur : 2**(7-k) créneaux par période de 128 s.
+    const intervalles = await page.$eval(`${q} select[name="downlink_periodicity"]`,
+      (s) => [...s.options].map((o) => o.textContent));
+    if (!intervalles[0].includes("toutes les 1 s") || !intervalles[7].includes("toutes les 2 min 8 s")) {
+      throw new Error(`intervalles inattendus : ${JSON.stringify([intervalles[0], intervalles[7]])}`);
+    }
+    await page.$eval(`${q} input[name="downlink_first_request_s"]`, (e) => { e.value = "10"; });
+    await submitForm(`${q} form`);
+    await attendreReglages("capt-1", { device_class: "B", downlink: { count: 1,
+      first_request_s: 10, request_period_s: 0, periodicity: 0, clock_drift_ppm: 0 } }, refus, 15_000);
+    // On rend le capteur tel qu'on l'a trouvé : l'étape suivante mesure l'ADR sur un capteur
+    // de classe A, et la lui laisser en B changerait ce qu'elle mesure sans le dire.
+    await page.select(`${q} select[name="device_class"]`, "A");
+    await page.click(`${q} input[name="downlink_on"]`);
+    await submitForm(`${q} form`);
+    await attendreReglages("capt-1", { device_class: "A", downlink: null }, refus, 15_000);
+    await page.click(`${q} .close`);
+  });
+
   // Le plan de canaux que le serveur a laissé au terminal, affiché.
   //
   // Placé **après** le réglage de la région sur la passerelle, et c'est la condition : sans

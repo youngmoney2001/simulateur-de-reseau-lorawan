@@ -1449,6 +1449,9 @@ function blocEcouteEtDescente(node, values, fields) {
       step: "any", value: dl.request_period_s ?? "" })));
   const choixPeriodicite = el("select", { name: "downlink_periodicity" });
   const rangPeriodicite = el("label", {}, "Fréquence des créneaux", choixPeriodicite);
+  // La périodicité est un choix, pas un nombre : elle entre dans `dlFields` comme les autres,
+  // sinon le validateur la verrait absente et refuserait la case cochée à coup sûr.
+  dlFields.periodicity = choixPeriodicite;
   champs.append(
     nombre("count", "Nombre de commandes"),
     nombre("first_request_s", "Premier envoi à (s)", "any"),
@@ -1728,13 +1731,20 @@ function renderSimulationIdle() {
 
 $("sim-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!state.sid || state.busy) return;
+  // Un run qui ne part pas en silence laisse à l'écran le statut du précédent, et fait croire
+  // à un résultat qui n'est pas le sien. La raison est donc énoncée.
+  if (!state.sid) { showError(new Error("aucune session : créez ou sélectionnez un chantier")); return; }
+  if (state.busy) { $("sim-status").textContent = "Run déjà en cours."; return; }
   state.busy = true;
   $("simulate").disabled = true;
   try {
     const seed = Number($("seed").value);
     const started = await guard(() => state.client.simulate(state.sid, seed));
-    if (!started) return;
+    if (!started) {
+      // `guard` a déjà affiché la raison ; le statut doit cesser de parler du run d'avant.
+      $("sim-status").textContent = "Run non lancé — voir le message d'erreur.";
+      return;
+    }
     clear($("sim-notes"));
     for (const note of started.notes) $("sim-notes").append(el("li", { text: note }));
     // Le bilan du run précédent ne survit pas au lancement : un encadré qui reste affiché
