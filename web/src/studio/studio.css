@@ -273,6 +273,28 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .device-win .console pre { max-height:none; }
 .frame-panel { margin-top:0; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
 .frame-panel h3 { margin:0 0 6px; font-size:13px; }
+/* --- Ce que le serveur a vu ------------------------------------------------------------- */
+/* Le serveur ne se configure pas : sa fenêtre est un constat, pas un formulaire. Le tableau
+   y est plus serré qu'ailleurs — cinq colonnes dans 430 px — d'où des chiffres de largeur
+   fixe, pour que deux équipements se comparent d'un coup d'œil. */
+.serveur-vu p { margin:0 0 4px; }
+.device-win table td, .device-win table th { font-variant-numeric:tabular-nums; }
+
+/* --- Runs déjà lancés ------------------------------------------------------------------ */
+/* La ligne entière est cliquable : c'est le run qu'on veut revoir, pas une cellule. Le
+   survol le dit, et la ligne du run affiché reste marquée — sans quoi on ne sait plus
+   lequel des deux on a sous les yeux. */
+table.runs tbody tr { cursor:pointer; }
+table.runs tbody tr:hover { background:var(--palette); }
+table.runs tbody tr.affiche { background:#eef4fb; font-weight:600; }
+table.runs td { white-space:nowrap; }
+table.runs th { color:var(--muted); font-weight:600; }
+/* Comparaison de deux runs : l'écart est la colonne qu'on vient lire, et des chiffres de
+   largeur variable la feraient danser d'une ligne à l'autre. */
+#runs-compare { margin-top:10px; border-top:1px solid var(--line); padding-top:6px; }
+#runs-compare h3 { margin:0 0 4px; font-size:13px; }
+#runs-compare td { font-variant-numeric:tabular-nums; }
+
 .frame-panel table { margin-top:0; }
 .frame-panel th { color:var(--muted); font-weight:600; white-space:nowrap; }
 .frame-panel td { font:12px/1.35 ui-monospace, monospace; word-break:break-all; }
@@ -371,6 +393,9 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
    propre, et son libellé se met en ligne à côté d'elle. */
 .sensor-form label.case { flex-direction:row; align-items:center; gap:6px; cursor:pointer;
   grid-column:1 / -1; }
+/* Une aide dans une grille à deux colonnes : sans la largeur entière, elle se glisserait
+   dans une case et tronquerait le nom du matériel — précisément ce qu'elle est venue dire. */
+.sensor-form .hint { grid-column:1 / -1; margin:0; }
 .sensor-form input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
 
 /* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */
@@ -440,8 +465,13 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 @media (max-width:1180px) {
   body { height:auto; min-height:100vh; }
   .workspace { flex-direction:column; }
+  /* En ligne, la barre se replie au lieu de défiler : à 760 px les huit commandes
+     couraient jusqu'à 867 px, si bien que « Sauvegarder » sortait de 37 px et « Charger »
+     de 107 px. Le défilement les rendait atteignables, mais il cache les dernières
+     commandes sans rien signaler — le repli les montre toutes, et la barre prend la
+     hauteur qu'il faut. À 900 px rien ne change : les boutons tiennent sur une ligne. */
   .toolbar { flex-direction:row; flex:0 0 auto; border-left:none; border-top:1px solid var(--menu-line);
-    margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; }
+    margin:0 8px 8px; border-radius:0 0 6px 6px; overflow-x:auto; flex-wrap:wrap; row-gap:4px; }
   .tool { flex-direction:row; gap:4px; font-size:11px; white-space:nowrap; }
   .plan-area { margin:8px; min-height:320px; }
   .bottom-dock { flex-direction:column; flex:0 0 auto; }

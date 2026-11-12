@@ -85,6 +85,9 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
       request("POST", `${s(sid)}/protocol`, { join, confirmed }),
     submit: (exerciseId, sid) =>
       request("POST", `/api/v1/exercises/${enc(exerciseId)}/submit`, { session_id: sid }),
+    // Les runs lancés depuis ce chantier, du plus récent au plus ancien : de quoi revoir une
+    // simulation déjà faite au lieu de n'avoir que la dernière.
+    runs: (sid) => request("GET", `${s(sid)}/runs`),
     run: (runId) => request("GET", `/api/v1/runs/${enc(runId)}`),
     summary: (runId) => request("GET", `/api/v1/runs/${enc(runId)}/summary`),
     eventsPage: (runId, cursor = 0, limit = 500) =>

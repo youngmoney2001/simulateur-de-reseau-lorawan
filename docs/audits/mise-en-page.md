@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**3 problème(s)** sur 23 états mesurés.
+**0 problème(s)** sur 27 états mesurés.
 
 ## 1400px
 
@@ -204,15 +204,9 @@ Aucun problème.
 
 ## 760px
 
-3 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (3)
-
-| élément | détail |
-|---|---|
-| button.tool#save-chantier | sort de 37px |
-| button.tool#load-chantier | sort de 107px |
-| span | sort de 56px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -228,14 +222,14 @@ Aucun problème.
 | button.tool.danger#delete-session | 468 | 636 | 82×31 |
 | button.tool#undo | 558 | 636 | 67×31 |
 | button.tool#redo | 627 | 636 | 67×31 |
-| button.tool#save-chantier | 702 | 636 | 95×31 |
-| button.tool#load-chantier | 799 | 636 | 68×31 |
-| button.tool.active | 17 | 692 | 156×38 |
-| button.tool | 179 | 692 | 139×38 |
-| button.tool | 324 | 692 | 129×38 |
-| button.tool | 17 | 736 | 225×38 |
-| button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1289 |
+| button.tool#save-chantier | 14 | 671 | 95×31 |
+| button.tool#load-chantier | 111 | 671 | 68×31 |
+| button.tool.active | 17 | 727 | 156×38 |
+| button.tool | 179 | 727 | 139×38 |
+| button.tool | 324 | 727 | 129×38 |
+| button.tool | 17 | 771 | 225×38 |
+| button.tool | 248 | 771 | 198×38 |
+| div.observation | 8 | 865 | 744×1289 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×656 |
 
@@ -373,6 +367,39 @@ Aucun problème.
 
 </details>
 
+## 1400 · observation · Runs
+
+0 problème(s) · défilement horizontal : non
+
+Aucun problème.
+
+<details><summary>géométrie</summary>
+
+| élément | x | y | largeur × hauteur |
+|---|---|---|---|
+| section.plan-area | 169 | 66 | 1145×669 |
+| button.tool.active | 1321 | 74 | 65×47 |
+| button.tool | 1321 | 123 | 65×47 |
+| button.tool | 1321 | 172 | 65×47 |
+| button.tool | 1321 | 221 | 65×47 |
+| button.tool | 1321 | 270 | 65×47 |
+| button.tool#new-session | 1321 | 330 | 65×47 |
+| button.tool.danger#delete-session | 1321 | 379 | 65×47 |
+| button.tool#undo | 1321 | 439 | 65×47 |
+| button.tool#redo | 1321 | 488 | 65×47 |
+| button.tool#save-chantier | 1321 | 548 | 65×47 |
+| button.tool#load-chantier | 1321 | 597 | 65×47 |
+| button.tool.active | 17 | 751 | 112×57 |
+| button.tool | 135 | 751 | 95×57 |
+| button.tool | 236 | 751 | 85×57 |
+| button.tool | 17 | 814 | 181×57 |
+| button.tool | 17 | 877 | 154×57 |
+| div.observation | 356 | 742 | 1036×224 |
+| footer.statusbar | 0 | 974 | 1400×26 |
+| section.device-win.active | 90 | 70 | 430×656 |
+
+</details>
+
 ## 1400 · équipement · Physique
 
 0 problème(s) · défilement horizontal : non
@@ -469,6 +496,39 @@ Aucun problème.
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
 | section.device-win.active | 90 | 70 | 430×220 |
+
+</details>
+
+## 1400 · serveur · Config
+
+0 problème(s) · défilement horizontal : non
+
+Aucun problème.
+
+<details><summary>géométrie</summary>
+
+| élément | x | y | largeur × hauteur |
+|---|---|---|---|
+| section.plan-area | 169 | 66 | 1145×669 |
+| button.tool.active | 1321 | 74 | 65×47 |
+| button.tool | 1321 | 123 | 65×47 |
+| button.tool | 1321 | 172 | 65×47 |
+| button.tool | 1321 | 221 | 65×47 |
+| button.tool | 1321 | 270 | 65×47 |
+| button.tool#new-session | 1321 | 330 | 65×47 |
+| button.tool.danger#delete-session | 1321 | 379 | 65×47 |
+| button.tool#undo | 1321 | 439 | 65×47 |
+| button.tool#redo | 1321 | 488 | 65×47 |
+| button.tool#save-chantier | 1321 | 548 | 65×47 |
+| button.tool#load-chantier | 1321 | 597 | 65×47 |
+| button.tool.active | 17 | 751 | 112×57 |
+| button.tool | 135 | 751 | 95×57 |
+| button.tool | 236 | 751 | 85×57 |
+| button.tool | 17 | 814 | 181×57 |
+| button.tool | 17 | 877 | 154×57 |
+| div.observation | 356 | 742 | 1036×224 |
+| footer.statusbar | 0 | 974 | 1400×26 |
+| section.device-win.active | 90 | 70 | 430×333 |
 
 </details>
 
@@ -637,6 +697,39 @@ Aucun problème.
 
 </details>
 
+## 900 · observation · Runs
+
+0 problème(s) · défilement horizontal : non
+
+Aucun problème.
+
+<details><summary>géométrie</summary>
+
+| élément | x | y | largeur × hauteur |
+|---|---|---|---|
+| section.plan-area | 8 | 132 | 884×575 |
+| button.tool.active | 14 | 724 | 77×31 |
+| button.tool | 93 | 724 | 74×31 |
+| button.tool | 168 | 724 | 82×31 |
+| button.tool | 252 | 724 | 74×31 |
+| button.tool | 328 | 724 | 58×31 |
+| button.tool#new-session | 394 | 724 | 72×31 |
+| button.tool.danger#delete-session | 468 | 724 | 82×31 |
+| button.tool#undo | 558 | 724 | 67×31 |
+| button.tool#redo | 627 | 724 | 67×31 |
+| button.tool#save-chantier | 702 | 724 | 95×31 |
+| button.tool#load-chantier | 799 | 724 | 68×31 |
+| button.tool.active | 17 | 780 | 156×38 |
+| button.tool | 179 | 780 | 139×38 |
+| button.tool | 324 | 780 | 129×38 |
+| button.tool | 17 | 824 | 225×38 |
+| button.tool | 248 | 824 | 198×38 |
+| div.observation | 8 | 918 | 884×260 |
+| footer.statusbar | 0 | 974 | 900×26 |
+| section.device-win.active | 90 | 70 | 430×641 |
+
+</details>
+
 ## 900 · équipement · Physique
 
 0 problème(s) · défilement horizontal : non
@@ -736,6 +829,39 @@ Aucun problème.
 
 </details>
 
+## 900 · serveur · Config
+
+0 problème(s) · défilement horizontal : non
+
+Aucun problème.
+
+<details><summary>géométrie</summary>
+
+| élément | x | y | largeur × hauteur |
+|---|---|---|---|
+| section.plan-area | 8 | 132 | 884×575 |
+| button.tool.active | 14 | 724 | 77×31 |
+| button.tool | 93 | 724 | 74×31 |
+| button.tool | 168 | 724 | 82×31 |
+| button.tool | 252 | 724 | 74×31 |
+| button.tool | 328 | 724 | 58×31 |
+| button.tool#new-session | 394 | 724 | 72×31 |
+| button.tool.danger#delete-session | 468 | 724 | 82×31 |
+| button.tool#undo | 558 | 724 | 67×31 |
+| button.tool#redo | 627 | 724 | 67×31 |
+| button.tool#save-chantier | 702 | 724 | 95×31 |
+| button.tool#load-chantier | 799 | 724 | 68×31 |
+| button.tool.active | 17 | 780 | 156×38 |
+| button.tool | 179 | 780 | 139×38 |
+| button.tool | 324 | 780 | 129×38 |
+| button.tool | 17 | 824 | 225×38 |
+| button.tool | 248 | 824 | 198×38 |
+| div.observation | 8 | 918 | 884×260 |
+| footer.statusbar | 0 | 974 | 900×26 |
+| section.device-win.active | 90 | 70 | 430×333 |
+
+</details>
+
 ## 900 · passerelle · Config
 
 0 problème(s) · défilement horizontal : non
@@ -765,8 +891,8 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×641 |
+| section.device-win.active | 90 | 70 | 430×629 |
 
 </details>
 
-TOTAL : 3 problème(s)
+TOTAL : 0 problème(s)

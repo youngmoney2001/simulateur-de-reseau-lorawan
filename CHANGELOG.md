@@ -68,6 +68,70 @@ fût-elle à une seule passerelle ; le réserver au mono l'y aurait rendu invisi
 instants d'émission sont identiques dans les deux formes, or l'attente n'est faite que de ces
 instants et de la classe.
 
+### Le serveur ne se configure pas — il commande, et dit ce qu'il a vu
+
+Sa fenêtre d'équipement disait « pas de configuration dans cette version ». C'était vrai, et
+ce n'était pas le défaut : le serveur n'a rien à régler dans l'atelier, puisque c'est **lui**
+qui commande le débit, les canaux et les descentes. Le défaut était de n'y rien mettre.
+
+Elle montre désormais ce que le serveur a **vu** du run affiché, par équipement : trames
+remises sur émises, pertes (hors portée, puis en collision), débit commandé, canaux laissés au
+terminal — plus, quand le run en a planifié, les commandes envoyées et leur attente moyenne.
+C'est le seul endroit de l'atelier qui montre le réseau du point de vue de celui qui décide.
+
+**Rien n'y est recopié depuis les formulaires.** Un champ que le run n'a pas observé reste
+vide plutôt que d'afficher une valeur que personne n'a mesurée : les canaux d'un run qui ne
+les a pas relevés s'écrivent « — », pas « aucun ». Le débit ne porte une flèche
+(`SF7 → SF9`) que si le serveur a commandé un changement **et** que le terminal l'a appliqué ;
+sinon il recopierait le réglage de départ en laissant croire à une décision du réseau.
+
+### « Celui du run » nomme enfin de quel matériel il s'agit
+
+Un capteur peut porter son propre modèle de matériel, ou dire « celui du run ». La seconde
+option ne valait que si le run **avait** un profil — et l'atelier le proposait sans jamais
+dire lequel. Choisir entre deux matériels qui diffèrent de 10 % de courant moyen, sans savoir
+lequel on aura, n'est pas choisir.
+
+**Mesuré d'abord, plutôt que cru.** La dette était notée « `_simulate` ne transmet aucun
+`energy_profile` au run créé depuis l'atelier ». Elle n'existe pas : `compile_session` écrit
+le profil du run dans le corps, `scenario.py` porte le modèle propre du groupe jusqu'au
+dispositif, et le modèle de l'équipement prime sur celui du run. Cinq tests le prouvent, et
+chacun a été vérifié discriminant par mutation : retirer le profil du corps en fait échouer
+deux, retirer celui du groupe en fait échouer deux autres.
+
+Ce qui manquait vraiment : **le moteur n'exposait pas ce défaut**. `GET /energy-profiles`
+publie désormais `default`, et l'atelier l'écrit sous le sélecteur — à l'ajout d'un capteur
+comme dans sa fenêtre — au lieu de le recopier, ce qui l'aurait laissé dériver. Un test lie
+les deux : le défaut annoncé par le catalogue est celui que le corps compilé écrit.
+
+### Les runs d'un chantier — revoir une simulation au lieu de n'avoir que la dernière
+
+Comparer deux réglages suppose de revoir le premier. Or l'atelier ne connaissait que le
+dernier run : les autres n'étaient atteignables que par leur identifiant, et un run qu'on
+n'avait pas noté était un run perdu.
+
+Nouvel onglet **Runs** dans le panneau d'observation, servi par `GET /sessions/{id}/runs` :
+graine, date, état, trames reçues, PDR et attente des descentes, du plus récent au plus
+ancien. Un clic rouvre un run — ses chiffres, son plan et son journal remplacent ceux de
+l'écran, et le chantier ne bouge pas : le run n'est **pas** relié à nouveau (`bind` sert à
+noter un exercice sur l'état courant, pas à regarder un résultat passé).
+
+**Un run non terminé ne publie aucun chiffre.** Pas de mesure ne veut pas dire mesure nulle :
+ses colonnes restent vides plutôt qu'à zéro, et « 0 reçu » ne se lit pas comme un résultat.
+Même règle pour l'attente des descentes, absente d'un run qui n'en a pas planifié.
+
+**Comparer, pas seulement revoir.** Chaque ligne porte un bouton « Comparer » qui met le run
+choisi face au run affiché : taux de réception, trames reçues, attente des descentes, avec
+l'écart lu de l'un vers l'autre. Seules les grandeurs **mesurées par les deux** runs sont
+comparées — un écart calculé contre une case vide inventerait une différence, l'attente des
+descentes ne se comparant qu'entre deux runs qui en ont planifié.
+
+**L'historique est celui du chantier, pas du stockage.** Le chantier rattache ses 16 derniers
+runs (`MAX_COMPILED`) ; un run évincé est sauté sans faire échouer la liste, et un run plus
+ancien n'est pas effacé — il cesse d'être rattaché, et reste consultable par son identifiant.
+Chaque entrée porte les liaisons équipement ↔ passerelle du run, sans lesquelles le revoir
+afficherait des équipements sans jamais dire qui a entendu qui.
+
 ### U0.5 — Convergence du point fixe : budget de réémissions cumulé
 
 Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre

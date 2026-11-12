@@ -159,6 +159,10 @@
                s'il n'en déclare aucun : un sélecteur vide serait une promesse non tenue.
                Masqué aussi pour les autres types, qui n'ont pas de matériel à choisir. -->
           <label id="add-materiel" hidden>Matériel <select name="energy_profile"></select></label>
+          <!-- Ce qu'est « celui du run » : un matériel nommé, pas une promesse. Deux
+               modèles diffèrent de 10 % de courant moyen, et choisir entre eux sans savoir
+               lequel on aura n'est pas choisir. Le nom vient du moteur. -->
+          <p id="add-materiel-aide" class="hint" hidden></p>
           <!-- Le modèle de la passerelle. Rempli depuis le catalogue du moteur, filtré sur
                ce que le rôle permet (un relais exige une radio mesh documentée), et masqué
                pour les types qui n'en ont pas. Ce que le modèle change est rappelé dessous :
@@ -186,6 +190,7 @@
           <button type="button" class="tab" data-tab="journal" role="tab">Journal</button>
           <button type="button" class="tab" data-tab="frame" role="tab">Trame</button>
           <button type="button" class="tab" data-tab="exercise" role="tab">Exercice</button>
+          <button type="button" class="tab" data-tab="runs" role="tab">Runs</button>
           <button type="button" class="tab" data-tab="environment" role="tab">Obstacles</button>
         </div>
 
@@ -274,6 +279,29 @@
             title="Porter chaque capteur au nombre de messages qui couvre l'heure réglementaire, puis relancer le run">
             Prolonger le run jusqu'à 1 h
           </button>
+        </div>
+
+        <!-- Les runs déjà lancés. Comparer deux réglages suppose de revoir le premier : sans
+             cette liste, un run qu'on n'a pas noté est un run perdu. -->
+        <div class="tab-body" data-panel="runs" hidden>
+          <p id="runs-vide" class="muted">Aucun run lancé depuis ce chantier.</p>
+          <table id="runs-table" class="runs" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Graine</th>
+                <th scope="col">Lancé</th>
+                <th scope="col">État</th>
+                <th scope="col">Reçues</th>
+                <th scope="col">PDR</th>
+                <th scope="col">Attente</th>
+                <th scope="col">Revoir</th>
+                <th scope="col">Comparer</th>
+              </tr>
+            </thead>
+            <tbody id="runs-lignes"></tbody>
+          </table>
+          <p id="runs-note" class="muted"></p>
+          <div id="runs-compare" hidden></div>
         </div>
 
         <div class="tab-body" data-panel="journal" hidden>

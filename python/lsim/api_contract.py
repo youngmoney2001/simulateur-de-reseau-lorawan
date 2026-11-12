@@ -22,7 +22,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lsim import study_contract as _study_constants
-from lsim.energy_report import profile_name
+from lsim.energy_report import DEFAULT_ENERGY_PROFILE, profile_name
 from lsim.plan import Plan, get_plan, plan_names
 from lsim.scenario import ScenarioModel
 
@@ -292,6 +292,44 @@ class DownlinkOut(_Strict):
         return self
 
 
+class SessionRunOut(_Strict):
+    """Un run lancé depuis un chantier, avec de quoi le reconnaître et le comparer.
+
+    Les grands nombres (`pdr`, `sent`, `received`, `downlink`) ne sont présents que si le run
+    est **terminé** : un run en cours n'a pas de résultat, et publier des zéros le ferait
+    croire mesuré à zéro plutôt que pas encore mesuré.
+    """
+
+    run_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    state: RunState
+    seed: Optional[int] = Field(default=None, ge=0)
+    # Horodatage POSIX écrit par le serveur au moment de la création du run.
+    created_at: Optional[int] = Field(default=None, ge=0)
+    pdr: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    sent: Optional[int] = Field(default=None, ge=0)
+    received: Optional[int] = Field(default=None, ge=0)
+    energy_profile: Optional[str] = None
+    # Attente des descentes réseau : présente seulement si le run en a planifié. Un run sans
+    # commande du serveur n'a pas d'attente, et `0` dirait « livré instantanément ».
+    downlink: Optional[DownlinkOut] = None
+    problem: Optional[Problem] = None
+    # Liaisons équipement <-> passerelle de ce run. Elles sont nécessaires pour **le revoir**
+    # tel qu'il a été mesuré : le plan les trace, et sans elles un run rouvert afficherait
+    # des équipements sans jamais dire qui a entendu qui.
+    links: list[_study_constants.GatewayLink] = Field(default_factory=list,
+                                                      max_length=_study_constants.MAX_NODES)
+
+
+class SessionRunList(_Strict):
+    """Les runs d'un chantier, du plus récent au plus ancien.
+
+    Borné à `MAX_COMPILED` (16) : c'est la profondeur de ce que le chantier rattache, et non
+    une limite d'affichage. Un run plus ancien n'est pas effacé, il n'est plus rattaché.
+    """
+
+    items: list[SessionRunOut] = Field(max_length=32)
+
+
 class RunSummary(_Strict):
     """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
     depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
@@ -539,11 +577,19 @@ class EnergyProfileInfo(_Strict):
 
 class EnergyProfileList(_Strict):
     profiles: list[EnergyProfileInfo] = Field(max_length=16)
+    # Celui du run : le matériel qu'un capteur consomme quand il n'en a pas choisi. Sans lui,
+    # l'interface propose « celui du run » sans pouvoir dire lequel, et elle ne peut pas
+    # l'écrire elle-même — une constante recopiée cesserait de suivre le moteur le jour où il
+    # en change. Le choix entre deux matériels se fait alors à l'aveugle, alors qu'ils
+    # diffèrent de 10 % de courant moyen.
+    default: str = Field(max_length=32)
 
 
 def list_energy_profiles() -> EnergyProfileList:
-    return EnergyProfileList(profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
-                                       for name in ENERGY_PROFILES])
+    return EnergyProfileList(
+        profiles=[EnergyProfileInfo(name=name, label=profile_name(name))
+                  for name in ENERGY_PROFILES],
+        default=DEFAULT_ENERGY_PROFILE)
 
 
 class GatewayProfileInfo(_Strict):
@@ -638,6 +684,7 @@ _MODELS = {
     "run_create": RunCreate,
     "run_status": RunStatus,
     "run_summary": RunSummary,
+    "session_run_list": SessionRunList,
     "device_page": DevicePage,
     "trace_page": TracePage,
     "trace_event": TraceEvent,

@@ -59,6 +59,7 @@ const state = {
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
+  defautMateriel: "",    // le materiel du run, annonce par le moteur : « celui du run », dit
   modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
   materiaux: [],         // catalogue du moteur : perte et caractere extrapole, a 868 MHz
   classesEcoute: [],     // classes d'ecoute : libelles, ouverture et creneaux viennent du moteur
@@ -142,6 +143,10 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  // Le matériel du run, annoncé par le moteur. L'écrire ici le recopierait, et il cesserait
+  // de suivre le moteur le jour où celui-ci en change. Vide si la réponse ne le porte pas
+  // (moteur plus ancien) : l'aide ne s'affiche pas, plutôt que d'afficher une devinette.
+  if (modeles) state.defautMateriel = modeles.default ?? "";
   const passerelles = await guard(() => state.client.gatewayProfiles());
   if (passerelles) state.modelesPasserelle = passerelles.profiles ?? [];
   // Les matériaux se lisent à la fréquence de la bande : la perte dépend de la fréquence, et
@@ -460,6 +465,9 @@ async function annulerOuRetablir(sens) {
   // topologie. On le retire, comme à l'ouverture d'un autre chantier.
   state.result = null;
   state.resultats = null;
+  // Le résumé est celui d'un run calculé sur un autre réseau : le garder ferait dire au
+  // serveur ce qu'il a vu d'un chantier qui n'existe plus.
+  state.resume = null;
   state.rxMatrix = null;
   state.liens = [];
   state.passerelles = null;
@@ -1011,6 +1019,7 @@ function renderDevice() {
       }));
     } else if (w.tab === "config") {
       if (node.kind === "sensor") renderSensorForm(node, body);
+      else if (node.kind === "server") renderServeurConfig(node, body);
       else renderGatewayConfig(node, body);
     } else if (w.tab === "cli") {
       if (CLI_KINDS.includes(node.kind)) renderConsole(node, body);
@@ -1198,6 +1207,73 @@ function renderGatewayConfig(node, body) {
 }
 
 // Pourquoi cet equipement n a pas de console, au lieu de masquer l onglet.
+/**
+ * Le serveur de réseau ne se configure pas : c'est lui qui commande.
+ *
+ * Sa fenêtre montre donc ce qu'il a **vu** du dernier run, par équipement : le débit qu'il a
+ * commandé, les canaux qu'il a laissés, les commandes qu'il a envoyées. Rien n'y est recopié
+ * depuis les formulaires — un champ que le run n'a pas observé reste vide, plutôt
+ * d'afficher une valeur que personne n'a mesurée.
+ */
+function renderServeurConfig(node, body) {
+  body.append(el("p", { class: "muted", text: `Rôle : ${KIND_LABEL[node.kind]}` }));
+  const rows = state.deviceRows ?? [];
+  if (!rows.length) {
+    body.append(el("p", { class: "no-cli",
+      text: "Le serveur n'a encore rien observé : lancez une simulation. Il ne se configure "
+        + "pas — c'est lui qui commande le débit, les canaux et les descentes." }));
+    return;
+  }
+  const noeuds = state.topo?.nodes ?? [];
+  const nomDe = (row) => {
+    const n = noeuds.find((x) => x.id === row.group);
+    return n ? (n.name || n.id) : row.group;
+  };
+  const envoyees = rows.reduce((a, r) => a + (r.sent ?? 0), 0);
+  const remises = rows.reduce((a, r) => a + (r.received ?? 0), 0);
+  const bloc = el("div", { class: "serveur-vu" });
+  bloc.append(el("p", { class: "muted",
+    text: `${remises} trame(s) remise(s) au serveur sur ${envoyees} émise(s), `
+      + `par ${rows.length} équipement(s).` }));
+  // Les commandes sont l'action du serveur lui-même : c'est le seul endroit qui les compte
+  // du point de vue de celui qui les envoie.
+  const dl = state.resume?.downlink;
+  if (dl) {
+    bloc.append(el("p", { class: "muted",
+      text: `Commandes envoyées : ${dl.delivered} sur ${dl.requested}`
+        + (dl.latency_mean_s === null || dl.latency_mean_s === undefined
+          ? "." : `, attendue ${formatSecondes(dl.latency_mean_s)} en moyenne.`) }));
+  }
+  body.append(bloc);
+
+  const corps = el("tbody");
+  for (const r of rows) {
+    // Une flèche seulement si le serveur a commandé un changement **et** que le terminal
+    // l'a appliqué : sinon le débit affiché recopierait le réglage de départ en laissant
+    // croire à une décision du serveur.
+    const commande = r.final_spreading_factor !== null && r.final_spreading_factor !== undefined
+      && r.final_spreading_factor !== r.spreading_factor;
+    corps.append(el("tr", {},
+      el("th", { scope: "row", text: nomDe(r) }),
+      el("td", { text: `${r.received} / ${r.sent}` }),
+      el("td", { text: `${r.lost_sensitivity} / ${r.lost_collision}` }),
+      el("td", { text: commande
+        ? `SF${r.spreading_factor} → SF${r.final_spreading_factor}` : `SF${r.spreading_factor}` }),
+      el("td", { text: r.enabled_channels?.length ? r.enabled_channels.join(" ") : "—" })));
+  }
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { scope: "col", text: "Équipement" }),
+      el("th", { scope: "col", text: "Reçues" }),
+      el("th", { scope: "col", text: "Pertes" }),
+      el("th", { scope: "col", text: "Débit" }),
+      el("th", { scope: "col", text: "Canaux" }))), corps);
+  body.append(table, el("p", { class: "gw-aide",
+    text: "Reçues : remises sur émises. Pertes : hors portée, puis en collision. Canaux : "
+      + "ceux que le serveur a laissés au terminal à la fin du run — vide si le run ne les a "
+      + "pas observés." }));
+}
+
 function cliAbsentMessage(kind) {
   if (kind === "sensor") return "Un capteur ne se configure pas en ligne de commande : utilisez l'onglet Config pour ses réglages radio.";
   if (kind === "server") return "Le serveur de réseau n'expose pas de console dans cette version.";
@@ -1280,7 +1356,12 @@ function renderDeviceInfo(node, body) {
   if (node.kind === "sensor") {
     const nom = node.sensor?.energy_profile ?? "";
     const modele = state.modelesMateriel.find((m) => m.name === nom);
-    ligne("Matériel", modele?.label ?? (nom || "celui du run"));
+    // Sans modèle propre, on nomme celui du run au lieu de laisser « celui du run » en
+    // suspens : c'est le matériel qui décide du courant, et le lecteur a besoin de savoir
+    // lequel avant d'avoir lancé quoi que ce soit.
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    ligne("Matériel", modele?.label
+      ?? (nom || (defaut ? `celui du run (${defaut.label})` : "celui du run")));
   }
   // Le serveur se pose et se dessine, mais le run ne le simule pas : le LNS est implicite
   // derrière la passerelle frontière. Le dire ici, parce que son rôle et ses ports, en haut
@@ -1576,6 +1657,12 @@ function renderSensorForm(node, body) {
     }
     fields.energy_profile = modeleSelect;
     grid.append(el("label", {}, "Matériel", modeleSelect));
+    // « Celui du run » sans dire lequel est une devinette : les deux matériels diffèrent de
+    // 10 % de courant moyen, et choisir entre eux sans savoir lequel on aura n'est pas
+    // choisir. Le nom vient du moteur (`default`), seul à savoir ce que le run calcule.
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    if (defaut) grid.append(el("p", { class: "hint",
+      text: `« celui du run » : ${defaut.label}` }));
   }
   const message = el("p", { class: "muted", text: "" });
   const form = el("form", {
@@ -1739,6 +1826,226 @@ function renderSimulationIdle() {
   state.liaisonsObservees = [];
 }
 
+// --- Runs déjà lancés : revoir une simulation au lieu de n'avoir que la dernière -------------
+// Le run auquel on compare, et la dernière liste lue : la comparaison se recalcule à partir
+// de cette liste, pas d'un souvenir de ce qu'on avait cliqué.
+let comparerAvec = null;
+let dernierRuns = [];
+//
+// Comparer deux réglages suppose de revoir le premier. Sans cette liste, un run qu'on n'a pas
+// noté est un run perdu : l'atelier ne connaissait que le dernier.
+
+/** Une date courte : le jour et l'heure suffisent à retrouver un run, l'année encombre. */
+function formatInstant(secondes) {
+  if (!secondes) return "—";
+  return new Date(secondes * 1000).toLocaleString("fr-FR",
+    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+async function renderRuns() {
+  const vide = $("runs-vide"), table = $("runs-table"), lignes = $("runs-lignes");
+  if (!vide || !table || !lignes) return;
+  $("runs-note").textContent = "";
+  if (!state.sid) {
+    table.hidden = true;
+    lignes.replaceChildren();
+    vide.hidden = false;
+    vide.textContent = "Aucun chantier sélectionné.";
+    return;
+  }
+  const liste = await guard(() => state.client.runs(state.sid));
+  if (!liste) return;
+  const items = liste.items ?? [];
+  table.hidden = items.length === 0;
+  vide.hidden = items.length > 0;
+  if (!items.length) {
+    lignes.replaceChildren();
+    vide.textContent = "Aucun run lancé depuis ce chantier.";
+    return;
+  }
+  // Les lignes se construisent **avant** de remplacer : vider la table puis attendre le
+  // serveur donnait un tableau vide pendant l'aller-retour, et un clic arrivant là ne
+  // trouvait plus rien à ouvrir.
+  dernierRuns = items;
+  const rows = [];
+  for (const r of items) {
+    const tr = el("tr", { class: r.run_id === state.runId ? "affiche" : undefined });
+    // Un run non terminé n'a pas de résultat : ses cases restent vides plutôt qu'à zéro.
+    // « 0 reçu » se lirait comme une mesure, alors qu'il n'y en a pas eu.
+    const fini = r.state === "done";
+    tr.append(
+      el("td", { text: r.seed === null || r.seed === undefined ? "—" : String(r.seed) }),
+      el("td", { text: formatInstant(r.created_at) }),
+      el("td", { text: r.state + (r.state === "done" ? "" : r.problem ? " : " + r.problem.message : "") }),
+      el("td", { text: fini ? `${r.received} / ${r.sent}` : "—" }),
+      el("td", { text: fini && r.pdr !== null && r.pdr !== undefined ? formatPercent(r.pdr) : "—" }),
+      el("td", { text: fini && r.downlink ? formatSecondes(r.downlink.latency_mean_s) : "—" }),
+    );
+    // La ligne entière est cliquable à la souris ; le bouton est ce qui la rend atteignable
+    // au clavier. Une ligne de tableau ne prend pas le focus : sans lui, revoir un run
+    // demanderait la souris, et le clavier ne verrait jamais l'historique.
+    const revoir = el("button", { type: "button", text: "Revoir",
+      "aria-label": `Revoir le run de la graine ${r.seed ?? "?"}, lancé `
+        + `${formatInstant(r.created_at)}`,
+      ...(fini ? {} : { disabled: "disabled",
+        title: "Ce run n'est pas terminé : il n'a pas de résultat." }) });
+    revoir.addEventListener("click", (ev) => { ev.stopPropagation(); ouvrirRun(r); });
+    tr.append(el("td", {}, revoir));
+    tr.addEventListener("click", () => ouvrirRun(r));
+    // Comparer vient après Revoir, dans l'ordre de l'en-tête : une colonne décalée ferait
+    // lire l'écart sous le bouton, et inversement.
+    if (fini && r.run_id !== state.runId) {
+      const comparer = el("button", { type: "button", text: "Comparer",
+        "aria-label": `Comparer le run affiché avec celui de la graine ${r.seed ?? "?"}` });
+      comparer.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        comparerAvec = r;
+        const affiche = dernierRuns.find((x) => x.run_id === state.runId);
+        if (affiche) renderComparaison(affiche, r);
+      });
+      tr.append(el("td", {}, comparer));
+    } else {
+      tr.append(el("td", {}));
+    }
+    rows.push(tr);
+  }
+  lignes.replaceChildren(...rows);
+  // La comparaison reste affichée tant qu'on ne change pas de run affiché : la relire à
+  // chaque rendu la ferait disparaître au premier rafraîchissement.
+  const affiche = items.find((r) => r.run_id === state.runId) ?? null;
+  if (comparerAvec && affiche && comparerAvec.run_id !== affiche.run_id) {
+    renderComparaison(affiche, comparerAvec);
+  } else if (comparerAvec && comparerAvec.run_id === state.runId) {
+    comparerAvec = null;
+    $("runs-compare").hidden = true;
+  }
+  $("runs-note").textContent = items.length === 1
+    ? "Un run gardé par ce chantier. Cliquez pour le revoir."
+    : `${items.length} runs gardés par ce chantier. Cliquez pour en revoir un : `
+      + "les chiffres affichés deviennent les siens.";
+}
+
+/**
+ * Deux runs l'un à côté de l'autre, avec l'écart.
+ *
+ * Seules les grandeurs que **les deux** runs ont mesurées sont comparées. Un écart calculé
+ * contre une case vide inventerait une différence : l'attente des descentes, par exemple, ne
+ * se compare que si les deux runs en ont planifié — sinon la ligne n'apparaît pas.
+ *
+ * `a` est le run affiché, `b` celui qu'on lui compare : l'écart est lu de l'un vers l'autre,
+ * et le sens est écrit dans l'en-tête plutôt que supposé.
+ */
+function renderComparaison(a, b) {
+  const bloc = $("runs-compare");
+  clear(bloc);
+  const signe = (v, unite = "") => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}${unite}`;
+  const lignes = [];
+  if (a.pdr !== null && a.pdr !== undefined && b.pdr !== null && b.pdr !== undefined) {
+    lignes.push(["Taux de réception (PDR)", formatPercent(a.pdr), formatPercent(b.pdr),
+      signe(Math.round((b.pdr - a.pdr) * 1000) / 10, " pts")]);
+  }
+  if (a.received !== undefined && b.received !== undefined) {
+    lignes.push(["Trames reçues", `${a.received} / ${a.sent}`, `${b.received} / ${b.sent}`,
+      signe(b.received - a.received)]);
+  }
+  if (a.downlink && b.downlink) {
+    const ecart = b.downlink.latency_mean_s - a.downlink.latency_mean_s;
+    lignes.push(["Attente de la commande", formatSecondes(a.downlink.latency_mean_s),
+      formatSecondes(b.downlink.latency_mean_s),
+      // Une attente se lit en secondes, mais l'écart d'une classe B à l'autre se joue sur
+      // des dizaines de secondes : garder deux décimales ici noierait la différence.
+      signe(Math.round(ecart * 10) / 10, " s")]);
+  }
+  if (!lignes.length) {
+    bloc.hidden = false;
+    bloc.append(el("p", { class: "muted",
+      text: "Ces deux runs n'ont aucune grandeur comparable : ils n'ont pas mesuré les mêmes"
+        + " choses." }));
+    return;
+  }
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { scope: "col", text: "Grandeur" }),
+      el("th", { scope: "col", text: `Affiché (graine ${a.seed ?? "?"})` }),
+      el("th", { scope: "col", text: `Comparé (graine ${b.seed ?? "?"})` }),
+      el("th", { scope: "col", text: "Écart" }))));
+  const corps = el("tbody");
+  for (const [nom, va, vb, ecart] of lignes) {
+    corps.append(el("tr", {}, el("th", { scope: "row", text: nom }),
+      el("td", { text: va }), el("td", { text: vb }), el("td", { text: ecart })));
+  }
+  table.append(corps);
+  bloc.hidden = false;
+  bloc.append(el("h3", { text: "Comparaison" }), table,
+    el("p", { class: "muted", text: "L'écart est lu du run affiché vers le run comparé." }));
+}
+
+/**
+ * Rouvre un run déjà lancé : ses résultats remplacent ceux de l'écran.
+ *
+ * Le run n'est **pas** relié à nouveau (`bind`) : relier sert à noter un exercice sur l'état
+ * courant du chantier, alors qu'ici on ne fait que regarder un résultat passé. Le chantier ne
+ * bouge donc pas.
+ */
+async function ouvrirRun(r) {
+  if (r.state !== "done") {
+    $("runs-note").textContent = `Le run ${r.run_id} n'est pas terminé : il n'a pas de résultat.`;
+    return;
+  }
+  if (state.busy) {
+    $("runs-note").textContent = "Un run est déjà en cours d'affichage.";
+    return;
+  }
+  state.busy = true;
+  try {
+    const summary = await guard(() => state.client.summary(r.run_id));
+    if (!summary) return;
+    const rows = await guard(() => collectPages(
+      (cursor) => state.client.devicesPage(r.run_id, cursor), MAX_METRIC_DEVICES));
+    if (!rows) return;
+    // Les bilans comptent les événements du run affiché : ceux du précédent n'ont plus rien à
+    // dire ici, et les laisser ferait lire l'ancien résultat comme celui qu'on vient d'ouvrir.
+    $("adr-bilan").hidden = true;
+    clear($("adr-bilan-liste"));
+    $("adr-bilan-aide").textContent = "";
+    $("proto-bilan").hidden = true;
+    clear($("proto-bilan-liste"));
+    $("proto-bilan-aide").textContent = "";
+    $("dl-bilan").hidden = true;
+    clear($("dl-bilan-liste"));
+    $("dl-bilan-aide").textContent = "";
+    clear($("sim-notes"));
+
+    state.runId = r.run_id;
+    state.deviceRows = rows;
+    state.resultats = resultatsParNoeud(rows, state.topo?.nodes ?? []);
+    state.fenetreNs = fenetreObservationNs(summary);
+    // Les liaisons viennent du run, pas de la session : le chantier a pu changer depuis, et
+    // c'est le réseau d'alors qu'on veut revoir.
+    state.liens = r.links ?? [];
+    state.passerelles = summary.gateways ?? null;
+    state.rxMatrix = summary.rx_matrix ?? null;
+    state.liaisonsObservees = calculerLiaisons();
+    state.resume = summary;
+    renderResults(summary, (r.links ?? []).map((l) => l.gateway), rows);
+    renderLegend();
+    renderDevice();
+    syncMap();
+    await loadAnimation(r.run_id);
+    renderBilanProtocole();
+    // Le résultat se lit dans l'onglet Simulation : y ramener, sinon le clic semble sans effet.
+    selectObservationTab("sim");
+    $("sim-status").textContent = `Run ${r.run_id} (graine ${r.seed ?? "?"}) rouvert : `
+      + "les chiffres affichés sont les siens.";
+  } finally {
+    state.busy = false;
+    // La liste se relit à l'ouverture de l'onglet : la rafraîchir alors qu'elle est masquée
+    // serait une requête pour un panneau qu'on ne regarde pas.
+    const panneau = document.querySelector('.tab-body[data-panel="runs"]');
+    if (panneau && !panneau.hidden) await renderRuns();   // la ligne affichée se marque
+  }
+}
+
 $("sim-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   // Un run qui ne part pas en silence laisse à l'écran le statut du précédent, et fait croire
@@ -1796,6 +2103,7 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // Un seul calcul pour les deux vues : si le plan et la carte le refaisaient chacun,
     // ils pourraient diverger sans que rien ne le signale.
     state.liaisonsObservees = calculerLiaisons();
+    state.resume = summary;
     renderResults(summary, started.links.map((l) => l.gateway), state.deviceRows);
     renderLegend();
     renderDevice();             // la fenêtre ouverte chiffre le résultat
@@ -1805,6 +2113,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // L'appeler depuis `renderResults` l'aurait fait lire ceux du run précédent.
     renderBilanProtocole();
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
+    // Ce run est désormais dans l'historique du chantier : la liste le montre, sans quoi
+    // « relancer » et « revoir » resteraient la même action.
+    if (!document.querySelector('.tab-body[data-panel="runs"]').hidden) await renderRuns();
   } finally {
     state.busy = false;
     $("simulate").disabled = false;
@@ -2191,8 +2502,17 @@ function appliquerModeleAjout() {
 
 function appliquerMaterielAjout() {
   const champ = $("add-materiel");
+  const aide = $("add-materiel-aide");
   const kind = $("add-form")?.querySelector('[name="kind"]')?.value;
   if (champ) champ.hidden = kind !== "sensor" || state.modelesMateriel.length === 0;
+  if (aide) {
+    // Même discipline que l'aide du modèle de passerelle : elle ne s'affiche que si le champ
+    // est visible, une explication orpheline décrivant un réglage absent. Et elle se tait si
+    // le moteur n'a pas annoncé de défaut, plutôt que d'inventer un nom.
+    aide.hidden = Boolean(champ?.hidden);
+    const defaut = state.modelesMateriel.find((m) => m.name === state.defautMateriel);
+    aide.textContent = (aide.hidden || !defaut) ? "" : `« celui du run » : ${defaut.label}`;
+  }
 }
 
 function renderTerrains() {
@@ -3190,7 +3510,12 @@ document.addEventListener("keydown", (ev) => {
   annulerOuRetablir(ev.shiftKey ? "redo" : "undo");
 });
 for (const b of document.querySelectorAll(".tab"))
-  b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
+  b.addEventListener("click", () => {
+    selectObservationTab(b.dataset.tab);
+    // La liste se relit à l'ouverture : un run lancé depuis une autre session, ou il y a une
+    // heure, ne serait pas connu autrement.
+    if (b.dataset.tab === "runs") renderRuns();
+  });
 wireTabs(document.querySelector(".tabs"));
 // Les onglets d'équipement et la fermeture sont câblés par fenêtre (openDeviceWindow).
 $("windows").addEventListener("pointerdown", (ev) => {

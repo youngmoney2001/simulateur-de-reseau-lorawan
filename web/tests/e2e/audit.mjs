@@ -305,6 +305,22 @@ try {
     await submitForm("#add-form");
     await page.waitForSelector(`g.node[data-id="${id}"]`);
   }
+  // Un serveur de réseau, posé à l'écart : sa fenêtre porte un tableau de cinq colonnes
+  // dans 430 px, une géométrie que rien d'autre ne mesure. Il n'entre pas dans la
+  // compilation (`compile_session` ne retient que les passerelles et les capteurs), donc le
+  // run mesuré plus bas n'en est pas changé.
+  await setValue('#add-form [name="id"]', "lns");
+  await page.select('#add-form [name="kind"]', "server");
+  // Coordonnées reprises **à l'intérieur** de la boîte que les cinq équipements occupent déjà
+  // (lat 4.047952 → 4.054158, lon 9.767900 → 9.773490). Un nœud posé au-delà élargit la boîte,
+  // change l'échelle du plan, et les étiquettes — dont la taille est en pixels, donc fixe —
+  // sortent alors du cadre à toutes les largeurs en dessous de 1180 px. Mesuré : 32 problèmes
+  // sur 27 états, tous dus à ce seul déplacement.
+  await setValue('#add-form [name="lat"]', "4.050000");
+  await setValue('#add-form [name="lon"]', "9.769500");
+  await submitForm("#add-form");
+  await page.waitForSelector('g.node[data-id="lns"]');
+
   // Sans WebGL, Cesium ne peut rien peindre : le globe reste une surface unie, ce qui n'est
   // pas un défaut de l'application mais une limite de l'environnement. On le mesure pour ne
   // pas attribuer à tort un globe vide à un défaut de code.
@@ -470,6 +486,9 @@ try {
     { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
     { nom: "observation · Trame", action: () => cliquerTexte(".tab", "Trame") },
     { nom: "observation · Exercice", action: () => cliquerTexte(".tab", "Exercice") },
+    // L'onglet Runs porte un tableau : une colonne trop large y sortirait du panneau sans
+    // que rien ne le voie, l'état n'existant pas avant lui.
+    { nom: "observation · Runs", action: () => cliquerTexte(".tab", "Runs") },
     { nom: "équipement · Physique", action: () => cliquerTexte(".dtab", "Physique") },
     { nom: "équipement · Config", action: () => cliquerTexte(".dtab", "Config") },
     { nom: "équipement · CLI", action: () => cliquerTexte(".dtab", "CLI") },
@@ -477,12 +496,33 @@ try {
     // ne mesure ici que celle d'un capteur : la nouvelle fenêtre serait la seule partie de
     // l'interface jamais passée au gabarit. On ferme donc le capteur et on ouvre la
     // passerelle — le formulaire le plus dense de l'atelier.
-    { nom: "passerelle · Config", action: async () => {
+    // Le serveur ne se configure pas : sa fenêtre dit ce qu'il a vu du run, dans un tableau
+    // par équipement. Cinq colonnes en 430 px : un débordement y passerait inaperçu sans
+    // cet état.
+    { nom: "serveur · Config", action: async () => {
+      // Toute fenêtre ouverte est fermée : une fenêtre laissée là recouvre le nœud visé, et
+      // le clic ouvrirait alors tout sauf la fenêtre du serveur.
       await page.evaluate(() => {
-        document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
+        for (const w of document.querySelectorAll(".device-win .close")) w.click();
       });
       await pause(300);
-      await page.click('g.node[data-id="gw-nord"] rect');
+      // Au clavier plutôt qu'au pointeur : le nœud est un bouton, et la touche ne peut pas
+      // être interceptée par un recouvrement.
+      await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
+      await page.keyboard.press("Enter");
+      await page.waitForSelector('.device-win[data-node-id="lns"]');
+      return cliquerTexte('.device-win[data-node-id="lns"] .dtab', "Config");
+    } },
+    { nom: "passerelle · Config", action: async () => {
+      // Même précaution que pour le serveur, et pour la même raison : la fenêtre laissée
+      // ouverte par l'état précédent recouvre le nœud visé. Fermer « capteur-a » ne suffit
+      // pas — c'est désormais la fenêtre du serveur qui est là.
+      await page.evaluate(() => {
+        for (const w of document.querySelectorAll(".device-win .close")) w.click();
+      });
+      await pause(300);
+      await page.evaluate(() => document.querySelector('g.node[data-id="gw-nord"]').focus());
+      await page.keyboard.press("Enter");
       await page.waitForSelector('.device-win[data-node-id="gw-nord"]');
       return cliquerTexte('.device-win[data-node-id="gw-nord"] .dtab', "Config");
     } },

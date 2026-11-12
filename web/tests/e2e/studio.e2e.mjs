@@ -48,8 +48,14 @@ async function waitHttp(url, child, timeoutMs = 60_000) {
 let browser;
 let failed = false;
 try {
+  // Le limiteur de débit est monté très au-dessus de son défaut (120 par minute) : l'e2e
+  // déroule en une minute ce qu'un utilisateur fait en dix, et il mesurait alors la
+  // protection du serveur au lieu de l'interface — un 429 au milieu d'une étape, sans
+  // rapport avec ce qu'elle vérifie. Le limiteur est vérifié à part, à l'unité
+  // (`test_api_server`), qui est son endroit.
   const api = start("API", python, ["-m", "lsim.api_server", "serve", "--tokens", tokens,
-    "--runs-db", join(work, "runs.sqlite"), "--port", String(API_PORT)], repoDir);
+    "--runs-db", join(work, "runs.sqlite"), "--port", String(API_PORT),
+    "--rate-per-minute", "6000"], repoDir);
   await waitHttp(`http://127.0.0.1:${API_PORT}/api/v1/regions`, api);
   const vite = start("Studio", process.execPath, [join(webDir, "node_modules", "vite", "bin", "vite.js"),
     "--port", String(WEB_PORT), "--strictPort"], webDir, { LSIM_API_URL: `http://127.0.0.1:${API_PORT}` });
@@ -738,6 +744,103 @@ try {
     console.log(`ADR : ${lignes.length} changement(s) · ${canaux}`);
   });
 
+  // Les runs déjà lancés. Comparer deux réglages suppose de revoir le premier : sans cette
+  // liste, un run qu'on n'a pas noté est un run perdu. Le test porte sur le plus ancien, qui
+  // est précisément celui qu'on ne peut pas revoir autrement.
+  await step("runs du chantier : le plus ancien se revoit", async () => {
+    await obsTab("Runs");
+    await page.waitForSelector("#runs-table tbody tr", { timeout: 20_000 });
+    const lire = () => page.$$eval("#runs-table tbody tr", (trs) => trs.map((tr) => ({
+      graine: tr.children[0]?.textContent.trim() ?? "(vide)",
+      etat: tr.children[2]?.textContent.trim() ?? "(vide)",
+      recues: tr.children[3]?.textContent.trim() ?? "(vide)",
+      affiche: tr.classList.contains("affiche"),
+    })));
+    // Ce que le panneau contient réellement au moment de l'échec : lire « aucune ligne »
+    // sans cela oblige à deviner entre un rendu en cours, une réponse vide et un panneau
+    // masqué — trois causes qui ne se ressemblent pas.
+    const etatPanneauRuns = async () => await page.evaluate(() => {
+      const p = document.querySelector('.tab-body[data-panel="runs"]');
+      const t = document.getElementById("runs-table");
+      return `panneau masqué : ${p?.hidden} · table masquée : ${t?.hidden} · `
+        + `note : ${document.getElementById("runs-note")?.textContent ?? "(absente)"} · `
+        + `vide : ${document.getElementById("runs-vide")?.textContent ?? "(absent)"} · `
+        + `onglet actif : ${document.querySelector(".tab.active")?.textContent?.trim()} · `
+        + `statut : ${document.getElementById("sim-status")?.textContent ?? "(vide)"} · `
+        + `html : ${(t?.innerHTML ?? "").slice(0, 600)}`;
+    });
+    const lignes = await lire();
+    if (lignes.length < 2) {
+      throw new Error(`historique trop court pour comparer : ${JSON.stringify(lignes)}\n`
+        + `${await etatPanneauRuns()}`);
+    }
+    // Le plus récent d'abord, et c'est celui qu'on vient de faire qui est marqué affiché.
+    if (!lignes[0].affiche) throw new Error(`run affiché non marqué : ${JSON.stringify(lignes)}`);
+    // Un run terminé publie ses chiffres : la colonne des reçues n'est pas un tiret. C'est
+    // l'inverse qu'on garde ici — des zéros sur un run en cours se liraient comme une mesure.
+    if (!/^\d+ \/ \d+$/.test(lignes[0].recues)) {
+      throw new Error(`reçues illisibles : « ${lignes[0].recues} » · ${JSON.stringify(lignes)}`);
+    }
+    await waitText("#runs-note", /runs gardés/);
+
+    const ancien = lignes[lignes.length - 1];
+    await page.evaluate(() => {
+      const trs = document.querySelectorAll("#runs-table tbody tr");
+      trs[trs.length - 1].querySelector("button").click();
+    });
+    await waitText("#sim-status", /rouvert/, 20_000);
+    const statut = await textOf("#sim-status");
+    if (!statut.includes(`graine ${ancien.graine}`)) {
+      throw new Error(`run rouvert annoncé « ${statut} », graine attendue ${ancien.graine}`);
+    }
+    // Et la liste remarque la ligne qu'on regarde : deux runs marqués, ou aucun, laisseraient
+    // croire qu'on lit l'autre.
+    await obsTab("Runs");
+    // La liste est relue à l'ouverture de l'onglet : la table affichée est d'abord celle
+    // d'avant le clic, qui compte déjà le bon nombre de lignes. Attendre un compte revient
+    // donc à lire une table périmée — on attend la condition elle-même : la dernière ligne
+    // marquée, et une seule.
+    try {
+      await page.waitForFunction(() => {
+        const trs = document.querySelectorAll("#runs-table tbody tr");
+        return trs.length >= 2
+          && trs[trs.length - 1].classList.contains("affiche")
+          && [...trs].filter((tr) => tr.classList.contains("affiche")).length === 1;
+      }, { timeout: 20_000 });
+    } catch (err) {
+      throw new Error(`la ligne du run rouvert n'est pas marquée : `
+        + `${JSON.stringify((await lire()).map((l) => l.affiche))}\n${await etatPanneauRuns()}`);
+    }
+    // Comparer, enfin : c'est la raison d'être de la liste. L'écart se lit entre le run
+    // affiché (qu'on vient de rouvrir) et celui qu'on lui compare.
+    await page.evaluate(() => {
+      const trs = document.querySelectorAll("#runs-table tbody tr");
+      const bouton = [...trs[0].querySelectorAll("button")]
+        .find((b) => b.textContent.trim() === "Comparer");
+      bouton.click();
+    });
+    await page.waitForFunction(() => !document.getElementById("runs-compare").hidden,
+      { timeout: 10_000 });
+    const compare = await page.evaluate(() => {
+      const t = document.querySelector("#runs-compare table");
+      return t ? [...t.querySelectorAll("tbody tr")]
+        .map((tr) => [...tr.children].map((c) => c.textContent.trim())) : null;
+    });
+    if (!compare || compare.length === 0) {
+      throw new Error(`comparaison vide : ${await etatPanneauRuns()}`);
+    }
+    for (const ligne of compare) {
+      if (ligne.length !== 4) {
+        throw new Error(`ligne de comparaison incomplète : ${JSON.stringify(compare)}`);
+      }
+    }
+    if (!compare.some((l) => /PDR|Taux de réception/.test(l[0]))) {
+      throw new Error(`comparaison sans taux de réception : ${JSON.stringify(compare)}`);
+    }
+    console.log(`Comparaison : ${JSON.stringify(compare)}`);
+    await obsTab("Simulation");
+  });
+
   // Liaisons mesh observées : un relais qui a livré des trames à la frontière. C'est la seule
   // partie de la topologie que le plan puisse tracer sans inventer — voir `liaisons.js` pour
   // ce qu'on refuse de dessiner, et pourquoi.
@@ -773,6 +876,16 @@ try {
     await page.waitForSelector('.device-win[data-node-id="capt-mesh"]');
     await deviceTab("Config", "capt-mesh");
     await page.waitForSelector('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]');
+    // « Celui du run » sans dire lequel est une devinette : les deux matériels diffèrent de
+    // 10 % de courant moyen, et choisir entre eux sans savoir lequel on aura n'est pas
+    // choisir. L'aide le nomme — et le nom vient du moteur, seul à savoir ce que le run
+    // calcule. Une aide absente échoue ici : `$eval` lève.
+    const aide = await page.$eval('.device-win[data-node-id="capt-mesh"] .sensor-form .hint',
+      (n) => n.textContent.trim());
+    if (!/^« celui du run » : \S/.test(aide)) {
+      throw new Error(`aide du matériel illisible : « ${aide} »`);
+    }
+    console.log(`Matériel du run : ${aide}`);
     await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="messages"]', "4");
     await setValue('.device-win[data-node-id="capt-mesh"] .sensor-form input[name="start_spread_s"]', "30");
     await submitForm('.device-win[data-node-id="capt-mesh"] form');
@@ -827,6 +940,65 @@ try {
     // l'étape exercice en particulier : la laisser sur la carte, c'est changer les conditions
     // d'un test qui n'a rien demandé. Une étape ne doit pas modifier l'état qu'elle emprunte.
     await viewTab("Plan");
+  });
+
+  // Le serveur de réseau ne se configure pas : c'est lui qui commande le débit, les canaux et
+  // les descentes. Sa fenêtre dit donc ce qu'il a **vu** du run, par équipement — le seul
+  // endroit de l'atelier qui montre le réseau du point de vue de celui qui décide.
+  //
+  // L'équipement est retiré à la fin : les étapes suivantes ont été écrites pour un réseau
+  // précis, et un nœud de plus les ferait dérailler.
+  await step("serveur : la fenêtre dit ce que le serveur a vu du run", async () => {
+    await setValue('#add-form [name="id"]', "lns");
+    await page.select('#add-form [name="kind"]', "server");
+    // À l'écart des autres : deux nœuds au même endroit se recouvriraient, et l'ouverture
+    // au clavier viserait le voisin. Mais **à l'intérieur** de la boîte déjà occupée par la
+    // session mesh (lat 4.051100 → 4.052899, lon 9.767900 → 9.782325) : un nœud posé au-delà
+    // élargit la boîte et change l'échelle du plan.
+    await setValue('#add-form [name="lat"]', "4.051500");
+    await setValue('#add-form [name="lon"]', "9.774000");
+    await submitForm("#add-form");
+    await page.waitForSelector('g.node[data-id="lns"]');
+
+    // Le run de l'étape mesh est terminé : la fenêtre se lit sur son résultat, sans relancer.
+    // Ajouter un serveur n'y change rien — `compile_session` ne retient que les passerelles
+    // et les capteurs — donc les chiffres affichés restent bien ceux du run qu'on a lancé.
+    //
+    // Ouverture au clavier : le nœud est un bouton, et la touche ne peut pas être
+    // interceptée par la fenêtre du capteur, restée ouverte et placée en cascade par-dessus
+    // le plan. C'est aussi le seul chemin sans souris vers cette fenêtre.
+    await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
+    await page.keyboard.press("Enter");
+    await page.waitForSelector('.device-win[data-node-id="lns"]', { timeout: 20_000 });
+    await deviceTab("Config", "lns");
+    await page.waitForSelector('.device-win[data-node-id="lns"] table tbody tr',
+      { timeout: 20_000 });
+    const lignes = await page.$$eval('.device-win[data-node-id="lns"] table tbody tr',
+      (trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent.trim())));
+    if (!lignes.some((l) => l[0] === "capt-mesh")) {
+      throw new Error(`le capteur du run ne figure pas : ${JSON.stringify(lignes)}`);
+    }
+    for (const l of lignes) {
+      // Des chiffres, ou rien : une case vide plutôt qu'un zéro que personne n'a mesuré.
+      if (!/^\d+ \/ \d+$/.test(l[1])) {
+        throw new Error(`reçues illisibles : ${JSON.stringify(lignes)}`);
+      }
+      if (!/^SF\d+( → SF\d+)?$/.test(l[3])) {
+        throw new Error(`débit illisible : ${JSON.stringify(lignes)}`);
+      }
+    }
+    const synthese = await textOf('.device-win[data-node-id="lns"] .serveur-vu');
+    if (!/\d+ trame\(s\) remise\(s\)/.test(synthese)) {
+      throw new Error(`synthèse du serveur illisible : « ${synthese} »`);
+    }
+    console.log(`Serveur : ${synthese.trim()} · ${JSON.stringify(lignes)}`);
+
+    await deviceTab("Physique", "lns");
+    await page.click('.device-win[data-node-id="lns"] button.danger');
+    await page.waitForFunction(() => !document.querySelector('.device-win[data-node-id="lns"]'),
+      { timeout: 20_000 });
+    await page.waitForFunction(() => !document.querySelector('g.node[data-id="lns"]'),
+      { timeout: 20_000 });
   });
 
   await step("exercice : démarrage, indice avec pénalité, notation, journal", async () => {

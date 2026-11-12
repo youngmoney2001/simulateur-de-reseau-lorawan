@@ -99,6 +99,24 @@ jobs:
           CHROME=$(find "$HOME/.cache/puppeteer" -type f -name chrome -perm -u+x | head -1)
           set -o pipefail
           CHROME_PATH="$CHROME" node tests/e2e/audit-clavier.mjs 2>&1 | tee ../clavier.log
+      # Un audit qui meurt ne mesure rien, et `continue-on-error` faisait alors passer le
+      # travail au vert : on croyait « 0 problème » alors qu'on n'avait rien regardé. Un
+      # débordement rapporté est une trouvaille et ne doit pas bloquer ; une exception ne
+      # rapporte rien et doit se voir.
+      - name: Les audits ont-ils seulement tourné ?
+        if: always()
+        run: |
+          mort=0
+          # `capture.log` aussi : le script de capture est en `continue-on-error` pour ne pas
+          # bloquer sur une image manquante, mais une exception n'est pas une image manquante
+          # — c'est un script qui s'arrête et n'en produit aucune.
+          for journal in audit.log clavier.log capture.log; do
+            if grep -qaE 'Node\.js v[0-9]|UnhandledPromiseRejection|ERR_UNHANDLED' "$journal"; then
+              echo "::error::$journal : l'audit a planté, il n'a rien mesuré"
+              mort=1
+            fi
+          done
+          exit $mort
       - name: Publier l'audit de mise en page
         if: always()
         uses: actions/github-script@v7
