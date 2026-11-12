@@ -131,6 +131,11 @@ serveur vérifie que ses totaux concordent avec `run_scenario` avant de publier 
   compte ses uplinks et l'airtime des descendantes qu'il reçoit (`downlink_airtime_by_device` : join-accept,
   données, ACK). Sans protocole, le résultat égale `run_scenario` (test de non-régression). Les fenêtres
   RX1/RX2 restent comptées par le modèle classe A.
+  Un **relevé mesuré** (`energy.measured` du scénario) déclenche le calcul sans option de requête :
+  l'écrire dans le YAML est une demande de calcul, pas un réglage en attente d'être activé. Le résumé
+  publie alors `energy_provenance` (et `energy_profile` reste absent). Un `energy_profile` explicite
+  dans la requête prime sur le relevé, et la provenance ne voyage **pas** : elle ne doit pas habiller
+  des courants de catalogue en mesure.
 - **Relief** : `terrain_id` désigne `<id>.csv` dans le dossier `--terrain-catalog`. Le client ne fournit
   jamais de chemin. Le relief est lu une fois puis gardé en mémoire. Son empreinte entre dans
   `scenario_sha256` (même scénario, autre relief : autre identifiant). `GET /terrains` liste le catalogue.

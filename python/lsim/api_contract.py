@@ -309,6 +309,9 @@ class SessionRunOut(_Strict):
     sent: Optional[int] = Field(default=None, ge=0)
     received: Optional[int] = Field(default=None, ge=0)
     energy_profile: Optional[str] = None
+    # Provenance du relevé mesuré, si ce sont ses courants qui ont servi. Même règle que
+    # `RunSummary.energy_provenance` : absent pour un profil du catalogue.
+    energy_provenance: Optional[str] = None
     # Attente des descentes réseau : présente seulement si le run en a planifié. Un run sans
     # commande du serveur n'a pas d'attente, et `0` dirait « livré instantanément ».
     downlink: Optional[DownlinkOut] = None
@@ -342,6 +345,10 @@ class RunSummary(_Strict):
     gateway: Optional[GatewayLoadOut] = None
     gateways: Optional[list[GatewayReportOut]] = Field(default=None, max_length=64)
     energy_profile: Optional[str] = None
+    # D'où viennent les courants quand un relevé mesuré a servi (`energy.measured` du
+    # scénario). Absent sinon : un profil du catalogue n'a pas de provenance à revendiquer,
+    # et un champ vide laisserait croire à une mesure qui n'a pas eu lieu.
+    energy_provenance: Optional[str] = None
     # Rapport cyclique par groupe. Absent si aucun groupe ne déclare de région : c'est le
     # cas de tout scénario écrit avant l'introduction du champ, dont l'empreinte ne bouge pas.
     duty_cycle: Optional[list[DutyCycleOut]] = Field(default=None, max_length=64)

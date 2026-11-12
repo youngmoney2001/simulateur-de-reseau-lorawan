@@ -2,6 +2,29 @@
 
 ## 0.1.0 (non publiée)
 
+### API : un relevé d'énergie ne passait plus à travers le serveur
+
+Le calcul d'énergie de l'API ne se déclenchait que sur l'option de requête
+`energy_profile`. Un scénario déclarant `energy.measured` — sans option — rendait des
+dispositifs **sans aucun champ d'énergie**, et sans erreur : le client ne pouvait pas
+distinguer « ce scénario n'a pas de modèle » d'« oublié ». Le CLI, lui, calculait
+correctement. Le serveur publie désormais l'énergie dès qu'un relevé est déclaré, et
+expose `energy_provenance` dans le résumé du run.
+
+La règle de provenance est la même qu'au CLI, et partagée — elle vit maintenant dans
+`energy_report.provenance_energie`, au lieu d'être réécrite à côté : un `energy_profile`
+explicite dans la requête prime sur le relevé, et la provenance ne voyage **pas** avec le
+résultat. L'afficher en face de courants de catalogue habillerait une fiche constructeur
+en mesure, ce qui est exactement ce que le champ cherche à éviter.
+
+`GET /runs/{id}` reste volontairement sans énergie : son contrat (`RunStatus`) ne publie
+ni `energy_profile` ni `energy_provenance`. La provenance se lit sur le résumé du run et
+sur la liste des runs d'un chantier.
+
+Quatre tests couvrent le chemin, dont un qui **échoue sans le correctif** : sans lui, la
+première assertion du test ne passe pas.
+
+
 ### Pénétration : remplacer P.2040-4 par une mesure
 
 Douze des quinze matériaux sortent de la plage documentée de la recommandation à

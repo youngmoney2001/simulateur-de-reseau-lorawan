@@ -58,7 +58,8 @@ from lsim.api_contract import (
     ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
     list_regions,
 )
-from lsim.energy_report import device_energies_protocol
+from lsim.energy import MeasuredProfile
+from lsim.energy_report import device_energies_protocol, provenance_energie
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
@@ -381,6 +382,10 @@ class _Job:
     options: ProtocolOptions
     energy_profile: Optional[str]
     multi: bool
+    # Relevé mesuré déclaré dans le scénario (`energy.measured`). Porté par le job pour que
+    # le calcul ne dépende pas d'une option de requête : un relevé écrit dans le YAML est une
+    # demande de calcul, pas un réglage en attente d'être activé.
+    measured: Optional["MeasuredProfile"] = None
 
 
 def _mesh_report_fields(load) -> dict[str, Any]:
@@ -557,7 +562,8 @@ def _descentes_reseau(devices, scenario: Scenario) -> tuple[Optional[dict[str, A
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
                  rx_matrix=None, event_kinds: Optional[dict[str, int]] = None,
-                 downlink: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                 downlink: Optional[dict[str, Any]] = None,
+                 energy_provenance: Optional[str] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -566,6 +572,10 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
                       lost_gateway_busy=totals.lost_gateway_busy, lost_mesh=lost_mesh).model_dump(),
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
+        # D'où viennent les courants, quand ce sont des courants mesurés. Absent sinon :
+        # publier une provenance pour des chiffres de catalogue habillerait une fiche
+        # constructeur en mesure.
+        energy_provenance=energy_provenance,
         duty_cycle=_duty_cycle_out(scenario),
         rx_matrix=rx_matrix,
         event_kinds=event_kinds or None,
@@ -621,7 +631,8 @@ class RunService:
         if problem is not None:
             raise ApiError(422, "validation_error", problem[1], problem[0])
         job = _Job(scenario=scenario, options=options,
-                   energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
+                   energy_profile=req.energy_profile, multi=req.scenario.gateways is not None,
+                   measured=scenario.measured_energy())
         with self._lock:
             owned = self._store.owner_runs(owner)
             if sum(1 for r in owned if r["state"] not in _TERMINAL) >= MAX_ACTIVE_PER_OWNER:
@@ -713,6 +724,7 @@ class RunService:
                 out["sent"] = totals.get("sent")
                 out["received"] = totals.get("received")
                 out["energy_profile"] = s.get("energy_profile")
+                out["energy_provenance"] = s.get("energy_provenance")
                 out["downlink"] = s.get("downlink")   # absent si le run n'en planifie pas
             return out
 
@@ -826,12 +838,17 @@ class RunService:
         # Les descentes se calculent quel que soit le chemin, et après lui : le passage ne
         # dépend ni de la trace ni du nombre de passerelles.
         descentes, dl_par = _descentes_reseau(devices, scenario)
-        if job.energy_profile is not None:
+        # Un relevé déclenche le calcul comme le ferait un profil nommé : sans lui, un
+        # scénario qui déclare `energy.measured` sans option de requête rendait des
+        # dispositifs sans énergie, en silence — le client ne pouvait pas distinguer
+        # « pas de modèle » d'« oublié ».
+        if job.energy_profile is not None or job.measured is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
             dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
             energies = device_energies_protocol(devices, dl_airtime, [c.sent for c in per_device],
                                                 job.energy_profile,
-                                                [c.airtime_ns for c in per_device])
+                                                [c.airtime_ns for c in per_device],
+                                                measured=job.measured)
             energy_rows = {r.device_index: r for r in energies}
         if len(events) > MAX_TRACE_EVENTS_PER_RUN:
             raise ApiError(422, "limit_exceeded", "événements au-delà de la borne du run")
@@ -885,7 +902,9 @@ class RunService:
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total,
                                mt.rx_matrix if job.multi else None, event_kinds=natures,
-                               downlink=descentes)
+                               downlink=descentes,
+                               energy_provenance=provenance_energie(job.measured,
+                                                                    job.energy_profile))
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {

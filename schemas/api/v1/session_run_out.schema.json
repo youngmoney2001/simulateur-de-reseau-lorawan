@@ -158,6 +158,18 @@
       "default": null,
       "title": "Energy Profile"
     },
+    "energy_provenance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Energy Provenance"
+    },
     "links": {
       "items": {
         "$ref": "#/$defs/GatewayLink"

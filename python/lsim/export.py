@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Optional, Union
 
 from lsim import __version__
-from lsim.energy_report import device_energies, device_energies_protocol
+from lsim.energy_report import (device_energies, device_energies_protocol,
+                               provenance_energie)
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.mesh_pass import mesh_pass
@@ -322,16 +323,8 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
 
 
 def _provenance(measured, energy_profile: Optional[str]) -> Optional[str]:
-    """La mention « d'où viennent ces courants », si ce sont bien ces courants qui ont servi.
-
-    Un profil de catalogue nommé — option de ligne de commande ou YAML — prime sur un
-    relevé. La provenance ne doit donc voyager que dans le cas contraire : l'afficher
-    alors que les chiffres viennent du catalogue donnerait une fiche constructeur
-    habillée en mesure.
-    """
-    if measured is None or energy_profile is not None:
-        return None
-    return measured.provenance
+    """Renvoi vers la règle unique, définie et testée dans `energy_report`."""
+    return provenance_energie(measured, energy_profile)
 
 
 def _gateway_names(gw_models) -> tuple[str, ...]:

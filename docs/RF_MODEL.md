@@ -198,4 +198,10 @@ Ces valeurs servent de garde aux tests de non-régression RF (`test_rf_character
 2. Aucun fading aléatoire ; la réception est déterministe au dB près.
 3. Aucun gain d'antenne pour le mesh ni pour le chemin causal.
 4. Aucun EIRP, aucun diagramme d'antenne, aucune polarisation.
+5. **Aucune grandeur énergétique** : le bilan d'un dispositif n'entre dans aucune équation de ce
+   document. Ce n'est pas une absence de calcul — le moteur évalue l'énergie par message et le
+   courant moyen (`core/src/energy.cpp`), à partir du temps d'antenne et, le cas échéant, d'un
+   relevé mesuré (`energy.measured`) qui remplace la fiche constructeur. Ces grandeurs relèvent
+   d'un autre modèle, décrit dans `USAGE.md` et dans les deux manuels ; les confondre avec le
+   modèle radio ferait croire qu'une portée dépend d'une batterie.
 5. Aucune table RF dans un scénario YAML ni dans un export géographique.

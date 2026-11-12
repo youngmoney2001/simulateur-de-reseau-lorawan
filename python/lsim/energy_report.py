@@ -51,6 +51,23 @@ def _check_name(name: str) -> str:
     return name
 
 
+def provenance_energie(measured: Optional["MeasuredProfile"],
+                       energy_profile: Optional[str]) -> Optional[str]:
+    """La mention « d'où viennent ces courants », si ce sont bien ces courants qui ont servi.
+
+    Un profil de catalogue nommé — option de ligne de commande ou YAML — prime sur un
+    relevé. La provenance ne doit donc voyager que dans le cas contraire : l'afficher
+    alors que les chiffres viennent du catalogue donnerait une fiche constructeur
+    habillée en mesure.
+
+    Partagée par le CLI et l'API : deux définitions de cette règle finiraient par diverger,
+    et la plus permissive des deux publierait une provenance qu'elle n'a pas servie.
+    """
+    if measured is None or energy_profile is not None:
+        return None
+    return measured.provenance
+
+
 def _valider_nom_si_utilise(profile: object, measured: "MeasuredProfile | None") -> None:
     """Valide le nom du profil du run, sauf quand un relevé le remplace.
 
