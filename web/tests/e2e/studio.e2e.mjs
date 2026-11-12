@@ -48,8 +48,14 @@ async function waitHttp(url, child, timeoutMs = 60_000) {
 let browser;
 let failed = false;
 try {
+  // Le limiteur de débit est monté très au-dessus de son défaut (120 par minute) : l'e2e
+  // déroule en une minute ce qu'un utilisateur fait en dix, et il mesurait alors la
+  // protection du serveur au lieu de l'interface — un 429 au milieu d'une étape, sans
+  // rapport avec ce qu'elle vérifie. Le limiteur est vérifié à part, à l'unité
+  // (`test_api_server`), qui est son endroit.
   const api = start("API", python, ["-m", "lsim.api_server", "serve", "--tokens", tokens,
-    "--runs-db", join(work, "runs.sqlite"), "--port", String(API_PORT)], repoDir);
+    "--runs-db", join(work, "runs.sqlite"), "--port", String(API_PORT),
+    "--rate-per-minute", "6000"], repoDir);
   await waitHttp(`http://127.0.0.1:${API_PORT}/api/v1/regions`, api);
   const vite = start("Studio", process.execPath, [join(webDir, "node_modules", "vite", "bin", "vite.js"),
     "--port", String(WEB_PORT), "--strictPort"], webDir, { LSIM_API_URL: `http://127.0.0.1:${API_PORT}` });

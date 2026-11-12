@@ -1867,7 +1867,10 @@ async function ouvrirRun(r) {
       + "les chiffres affichés sont les siens.";
   } finally {
     state.busy = false;
-    await renderRuns();          // la ligne affichée se marque
+    // La liste se relit à l'ouverture de l'onglet : la rafraîchir alors qu'elle est masquée
+    // serait une requête pour un panneau qu'on ne regarde pas.
+    const panneau = document.querySelector('.tab-body[data-panel="runs"]');
+    if (panneau && !panneau.hidden) await renderRuns();   // la ligne affichée se marque
   }
 }
 
