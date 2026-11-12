@@ -312,6 +312,39 @@ scénario sans environnement reste celui d'avant, empreinte comprise.
 Le caractère extrapolé est affiché à côté du matériau, et l'atténuation saisie reste le chemin
 par défaut : à 868 MHz, seuls `air`, `wood` et `glass` sont dans la plage du Tableau 3.
 
+### 5 bis. Remplacer P.2040-4 par une mesure (`material_calibration`)
+
+Une mesure vaut mieux qu'une extrapolation. Elle se déclare dans l'environnement, matériau par
+matériau, en dB par mètre :
+
+```yaml
+environment:
+  material_calibration:
+    concrete:
+      loss_db_per_m: 60.0                        # mesure, dB/m
+      provenance: "campagne Douala, 2026-04, 14 murs"
+  obstacles:
+    - x_min_m: -1
+      y_min_m: -400
+      x_max_m: 1
+      y_max_m: 400
+      height_m: 20.0
+      material: concrete
+      thickness_m: 0.25                          # perte = 60,0 × 0,25 = 15,0 dB
+```
+
+Trois points, pour que le résultat reste interprétable :
+
+- la perte vaut `loss_db_per_m × thickness_m` : l'épaisseur reste celle de l'obstacle, seul le
+  coefficient change ;
+- la mesure **n'est pas une extrapolation**, et l'avertissement P.2040-4 ne la concerne donc
+  pas — le faire porter sur un relevé ferait douter d'une valeur solide ;
+- `provenance` est obligatoire, comme sur un relevé d'énergie : un chiffre sans origine se
+  présente comme une donnée du moteur.
+
+Un obstacle qui déclare `attenuation_db` au lieu d'un matériau n'est pas concerné : la
+calibration porte sur un matériau, pas sur une valeur déjà saisie.
+
 **Annuler et rétablir** (barre d'outils, `Ctrl+Z` / `Ctrl+Maj+Z`). L'historique vit côté serveur,
 parce que le CLI y vit aussi : annuler « region US915 » restaure la configuration de l'équipement,
 pas seulement la case que l'interface affichait. Un geste par opération — ajout, retrait,
@@ -592,5 +625,7 @@ moteur : une limite qui n'existe plus en est retirée, une limite levable par un
   l'absence de mesure possible, elle est que **le projet n'en fournit aucune**.
 - **pénétration** : la perte d'un matériau suit UIT-R P.2040-4 (diélectriques), non calibrée sur
   mesures. À 868,1 MHz, **12 des 15 matériaux** sortent de la plage documentée : la valeur est
-  alors extrapolée, et le serveur le signale (`extrapolated`). Un relevé de mesure se saisit
-  directement, sans passer par un matériau : `attenuation_db` sur un obstacle.
+  alors extrapolée, et le serveur le signale (`extrapolated`). Deux issues, selon ce dont on
+  dispose : un relevé d'atténuation se saisit directement (`attenuation_db` sur un obstacle),
+  et une mesure de matériau se déclare dans `environment.material_calibration` (§5 bis), qui
+  remplace P.2040-4 pour les obstacles concernés.

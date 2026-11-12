@@ -299,6 +299,21 @@
           "title": "Gateway Height M",
           "type": "number"
         },
+        "material_calibration": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/MaterialCalibrationModel"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Calibration"
+        },
         "obstacles": {
           "items": {
             "$ref": "#/$defs/ObstacleModel"
@@ -707,6 +722,30 @@
         }
       },
       "title": "MacModel",
+      "type": "object"
+    },
+    "MaterialCalibrationModel": {
+      "additionalProperties": false,
+      "description": "Perte d'un matériau **mesurée**, en dB par mètre, à la place de UIT-R P.2040-4.\n\nLa table du moteur vient de la recommandation P.2040-4 (diélectriques), et à 868 MHz\n12 des 15 matériaux sortent de la plage documentée : la valeur est alors extrapolée.\nUne mesure vaut mieux qu'une extrapolation, et elle se déclare ici.\n\n`provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un\nchiffre sans origine se présente comme une donnée du moteur.",
+      "properties": {
+        "loss_db_per_m": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Loss Db Per M",
+          "type": "number"
+        },
+        "provenance": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loss_db_per_m",
+        "provenance"
+      ],
+      "title": "MaterialCalibrationModel",
       "type": "object"
     },
     "MeasuredEnergyModel": {

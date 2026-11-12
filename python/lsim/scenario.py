@@ -509,11 +509,43 @@ class TerrainModel(_Strict):
         return self
 
 
+class MaterialCalibrationModel(_Strict):
+    """Perte d'un matériau **mesurée**, en dB par mètre, à la place de UIT-R P.2040-4.
+
+    La table du moteur vient de la recommandation P.2040-4 (diélectriques), et à 868 MHz
+    12 des 15 matériaux sortent de la plage documentée : la valeur est alors extrapolée.
+    Une mesure vaut mieux qu'une extrapolation, et elle se déclare ici.
+
+    `provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un
+    chiffre sans origine se présente comme une donnée du moteur.
+    """
+
+    loss_db_per_m: float = Field(ge=0, le=200)
+    provenance: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _provenance_non_vide(self) -> "MaterialCalibrationModel":
+        if not self.provenance.strip():
+            raise ValueError("provenance : d'où vient cette mesure ?")
+        return self
+
+
 class EnvironmentModel(_Strict):
     gateway_height_m: float = Field(15.0, gt=0, le=1000)
     device_height_m: float = Field(1.5, gt=0, le=1000)
     terrain: Optional[TerrainModel] = None
     obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
+    # Pertes mesurées par matériau, clé = nom du catalogue. Elles remplacent P.2040-4
+    # pour les obstacles qui déclarent ce matériau.
+    material_calibration: Optional[dict[str, MaterialCalibrationModel]] = None
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentModel":
+        if self.material_calibration:
+            for nom in self.material_calibration:
+                if nom not in MATERIAL_NAMES:
+                    raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
 
 
 class TxPointModel(_Strict):
@@ -862,6 +894,10 @@ class Scenario:
                 if ob.get("material") is None:
                     ob.pop("material", None)
                     ob.pop("thickness_m", None)
+            # Aucune calibration déclarée : hors du hash, donc un scénario écrit avant
+            # cette possibilité garde exactement la même empreinte — et les mêmes pertes.
+            if not env_dump.get("material_calibration"):
+                env_dump.pop("material_calibration", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
@@ -1035,9 +1071,19 @@ def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
     return out
 
 
-def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float) -> float:
+def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float,
+                          calibration: Optional[dict] = None) -> float:
     if o.material is None:
         return o.attenuation_db
+    if calibration and o.material in calibration:
+        # Une mesure remplace la recommandation. Elle n'est pas extrapolée — c'est tout
+        # l'intérêt — et l'épaisseur reste celle de l'obstacle, seul le coefficient change.
+        mesure = calibration[o.material]
+        loss = mesure.loss_db_per_m * o.thickness_m
+        if loss > 200.0:
+            raise ValueError(
+                f"atténuation mesurée {loss:.1f} dB > 200 dB (matériau {o.material})")
+        return loss
     loss, extrapolated = traversal_loss(o.material, frequency_hz, o.thickness_m)
     if extrapolated:
         warnings.warn(
@@ -1061,7 +1107,7 @@ def _build_environment(model: EnvironmentModel, base_dir: Path,
         terrain = load_dem_csv(target)
     obstacles = tuple(
         Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m,
-                 _obstacle_attenuation(o, frequency_hz))
+                 _obstacle_attenuation(o, frequency_hz, model.material_calibration))
         for o in model.obstacles)
     return Environment(terrain=terrain, obstacles=obstacles,
                        gateway_height_m=model.gateway_height_m,

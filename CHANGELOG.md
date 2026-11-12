@@ -2,6 +2,27 @@
 
 ## 0.1.0 (non publiée)
 
+### Pénétration : remplacer P.2040-4 par une mesure
+
+Douze des quinze matériaux sortent de la plage documentée de la recommandation à
+868 MHz : la valeur était extrapolée, et le moteur le signalait sans proposer
+d'issue. `environment.material_calibration` en ouvre une : on déclare une perte
+mesurée en dB par mètre, matériau par matériau, et elle remplace la table pour les
+obstacles concernés.
+
+La conversion matériau -> dB se faisant deja en Python, le changement est confine :
+aucune structure C, aucun ABI touche.
+
+Une mesure n'est pas une extrapolation, et l'avertissement P.2040-4 ne la concerne
+donc plus : le laisser porter sur un releve ferait douter d'une valeur solide, comme
+le taire sur la table cacherait une approximation. La `provenance` est obligatoire,
+pour la meme raison que sur un releve d'energie : un chiffre sans origine se presente
+comme une donnee du moteur.
+
+Sans mesure declaree, l'empreinte ne bouge pas : un scenario ecrit avant garde
+exactement la sienne.
+
+
 ### Énergie : un relevé peut remplacer la fiche constructeur
 
 Les deux profils du moteur venaient de fiches : utiles pour comparer deux architectures,
