@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**3 problème(s)** sur 23 états mesurés.
+**0 problème(s)** sur 23 états mesurés.
 
 ## 1400px
 
@@ -204,15 +204,9 @@ Aucun problème.
 
 ## 760px
 
-3 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (3)
-
-| élément | détail |
-|---|---|
-| button.tool#save-chantier | sort de 37px |
-| button.tool#load-chantier | sort de 107px |
-| span | sort de 56px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -228,14 +222,14 @@ Aucun problème.
 | button.tool.danger#delete-session | 468 | 636 | 82×31 |
 | button.tool#undo | 558 | 636 | 67×31 |
 | button.tool#redo | 627 | 636 | 67×31 |
-| button.tool#save-chantier | 702 | 636 | 95×31 |
-| button.tool#load-chantier | 799 | 636 | 68×31 |
-| button.tool.active | 17 | 692 | 156×38 |
-| button.tool | 179 | 692 | 139×38 |
-| button.tool | 324 | 692 | 129×38 |
-| button.tool | 17 | 736 | 225×38 |
-| button.tool | 248 | 736 | 198×38 |
-| div.observation | 8 | 830 | 744×1289 |
+| button.tool#save-chantier | 14 | 671 | 95×31 |
+| button.tool#load-chantier | 111 | 671 | 68×31 |
+| button.tool.active | 17 | 727 | 156×38 |
+| button.tool | 179 | 727 | 139×38 |
+| button.tool | 324 | 727 | 129×38 |
+| button.tool | 17 | 771 | 225×38 |
+| button.tool | 248 | 771 | 198×38 |
+| div.observation | 8 | 865 | 744×1289 |
 | footer.statusbar | 0 | 974 | 760×26 |
 | section.device-win.active | 90 | 70 | 430×656 |
 
@@ -769,4 +763,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 3 problème(s)
+TOTAL : 0 problème(s)
