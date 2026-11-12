@@ -365,6 +365,14 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
    désactivé ; la jointure et les trames confirmées, toujours actives, l'ont révélé. */
 .adr input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
 
+/* Même raison, autre endroit : dans une grille de formulaire, `label` est une colonne
+   (`flex-direction:column`), et une case native s'y étire à la largeur de la case — mesuré
+   157x13, une cible plus large que haute qu'on ne vise pas. La case garde donc sa taille
+   propre, et son libellé se met en ligne à côté d'elle. */
+.sensor-form label.case { flex-direction:row; align-items:center; gap:6px; cursor:pointer;
+  grid-column:1 / -1; }
+.sensor-form input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
+
 /* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */
 /* Encadré plutôt que ligne perdue : ce bloc est la réponse à « pourquoi ce capteur a-t-il
    changé de débit ? ». Il doit se voir dès la fin du run, avant les indicateurs. */

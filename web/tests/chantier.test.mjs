@@ -335,3 +335,51 @@ test("une attenuation hors bornes est refusee", () => {
     environment: { obstacles: [{ ...MUR, attenuation_db: 500 }] }, equipements: [] });
   assert.throws(() => lireChantier(texte), /atténuation hors bornes/);
 });
+
+// --- Classe d'écoute et descentes : ce qu'un chantier enregistré doit retrouver -------------
+// Ces réglages sont récents. Sans lecture, un chantier écrit en classe B avec une commande
+// réseau se rouvrait en classe A : le réglage ne serait pas refusé, il disparaîtrait — et
+// l'utilisateur relancerait un run qui n'a plus rien à voir avec ce qu'il a construit.
+
+function chantierAvec(capteur) {
+  return ecrire({ format: FORMAT, version: VERSION, origine: null,
+    equipements: [{ id: "capt-1", kind: "sensor", name: "Capteur 1", x_m: 0, y_m: 0,
+      sensor: capteur }] });
+}
+
+test("la classe d'écoute et la descente survivent à un aller-retour", () => {
+  const capteur = { spreading_factor: 9, payload_bytes: 10, tx_power_dbm: 14, period_s: 600,
+    messages: 2, start_spread_s: 0, region: null, channel_freq_hz: null, device_class: "B",
+    downlink: { count: 1, first_request_s: 10, request_period_s: 0, periodicity: 0,
+      clock_drift_ppm: 0 } };
+  const lu = lireChantier(ecrire(serialiserChantier({ topo: { nodes: [{ id: "capt-1",
+    kind: "sensor", name: "Capteur 1", x_m: 0, y_m: 0, sensor: capteur }], states: [] } })));
+  assert.deepEqual(lu.equipements[0].sensor.device_class, "B");
+  assert.deepEqual(lu.equipements[0].sensor.downlink,
+    { count: 1, first_request_s: 10, request_period_s: 0, periodicity: 0, clock_drift_ppm: 0 });
+});
+
+test("un chantier écrit avant les classes garde son empreinte", () => {
+  // Aucune clé ajoutée : le fichier d'avant reste identique, octet pour octet. C'est la
+  // condition pour qu'un chantier ancien se rouvre sans qu'on ait à le migrer.
+  const capteur = { spreading_factor: 9, payload_bytes: 10, tx_power_dbm: 14, period_s: 600,
+    messages: 2, start_spread_s: 0 };
+  const lu = lireChantier(chantierAvec(capteur));
+  assert.deepEqual(lu.equipements[0].sensor, capteur);
+});
+
+test("une classe d'écoute inconnue est refusée", () => {
+  assert.throws(() => lireChantier(chantierAvec({ device_class: "D" })),
+    /classe d'écoute « D » inconnue/);
+});
+
+test("une descente hors bornes est refusée à l'ouverture, pas au run", () => {
+  assert.throws(() => lireChantier(chantierAvec(
+    { device_class: "B", downlink: { count: 1, first_request_s: -5 } })),
+    /first_request_s hors bornes/);
+});
+
+test("un nombre de commandes fractionnaire est refusé", () => {
+  assert.throws(() => lireChantier(chantierAvec(
+    { device_class: "A", downlink: { count: 2.5 } })), /count doit être un nombre entier/);
+});

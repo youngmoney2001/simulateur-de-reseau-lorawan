@@ -9,6 +9,10 @@
 // serveur. Un chantier à moitié chargé a l'air correct et ne l'est pas.
 
 import { estLatitude, estLongitude } from "./geo.js";
+// Les bornes viennent de `topology.js`, qui est la seule source : les recopier ici, c'était
+// accepter qu'un réglage refusé d'un côté soit accepté de l'autre — deux vérités sur une
+// limite ne se lisent qu'au moment du run, trop tard pour être comprises.
+import { SENSOR_LIMITS, DOWNLINK_LIMITS, DOWNLINK_INTEGER_KEYS, CLASSES_ECOUTE } from "./topology.js";
 
 export const FORMAT = "lsim-chantier";
 export const VERSION = 1;
@@ -318,12 +322,8 @@ function lireEquipement(eq, rang) {
 }
 
 function lireCapteur(s, id) {
-  const bornes = {
-    spreading_factor: [7, 12], payload_bytes: [0, 255], tx_power_dbm: [-10, 30],
-    period_s: [0, 86400], messages: [1, 1000], start_spread_s: [0, 86400],
-  };
   const out = {};
-  for (const [cle, [min, max]] of Object.entries(bornes)) {
+  for (const [cle, [min, max]] of Object.entries(SENSOR_LIMITS)) {
     if (s[cle] === undefined || s[cle] === null) continue;
     if (!Number.isFinite(s[cle]) || s[cle] < min || s[cle] > max) {
       throw new ChantierInvalide(`« ${id} » : ${cle} hors bornes (${min} à ${max})`);
@@ -346,6 +346,47 @@ function lireCapteur(s, id) {
       throw new ChantierInvalide(`« ${id} » : fréquence hors bornes`);
     }
     out.channel_freq_hz = s.channel_freq_hz;
+  }
+  // Classe d'écoute et descentes : sans ces deux lectures, un chantier enregistré en classe B
+  // avec une commande réseau se rouvrait en classe A sans rien dire — le réglage disparaissait
+  // au lieu d'être refusé, ce qui est la pire des deux issues.
+  if (s.device_class !== undefined && s.device_class !== null) {
+    if (!CLASSES_ECOUTE.includes(s.device_class)) {
+      throw new ChantierInvalide(`« ${id} » : classe d'écoute « ${s.device_class} » inconnue`);
+    }
+    out.device_class = s.device_class;
+  }
+  if (s.downlink !== undefined && s.downlink !== null) {
+    out.downlink = lireDescente(s.downlink, id);
+  }
+  return out;
+}
+
+/** Descentes réseau d'un chantier. `null` et champ absent y sont la même chose : pas de commande. */
+function lireDescente(dl, id) {
+  if (typeof dl !== "object" || Array.isArray(dl)) {
+    throw new ChantierInvalide(`« ${id} » : réglage de descente illisible`);
+  }
+  const out = {};
+  for (const [cle, [min, max]] of Object.entries(DOWNLINK_LIMITS)) {
+    if (dl[cle] === undefined || dl[cle] === null) continue;
+    const v = Number(dl[cle]);
+    if (!Number.isFinite(v) || v < min || v > max) {
+      throw new ChantierInvalide(`« ${id} » : ${cle} hors bornes (${min} à ${max})`);
+    }
+    // Un nombre de commandes se compte : 2,5 commandes ne veut rien dire, et le serveur
+    // répondrait 422 au run, pas à l'ouverture du fichier.
+    if (DOWNLINK_INTEGER_KEYS.has(cle) && !Number.isInteger(v)) {
+      throw new ChantierInvalide(`« ${id} » : ${cle} doit être un nombre entier`);
+    }
+    out[cle] = v;
+  }
+  if (dl.clock_drift_ppm !== undefined && dl.clock_drift_ppm !== null) {
+    const v = Number(dl.clock_drift_ppm);
+    if (!Number.isFinite(v)) {
+      throw new ChantierInvalide(`« ${id} » : dérive d'horloge illisible`);
+    }
+    out.clock_drift_ppm = v;
   }
   return out;
 }

@@ -1741,7 +1741,6 @@ function renderSimulationIdle() {
 
 $("sim-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  console.log("SIM-SUBMIT", JSON.stringify({ sid: state.sid ?? null, busy: state.busy }));
   // Un run qui ne part pas en silence laisse à l'écran le statut du précédent, et fait croire
   // à un résultat qui n'est pas le sien. La raison est donc énoncée.
   if (!state.sid) { showError(new Error("aucune session : créez ou sélectionnez un chantier")); return; }
