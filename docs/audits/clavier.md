@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit-clavier.mjs`.
 
-**0 problème(s)** sur 8 états mesurés et 315 éléments atteints.
+**0 problème(s)** sur 8 états mesurés et 321 éléments atteints.
 
 ## observation · Simulation
 
@@ -40,7 +40,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab.active | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -90,7 +90,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab.active | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -140,7 +140,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab.active | tab | Trame | oui |
@@ -186,7 +186,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -233,7 +233,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -254,7 +254,7 @@ Aucun problème.
 
 ## équipement · Config
 
-0 problème(s) · 48 élément(s) dans l'ordre de tabulation
+0 problème(s) · 54 élément(s) dans l'ordre de tabulation
 
 Aucun problème.
 
@@ -288,7 +288,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -308,8 +308,14 @@ Aucun problème.
 | 44 | input | input | Dispersion du départ (s) | oui |
 | 45 | input | input | Fréquence (Hz, vide = défaut) | oui |
 | 46 | select | select | Plan régionalplan des passerellesEU868US915AU915 | oui |
-| 47 | select | select | Matérielcelui du runRAK4631 (nRF52840 + SX1262,  | oui |
-| 48 | button | button | Enregistrer les réglages | oui |
+| 47 | select | select | Classe d'écouteClasse A — écoute après avoir émi | oui |
+| 48 | input | input | Le serveur envoie une commande | oui |
+| 49 | input | input | Nombre de commandes | oui |
+| 50 | input | input | Premier envoi à (s) | oui |
+| 51 | input | input | Écart entre deux envois (s) | oui |
+| 52 | select | select | Fréquence des créneaux | oui |
+| 53 | select | select | Matérielcelui du runRAK4631 (nRF52840 + SX1262,  | oui |
+| 54 | button | button | Enregistrer les réglages | oui |
 
 </details>
 
@@ -349,7 +355,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -400,7 +406,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session az69MtFG · 3 équip. | oui |
+| 27 | select#session-select | select | Session AubusFMH · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |

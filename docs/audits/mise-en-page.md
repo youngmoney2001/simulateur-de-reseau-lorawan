@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**3 problème(s)** sur 23 états mesurés.
+**4 problème(s)** sur 23 états mesurés.
 
 ## 1400px
 
@@ -33,7 +33,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -66,7 +66,7 @@ Aucun problème.
 | button.tool | 248 | 1007 | 198×38 |
 | div.observation | 8 | 1101 | 1164×1090 |
 | footer.statusbar | 0 | 974 | 1180×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -99,7 +99,7 @@ Aucun problème.
 | button.tool | 248 | 955 | 198×38 |
 | div.observation | 8 | 1049 | 1084×1154 |
 | footer.statusbar | 0 | 974 | 1100×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -132,7 +132,7 @@ Aucun problème.
 | button.tool | 248 | 915 | 198×38 |
 | div.observation | 8 | 1009 | 1024×1095 |
 | footer.statusbar | 0 | 974 | 1040×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -165,7 +165,7 @@ Aucun problème.
 | button.tool | 248 | 889 | 198×38 |
 | div.observation | 8 | 983 | 984×1111 |
 | footer.statusbar | 0 | 974 | 1000×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -198,7 +198,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×1170 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -237,7 +237,7 @@ Aucun problème.
 | button.tool | 248 | 736 | 198×38 |
 | div.observation | 8 | 830 | 744×1289 |
 | footer.statusbar | 0 | 974 | 760×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -270,7 +270,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -303,7 +303,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -336,7 +336,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -369,7 +369,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -402,15 +402,19 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×760 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
 ## 1400 · équipement · Config
 
-0 problème(s) · défilement horizontal : non
+1 problème(s) · défilement horizontal : non
 
-Aucun problème.
+### cible-trop-petite (1)
+
+| élément | détail |
+|---|---|
+| input | 157x13 (seuil 20) |
 
 <details><summary>géométrie</summary>
 
@@ -435,7 +439,7 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win.active | 90 | 70 | 430×386 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -666,7 +670,7 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win.active | 90 | 70 | 430×734 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
@@ -769,4 +773,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 3 problème(s)
+TOTAL : 4 problème(s)
