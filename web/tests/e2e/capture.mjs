@@ -112,6 +112,20 @@ try {
     }, { timeout: 10_000 }, libelle);
   };
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  /** L'élément doit être **visible à l'écran**, et pas seulement présent dans le document.
+   *  Une capture plein écran ne montre que la fenêtre du navigateur : un bloc sous la ligne
+   *  de flottaison donne une image où rien n'a changé — deux fichiers identiques à
+   *  l'octet près, ce qui ne se remarque qu'en comparant les empreintes. Vérifié avant la
+   *  capture, donc, et pas après. */
+  const dansLeCadre = async (sel) => {
+    const ok = await page.evaluate((s) => {
+      const e = document.querySelector(s);
+      if (!e) return false;
+      const r = e.getBoundingClientRect();
+      return r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight;
+    }, sel);
+    if (!ok) throw new Error(`${sel} hors de l'écran : la capture ne le montrerait pas`);
+  };
 
   // 1. écran d'accueil : choix du mode, avant toute connexion
   await shoot("accueil-modes");
@@ -308,6 +322,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll("#runs-table tbody tr").length >= 3,
     { timeout: 20_000 });
   await pause(400);
+  await dansLeCadre("#runs-table");
   await shoot("runs-liste");
 
   // Le comparé est la **deuxième** ligne : la première est le run affiché, et le comparer à
@@ -322,7 +337,10 @@ try {
   await page.waitForFunction(() => !document.getElementById("runs-compare").hidden,
     { timeout: 10_000 });
   await pause(400);
-  await shoot("runs-comparaison");
+  // Recadrée et non plein écran : le bloc est sous la liste, donc sous la ligne de
+  // flottaison, et la page entière ne le montrait pas — les deux premières captures
+  // sortaient alors identiques à l'octet près.
+  await shootBloc("runs-comparaison", "#runs-compare");
 
   // 9. Le serveur, tel qu'il a vu le run qu'on vient de lancer. Sa fenêtre ne se remplit
   // qu'avec des mesures : sans run, elle dirait « rien d'observé » — une image d'une case
@@ -335,6 +353,14 @@ try {
   await setValue('#add-form [name="lon"]', "9.769500");
   await submitForm("#add-form");
   await page.waitForSelector('g.node[data-id="lns"]');
+  // Les fenêtres du capteur et de la passerelle sont restées ouvertes depuis les captures
+  // 5 à 8 : celle du serveur serait cascadée sous elles, donc hors du cadre de 1000 px, et
+  // l'image ne la montrerait pas. On les ferme avant de viser — la même leçon que dans
+  // l'audit, une troisième fois.
+  await page.evaluate(() => {
+    for (const w of document.querySelectorAll(".device-win .close")) w.click();
+  });
+  await pause(300);
   // Au clavier : la fenêtre d'un équipement ouverte plus haut recouvre le nœud, et le clic
   // ouvrirait alors tout sauf celle du serveur.
   await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
@@ -344,6 +370,7 @@ try {
   await page.waitForSelector('.device-win[data-node-id="lns"] table tbody tr',
     { timeout: 20_000 });
   await pause(400);
+  await dansLeCadre('.device-win[data-node-id="lns"] table');
   await shoot("serveur-ce-qu-il-a-vu");
 
   console.log(`${n} captures dans ${outDir}`);
