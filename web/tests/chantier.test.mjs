@@ -256,3 +256,130 @@ test("un identifiant de relief invalide est refuse en le citant", () => {
   refuse(ecrire({ format: FORMAT, version: VERSION, origine: null,
     terrain_id: "../../etc/passwd", equipements: [] }), "../../etc/passwd");
 });
+
+// --- Modèle de passerelle --------------------------------------------------------------------
+// Le seuil de réception se choisit à la pose ; un chantier qui ne le porte pas repart à la
+// référence du moteur sans rien dire.
+
+test("le modele d'une passerelle fait partie du chantier", () => {
+  const topo = { ...TOPO,
+    nodes: TOPO.nodes.map((n) => (n.kind === "border"
+      ? { ...n, gateway_profile: "rak5146-rak5148" } : n)) };
+  const c = serialiserChantier({ topo, origine: ORIGINE });
+  const gw = c.equipements.find((e) => e.id === "gw-nord");
+  assert.equal(gw.gateway_profile, "rak5146-rak5148");
+  assert.equal(lireChantier(ecrire(c)).equipements[0].gateway_profile, "rak5146-rak5148");
+});
+
+test("une passerelle sans modele n'ecrit rien : le chantier reste celui d'avant", () => {
+  const c = serialiserChantier({ topo: TOPO, origine: ORIGINE });
+  assert.ok(!("gateway_profile" in c.equipements[0]));
+});
+
+// --- Obstacles et environnement ---------------------------------------------------------------
+
+const MUR = { x_min_m: 400, y_min_m: -300, x_max_m: 600, y_max_m: 300,
+              height_m: 12, attenuation_db: 6 };
+
+test("un environnement vierge n'ecrit rien : le fichier reste celui d'avant", () => {
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 0, gateway_height_m: 15, device_height_m: 1.5, obstacles: [] } },
+    origine: ORIGINE });
+  assert.ok(!("environment" in c), Object.keys(c).join(", "));
+});
+
+test("les murs et le shadowing font partie du chantier, et se relisent", () => {
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 4, gateway_height_m: 40, device_height_m: 1.5,
+    obstacles: [MUR] } }, origine: ORIGINE });
+  assert.equal(c.environment.shadowing_sigma_db, 4);
+  assert.equal(c.environment.gateway_height_m, 40);
+  assert.deepEqual(c.environment.obstacles[0], MUR);
+  const relu = lireChantier(ecrire(c)).environment;
+  assert.deepEqual(relu.obstacles[0], MUR);
+  assert.equal(relu.gateway_height_m, 40);
+});
+
+test("un mur en materiau garde le materiau, pas une attenuation", () => {
+  const mur = { ...MUR, material: "concrete", thickness_m: 0.2 };
+  delete mur.attenuation_db;
+  const c = serialiserChantier({ topo: { ...TOPO, environment: {
+    shadowing_sigma_db: 0, gateway_height_m: 15, device_height_m: 1.5,
+    obstacles: [mur] } }, origine: ORIGINE });
+  const relu = lireChantier(ecrire(c)).environment.obstacles[0];
+  assert.equal(relu.material, "concrete");
+  assert.ok(!("attenuation_db" in relu));
+});
+
+test("un mur a l'emprise vide est refuse en disant lequel", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ x_min_m: 10, y_min_m: 0, x_max_m: 10, y_max_m: 5,
+                                 height_m: 12, attenuation_db: 6 }] },
+    equipements: [] });
+  assert.throws(() => lireChantier(texte), (err) => {
+    assert.ok(err instanceof ChantierInvalide);
+    assert.match(err.message, /obstacle nº 1 : emprise vide/);
+    return true;
+  });
+});
+
+test("un mur qui porte a la fois une attenuation et un materiau est refuse", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ ...MUR, material: "concrete", thickness_m: 0.2 }] },
+    equipements: [] });
+  assert.throws(() => lireChantier(texte), /atténuation et matériau s'excluent/);
+});
+
+test("une attenuation hors bornes est refusee", () => {
+  const texte = ecrire({ format: FORMAT, version: VERSION, origine: null,
+    environment: { obstacles: [{ ...MUR, attenuation_db: 500 }] }, equipements: [] });
+  assert.throws(() => lireChantier(texte), /atténuation hors bornes/);
+});
+
+// --- Classe d'écoute et descentes : ce qu'un chantier enregistré doit retrouver -------------
+// Ces réglages sont récents. Sans lecture, un chantier écrit en classe B avec une commande
+// réseau se rouvrait en classe A : le réglage ne serait pas refusé, il disparaîtrait — et
+// l'utilisateur relancerait un run qui n'a plus rien à voir avec ce qu'il a construit.
+
+function chantierAvec(capteur) {
+  return ecrire({ format: FORMAT, version: VERSION, origine: null,
+    equipements: [{ id: "capt-1", kind: "sensor", name: "Capteur 1", x_m: 0, y_m: 0,
+      sensor: capteur }] });
+}
+
+test("la classe d'écoute et la descente survivent à un aller-retour", () => {
+  const capteur = { spreading_factor: 9, payload_bytes: 10, tx_power_dbm: 14, period_s: 600,
+    messages: 2, start_spread_s: 0, region: null, channel_freq_hz: null, device_class: "B",
+    downlink: { count: 1, first_request_s: 10, request_period_s: 0, periodicity: 0,
+      clock_drift_ppm: 0 } };
+  const lu = lireChantier(ecrire(serialiserChantier({ topo: { nodes: [{ id: "capt-1",
+    kind: "sensor", name: "Capteur 1", x_m: 0, y_m: 0, sensor: capteur }], states: [] } })));
+  assert.deepEqual(lu.equipements[0].sensor.device_class, "B");
+  assert.deepEqual(lu.equipements[0].sensor.downlink,
+    { count: 1, first_request_s: 10, request_period_s: 0, periodicity: 0, clock_drift_ppm: 0 });
+});
+
+test("un chantier écrit avant les classes garde son empreinte", () => {
+  // Aucune clé ajoutée : le fichier d'avant reste identique, octet pour octet. C'est la
+  // condition pour qu'un chantier ancien se rouvre sans qu'on ait à le migrer.
+  const capteur = { spreading_factor: 9, payload_bytes: 10, tx_power_dbm: 14, period_s: 600,
+    messages: 2, start_spread_s: 0 };
+  const lu = lireChantier(chantierAvec(capteur));
+  assert.deepEqual(lu.equipements[0].sensor, capteur);
+});
+
+test("une classe d'écoute inconnue est refusée", () => {
+  assert.throws(() => lireChantier(chantierAvec({ device_class: "D" })),
+    /classe d'écoute « D » inconnue/);
+});
+
+test("une descente hors bornes est refusée à l'ouverture, pas au run", () => {
+  assert.throws(() => lireChantier(chantierAvec(
+    { device_class: "B", downlink: { count: 1, first_request_s: -5 } })),
+    /first_request_s hors bornes/);
+});
+
+test("un nombre de commandes fractionnaire est refusé", () => {
+  assert.throws(() => lireChantier(chantierAvec(
+    { device_class: "A", downlink: { count: 2.5 } })), /count doit être un nombre entier/);
+});

@@ -190,6 +190,8 @@ Corps `Problem` :
 | `run_failed` | 500 (dans `RunStatus.problem`) | échec pendant le calcul |
 | `unauthorized` | 401 | jeton absent, invalide ou révoqué |
 | `rate_limited` | 429 | trop de requêtes pour ce jeton (en-tête `Retry-After`) |
+| `nothing_to_undo` | 409 | `POST /sessions/{sid}/undo` alors que l'historique est vide |
+| `nothing_to_redo` | 409 | `POST /sessions/{sid}/redo` alors qu'il n'y a rien à rétablir |
 
 ## 6. Sécurité (exigences de mise en œuvre)
 
@@ -223,7 +225,8 @@ Routes servies sous `/api/v1` (détail, règles et limites : `docs/STUDY_PANEL_S
 `POST /sessions`, `GET /sessions`, `DELETE /sessions/{id}`, `GET /sessions/{id}/topology`,
 `POST /sessions/{id}/nodes`, `POST /sessions/{id}/nodes/{node_id}/position`,
 `DELETE /sessions/{id}/nodes/{node_id}`, `POST /sessions/{id}/nodes/{node_id}/sensor`,
-`POST /sessions/{id}/cli`, `POST /sessions/{id}/simulate` (compile la session et crée le run),
+`POST /sessions/{id}/cli`, `POST /sessions/{id}/undo`, `POST /sessions/{id}/redo`,
+`POST /sessions/{id}/simulate` (compile la session et crée le run),
 `POST /sessions/{id}/simulation` (liaison : `links` explicite, ou celle de `simulate`),
 `POST /sessions/{id}/hints`, `GET /sessions/{id}/attempts`, `GET /exercises`,
 `POST /exercises/{id}/submit`.

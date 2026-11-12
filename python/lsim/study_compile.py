@@ -32,7 +32,7 @@ from lsim.energy_report import ENERGY_PROFILES
 from lsim.gateway_profiles import get_profile, software_status
 from lsim.plan import get_plan
 from lsim.study_cli import SUB_BAND_REGIONS, GatewayConfig
-from lsim.study_contract import Node, SensorSettings
+from lsim.study_contract import EnvironmentSettings, Node, SensorSettings
 
 DEFAULT_REGION = "EU868"
 DEFAULT_SUB_BAND = 1
@@ -129,9 +129,35 @@ def confirmed_possible(nodes: list[Node], configs: dict[str, GatewayConfig],
     return True, ""
 
 
+def _bloc_environment(env: EnvironmentSettings) -> Optional[dict]:
+    """Le bloc `environment` du scénario, ou `None` si l'utilisateur n'a rien réglé.
+
+    `None` et non un bloc aux valeurs par défaut : un scénario compilé sans environnement est
+    **le même fichier** qu'avant cette fonctionnalité, donc la même empreinte. C'est la règle
+    qui tient depuis le début — un scénario écrit avant garde ses chiffres et son empreinte.
+    """
+    if env.est_vierge():
+        return None
+    obstacles = []
+    for o in env.obstacles:
+        bloc = {"x_min_m": o.x_min_m, "y_min_m": o.y_min_m,
+                "x_max_m": o.x_max_m, "y_max_m": o.y_max_m,
+                "height_m": o.height_m}
+        if o.material is not None:
+            bloc["material"] = o.material
+            bloc["thickness_m"] = o.thickness_m
+        else:
+            bloc["attenuation_db"] = o.attenuation_db
+        obstacles.append(bloc)
+    return {"gateway_height_m": env.gateway_height_m,
+            "device_height_m": env.device_height_m,
+            "obstacles": obstacles}
+
+
 def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int,
                     terrain_id: Optional[str] = None, adr: bool = False,
-                    join: bool = False, confirmed: bool = False) -> Compiled:
+                    join: bool = False, confirmed: bool = False,
+                    environment: Optional[EnvironmentSettings] = None) -> Compiled:
     """Compile la session en scénario.
 
     `adr` : la boucle fermée (LinkADRReq) est demandée. Elle n'existe qu'à passerelle unique,
@@ -146,6 +172,10 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
 
     Les trois passent par `protocol` du corps de run, et non par le scénario : le moteur les
     applique à tous les dispositifs du run, ou à aucun.
+
+    `environment` : obstacles, shadowing et hauteurs d'antennes. Il entre dans le **scénario**
+    (contrairement aux trois précédents) et seulement s'il a été réglé — voir
+    `_bloc_environment`.
     """
     notes: list[str] = []
     gateways = [n for n in nodes if n.kind in ("relay", "border")]
@@ -208,8 +238,15 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         gw = {"name": n.id, "x_m": n.x_m, "y_m": n.y_m,
               "antenna_gain_dbi": cfg.lora.antenna_gain_dbi or 0.0}
         if n in mesh_nodes:
-            gw["profile"] = MESH_PROFILE
+            # Le modèle du relais : celui de l'équipement s'il est choisi, sinon la valeur
+            # historique. Le scénario refuse de lui-même un modèle sans radio mesh
+            # documentée — le refus Remonte tel quel, avec le nom du modèle fautif.
+            gw["profile"] = n.gateway_profile or MESH_PROFILE
             gw["mesh"] = True
+        elif n.gateway_profile is not None:
+            # Passerelle d'accès : le modèle décale le seuil de réception de la différence
+            # entre la sensibilité publiée et la référence du moteur au même point.
+            gw["profile"] = n.gateway_profile
         scenario_gateways.append(gw)
 
     # L'ADR n'existe que sur la forme `gateway` (une seule passerelle, sans mesh). On ne
@@ -272,6 +309,17 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         # chiffres et son empreinte.
         if r.energy_profile is not None:
             group["energy"] = {"profile": r.energy_profile}
+        # Classe d'écoute et descentes réseau : posés seulement s'ils quittent le défaut.
+        # Un chantier écrit avant garde donc exactement son scénario — empreinte comprise.
+        if r.device_class != "A":
+            group["device_class"] = r.device_class
+        if r.downlink is not None:
+            d = r.downlink
+            bloc = {"count": d.count, "first_request_s": d.first_request_s,
+                    "periodicity": d.periodicity, "clock_drift_ppm": d.clock_drift_ppm}
+            if d.count > 1:
+                bloc["request_period_s"] = d.request_period_s
+            group["downlink"] = bloc
         groups.append(group)
 
     scenario: dict = {
@@ -295,16 +343,26 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
     if mesh_block is not None:
         scenario["mesh"] = mesh_block
     if mesh_nodes:
-        prof = get_profile(MESH_PROFILE)
-        if not prof.software_validated:
-            notes.append(f"relais : profil {MESH_PROFILE} ({software_status(prof)}) : compatibilité "
-                         "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
+        retenus = {(n.gateway_profile or MESH_PROFILE) for n in mesh_nodes}
+        for cle in sorted(retenus):
+            prof = get_profile(cle)
+            if not prof.software_validated:
+                notes.append(f"relais : profil {cle} ({software_status(prof)}) : compatibilité "
+                             "logicielle non confirmée (essai ChirpStack Gateway OS ou confirmation RAK)")
     notes.append("non modélisés (ignorés) : " + ", ".join(NOT_MODELLED))
-    # Le courant moyen est calculé sur ce matériel, pas sur celui de l'utilisateur. Le dire
-    # évite qu'un chiffre de consommation passe pour une mesure de son propre capteur.
+    # Le matériel du run, puis ceux qui s'en écartent : depuis qu'un capteur peut porter le
+    # sien, annoncer seulement le profil du run décrit un run qui n'est plus le sien. Les
+    # écarts sont nommés — un courant moyen se vérifie en sachant de quel matériel il vient.
     nom = energy_profile_by_name(ENERGY_PROFILES[ENERGY_PROFILE]).name
-    notes.append(f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
-                 "moyen est celui de ce matériel")
+    propres = [(s.id, (s.sensor.energy_profile if s.sensor else None)) for s in sensors]
+    propres = [(sid, p) for sid, p in propres if p is not None and p != ENERGY_PROFILE]
+    note = (f"énergie des capteurs : profil {ENERGY_PROFILE} ({nom}) — le courant "
+            "moyen est celui de ce matériel")
+    if propres:
+        noms = ", ".join(f"{sid} : {p} ({energy_profile_by_name(ENERGY_PROFILES[p]).name})"
+                         for sid, p in propres)
+        note += f" ; matériel propre à {noms}"
+    notes.append(note)
     links = [{"node_id": n.id, "gateway": n.id} for n in active]
     # Le protocole effectif, pas le protocole demandé : une jointure demandée alors que l'ADR
     # est actif ne serait pas simulée, et l'écrire dans le corps laisserait croire à un run
@@ -316,6 +374,18 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         protocole["confirmed_uplinks"] = True
     body: dict = {"scenario": scenario, "protocol": protocole,
                   "energy_profile": ENERGY_PROFILE}
+    # L'environnement radio, de même : absent tant que rien n'a été réglé. Le shadowing
+    # n'appartient pas au bloc `environment` mais à `propagation`, et n'est émis que s'il est
+    # non nul — la clé absente, c'est le comportement d'avant.
+    if environment is not None and not environment.est_vierge():
+        scenario["environment"] = _bloc_environment(environment)
+        if environment.shadowing_sigma_db > 0.0:
+            scenario["propagation"] = {"shadowing_sigma_db": environment.shadowing_sigma_db}
+        notes.append(
+            f"environnement : {len(environment.obstacles)} obstacle(s), "
+            f"shadowing sigma {environment.shadowing_sigma_db:g} dB, "
+            f"antennes {environment.device_height_m:g} m / {environment.gateway_height_m:g} m "
+            "— matériaux UIT-R P.2040-4, tirage log-normal par dispositif")
     # Le relief n'entre dans le corps que s'il a ete choisi : une cle absente et une cle a
     # `null` n'ont pas le meme sens cote serveur, et seul le choix doit se voir.
     if terrain_id is not None:

@@ -113,3 +113,17 @@ int32_t lsim_classb_next_ping_slot(const lsim_classb_device* d, uint64_t now_ns,
     out->window_half_ns = p.window_half_ns;
     return 0;
 }
+
+int32_t lsim_classb_ping_slot_at(const lsim_classb_device* d, uint64_t now_ns,
+                                 lsim_classb_ping_slot* out) {
+    if (d == nullptr || out == nullptr) return null_out();
+    lsim::lorawan::classb::PingSlot p;
+    const auto st = lsim::lorawan::classb::ping_slot_at(to_native(*d), now_ns, p);
+    if (st != ClassBStatus::Ok) return map_status(st);
+    out->start_ns = p.start_ns;
+    out->slot_index = p.slot_index;
+    out->beacon_time_s = p.beacon_time_s;
+    out->beacon_period_start_ns = p.beacon_period_start_ns;
+    out->window_half_ns = p.window_half_ns;
+    return 0;
+}

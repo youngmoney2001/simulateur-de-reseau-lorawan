@@ -8,6 +8,28 @@ export function formatPercent(value) {
   return value == null ? "—" : `${(value * 100).toFixed(1)} %`;
 }
 
+/**
+ * Une durée en secondes, telle qu'on la lit sur un écran d'attente.
+ *
+ * Le saut d'unité à 90 s (« 2 min 8 s ») plutôt qu'à 60 s : en dessous, « 1 min 12 s » n'est
+ * pas plus clair que « 72 s », et l'attente d'un créneau se compare mieux en secondes.
+ * `null` devient « — », jamais « 0 s » — une attente inconnue n'est pas une attente nulle.
+ */
+export function formatSecondes(value) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (value === 0) return "0 s";
+  if (value < 1) return `${value.toFixed(2)} s`;
+  // Sous 10 s, la décimale dit quelque chose (1,5 s ≠ 1 s) ; au-delà, elle encombre : une
+  // attente de 51 s s'écrit « 51 s », pas « 51.0 s ». Un intervalle rond reste rond.
+  if (value < 10) {
+    return Number.isInteger(value) ? `${value} s` : `${value.toFixed(1)} s`;
+  }
+  if (value < 90) return `${Math.round(value)} s`;
+  const min = Math.floor(value / 60);
+  const sec = Math.round(value - min * 60);
+  return sec ? `${min} min ${sec} s` : `${min} min`;
+}
+
 // Une ligne par passerelle du run : compteurs, latence p95, liens mesh observés.
 export function gatewayRows(summary, linkedNames = []) {
   const linked = new Set(linkedNames);

@@ -62,6 +62,54 @@
       "title": "DiskPlacement",
       "type": "object"
     },
+    "DownlinkRequestsModel": {
+      "additionalProperties": false,
+      "description": "Descentes **à l'initiative du réseau** : le serveur veut envoyer, le terminal n'a rien\ndemandé.\n\nC'est le seul réglage qui distingue vraiment les trois classes, et la raison d'être de ce\nbloc : un ACK ou une réponse MAC est déclenché par un uplink et tombe donc toujours dans\nRX1 ou RX2 — la classe n'y change rien. Ici la demande naît à un instant que le terminal\nn'a pas choisi, et la latence devient la grandeur que la classe détermine :\n\n- A : le réseau attend le prochain uplink du terminal, puis répond dans RX1 (jusqu'à une\n  période d'attente) ;\n- B : il attend le prochain ping slot (`periodicity`, 0 = un slot toutes les 0,96 s,\n  7 = un slot par période de 128 s) ;\n- C : il émet presque aussitôt, hors des propres émissions du terminal et de son RX1.\n\nLa classe du terminal est celle du groupe (`device_class`) : ce n'est pas la demande qui\ndécide de la classe, c'est l'équipement.",
+      "properties": {
+        "clock_drift_ppm": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Clock Drift Ppm",
+          "type": "integer"
+        },
+        "count": {
+          "default": 1,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "first_request_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "First Request S",
+          "type": "number"
+        },
+        "periodicity": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Periodicity",
+          "type": "integer"
+        },
+        "request_period_s": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Request Period S",
+          "type": "number"
+        },
+        "rx_window_s": {
+          "default": 1.0,
+          "maximum": 10.0,
+          "minimum": 0,
+          "title": "Rx Window S",
+          "type": "number"
+        }
+      },
+      "title": "DownlinkRequestsModel",
+      "type": "object"
+    },
     "EnergyModel": {
       "additionalProperties": false,
       "description": "Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace).",
@@ -278,6 +326,17 @@
           ],
           "title": "Device Class",
           "type": "string"
+        },
+        "downlink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DownlinkRequestsModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "duty_cycle": {
           "default": 1.0,

@@ -50,10 +50,12 @@ from pydantic import ValidationError
 
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
-    DevicePage, DeviceRowOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut, Problem,
+    DevicePage, DeviceRowOut, DownlinkOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut,
+    Problem, classes_ecoute,
     RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
-    ValidateResponse, list_energy_profiles, list_regions,
+    ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
+    list_regions,
 )
 from lsim.energy_report import device_energies_protocol
 from lsim import study_exercises
@@ -61,7 +63,7 @@ from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
     CliRequest, GatewayLink, GatewaySettings, HintRequest, Node, Position, SensorSettings,
     AdrChoice, ProtocoleChoice, SessionCreate, SimulateOut, SimulateRequest, SimulationBind,
-    SubmitRequest, TerrainChoice,
+    EnvironmentChoice, SubmitRequest, TerrainChoice,
 )
 from lsim.study_session import StudyError, StudyService
 from lsim.study_store import StudyStore
@@ -510,9 +512,51 @@ def _sf_final_par_dispositif(records) -> dict[int, int]:
     return out
 
 
+def _descentes_reseau(devices, scenario: Scenario) -> tuple[Optional[dict[str, Any]], tuple]:
+    """(résumé publié, détail par dispositif) des descentes réseau, en un seul passage.
+
+    Le détail est rendu en même temps que le résumé parce qu'un seul appel natif produit les
+    deux : le séparer obligerait soit à calculer deux fois, soit à mémoriser le résultat dans
+    un état partagé — or `_compute` tourne dans un thread par run, et un état partagé y serait
+    une race, pas une économie.
+    """
+    """Descentes à l'initiative du réseau : latence par classe, calculée par le moteur.
+
+    Pourquoi un second passage natif plutôt qu'un greffon sur la trace : le seul point
+    d'entrée qui planifie ces descentes (`lsim_simulate_downlinks_env`) recalcule les
+    uplinks dont il a besoin — il ne se greffe pas sur une trace déjà produite. On ne lui
+    emprunte donc **que** les compteurs de descente ; ses compteurs d'uplink sont jetés,
+    le run gardant ceux de la trace.
+
+    Ce que ce passage ne voit pas, et pourquoi c'est sans conséquence mesurable : la charge
+    MAC réservée et l'ADR allongent les trames **sans décaler leur début** (vérifié par
+    `test_mac_does_not_move_transmission_starts`), or l'attente se compte sur les instants
+    de début. Reste RX1, qui s'ouvre après la **fin** de l'émission : une trame allongée
+    décale donc la latence d'au plus la durée ajoutée — 15 ms pour 10 octets à SF7, soit
+    0,03 % des 51 s que la classe A attend.
+
+    S'applique aussi en multi-passerelles : les instants d'émission y sont les mêmes qu'en
+    mono (mesuré), et l'attente n'est faite que de ces instants et de la classe. Le réserver
+    au mono l'aurait rendu invisible depuis l'atelier, dont toute session compile en forme
+    `gateways`.
+
+    `None` si aucun terminal n'en déclare : un objet de zéros dirait « aucune descente
+    livrée », ce qui serait faux d'un run qui n'en a pas demandé.
+    """
+    # Même fabrique que l'export : un scénario donne les mêmes chiffres par les deux chemins.
+    from lsim.export import passage_descentes
+    resume, dl_par = passage_descentes(devices, scenario)
+    publie = None if resume is None else DownlinkOut(
+        requested=resume.requested, delivered=resume.delivered,
+        latency_mean_s=resume.latency_mean_s,
+        latency_max_s=resume.latency_max_s).model_dump(exclude_none=True)
+    return publie, dl_par
+
+
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
-                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None) -> dict[str, Any]:
+                 rx_matrix=None, event_kinds: Optional[dict[str, int]] = None,
+                 downlink: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -524,6 +568,7 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
         duty_cycle=_duty_cycle_out(scenario),
         rx_matrix=rx_matrix,
         event_kinds=event_kinds or None,
+        downlink=downlink,
     )
     if gateways is None:
         body["gateway"] = GatewayLoadOut(
@@ -751,6 +796,9 @@ class RunService:
             # configuration de départ en laissant croire à une décision du serveur.
             canaux = dict(tr.device_channels or {})
         self._set(run_id, 0.7)
+        # Les descentes se calculent quel que soit le chemin, et après lui : le passage ne
+        # dépend ni de la trace ni du nombre de passerelles.
+        descentes, dl_par = _descentes_reseau(devices, scenario)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
             dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
@@ -778,6 +826,12 @@ class RunService:
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),
                 energy_per_message_j=getattr(e, "energy_per_message_j", None),
                 average_current_ua=getattr(e, "average_current_ua", None),
+                # Latence de descente de ce dispositif, publiée pour que l'atelier puisse
+                # situer l'émission dans le temps au lieu de n'afficher qu'une moyenne.
+                # `dl_par` est vide hors mono-passerelle : le champ reste alors absent.
+                downlink_delivered=(dl_par[i].delivered if dl_par else None),
+                downlink_latency_s=(dl_par[i].latency_sum_ns / 1e9 / dl_par[i].requested
+                                    if dl_par and dl_par[i].requested else None),
             ).model_dump(exclude_none=True))
         # Invariant : la somme des compteurs par dispositif égale les totaux publiés.
         if (sum(r["sent"] for r in rows) != totals.sent
@@ -803,7 +857,8 @@ class RunService:
             ).model_dump(exclude_none=True))
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total,
-                               mt.rx_matrix if job.multi else None, event_kinds=natures)
+                               mt.rx_matrix if job.multi else None, event_kinds=natures,
+                               downlink=descentes)
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {
@@ -976,8 +1031,15 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             status, body = self._route(method)
         except ApiError as exc:
-            status, body = exc.status, _problem(exc.code, exc.message, exc.field)
             headers = exc.headers
+            # Les codes de problème forment un ensemble fermé : un code absent du contrat est
+            # une erreur de serveur, pas une réponse à inventer. Sans ce repli, la validation
+            # échouait dans le traitement de l'erreur et la connexion partait sans réponse.
+            try:
+                status, body = exc.status, _problem(exc.code, exc.message, exc.field)
+            except ValidationError:
+                log.error("code de problème hors contrat : %s", exc.code, exc_info=True)
+                status, body = 500, _problem("run_failed", "erreur interne")
         except Exception:
             log.error("erreur interne", exc_info=True)
             status, body = 500, _problem("run_failed", "erreur interne")
@@ -1062,6 +1124,33 @@ class _Handler(BaseHTTPRequestHandler):
         # choix par équipement, et les libellés doivent venir du moteur, pas de lui.
         if method == "GET" and rest == "energy-profiles":
             return 200, list_energy_profiles().model_dump()
+        # Classes d'écoute, avec ce qu'elles changent — et ce qu'elles ne changent pas. Les
+        # intervalles entre créneaux de ping viennent du moteur : l'interface n'a donc aucune
+        # table à recopier, et ne peut pas annoncer un intervalle que le moteur ne tient pas.
+        if method == "GET" and rest == "device-classes":
+            return 200, classes_ecoute().model_dump()
+        # Modèles de passerelle du catalogue, avec ce que chacun change : sans cela,
+        # présenter trois modèles au seuil identique ferait croire à un choix.
+        if method == "GET" and rest == "gateway-profiles":
+            return 200, list_gateway_profiles().model_dump()
+        # Matériaux d'obstacle, avec la perte réelle à la fréquence et à l'épaisseur demandées
+        # et son caractère extrapolé. À 868 MHz, 13 des 15 matériaux sortent de la plage
+        # documentée de l'UIT-R P.2040-4 : le dire ici plutôt que de laisser l'atelier afficher
+        # une perte qu'on croirait mesurée.
+        if method == "GET" and rest == "materials":
+            try:
+                f_hz = float(query.get("frequency_hz", ["868.1e6"])[0])
+                ep = float(query.get("thickness_m", ["0.2"])[0])
+            except (ValueError, IndexError, TypeError):
+                raise ApiError(422, "validation_error",
+                               "frequency_hz et thickness_m doivent être numériques") from None
+            if not (0 < f_hz < 1e12):
+                raise ApiError(422, "validation_error", "frequency_hz hors bornes",
+                               "frequency_hz")
+            if not (0 < ep <= 10):
+                raise ApiError(422, "validation_error", "thickness_m hors bornes",
+                               "thickness_m")
+            return 200, list_materials(f_hz, ep).model_dump()
         if method == "GET" and rest == "terrains":
             return 200, svc.terrains.listing()
         if method == "POST" and rest == "scenarios/validate":
@@ -1080,6 +1169,21 @@ class _Handler(BaseHTTPRequestHandler):
             connus = svc.terrains.ids()
             return 200, self._study(lambda: study.set_terrain(
                 owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        # Environnement radio : obstacles tracés sur le plan, shadowing, hauteurs d'antennes.
+        # Le matériau est vérifié côté service — un nom inconnu se refuse à la pose du mur.
+        m_env = re.fullmatch(r"sessions/([^/]+)/environment", rest)
+        if m_env is not None and method == "POST":
+            req = self._parse_body(EnvironmentChoice)
+            return 200, self._study(lambda: study.set_environment(
+                owner, m_env.group(1), req)).model_dump()
+        # Annuler et rétablir. L'historique vit côté serveur parce que le CLI y vit aussi :
+        # annuler « region US915 » restaure la configuration de l'équipement, pas seulement
+        # la case que l'interface affichait.
+        m_undo = re.fullmatch(r"sessions/([^/]+)/(undo|redo)", rest)
+        if m_undo is not None and method == "POST":
+            action = m_undo.group(2)
+            return 200, self._study(lambda: (study.undo if action == "undo" else study.redo)(
+                owner, m_undo.group(1))).model_dump()
         m_adr = re.fullmatch(r"sessions/([^/]+)/adr", rest)
         if m_adr is not None and method == "POST":
             # Le souhait est enregistré quel qu'il soit ; c'est la topologie qui décide s'il est

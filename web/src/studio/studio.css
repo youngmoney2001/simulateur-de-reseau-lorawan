@@ -365,6 +365,14 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
    désactivé ; la jointure et les trames confirmées, toujours actives, l'ont révélé. */
 .adr input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
 
+/* Même raison, autre endroit : dans une grille de formulaire, `label` est une colonne
+   (`flex-direction:column`), et une case native s'y étire à la largeur de la case — mesuré
+   157x13, une cible plus large que haute qu'on ne vise pas. La case garde donc sa taille
+   propre, et son libellé se met en ligne à côté d'elle. */
+.sensor-form label.case { flex-direction:row; align-items:center; gap:6px; cursor:pointer;
+  grid-column:1 / -1; }
+.sensor-form input[type="checkbox"] { width:20px; height:20px; flex:0 0 auto; margin:0; }
+
 /* --- Débit commandé par le serveur : le résultat lu dans le run, pas dans le formulaire --- */
 /* Encadré plutôt que ligne perdue : ce bloc est la réponse à « pourquoi ce capteur a-t-il
    changé de débit ? ». Il doit se voir dès la fin du run, avant les indicateurs. */
@@ -409,6 +417,11 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .anim-ok { stroke:#2e7d32; fill:#2e7d32; }
 .anim-lost { stroke:#c62828; fill:#c62828; }
 .anim-neutral { stroke:#546e7a; fill:#546e7a; }
+/* Descentes à l'initiative du réseau : ni vert (reçue) ni rouge (perdue). Une couleur à part,
+   parce que ce sont les seules flèches que le réseau déclenche de lui-même — les autres
+   répondent à un uplink. Violet, distinct des trois, pour qu'une flèche descendante ne se
+   lise pas comme un acquittement. */
+.anim-dl { stroke:#6a1b9a; fill:#6a1b9a; }
 #anim-layer .trail { stroke-width:2; stroke-opacity:.45; stroke-dasharray:4 3; }
 #anim-layer .frame { stroke:#fff; stroke-width:1; }
 #anim-layer .ring { fill:none; stroke-width:2; }
@@ -459,3 +472,22 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
   .modes { grid-template-columns:1fr; }
   .plan-area { min-height:260px; }
 }
+
+/* --- Obstacles : ce qui sépare deux équipements ---------------------------------------- */
+/* Hachurés, jamais pleins : un mur opaque masquerait le plan qu'il est censé expliquer, et
+   ce sont les équipements de part et d'autre qu'on vient lire. */
+.obstacles rect.obstacle { fill:#d9534f; fill-opacity:.18; stroke:#b03a37;
+  stroke-width:2; stroke-dasharray:6 3; pointer-events:none; }
+/* Le rectangle en cours de tracé, lui, se voit franchement : c'est un geste en train de se
+   faire, pas un objet posé. */
+rect.obstacle-trace { fill:#d9534f; fill-opacity:.10; stroke:#d9534f; stroke-width:2;
+  stroke-dasharray:4 3; pointer-events:none; }
+.obstacle-row { display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+  padding:4px 0; border-bottom:1px solid var(--line); }
+.obstacle-row > span:first-child { flex:1 1 100%; font-size:12px; }
+.obstacle-ctrls { display:flex; flex-wrap:wrap; gap:3px; align-items:center; }
+.obstacle-ctrls input, .obstacle-ctrls select { font-size:12px; padding:1px 3px; }
+.obstacle-ctrls input[type="number"] { width:62px; }
+.obstacle-ctrls select { max-width:130px; }
+.obstacle-ctrls button { font-size:11px; padding:1px 6px; }
+.obstacle-del { color:var(--danger); }

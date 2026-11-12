@@ -56,9 +56,26 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     attempts: (sid) => request("GET", `${s(sid)}/attempts`),
     exercises: () => request("GET", "/api/v1/exercises"),
     energyProfiles: () => request("GET", "/api/v1/energy-profiles"),
+    // Classes d'écoute, avec ce qu'elles changent et les intervalles entre créneaux de ping
+    // de la classe B. Tout vient du moteur : rien n'est recopié dans l'interface, donc rien
+    // ne peut annoncer un intervalle que le moteur ne tient pas.
+    deviceClasses: () => request("GET", "/api/v1/device-classes"),
+    gatewayProfiles: () => request("GET", "/api/v1/gateway-profiles"),
     terrains: () => request("GET", "/api/v1/terrains"),
+    // Matériaux d'obstacle : la perte est calculée par le moteur à la fréquence et à
+    // l'épaisseur demandées, avec son caractère extrapolé. Rien n'est recopié ici.
+    materials: (frequency_hz, epaisseur_m) => request(
+      "GET", `/api/v1/materials?frequency_hz=${encodeURIComponent(frequency_hz)}`
+        + `&thickness_m=${encodeURIComponent(epaisseur_m)}`),
+    // Environnement radio de la session : obstacles, shadowing, hauteurs d'antennes.
+    setEnvironment: (sid, settings) => request("POST", `${s(sid)}/environment`, settings),
     setTerrain: (sid, terrainId) =>
       request("POST", `${s(sid)}/terrain`, { terrain_id: terrainId }),
+    // Annuler et rétablir. L'historique vit côté serveur : annuler une commande CLI restaure
+    // la configuration de l'équipement, pas seulement ce que l'interface en montrait.
+    // La réponse est une topologie, comme les autres.
+    undo: (sid) => request("POST", `${s(sid)}/undo`),
+    redo: (sid) => request("POST", `${s(sid)}/redo`),
     // Le souhait est envoyé tel quel : c'est le serveur qui sait si la topologie le permet,
     // et il renvoie la raison avec la topologie plutôt qu'un refus.
     setAdr: (sid, adr) => request("POST", `${s(sid)}/adr`, { adr }),

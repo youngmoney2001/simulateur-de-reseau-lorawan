@@ -36,6 +36,29 @@ export const SENSOR_DEFAULTS = {
   channel_freq_hz: "",
 };
 
+// --- Descentes à l'initiative du réseau -----------------------------------------------------
+// Le serveur veut envoyer au terminal sans que le terminal l'ait demandé. C'est le SEUL réglage
+// que la classe d'écoute change : un ACK est déclenché par un uplink et tombe dans RX1 ou RX2
+// quelle que soit la classe. Le dire conditionne tout ce qui suit — sans cette précision, le
+// sélecteur de classe laisserait croire à un réglage général, ce qu'il n'est pas.
+
+// Les classes elles-mêmes viennent du serveur (`GET /device-classes`) : libellés, phrase
+// d'ouverture et intervalles entre créneaux sont servis par le moteur, jamais recopiés ici.
+// Ce tableau n'est qu'un repli pour les modules purs, sans réseau.
+export const CLASSES_ECOUTE = ["A", "B", "C"];
+export const CLASSE_DEFAUT = "A";
+
+export const DOWNLINK_LIMITS = {
+  count: [1, 100_000],
+  first_request_s: [0, 86_400],
+  request_period_s: [0, 86_400],
+  periodicity: [0, 7],
+};
+export const DOWNLINK_INTEGER_KEYS = new Set(["count", "periodicity"]);
+// La périodicité n'a d'effet qu'en classe B : ailleurs c'est un champ sans objet, et un champ
+// sans objet ne se masque pas, il ne s'affiche pas.
+export const CLASSE_A_PERIODICITE = "B";
+
 // Cadre du plan : englobe les équipements, marge de 10 %, étendue minimale de 1 km.
 // Cadrage du plan. La portée minimale était de 1000 m : un réseau de quatre capteurs
 // distants de 300 m était donc noyé dans 1200 m de vide, et les équipements devenaient
@@ -119,6 +142,11 @@ export function validateNewNode(form) {
   if (form.kind === "sensor" && form.energy_profile) {
     node.sensor = { energy_profile: form.energy_profile };
   }
+  // Le modèle de passerelle, de même. Réservé aux passerelles : un capteur n'en a pas, et
+  // le serveur le refuse avec raison. Vide : seuil de référence du moteur, comme avant.
+  if (KINDS_GATEWAY.includes(form.kind) && form.gateway_profile) {
+    node.gateway_profile = form.gateway_profile;
+  }
   return { ok: true, node };
 }
 
@@ -175,7 +203,83 @@ export function sensorFormFrom(node) {
     region: s.region ?? "",
     channel_freq_hz: s.channel_freq_hz ?? "",
     energy_profile: s.energy_profile ?? "",
+    device_class: s.device_class ?? CLASSE_DEFAUT,
+    downlink: downlinkFormFrom(s.downlink),
   };
+}
+
+/**
+ * Le bloc « descente réseau » d'un capteur, sous la forme qu'attend le formulaire.
+ * `null` quand il n'en déclare aucune : c'est l'absence qui est publiée, pas un bloc de zéros
+ * qui dirait « une commande à l'instant 0 ».
+ */
+export function downlinkFormFrom(d) {
+  if (!d) return null;
+  return {
+    count: d.count,
+    first_request_s: d.first_request_s,
+    request_period_s: d.request_period_s,
+    periodicity: d.periodicity,
+  };
+}
+
+/**
+ * Ce que le réglage va réellement coûter d'attente, **avant** de lancer le run.
+ *
+ * `null` : trop peu d'éléments pour le dire (classe B sans intervalle de créneaux servi, ou
+ * pas de descente). Ce n'est PAS une estimation de la latence — la latence, c'est le run qui
+ * la mesure. C'est un ordre de grandeur de la fenêtre, pour que l'utilisateur sache en
+ * choisissant une classe qu'il choisit une attente.
+ *
+ * La classe A attend le prochain uplink : son attente est donc la période, au plus. La classe
+ * C n'attend pas. La classe B attend son prochain créneau : au plus l'intervalle entre deux
+ * créneaux, qui dépend de la périodicité.
+ */
+export function attenteAttendue({ classe, period_s, intervalleSlotS }) {
+  if (classe === "C") return 0;
+  if (classe === "B") return Number.isFinite(intervalleSlotS) ? intervalleSlotS : null;
+  if (classe === "A") return Number.isFinite(period_s) ? period_s : null;
+  return null;
+}
+
+/**
+ * Une classe B peut-elle attendre PLUS longtemps qu'une classe A ? Oui, et c'est le cas le
+ * plus courant : un créneau par période de 128 s (périodicité 7) attend 128 s, là où la
+ * classe A n'attend que sa période d'émission. L'atelier doit le dire, sinon « classe B »
+ * se lit comme « mieux que classe A », ce qui est faux.
+ */
+export function classeBPlusLenteQueA(intervalleSlotS, period_s) {
+  if (!Number.isFinite(intervalleSlotS) || !Number.isFinite(period_s)) return null;
+  return intervalleSlotS > period_s;
+}
+
+/** Les types qui sont des passerelles : seuls eux portent un modèle du catalogue. */
+export const KINDS_GATEWAY = ["border", "relay"];
+
+/**
+ * Les modèles du catalogue qu'un rôle peut porter. Un relais exige une radio mesh
+ * documentée, et un hôte sans radio publiée n'entre dans aucune passerelle : le scénario
+ * refuserait les deux, autant ne pas les proposer. La liste vient du moteur, jamais
+ * recopiée — c'est ce qui la garde d'accord avec les fiches constructeur.
+ */
+export function modelesAdmis(catalogue, kind) {
+  return catalogue.filter((m) => m.can_simulate_radio
+    && (kind !== "relay" || m.can_relay));
+}
+
+/**
+ * Ce que le modèle choisi change réellement. Trois des quatre modèles du catalogue ne
+ * décalent pas le seuil de réception : leur fiche donne une sensibilité sans dire à quel
+ * facteur d'étalement ni sur quelle bande elle est mesurée, et le moteur n'applique alors
+ * aucun décalage. L'écrire évite un choix qui n'en est pas un.
+ */
+export function aideModele(m) {
+  if (!m) return "";
+  const seuil = m.sensitivity_published
+    ? `seuil ${m.sensitivity_offset_db.toFixed(1).replace("-", "−")} dB par rapport à la référence du moteur`
+    : "seuil de référence : la fiche ne publie pas le point de mesure (SF et bande), aucun décalage appliqué";
+  const relais = m.can_relay ? " · radio mesh documentée, peut relayer" : " · ne peut pas relayer";
+  return `${m.vendor} ${m.model} — ${seuil}${relais}`;
 }
 
 const INTEGER_SENSOR_KEYS = new Set(["spreading_factor", "payload_bytes", "messages", "channel_freq_hz"]);
@@ -199,6 +303,34 @@ export function validateSensor(form) {
   // Le matériel n'a pas de bornes : la liste vient du moteur et c'est lui qui la valide —
   // la recopier ici la laisserait dériver du matériel modélisé. Vide = celui du run.
   if (form.energy_profile) out.energy_profile = form.energy_profile;
+  // Classe d'écoute : la liste vient du serveur, mais la borne est connue ici pour un retour
+  // immédiat. Le défaut (« A ») n'est pas envoyé : le scénario compilé reste alors exactement
+  // celui d'avant, empreinte comprise.
+  if (form.device_class && form.device_class !== CLASSE_DEFAUT) {
+    if (!CLASSES_ECOUTE.includes(form.device_class)) {
+      return bad("device_class", "classe d'écoute inconnue");
+    }
+    out.device_class = form.device_class;
+  }
+  // Descente réseau : `form.downlink` vaut `null` (ou est absent) quand la case est décochée.
+  if (form.downlink) {
+    const d = {};
+    for (const [key, [lo, hi]] of Object.entries(DOWNLINK_LIMITS)) {
+      const raw = form.downlink[key];
+      const value = num(raw);
+      if (!Number.isFinite(value) || value < lo || value > hi) {
+        return bad(`downlink_${key}`, `${key} : entre ${lo} et ${hi}`);
+      }
+      d[key] = DOWNLINK_INTEGER_KEYS.has(key) ? Math.trunc(value) : value;
+    }
+    // Plusieurs commandes sans période les enverrait toutes au même instant : c'est un
+    // non-sens que le serveur refuse, autant le dire avant l'aller-retour.
+    if (d.count > 1 && d.request_period_s <= 0) {
+      return bad("downlink_request_period_s",
+        "plusieurs commandes : indiquez l'écart entre deux envois");
+    }
+    out.downlink = d;
+  }
   return { ok: true, settings: out };
 }
 
@@ -254,6 +386,14 @@ export function validateGateway(form) {
       return bad(key, `${key} : entre ${lo} et ${hi}`);
     }
     out[key] = key === "mesh_max_hops" ? Math.trunc(v) : v;
+  }
+  // Le modèle de passerelle : transmis tel quel. La liste vient du catalogue du moteur, et
+  // c'est lui qui la valide — la recopier ici la laisserait dériver des fiches constructeur.
+  // Vide = seuil de référence du moteur.
+  if (form.gateway_profile != null && form.gateway_profile !== "") {
+    out.gateway_profile = form.gateway_profile;
+  } else if (form.gateway_profile === "") {
+    out.gateway_profile = null;      // retour explicite à la référence
   }
   if (form.mesh_mode) {
     if (!MODES_MESH.includes(form.mesh_mode)) return bad("mesh_mode", "mode de relais inconnu");

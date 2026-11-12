@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { createClient, ApiError } from "../src/studio/api.js";
 import {
   planBounds, toScreen, toMeters, validateNewNode, validateSensor, sensorFormFrom,
-  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL, validateNewNodeGeo,
+  gridStep, PLAN_MIN_SPAN_M, KIND_LABEL, validateNewNodeGeo, validateGateway,
+  modelesAdmis, aideModele,
 } from "../src/studio/topology.js";
 import { degresVersMetres, metresVersDegres } from "../src/studio/geo.js";
 // Seules les données sont testées ici (le dessin exige le DOM). Ce sont elles qui engagent
@@ -310,4 +311,118 @@ test("aller-retour : une position posée au clic se relit à l'identique", () =>
     assert.ok(Math.abs(r.node.x_m - x) < 1e-6, `x : ${r.node.x_m} au lieu de ${x}`);
     assert.ok(Math.abs(r.node.y_m - y) < 1e-6, `y : ${r.node.y_m} au lieu de ${y}`);
   }
+});
+
+// ---- Modèles de passerelle -----------------------------------------------------------
+// Le catalogue vient du moteur, mais deux choses sont de l'interface : qui peut porter quel
+// modèle, et ce qu'on annonce que le modèle change. Trois des quatre modèles ne décalent pas
+// le seuil — leur fiche ne publie pas le point de mesure — et l'annoncer évite de vendre un
+// réglage qui n'en est pas un.
+const CATALOGUE = [
+  { name: "rak7249", vendor: "RAKwireless", model: "RAK7249", sensitivity_offset_db: 0,
+    sensitivity_published: false, can_relay: false, can_simulate_radio: true },
+  { name: "rak5148", vendor: "RAKwireless", model: "RAK5148", sensitivity_offset_db: 0,
+    sensitivity_published: false, can_relay: true, can_simulate_radio: true },
+  { name: "rak5146-rak5148", vendor: "RAKwireless", model: "RAK5146 + RAK5148",
+    sensitivity_offset_db: -3, sensitivity_published: true, can_relay: true,
+    can_simulate_radio: true },
+  { name: "rak7391", vendor: "RAKwireless", model: "RAK7391", sensitivity_offset_db: 0,
+    sensitivity_published: false, can_relay: false, can_simulate_radio: false },
+];
+
+test("un relais n'accepte que les modèles à radio mesh documentée", () => {
+  // RAK7249 sait recevoir mais pas relayer : le scénario le refuserait, autant ne pas
+  // le proposer. RAK7391 n'a pas de radio publiée du tout.
+  assert.deepEqual(modelesAdmis(CATALOGUE, "relay").map((m) => m.name),
+    ["rak5148", "rak5146-rak5148"]);
+  // Une frontière n'a pas besoin du mesh : seul l'hôte sans radio est écarté.
+  assert.deepEqual(modelesAdmis(CATALOGUE, "border").map((m) => m.name),
+    ["rak7249", "rak5148", "rak5146-rak5148"]);
+  assert.equal(modelesAdmis(CATALOGUE, "sensor").length, 3);
+});
+
+test("l'aide dit quand le modèle ne décale rien", () => {
+  const zero = aideModele(CATALOGUE[0]);
+  assert.ok(zero.includes("ne publie pas le point de mesure"));
+  assert.ok(zero.includes("ne peut pas relayer"));
+  const decale = aideModele(CATALOGUE[2]);
+  assert.ok(decale.includes("−3.0 dB"));   // tiret demi-cadratin : lisible, pas un moins
+  assert.ok(decale.includes("peut relayer"));
+  // Sans modèle : pas d'aide du tout, plutôt qu'une phrase sur un réglage absent.
+  assert.equal(aideModele(undefined), "");
+});
+
+test("le modèle de passerelle se transmet et se retire", () => {
+  const pose = validateGateway({ region: "EU868", gateway_profile: "rak7249" });
+  assert.ok(pose.ok);
+  assert.equal(pose.settings.gateway_profile, "rak7249");
+  // Vide = retour explicite à la référence du moteur ; absent = rien ne change. C'est ce
+  // qui permet d'effacer le modèle sans qu'un envoi partiel le remette.
+  assert.equal(validateGateway({ gateway_profile: "" }).settings.gateway_profile, null);
+  assert.ok(!("gateway_profile" in validateGateway({ region: "EU868" }).settings));
+});
+
+test("le modèle posé à la création ne va que sur une passerelle", () => {
+  const grille = { id: "gw1", kind: "border", x_m: 0, y_m: 0 };
+  const pose = validateNewNode({ ...grille, gateway_profile: "rak7249" });
+  assert.ok(pose.ok);
+  assert.equal(pose.node.gateway_profile, "rak7249");
+  // Un capteur n'a pas de modèle de passerelle : le serveur le refuse, et ce n'est pas
+  // à l'interface d'inventer une exception.
+  const capteur = validateNewNode({ id: "c1", kind: "sensor", x_m: 0, y_m: 0,
+    gateway_profile: "rak7249" });
+  assert.ok(capteur.ok);
+  assert.ok(!("gateway_profile" in capteur.node));
+  // Aucun modèle choisi : le champ est absent, pas vide — le run garde sa référence.
+  assert.ok(!("gateway_profile" in validateNewNode(grille).node));
+});
+
+test("le client lit le catalogue des passerelles au moteur", async () => {
+  const { fetchImpl, calls } = fakeFetch([{ status: 200, body: { profiles: CATALOGUE } }]);
+  const r = await createClient({ token: "t", fetchImpl }).gatewayProfiles();
+  assert.equal(calls[0].url, "/api/v1/gateway-profiles");
+  assert.equal(r.profiles.length, 4);
+});
+
+// Annuler et rétablir : l'historique vit côté serveur, le client ne fait qu'appeler.
+// La réponse est une topologie : c'est elle qui porte les libellés, l'interface n'en invente
+// aucun et n'a donc pas à les recopier.
+
+test("annuler et rétablir postent sur la session et rendent la topologie", async () => {
+  const topo = { session_id: "s1", nodes: [], states: [], can_undo: true, can_redo: false,
+    undo_label: "capteur-1 : region US915", redo_label: "" };
+  const { fetchImpl, calls } = fakeFetch([{ status: 200, body: topo },
+    { status: 200, body: { ...topo, can_undo: false, can_redo: true, undo_label: "",
+      redo_label: "capteur-1 : region US915" } }]);
+  const client = createClient({ token: "t", fetchImpl });
+  const premiere = await client.undo("s1");
+  assert.equal(calls[0].url, "/api/v1/sessions/s1/undo");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(premiere.undo_label, "capteur-1 : region US915");
+  const seconde = await client.redo("s1");
+  assert.equal(calls[1].url, "/api/v1/sessions/s1/redo");
+  assert.equal(calls[1].init.method, "POST");
+  // Après un annuler, le geste est passé dans l'autre pile : c'est le rétablir qui le nomme.
+  assert.equal(seconde.redo_label, "capteur-1 : region US915");
+});
+
+test("rien à annuler arrive comme une erreur au format problème, pas comme un vide", async () => {
+  const { fetchImpl } = fakeFetch([
+    { status: 409, body: { code: "nothing_to_undo", message: "rien à annuler" } }]);
+  const client = createClient({ token: "t", fetchImpl });
+  await assert.rejects(client.undo("s1"), (err) => {
+    assert.ok(err instanceof ApiError);
+    assert.equal(err.status, 409);
+    assert.equal(err.code, "nothing_to_undo");
+    return true;
+  });
+});
+
+test("l'identifiant de session est encodé dans les routes d'historique", async () => {
+  const { fetchImpl, calls } = fakeFetch([{ status: 200, body: {} }, { status: 200, body: {} }]);
+  const client = createClient({ token: "t", fetchImpl });
+  await client.undo("a/b");
+  await client.redo("a/b");
+  assert.equal(calls[0].url, "/api/v1/sessions/a%2Fb/undo");
+  assert.equal(calls[1].url, "/api/v1/sessions/a%2Fb/redo");
 });

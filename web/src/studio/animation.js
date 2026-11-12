@@ -57,6 +57,69 @@ export function segmentsFromEvents(events, deviceGroups) {
   return out;
 }
 
+/**
+ * Segments des descentes à l'initiative du réseau : le serveur veut envoyer, la passerelle
+ * attend une fenêtre, puis émet.
+ *
+ * Deux segments par commande, et c'est le vide entre les deux qui est le sujet : la flèche
+ * « serveur → passerelle » part à l'instant voulu, la flèche « passerelle → capteur » à
+ * l'instant où la fenêtre s'est ouverte. L'écart visible **est** l'attente.
+ *
+ * Condition, et elle n'est pas négociable : `count === 1`. La latence publiée par le run est
+ * une moyenne par dispositif ; avec plusieurs commandes, dater chaque émission de cette
+ * moyenne inventerait un instant. On préfère ne rien animer plutôt que d'animer une fiction —
+ * le résumé chiffré, lui, reste affiché dans tous les cas.
+ *
+ * La datation est donc une reconstitution : deux grandeurs calculées par le run (l'instant de
+ * la demande, qui vient du scénario, et la latence, qui vient du moteur). Ce n'est pas un
+ * événement lu dans la trace — le journal le dit.
+ */
+export function segmentsDescentes({ deviceRows, deviceGroups, capteurs, passerelle }) {
+  const out = [];
+  if (!passerelle) return out;
+  for (const row of deviceRows ?? []) {
+    // Latence absente : le dispositif n'a rien demandé, ou le run ne la publie pas.
+    if (row.downlink_latency_s == null) continue;
+    const groupe = deviceGroups?.[row.device_index];
+    if (!groupe) continue;
+    const reglage = capteurs?.get(groupe)?.downlink;
+    if (!reglage || Number(reglage.count) !== 1) continue;
+    const demandeS = Number(reglage.first_request_s);
+    if (!Number.isFinite(demandeS)) continue;
+
+    const tDemande = BigInt(Math.round(demandeS * 1e9));
+    const tEmission = BigInt(Math.round((demandeS + Number(row.downlink_latency_s)) * 1e9));
+    const nonAcheminee = !row.downlink_delivered;
+    out.push({
+      seq: -1,                       // hors numérotation des événements : ce n'en est pas un
+      kind: "downlink_request",
+      outcome: "network_request",
+      cls: "dl",
+      from: "ns",
+      to: passerelle,
+      t0: tDemande,
+      rssi: null,
+      downlink: true,
+    });
+    // Une commande jamais acheminée ne trace pas de flèche vers le terminal : rien n'a été
+    // émis. Une flèche « perdue » laisserait croire à une trame partie et ratée.
+    if (nonAcheminee) continue;
+    out.push({
+      seq: -1,
+      kind: "downlink_emit",
+      outcome: "delivered",
+      cls: "dl",
+      from: passerelle,
+      to: groupe,
+      t0: tEmission,
+      rssi: null,
+      downlink: true,
+      attenteS: Number(row.downlink_latency_s),
+    });
+  }
+  return out;
+}
+
 // État visuel des segments à l'instant `clockNs` : position d'avancement (0 à 1) et visibilité.
 export function activeAt(segments, clockNs) {
   const clock = BigInt(clockNs);

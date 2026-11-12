@@ -86,3 +86,56 @@ def test_invalid_inputs_rejected():
     with pytest.raises(StatusError) as e:
         d.on_beacon(5 * SEC, 2)
     assert e.value.code == 801
+
+
+# --- Le ping slot qui couvre un instant -----------------------------------------------------
+# `next_ping_slot` répond à « quand le réseau peut-il émettre ? ». `ping_slot_at` répond à la
+# question du terminal : « est-ce que j'écoute à cet instant ? ». Ce sont les deux moitiés du
+# même mécanisme, et la seconde n'existait pas.
+
+def test_the_slot_covering_an_instant_is_the_one_the_engine_announced():
+    d = ClassBDevice(dev_addr=0x01020304, periodicity=0).on_beacon(0, 0)
+    s = d.next_ping_slot(0)
+    # Le début du slot annoncé est couvert, et c'est bien ce slot-là.
+    assert d.ping_slot_at(s.start_ns) == s
+    assert d.ping_slot_at(s.start_ns + SLOT_NS - 1) == s
+    # Hors fenêtre : une nanoseconde avant, et dès la fin du slot (fenêtre demi-ouverte).
+    assert d.ping_slot_at(s.start_ns - 1) is None
+    assert d.ping_slot_at(s.start_ns + SLOT_NS) is None
+
+
+def test_drift_widens_the_window_on_both_sides():
+    d = ClassBDevice(dev_addr=0x01020304, periodicity=0, clock_drift_ppm=10).on_beacon(0, 0)
+    s = d.next_ping_slot(0)
+    marge = d.ping_slot_at(s.start_ns).window_half_ns
+    assert marge > 0
+    assert d.ping_slot_at(s.start_ns - marge) is not None
+    assert d.ping_slot_at(s.start_ns - marge - 1) is None
+    assert d.ping_slot_at(s.start_ns + SLOT_NS + marge - 1) is not None
+    assert d.ping_slot_at(s.start_ns + SLOT_NS + marge) is None
+
+
+def test_a_device_outside_its_ping_slots_listens_to_nothing():
+    # Périodicité 7 : un seul ping slot par période de 128 s. Le terminal y passe donc
+    # 30 ms sur 128 s — l'essentiel du temps, il n'écoute pas. C'est la grandeur que
+    # n'importe quel bilan de classe B doit pouvoir lire.
+    d = ClassBDevice(dev_addr=0x01020304, periodicity=7).on_beacon(0, 0)
+    s = d.next_ping_slot(0)
+    ouverts = sum(1 for k in range(0, BEACON_PERIOD_NS, 10_000_000)
+                  if d.ping_slot_at(k) is not None)
+    assert ouverts >= 1
+    # 30 ms couvertes par pas de 10 ms : 3 ou 4 échantillons, pas davantage.
+    assert ouverts <= 6, ouverts
+    assert d.ping_slot_at(s.start_ns) is not None
+
+
+def test_without_a_beacon_there_is_no_ping_slot():
+    d = ClassBDevice(dev_addr=0x01020304, periodicity=0)
+    with pytest.raises(StatusError) as e:
+        d.ping_slot_at(10 * SEC)
+    assert e.value.code == 803          # NotSynchronized
+    # 2 h sans balise : la classe B est quittée.
+    d = d.on_beacon(0, 0)
+    with pytest.raises(StatusError) as e:
+        d.ping_slot_at(120 * 60 * SEC)
+    assert e.value.code == 804          # BeaconLost

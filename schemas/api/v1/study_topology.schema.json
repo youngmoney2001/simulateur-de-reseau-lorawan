@@ -1,9 +1,107 @@
 {
   "$defs": {
+    "DownlinkSettings": {
+      "additionalProperties": false,
+      "description": "Le serveur veut envoyer une commande au terminal, sans que le terminal l'ait demandée.\n\nC'est le seul réglage de l'atelier que la classe d'écoute change vraiment. Un ACK est\ndéclenché par un uplink : il tombe dans RX1 ou RX2 quelle que soit la classe. Ici la\ndemande naît à un instant que le terminal n'a pas choisi, et la classe décide de la\nfenêtre — donc de l'attente.\n\n`count` > 1 exige `request_period_s` : sinon toutes les demandes partiraient au même\ninstant, ce qui n'a pas de sens et que le moteur refuse.",
+      "properties": {
+        "clock_drift_ppm": {
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Clock Drift Ppm",
+          "type": "integer"
+        },
+        "count": {
+          "default": 1,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "first_request_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "First Request S",
+          "type": "number"
+        },
+        "periodicity": {
+          "default": 0,
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Periodicity",
+          "type": "integer"
+        },
+        "request_period_s": {
+          "default": 0.0,
+          "maximum": 86400,
+          "minimum": 0,
+          "title": "Request Period S",
+          "type": "number"
+        }
+      },
+      "title": "DownlinkSettings",
+      "type": "object"
+    },
+    "EnvironmentSettings": {
+      "additionalProperties": false,
+      "description": "Environnement radio d'une session.\n\n`shadowing_sigma_db` : écart-type du tirage log-normal, un tirage par dispositif. Mesuré\nà 10 km SF10 sans obstacle : à sigma 4 dB, 37 tirages sur 40 restent entendus ; à 8 dB,\n30 sur 40. Les hauteurs comptent aussi : face à un mur de 12 m, une passerelle à 40 m\nreçoit encore là où une passerelle à 15 m a tout perdu.",
+      "properties": {
+        "device_height_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Device Height M",
+          "type": "number"
+        },
+        "gateway_height_m": {
+          "default": 15.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Gateway Height M",
+          "type": "number"
+        },
+        "obstacles": {
+          "items": {
+            "$ref": "#/$defs/Obstacle"
+          },
+          "maxItems": 200,
+          "title": "Obstacles",
+          "type": "array"
+        },
+        "shadowing_sigma_db": {
+          "default": 0.0,
+          "maximum": 30.0,
+          "minimum": 0.0,
+          "title": "Shadowing Sigma Db",
+          "type": "number"
+        }
+      },
+      "title": "EnvironmentSettings",
+      "type": "object"
+    },
     "GatewaySettings": {
       "additionalProperties": false,
       "description": "Réglages d'une passerelle exposés dans l'atelier 3D.\n\nCe n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur\nd'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit\nexplicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux\nque réclament les exercices, les autres relèvent du dépannage.\n\nLes bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans\nla fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent\nau même endroit (`Session.config`), ils ne peuvent pas diverger.",
       "properties": {
+        "gateway_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak7249",
+                "rak5148",
+                "rak5146-rak5148",
+                "rak7391"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateway Profile"
+        },
         "mesh_bandwidth_khz": {
           "anyOf": [
             {
@@ -108,6 +206,24 @@
     "Node": {
       "additionalProperties": false,
       "properties": {
+        "gateway_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak7249",
+                "rak5148",
+                "rak5146-rak5148",
+                "rak7391"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gateway Profile"
+        },
         "id": {
           "pattern": "^[a-z][a-z0-9-]{0,31}$",
           "title": "Id",
@@ -228,6 +344,77 @@
       "title": "NodeState",
       "type": "object"
     },
+    "Obstacle": {
+      "additionalProperties": false,
+      "description": "Une boîte qui atténue. Soit une atténuation saisie, soit un matériau + une épaisseur.\n\nL'atténuation est le chemin principal : à 868 MHz, 13 des 15 matériaux du catalogue sont\nhors de la plage documentée du Tableau 3 de l'UIT-R P.2040-4, et la perte est alors\nextrapolée. Saisir ses dB reste la façon honnête de procéder ; le matériau est une\ncommodité, et son caractère extrapolé est exposé par l'API.",
+      "properties": {
+        "attenuation_db": {
+          "default": 0.0,
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Attenuation Db",
+          "type": "number"
+        },
+        "height_m": {
+          "default": 12.0,
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Height M",
+          "type": "number"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "thickness_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thickness M"
+        },
+        "x_max_m": {
+          "title": "X Max M",
+          "type": "number"
+        },
+        "x_min_m": {
+          "title": "X Min M",
+          "type": "number"
+        },
+        "y_max_m": {
+          "title": "Y Max M",
+          "type": "number"
+        },
+        "y_min_m": {
+          "title": "Y Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x_min_m",
+        "y_min_m",
+        "x_max_m",
+        "y_max_m"
+      ],
+      "title": "Obstacle",
+      "type": "object"
+    },
     "SensorSettings": {
       "additionalProperties": false,
       "description": "Réglages d'un capteur : un groupe de simulation. Les défauts sont ceux du scénario.",
@@ -245,6 +432,27 @@
           ],
           "default": null,
           "title": "Channel Freq Hz"
+        },
+        "device_class": {
+          "default": "A",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Device Class",
+          "type": "string"
+        },
+        "downlink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DownlinkSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "energy_profile": {
           "anyOf": [
@@ -347,6 +555,16 @@
       "title": "Adr Raison",
       "type": "string"
     },
+    "can_redo": {
+      "default": false,
+      "title": "Can Redo",
+      "type": "boolean"
+    },
+    "can_undo": {
+      "default": false,
+      "title": "Can Undo",
+      "type": "boolean"
+    },
     "confirmed": {
       "default": false,
       "title": "Confirmed",
@@ -361,6 +579,9 @@
       "default": "",
       "title": "Confirmed Raison",
       "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentSettings"
     },
     "join": {
       "default": false,
@@ -384,6 +605,12 @@
       "maxItems": 64,
       "title": "Nodes",
       "type": "array"
+    },
+    "redo_label": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Redo Label",
+      "type": "string"
     },
     "session_id": {
       "pattern": "^[A-Za-z0-9_-]{8,64}$",
@@ -410,6 +637,12 @@
       ],
       "default": null,
       "title": "Terrain Id"
+    },
+    "undo_label": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Undo Label",
+      "type": "string"
     }
   },
   "required": [

@@ -284,5 +284,128 @@ void run_class_b_tests() {
         CHECK_EQ(lsim_classb_next_ping_slot(&cd, 0, &cs), 0);
         CHECK_EQ(static_cast<int>(cs.window_half_ns), static_cast<int>(expected));
     }
+
+    // --- ping_slot_at : la question inverse. Un terminal ne choisit pas quand le réseau
+    //     émet, il décide s'il écoute à cet instant. La fonction est O(1) (trois
+    //     candidats) ; elle est donc confrontée au balayage exhaustif des slots, qui est
+    //     la définition même de la fenêtre.
+    {
+        for (std::uint8_t periodicite : {std::uint8_t{0}, std::uint8_t{3}, std::uint8_t{7}}) {
+            for (std::uint32_t derive : {std::uint32_t{0}, std::uint32_t{10}}) {
+                DeviceClassB d{};
+                d.dev_addr = 0x11223344u;
+                d.periodicity = periodicite;
+                d.clock_drift_ppm = derive;
+                CHECK_EQ(static_cast<int>(on_beacon(d, 0, 0)), 0);
+
+                std::uint32_t ping_nb = 0;
+                std::uint32_t ping_period = 0;
+                CHECK_EQ(static_cast<int>(ping_slot_count(periodicite, ping_nb, ping_period)), 0);
+
+                // Balayage : un instant toutes les 10 ms sur trois périodes de balise.
+                std::size_t trouves = 0;
+                std::size_t ecarts = 0;
+                for (std::uint64_t t = 0; t < 3 * kBeaconPeriodNs; t += 10'000'000ull) {
+                    // Référence : les trois mêmes périodes, tous les slots, dans l'ordre.
+                    const std::uint64_t k = t / kBeaconPeriodNs;
+                    bool attendu = false;
+                    std::uint64_t debut_attendu = 0;
+                    for (std::int64_t delta = -1; delta <= 1 && !attendu; ++delta) {
+                        const std::int64_t j = static_cast<std::int64_t>(k) + delta;
+                        if (j < 0) continue;
+                        const std::uint64_t debut_periode =
+                            d.last_beacon_rx_ns + static_cast<std::uint64_t>(j) * kBeaconPeriodNs;
+                        const std::uint32_t temps_balise =
+                            d.last_beacon_time_s + static_cast<std::uint32_t>(
+                                static_cast<std::uint64_t>(j) * (kBeaconPeriodNs / kSec));
+                        std::uint32_t offset = 0;
+                        CHECK_EQ(static_cast<int>(ping_offset(temps_balise, d.dev_addr,
+                                                              periodicite, offset)), 0);
+                        for (std::uint32_t m = 0; m < ping_nb; ++m) {
+                            const std::uint32_t n = offset + m * ping_period;
+                            const std::uint64_t debut = debut_periode + kBeaconReservedNs
+                                + static_cast<std::uint64_t>(n) * kSlotNs;
+                            const std::uint64_t marge =
+                                ((debut - d.last_beacon_rx_ns) * derive + 999'999ull) / 1'000'000ull;
+                            if (t + marge >= debut && t < debut + kSlotNs + marge) {
+                                attendu = true;
+                                debut_attendu = debut;
+                                break;
+                            }
+                        }
+                    }
+                    PingSlot s{};
+                    const bool obtenu = ping_slot_at(d, t, s) == ClassBStatus::Ok;
+                    CHECK_EQ(static_cast<int>(obtenu), static_cast<int>(attendu));
+                    if (attendu) {
+                        ++trouves;
+                        if (s.start_ns != debut_attendu) ++ecarts;
+                    }
+                }
+                CHECK_EQ(static_cast<int>(ecarts), 0);
+                CHECK_TRUE(trouves > 0);   // au moins un ping slot couvert, sinon le test est vide
+            }
+        }
+    }
+    // --- ping_slot_at : bords de fenêtre, dérive, et états du dispositif.
+    {
+        DeviceClassB d{};
+        d.dev_addr = 0x0000ABCDu;
+        d.periodicity = 0;
+        CHECK_EQ(static_cast<int>(on_beacon(d, 0, 0)), 0);
+        PingSlot s{};
+        CHECK_EQ(static_cast<int>(next_ping_slot(d, 0, s)), 0);
+        const std::uint64_t debut = s.start_ns;
+
+        // Sans dérive : fenêtre exactement [start, start + 30 ms).
+        PingSlot a{};
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut, a)), 0);
+        CHECK_EQ(static_cast<int>(a.slot_index), static_cast<int>(s.slot_index));
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut - 1, a)),
+                 static_cast<int>(ClassBStatus::NoSlot));
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut + kSlotNs - 1, a)), 0);
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut + kSlotNs, a)),
+                 static_cast<int>(ClassBStatus::NoSlot));
+
+        // Avec dérive : la fenêtre s'élargit de `window_half_ns` de chaque côté.
+        d.clock_drift_ppm = 10;
+        PingSlot w{};
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut, w)), 0);
+        const std::uint64_t marge = w.window_half_ns;
+        CHECK_TRUE(marge > 0);
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut - marge, w)), 0);
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut - marge - 1, w)),
+                 static_cast<int>(ClassBStatus::NoSlot));
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut + kSlotNs + marge - 1, w)), 0);
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, debut + kSlotNs + marge, w)),
+                 static_cast<int>(ClassBStatus::NoSlot));
+
+        // Un dispositif qui n'a jamais reçu de beacon n'ouvre aucun slot.
+        DeviceClassB vierge{};
+        vierge.periodicity = 0;
+        CHECK_EQ(static_cast<int>(ping_slot_at(vierge, debut, w)),
+                 static_cast<int>(ClassBStatus::NotSynchronized));
+        // Au-delà de 2 h sans beacon : la classe B est quittée.
+        CHECK_EQ(static_cast<int>(ping_slot_at(d, kBeaconlessNs, w)),
+                 static_cast<int>(ClassBStatus::BeaconLost));
+        // Paramètres hors bornes.
+        DeviceClassB mauvais = d;
+        mauvais.clock_drift_ppm = kMaxDriftPpm + 1;
+        CHECK_EQ(static_cast<int>(ping_slot_at(mauvais, debut, w)),
+                 static_cast<int>(ClassBStatus::InvalidParameter));
+
+        // Passage par l'API C.
+        lsim_classb_device cd{};
+        cd.dev_addr = 0x0000ABCDu;
+        cd.periodicity = 0;
+        CHECK_EQ(lsim_classb_on_beacon(&cd, 0, 0), 0);
+        lsim_classb_ping_slot cs{};
+        CHECK_EQ(lsim_classb_ping_slot_at(&cd, debut, &cs), 0);
+        CHECK_EQ(static_cast<int>(cs.slot_index), static_cast<int>(s.slot_index));
+        CHECK_EQ(static_cast<int>(lsim_classb_ping_slot_at(&cd, debut - 1, &cs)),
+                 LSIM_STATUS_CLASSB_BASE + static_cast<int>(ClassBStatus::NoSlot));
+        CHECK_TRUE(lsim_classb_ping_slot_at(nullptr, 0, &cs) != 0);
+        CHECK_TRUE(lsim_classb_ping_slot_at(&cd, 0, nullptr) != 0);
+    }
 }
 

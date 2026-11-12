@@ -121,7 +121,11 @@ try {
         { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
       const n = (topo.nodes ?? []).find((x) => x.id === nodeId);
       vu = n?.sensor ?? null;
-      if (vu && Object.entries(attendus).every(([k, v]) => vu[k] === v)) return;
+      // Comparaison par valeur, pas par référence : un réglage imbriqué (`downlink`) est un
+      // objet, et `===` le dirait toujours différent de l'attendu — le test échouerait alors
+      // que le serveur a exactement ce qu'on lui a demandé.
+      if (vu && Object.entries(attendus)
+        .every(([k, v]) => JSON.stringify(vu[k]) === JSON.stringify(v))) return;
       if (Date.now() > fin) break;
       await new Promise((r) => setTimeout(r, 250));
     }
@@ -553,6 +557,54 @@ try {
     if (st2.sub_band !== null) throw new Error(`sous-bande conservée : ${st2.sub_band}`);
   });
 
+  // Le réglage « le serveur envoie une commande » n'existe que dans le formulaire : aucune
+  // vérification de module pur ne peut dire s'il s'enregistre, faute de DOM. Et le défaut
+  // qu'il guette est silencieux — un champ manquant dans le corps envoyé fait refuser la
+  // case par le validateur, sans que rien n'indique lequel.
+  //
+  // La périodicité est ce champ-là : c'est un choix (`select`), pas un nombre, et un bloc
+  // construit autour de champs `input` l'oublie. On l'exerce donc ici, dans un navigateur.
+  await step("descente réseau : le réglage s'enregistre et la périodicité suit la classe", async () => {
+    await viewTab("Plan");
+    await page.click('g.node[data-id="capt-1"] circle');
+    await page.waitForSelector('.device-win[data-node-id="capt-1"]');
+    await deviceTab("Config", "capt-1");
+    const q = '.device-win[data-node-id="capt-1"]';
+    await page.waitForSelector(`${q} select[name="device_class"]`);
+    // La périodicité n'a d'effet qu'en classe B : en A, le champ n'est pas affiché du tout —
+    // un champ sans effet ne se grise pas, il disparaît.
+    await page.select(`${q} select[name="device_class"]`, "A");
+    await page.click(`${q} input[name="downlink_on"]`);
+    await page.waitForFunction((s) => {
+      const l = [...document.querySelectorAll(`${s} label`)]
+        .find((e) => e.textContent.includes("Fréquence des créneaux"));
+      return l?.hidden === true;
+    }, { timeout: 5_000 }, q);
+    await page.select(`${q} select[name="device_class"]`, "B");
+    await page.waitForFunction((s) => {
+      const l = [...document.querySelectorAll(`${s} label`)]
+        .find((e) => e.textContent.includes("Fréquence des créneaux"));
+      return l?.hidden === false && l.querySelector("select")?.options.length === 8;
+    }, { timeout: 5_000 }, q);
+    // Huit périodicités, servies par le moteur : 2**(7-k) créneaux par période de 128 s.
+    const intervalles = await page.$eval(`${q} select[name="downlink_periodicity"]`,
+      (s) => [...s.options].map((o) => o.textContent));
+    if (!intervalles[0].includes("toutes les 1 s") || !intervalles[7].includes("toutes les 2 min 8 s")) {
+      throw new Error(`intervalles inattendus : ${JSON.stringify([intervalles[0], intervalles[7]])}`);
+    }
+    await page.$eval(`${q} input[name="downlink_first_request_s"]`, (e) => { e.value = "10"; });
+    await submitForm(`${q} form`);
+    await attendreReglages("capt-1", { device_class: "B", downlink: { count: 1,
+      first_request_s: 10, request_period_s: 0, periodicity: 0, clock_drift_ppm: 0 } }, refus, 15_000);
+    // On rend le capteur tel qu'on l'a trouvé : l'étape suivante mesure l'ADR sur un capteur
+    // de classe A, et la lui laisser en B changerait ce qu'elle mesure sans le dire.
+    await page.select(`${q} select[name="device_class"]`, "A");
+    await page.click(`${q} input[name="downlink_on"]`);
+    await submitForm(`${q} form`);
+    await attendreReglages("capt-1", { device_class: "A", downlink: null }, refus, 15_000);
+    await page.click(`${q} .close`);
+  });
+
   // Le plan de canaux que le serveur a laissé au terminal, affiché.
   //
   // Placé **après** le réglage de la région sur la passerelle, et c'est la condition : sans
@@ -608,6 +660,31 @@ try {
     // les 60 messages ni le SF12. On attend un « terminé » portant un autre numéro de run.
     await setValue("#seed", "7");
     const runAvant = (await textOf("#sim-status")).match(/Run (\S+)/)?.[1] ?? "";
+    // Un clic qui n'atteint pas le bouton ne produit aucun run et aucun message : la seule
+    // trace est un statut qui ne bouge pas. On regarde donc ce qui se trouve au point de
+    // clic avant de cliquer — un recouvrement silencieux se lit ici, pas dans un délai expiré.
+    const devant = await page.evaluate(() => {
+      const decrire = (e) => e ? `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}`
+        + `${e.className ? "." + String(e.className).trim().split(/\s+/).join(".") : ""}`
+        + ` [${Math.round(e.getBoundingClientRect().top)}..${Math.round(e.getBoundingClientRect().bottom)}]`
+        : "(rien)";
+      const b = document.getElementById("simulate");
+      const r = b.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const e = document.elementFromPoint(x, y);
+      const chaine = [];
+      for (let n = e; n && n !== document.body; n = n.parentElement) chaine.push(decrire(n));
+      const plan = document.querySelector(".plan-area")?.getBoundingClientRect();
+      return { x, y, bouton: decrire(b), devant: decrire(e), chaine,
+        plan: plan ? `${Math.round(plan.top)}..${Math.round(plan.bottom)}` : "(pas de plan)",
+        recouvre: e !== b && !b.contains(e) };
+    });
+    // Le recouvrement est silencieux : le clic part dans le vide, aucun run n'est lancé, et
+    // le statut garde celui du run précédent. On nomme donc l'obstacle et la chaîne qui
+    // l'amène, plutôt que d'attendre un délai expiré sans savoir ce qui a manqué.
+    if (devant.recouvre) throw new Error(`bouton Simuler recouvert : ${devant.bouton}`
+      + ` couvert par ${devant.devant}\n  chaîne : ${devant.chaine.join(" < ")}`
+      + `\n  plan : ${devant.plan}`);
     await page.click("#simulate");
     try {
       await page.waitForFunction((avant) => {

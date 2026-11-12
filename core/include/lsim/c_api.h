@@ -962,6 +962,10 @@ LSIM_API int32_t lsim_classb_beacon_state(const lsim_classb_device* d, uint64_t 
                                           uint8_t* state);
 LSIM_API int32_t lsim_classb_next_ping_slot(const lsim_classb_device* d, uint64_t now_ns,
                                             lsim_classb_ping_slot* out);
+/* Ping slot dont la fenetre (30 ms elargie de la derive) contient now_ns.
+   Statut 5 (LSIM_STATUS_CLASSB_BASE + 5) : aucun slot ne couvre cet instant. */
+LSIM_API int32_t lsim_classb_ping_slot_at(const lsim_classb_device* d, uint64_t now_ns,
+                                          lsim_classb_ping_slot* out);
 
 /* Relais mesh 2,4 GHz (core/src/mesh.cpp). Disposition identique aux structures ctypes. */
 typedef struct lsim_mesh_radio {

@@ -33,6 +33,7 @@ MAX_PAGE_SIZE = 500                      # événements par page
 MAX_HOPS_PER_EVENT = 8                   # appareil -> passerelle -> serveur -> passerelle -> appareil...
 # Dérivé du `Literal` de la couche basse : une seule liste, donc pas de divergence.
 ENERGY_PROFILES = typing.get_args(_study_constants.EnergyProfileName)
+GATEWAY_PROFILES = typing.get_args(_study_constants.GatewayProfileName)
 # Défini dans `study_contract`, couche basse : `api_contract` l'importe déjà, l'inverse
 # créerait un cycle.
 TERRAIN_ID_PATTERN = _study_constants.TERRAIN_ID_PATTERN
@@ -41,6 +42,9 @@ RunState = Literal["queued", "running", "done", "failed", "cancelled"]
 ProblemCode = Literal[
     "validation_error", "not_found", "limit_exceeded", "terrain_not_allowed",
     "run_failed", "conflict", "unsupported_region", "unauthorized", "rate_limited",
+    # « Rien à annuler » est un état de la session, pas une faute de l'utilisateur : le code le
+    # dit, le message reste lisible, et l'interface n'a pas à deviner d'après le seul 409.
+    "nothing_to_undo", "nothing_to_redo",
 ]
 EventKind = Literal[
     "join_request", "join_accept", "uplink", "ack", "downlink",
@@ -187,6 +191,22 @@ class DeviceRowOut(_Strict):
     lost_mesh: Optional[int] = Field(default=None, ge=0)  # mesh seulement (voir Totals)
     energy_per_message_j: Optional[float] = None
     average_current_ua: Optional[float] = None
+    # Descentes à l'initiative du réseau, **pour ce dispositif**. `None` : il n'en a demandé
+    # aucune, ou le chemin de calcul ne les porte pas.
+    #
+    # `downlink_latency_s` est la moyenne des attentes de ses propres descentes. Jointe à
+    # l'instant de la demande, que détient le scénario, elle dit **quand** la passerelle a
+    # émis — c'est ce qui permet d'animer l'attente au lieu de la résumer en un chiffre.
+    # La prudence est de mise : cette date d'arrivée est reconstituée de deux grandeurs
+    # calculées par le run, ce n'est pas un événement lu dans la trace.
+    downlink_delivered: Optional[int] = Field(default=None, ge=0)
+    downlink_latency_s: Optional[float] = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _latence_seulement_si_livree(self) -> "DeviceRowOut":
+        if self.downlink_latency_s is not None and self.downlink_delivered is None:
+            raise ValueError("downlink_latency_s exige downlink_delivered")
+        return self
 
 
 class MeshInboundOut(_Strict):
@@ -249,6 +269,29 @@ class DutyCycleOut(_Strict):
     source: Optional[str] = None
 
 
+class DownlinkOut(_Strict):
+    """Descentes **à l'initiative du réseau** : le serveur veut envoyer à un instant donné.
+
+    Ce n'est pas un ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou RX2, et la
+    classe d'écoute n'y change rien. Ici la demande naît au moment choisi par le réseau, et
+    c'est la classe qui décide de la fenêtre — donc de l'attente. C'est la seule grandeur du
+    simulateur que la classe détermine à elle seule.
+
+    `latency_mean_s` / `latency_max_s` : délai entre l'instant voulu et l'instant d'émission.
+    """
+
+    requested: int = Field(ge=0)
+    delivered: int = Field(ge=0)
+    latency_mean_s: Optional[float] = Field(default=None, ge=0.0)
+    latency_max_s: Optional[float] = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _delivered_at_most_requested(self) -> "DownlinkOut":
+        if self.delivered > self.requested:
+            raise ValueError("delivered ne peut pas dépasser requested")
+        return self
+
+
 class RunSummary(_Strict):
     """Résumé d'un run. Exactement un des deux champs : `gateway` (mono-passerelle, champ présent
     depuis la v1) ou `gateways` (multi-passerelles, ajouté en v1 ; `gateway` est alors absent)."""
@@ -287,6 +330,10 @@ class RunSummary(_Strict):
     # C'est ce qui permet de répondre à « les quatre capteurs ont-ils obtenu leur join-accept ? »
     # par ce que le run a produit, jamais par ce que le formulaire a demandé.
     event_kinds: Optional[dict[str, int]] = Field(default=None, max_length=32)
+    # Descentes à l'initiative du réseau. Absent si le run n'en a planifié aucune : un objet
+    # de zéros dirait « aucune descente livrée », ce qui serait faux d'un run qui n'en a
+    # jamais demandé. Voir `DownlinkOut`.
+    downlink: Optional[DownlinkOut] = None
 
     @model_validator(mode="after")
     def _one_load_shape(self) -> "RunSummary":
@@ -359,6 +406,98 @@ class RegionInfo(_Strict):
     sub_bands: bool
 
 
+class PeriodiciteInfo(_Strict):
+    """Une périodicité de ping slot (classe B) : 0 à 7, du plus bavard au plus rare.
+
+    L'intervalle entre deux slots vient du moteur, pas d'une table recopiée : la période de
+    balise est de 128 s, et une périodicité `k` ouvre `2**(7 - k)` slots par période.
+    """
+
+    value: int = Field(ge=0, le=7)
+    slots_par_periode: int = Field(ge=1)
+    intervalle_s: float = Field(gt=0)
+
+
+class DeviceClassInfo(_Strict):
+    """Une classe d'écoute, **et ce qu'elle change** — ou ne change pas.
+
+    `change` est le point sensible. Un ACK, une réponse MAC ou une charge descendante
+    périodique sont déclenchés par un uplink : ils tombent dans RX1 ou RX2 quelle que soit
+    la classe. La classe ne pèse que sur les descentes à l'initiative du réseau. Le dire ici
+    évite un sélecteur qui laisserait croire à un réglage général.
+
+    `ordre` : rang indicatif d'attente, pour que l'interface puisse avertir. La classe B
+    n'est pas « meilleure que A » : selon sa périodicité elle l'encadre. C'est `periodicity`
+    qui décide, et l'intervalle est servi avec.
+    """
+
+    name: str = Field(max_length=1, pattern=r"^[ABC]$")
+    label: str = Field(max_length=128)
+    # Quand la fenêtre est ouverte, en une phrase. Vide de tout chiffre : les chiffres sont
+    # mesurés par le run, pas promis par le catalogue.
+    ouverture: str = Field(max_length=256)
+    # Ce que la classe ne change **pas** : c'est le garde-fou contre un réglage qu'on croirait
+    # général. Renseigné ici plutôt que dans l'interface, pour que les deux disent la même chose.
+    ne_change_pas: str = Field(max_length=256)
+    periodicites: tuple[PeriodiciteInfo, ...] = ()      # classe B seulement
+
+
+class DeviceClassList(_Strict):
+    classes: list[DeviceClassInfo] = Field(max_length=8)
+    # Rappel servi avec la liste : une classe plus « réactive » coûte l'écoute, donc
+    # l'énergie. Sans cette phrase, choisir C paraîtrait gratuit.
+    cout: str = Field(max_length=256)
+
+
+def classes_ecoute() -> DeviceClassList:
+    """Les classes d'écoute et ce qu'elles changent, depuis le moteur.
+
+    Source unique : `lsim.class_b` pour la période de balise et le nombre de slots. Rien
+    n'est recopié, donc rien ne peut dériver du moteur.
+    """
+    from lsim.class_b import BEACON_PERIOD_NS
+
+    periode_s = BEACON_PERIOD_NS / 1e9
+    periodicites = tuple(
+        PeriodiciteInfo(value=k, slots_par_periode=2 ** (7 - k),
+                        intervalle_s=periode_s / 2 ** (7 - k))
+        for k in range(8))
+    return DeviceClassList(
+        classes=[
+            DeviceClassInfo(
+                name="A",
+                label="Classe A — écoute après avoir émis",
+                ouverture="Juste après chacune de ses émissions (RX1, puis RX2 en repli). "
+                          "Le reste du temps, le terminal dort.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+            ),
+            DeviceClassInfo(
+                name="B",
+                label="Classe B — écoute à des créneaux annoncés",
+                ouverture="En plus de RX1/RX2, à des créneaux de ping réguliers calés sur "
+                          "une balise de la passerelle, tous les 128 s.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+                # Servies ici pour que l'interface n'ait pas à recalculer un intervalle, et
+                # surtout pour qu'elle puisse montrer que la périodicité décide — une classe
+                # B lente attend plus longtemps qu'une classe A.
+                periodicites=periodicites,
+            ),
+            DeviceClassInfo(
+                name="C",
+                label="Classe C — écoute en permanence",
+                ouverture="Presque tout le temps ; le terminal ne renonce à écouter que "
+                          "pendant ses propres émissions.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+            ),
+        ],
+        cout="Une classe plus réactive coûte l'écoute : C écoute en permanence, B à chaque "
+             "créneau. Le surcoût d'énergie se lit dans le courant moyen du run, pas ici.",
+    )
+
+
 class RegionList(_Strict):
     regions: list[RegionInfo] = Field(max_length=16)
 
@@ -407,6 +546,87 @@ def list_energy_profiles() -> EnergyProfileList:
                                        for name in ENERGY_PROFILES])
 
 
+class GatewayProfileInfo(_Strict):
+    """Un modèle de passerelle du catalogue, et **ce qu'il change** — pas seulement son nom.
+
+    Trois des quatre modèles ne décalent pas le seuil de réception, leur fiche ne publiant
+    pas le point (SF, bande) auquel la sensibilité est mesurée. Les présenter comme un choix
+    sans le dire serait faire croire à une différence que le run ne calcule pas.
+    """
+
+    name: str = Field(max_length=32)
+    vendor: str = Field(max_length=64)
+    model: str = Field(max_length=128)
+    sensitivity_offset_db: float = Field(ge=-60.0, le=60.0)   # décalage du seuil montant
+    sensitivity_published: bool        # la fiche publie-t-elle le point (SF, bande) ?
+    can_relay: bool                    # radio mesh documentée : peut-il être relais ?
+    can_simulate_radio: bool           # radio d'accès publiée : sans elle, le scénario refuse
+    access_bands: list[str] = Field(max_length=16)   # régions d'accès capteurs
+    max_channels: Optional[int] = Field(None, ge=1, le=64)
+    tx_power_max_dbm: Optional[float] = Field(None, ge=-10.0, le=30.0)
+    software_status: str = Field(max_length=32)
+
+
+class GatewayProfileList(_Strict):
+    profiles: list[GatewayProfileInfo] = Field(max_length=16)
+
+
+def list_gateway_profiles() -> GatewayProfileList:
+    from lsim.gateway_profiles import (CATALOG, can_relay, can_simulate_radio,
+                                       rx_sensitivity_offset_db, software_status)
+    items = []
+    for p in CATALOG:
+        decalage = rx_sensitivity_offset_db(p)
+        items.append(GatewayProfileInfo(
+            name=p.key, vendor=p.vendor, model=p.model,
+            sensitivity_offset_db=decalage,
+            sensitivity_published=p.rx_sensitivity_point is not None,
+            can_relay=can_relay(p), can_simulate_radio=can_simulate_radio(p),
+            access_bands=list(p.access_bands),
+            max_channels=p.max_channels, tx_power_max_dbm=p.tx_power_max_dbm,
+            software_status=software_status(p)))
+    return GatewayProfileList(profiles=items)
+
+
+class MaterialInfo(_Strict):
+    """Un matériau d'obstacle, avec la perte qu'il causerait réellement.
+
+    `extrapolated` : la fréquence demandée sort de la plage documentée du matériau
+    (UIT-R P.2040-4, Tableau 3). À 868 MHz c'est le cas de 13 matériaux sur 15 — seuls
+    `air`, `wood` et `glass` sont dans la plage. Le dire ici évite qu'une interface affiche
+    une perte en la laissant croire mesurée.
+    """
+
+    name: str = Field(max_length=32)
+    loss_db: float = Field(ge=0.0, le=1e4)
+    extrapolated: bool
+    # Plage de fréquences documentée (Hz), quand le catalogue la connaît : c'est la borne
+    # que l'utilisateur dépasse, autant la montrer.
+    frequency_min_hz: Optional[float] = None
+    frequency_max_hz: Optional[float] = None
+
+
+class MaterialList(_Strict):
+    frequency_hz: float
+    thickness_m: float
+    materials: list[MaterialInfo] = Field(max_length=64)
+
+
+def list_materials(frequency_hz: float, thickness_m: float = 0.2) -> MaterialList:
+    """Les matériaux du moteur, avec leur perte à la fréquence et à l'épaisseur demandées."""
+    from lsim.materials import MATERIAL_NAMES, traversal_loss
+    items = []
+    for name in MATERIAL_NAMES:
+        perte, extra = traversal_loss(name, frequency_hz, thickness_m)
+        # `+ 0.0` : « air » renvoie -0.0, et un JSON qui affiche « -0.0 dB » pour une
+        # traversée d'air se lit comme une erreur de signe.
+        items.append(MaterialInfo(name=name,
+                                  loss_db=round(max(perte, 0.0), 3) + 0.0,
+                                  extrapolated=extra))
+    return MaterialList(frequency_hz=frequency_hz, thickness_m=thickness_m,
+                        materials=items)
+
+
 # --- Schémas publiés --------------------------------------------------------------------------
 
 from lsim.study_contract import MODELS as _STUDY_MODELS  # noqa: E402
@@ -423,6 +643,8 @@ _MODELS = {
     "trace_event": TraceEvent,
     "problem": Problem,
     "region_list": RegionList,
+    "device_class_list": DeviceClassList,
+    "material_list": MaterialList,
     "terrain_list": TerrainList,
     **_STUDY_MODELS,
 }

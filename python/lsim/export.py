@@ -17,8 +17,10 @@ from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.mesh_pass import mesh_pass
 from lsim.simulator import (
     Counters,
+    DownlinkSummary,
     GatewayLoad,
     GatewayRxCounters,
+    downlink_summary,
     simulate_uplinks,
     simulate_uplinks_multi,
 )
@@ -40,6 +42,10 @@ class DeviceRow:
     # Énergie (profil choisi à run_scenario) : None si non demandée ou non calculable.
     energy_per_message_j: Optional[float] = None
     average_current_ua: Optional[float] = None
+    # Descentes à l'initiative du réseau (voir `DownlinkSummary`). `None` : ce terminal
+    # n'en a demandé aucune, ou le chemin de calcul ne les planifie pas.
+    downlink_delivered: Optional[int] = None
+    downlink_latency_s: Optional[float] = None
 
     @property
     def pdr(self) -> Optional[float]:
@@ -87,10 +93,59 @@ class RunResult:
     # réception sur les trames audibles. Vide en mono-passerelle.
     gateway_names: tuple[str, ...] = ()
     gateway_loads: tuple[GatewayRxCounters, ...] = ()
+    # Descentes à l'initiative du réseau : `None` si le run n'en a planifié aucune.
+    downlink: Optional[DownlinkSummary] = None
 
     @property
     def pdr(self) -> Optional[float]:
         return self.totals.received / self.totals.sent if self.totals.sent else None
+
+
+def passage_descentes(devices, scenario: Scenario):
+    """Un seul passage natif dédié, qui rend le résumé **et** le détail par dispositif.
+
+    `(None, ())` quand aucun terminal ne déclare de descente : l'appelant n'a alors rien à
+    publier, et n'a surtout pas fait le calcul pour rien. Voir `descentes_reseau` pour le
+    pourquoi de ce passage séparé.
+    """
+    if not any(getattr(d, "downlink", None) is not None and d.downlink.count > 0
+               for d in devices):
+        return None, ()
+    resultat = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
+                                scenario.environment)
+    return downlink_summary(resultat.downlink_per_device), resultat.downlink_per_device
+
+
+def descentes_reseau(devices, scenario: Scenario) -> Optional[DownlinkSummary]:
+    """Latence des descentes à l'initiative du réseau, ou `None` si aucune n'est demandée.
+
+    Seul endroit qui calcule ce résumé : l'export (CLI) et l'API l'appellent tous les deux,
+    pour qu'un même scénario donne les mêmes chiffres par les deux chemins.
+
+    Pourquoi un passage natif dédié plutôt qu'un greffon sur la trace : le seul point
+    d'entrée qui planifie ces descentes (`lsim_simulate_downlinks_env`) recalcule les
+    uplinks dont il a besoin — il ne se greffe pas sur une trace déjà produite. On ne lui
+    emprunte donc **que** les compteurs de descente ; ses compteurs d'uplink sont jetés, le
+    run gardant ceux de son propre chemin.
+
+    Ce que ce passage ne voit pas, et pourquoi c'est sans conséquence mesurable :
+
+    - la charge MAC réservée et l'ADR allongent les trames **sans décaler leur début**
+      (vérifié par `test_mac_payload_does_not_move_transmission_starts`), or l'attente se
+      compte sur les instants de début. Reste RX1, qui s'ouvre après la **fin** de
+      l'émission : une trame allongée décale donc la latence d'au plus la durée ajoutée —
+      15 ms pour 10 octets à SF7, soit 0,03 % des 51 s que la classe A attend ;
+    - sur un scénario **multi-passerelles**, le passage ne voit que la première. Les
+      instants d'émission sont pourtant les mêmes dans les deux formes (vérifié par
+      `test_emissions_start_at_the_same_instants_in_single_and_multi_gateway`), et l'attente
+      n'est faite que de ces instants et de la classe : la latence est donc la même. Le
+      restreindre au mono-passerelle l'aurait rendue invisible depuis l'atelier, dont toute
+      session compile en forme `gateways` — fût-elle à une seule passerelle.
+
+    `None` si aucun terminal n'en déclare : un objet de zéros dirait « aucune descente
+    livrée », ce qui serait faux d'un run qui n'en a pas demandé.
+    """
+    return passage_descentes(devices, scenario)[0]
 
 
 def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> RunResult:
@@ -116,7 +171,9 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
             energies = device_energies_protocol(
                 devices, [0] * len(devices), [c.sent for c in result.per_device], energy_profile,
                 [c.airtime_ns for c in result.per_device])
-        rows = _rows(devices, groups, indices, energies, result.per_device, None)
+        descentes, dl_par = passage_descentes(devices, scenario)
+        rows = _rows(devices, groups, indices, energies, result.per_device, None,
+                     dl_par or None)
         return RunResult(
             scenario_name=scenario.name,
             scenario_sha256=scenario.sha256,
@@ -125,6 +182,7 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
             totals=result.totals,
             gateway=result.gateway,
             energy_profile=energy_profile,
+            downlink=descentes,
         )
     reservations = mac_reservations(scenario, devices)
     if reservations:
@@ -136,7 +194,11 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
     else:
         result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
                                   scenario.environment)
-    rows = _rows(devices, groups, indices, energies, result.per_device, None)
+    # Même calcul pour les deux chemins : le second passage ne dépend pas de la trace, et un
+    # scénario avec MAC doit publier la même latence qu'un scénario sans.
+    descentes, dl_par = passage_descentes(devices, scenario)
+    rows = _rows(devices, groups, indices, energies, result.per_device, None,
+                 dl_par or None)
     return RunResult(
         scenario_name=scenario.name,
         scenario_sha256=scenario.sha256,
@@ -145,6 +207,7 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
         totals=result.totals,
         gateway=result.gateway,
         energy_profile=energy_profile,
+        downlink=descentes,
     )
 
 
@@ -156,8 +219,12 @@ def simulate_trace_result(devices, scenario: Scenario, reservations):
                                   scenario.environment, reservations=reservations)
 
 
-def _rows(devices, groups, indices, energies, per_device, delivered_by_device) -> tuple[DeviceRow, ...]:
-    """Lignes par dispositif ; `delivered_by_device` remplace `received` s'il est fourni."""
+def _rows(devices, groups, indices, energies, per_device, delivered_by_device,
+          downlinks=None) -> tuple[DeviceRow, ...]:
+    """Lignes par dispositif ; `delivered_by_device` remplace `received` s'il est fourni.
+
+    `downlinks` : compteurs de descente par dispositif (chemin compteurs seulement).
+    """
     return tuple(
         DeviceRow(
             device_index=i,
@@ -173,6 +240,10 @@ def _rows(devices, groups, indices, energies, per_device, delivered_by_device) -
             airtime_ns=c.airtime_ns,
             energy_per_message_j=energies[i].energy_per_message_j if energies else None,
             average_current_ua=energies[i].average_current_ua if energies else None,
+            downlink_delivered=(None if downlinks is None or not downlinks[i].requested
+                                else downlinks[i].delivered),
+            downlink_latency_s=(None if downlinks is None or not downlinks[i].requested
+                                else downlinks[i].latency_sum_ns / 1e9 / downlinks[i].requested),
         )
         for i, (dev, c) in enumerate(zip(devices, per_device))
     )
@@ -266,6 +337,13 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
             [r.energy_per_message_j for r in rows], pa.float64()))
         table = table.append_column("average_current_ua", pa.array(
             [r.average_current_ua for r in rows], pa.float64()))
+    # Colonnes de descente : présentes seulement si le run en a planifié, pour qu'un
+    # export ancien reste identique colonne par colonne.
+    if run.downlink is not None:
+        table = table.append_column("downlink_delivered", pa.array(
+            [r.downlink_delivered for r in rows], pa.uint64()))
+        table = table.append_column("downlink_latency_s", pa.array(
+            [r.downlink_latency_s for r in rows], pa.float64()))
     metadata = {
         b"lsim.scenario_name": run.scenario_name.encode("utf-8"),
         b"lsim.scenario_sha256": run.scenario_sha256.encode("ascii"),
@@ -277,6 +355,11 @@ def write_parquet(run: RunResult, path: Union[str, Path]) -> None:
         b"lsim.total_received": str(run.totals.received).encode("ascii"),
         b"lsim.total_airtime_ns": str(run.totals.airtime_ns).encode("ascii"),
     }
+    if run.downlink is not None:
+        metadata[b"lsim.downlink_requested"] = str(run.downlink.requested).encode("ascii")
+        metadata[b"lsim.downlink_delivered"] = str(run.downlink.delivered).encode("ascii")
+        metadata[b"lsim.downlink_latency_mean_s"] = repr(run.downlink.latency_mean_s).encode("ascii")
+        metadata[b"lsim.downlink_latency_max_s"] = repr(run.downlink.latency_max_s).encode("ascii")
     if run.gateway is not None:
         metadata[b"lsim.gateway_busy_ns"] = str(run.gateway.busy_ns).encode("ascii")
         metadata[b"lsim.gateway_peak_concurrent"] = str(run.gateway.peak_concurrent).encode("ascii")

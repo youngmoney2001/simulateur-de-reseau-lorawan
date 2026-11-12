@@ -14,7 +14,9 @@
             "conflict",
             "unsupported_region",
             "unauthorized",
-            "rate_limited"
+            "rate_limited",
+            "nothing_to_undo",
+            "nothing_to_redo"
           ],
           "title": "Code",
           "type": "string"

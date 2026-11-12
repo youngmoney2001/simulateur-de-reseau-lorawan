@@ -1,0 +1,77 @@
+# Descentes à l'initiative du réseau : la classe d'écoute décide de l'attente.
+#
+# Trois terminaux identiques, à 100 m de la passerelle, qui émettent à 0, 60 et 120 s.
+# Le serveur veut envoyer une commande à chacun à t = 10 s. Personne n'a émis à cet instant :
+# la commande attend une fenêtre, et c'est la classe du terminal qui dit laquelle.
+#
+#   classe A  → 51,04 s : elle attend le prochain uplink (60 s), puis RX1 (1 s après la fin).
+#   classe B  →  0,37 s : un slot de ping toutes les ~0,96 s (periodicity 0), donc quasi immédiat.
+#   classe C  →  0,00 s : la fenêtre est ouverte en permanence, la passerelle émet tout de suite.
+#
+# Le 0,37 s de la classe B n'est pas le 0,94 s qu'on obtiendrait avec un seul terminal dans le
+# run : le slot de ping se déduit du DevAddr, que `deploy()` attribue dans l'ordre des groupes.
+# Deux terminaux B de rangs différents n'attendent donc pas le même slot — c'est la règle de
+# la norme, pas un artefact. Le chiffre à retenir est l'ordre de grandeur, pas la décimale.
+#
+# Attention à l'idée reçue : la classe B n'est pas « meilleure que A ». Elle est de part et
+# d'autre. Avec periodicity 7 — un slot par période de 128 s — une commande attend davantage
+# que la classe A. C'est la périodicité qui décide, pas l'étiquette de la classe.
+#
+# Ce fichier ne parle pas des ACK. Un ACK est déclenché par un uplink : il tombe dans RX1 ou
+# RX2, et la classe n'y change rien (§3 bis de docs/MAC_CONSOLIDATION.md). Le bloc `downlink`
+# ci-dessous, lui, décrit une demande née au moment choisi par le réseau.
+schema_version: 1
+name: Descentes réseau — latence par classe
+seed: 7
+gateway:
+  x_m: 0
+  y_m: 0
+propagation:
+  frequency_hz: 868100000
+  reference_distance_m: 1
+  exponent: 2.7
+  capture_threshold_db: 6
+groups:
+  - name: classe-a
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 7
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 3
+    device_class: A
+    downlink:
+      count: 1            # une seule commande
+      first_request_s: 10 # le serveur la veut à t = 10 s
+  - name: classe-b
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 7
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 3
+    device_class: B
+    downlink:
+      count: 1
+      first_request_s: 10
+      periodicity: 0      # un slot de ping toutes les ~0,96 s
+  - name: classe-c
+    count: 1
+    placement:
+      type: explicit
+      positions: [[100.0, 0.0]]
+    spreading_factor: 7
+    payload_bytes: 12
+    tx_power_dbm: 14
+    period_s: 60
+    messages: 3
+    device_class: C
+    downlink:
+      count: 1
+      first_request_s: 10

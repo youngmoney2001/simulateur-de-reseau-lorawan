@@ -5,17 +5,19 @@ import {
   KIND_LABEL, CLI_KINDS, REGIONS, SENSOR_LIMITS, planBounds, toScreen, toMeters, gridStep,
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
-  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut,
+  GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut, modelesAdmis, aideModele,
+  CLASSES_ECOUTE, CLASSE_DEFAUT, DOWNLINK_LIMITS, CLASSE_A_PERIODICITE,
+  attenteAttendue, classeBPlusLenteQueA,
 } from "./topology.js";
 import { protocoleMessage, protocoleStatut } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
-import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
+import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows, formatSecondes } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
   limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, messagesPourFenetre,
   autonomieAns, autonomieTexte, entier,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
-import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
+import { collectPages, deviceGroupsFromRows, segmentsFromEvents, segmentsDescentes } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
 // toute confusion entre les deux conversions.
@@ -57,6 +59,10 @@ const state = {
   rxMatrix: null,      // receptions par (dispositif, passerelle) : seule source des liaisons radio
   liaisonsObservees: [], // calculees une seule fois : le plan et la carte tracent la meme chose
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
+  modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
+  materiaux: [],         // catalogue du moteur : perte et caractere extrapole, a 868 MHz
+  classesEcoute: [],     // classes d'ecoute : libelles, ouverture et creneaux viennent du moteur
+  traceMur: false,       // mode « tracer un mur » : le plan attend un rectangle
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
   courantMoyenUA: null, // dernier run : le seul terme de l'autonomie que le moteur mesure
@@ -136,11 +142,22 @@ async function connect() {
   // lecture échoue, et le réglage n'est alors pas proposé — plutôt rien qu'un faux choix.
   const modeles = await guard(() => state.client.energyProfiles());
   if (modeles) state.modelesMateriel = modeles.profiles ?? [];
+  const passerelles = await guard(() => state.client.gatewayProfiles());
+  if (passerelles) state.modelesPasserelle = passerelles.profiles ?? [];
+  // Les matériaux se lisent à la fréquence de la bande : la perte dépend de la fréquence, et
+  // son caractère extrapolé aussi. EU868 par défaut — c'est le plan de la plupart des runs.
+  const materiaux = await guard(() => state.client.materials(868.1e6, 0.2));
+  if (materiaux) state.materiaux = materiaux.materials ?? [];
+  // Classes d'écoute : les intervalles entre créneaux de la classe B viennent du moteur, donc
+  // l'interface ne peut pas annoncer une attente qu'il ne tiendrait pas.
+  const classes = await guard(() => state.client.deviceClasses());
+  if (classes) state.classesEcoute = classes.classes ?? [];
   // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
   // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
   // générique alors que le moteur en déclare deux.
   renderPalette();
   renderMaterielAjout();
+  renderModeleAjout();
   renderSessionChoices();
   if (state.sessions.length) await selectSession(state.sessions[0].session_id);
   else await newSession(null);
@@ -222,6 +239,9 @@ async function chargerChantier(fichier) {
   const noeuds = chantier.equipements.map((eq) => ({
     id: eq.id, kind: eq.kind, name: eq.name, x_m: eq.x_m, y_m: eq.y_m,
     ...(eq.sensor ? { sensor: eq.sensor } : {}),
+    // Le modèle de la passerelle : posé à la création, faute de quoi le chantier rouvert
+    // repartait au seuil de référence sans rien dire.
+    ...(eq.gateway_profile ? { gateway_profile: eq.gateway_profile } : {}),
   }));
   const created = await guard(() => state.client.createSession({ nodes: noeuds }));
   if (!created) return;
@@ -246,6 +266,13 @@ async function chargerChantier(fichier) {
         chantier.terrain_id));
       if (t) state.topo = t;
     }
+  }
+  // L'environnement radio — obstacles, shadowing, hauteurs — vient du fichier, et le serveur
+  // le valide comme le reste : un mur hors bornes est signalé, pas absorbé.
+  if (chantier.environment) {
+    const e = await guard(() => state.client.setEnvironment(
+      created.session_id, chantier.environment));
+    if (e) state.topo = e;
   }
   // La zone s'écrit avant de sélectionner la session, pas après : sinon la carte s'affiche
   // d'abord à l'ancre du chantier précédent, puis saute. Le saut est invisible sur un plan en
@@ -382,6 +409,76 @@ function nodeIcon(kind) {
 function refreshViews() {
   renderPlan();
   syncMap();
+  majHistorique();
+}
+
+/**
+ * Les boutons Annuler et Rétablir, depuis ce que la topologie dit de l'historique.
+ *
+ * Le serveur porte l'historique, et chaque réponse le résume : les boutons se mettent donc
+ * à jour **après chaque opération**, et pas seulement après un annuler. Grisés avec leur
+ * raison — « Rien à annuler » — plutôt que muets : un bouton désactivé sans explication
+ * passe pour un bogue.
+ *
+ * Le libellé nomme l'opération (« annuler le déplacement de capteur-1 »). C'est ce qui
+ * rend le geste sûr : on annule en sachant quoi.
+ */
+function majHistorique() {
+  const annuler = $("undo");
+  const retablir = $("redo");
+  const peutAnnuler = Boolean(state.topo?.can_undo);
+  const peutRetablir = Boolean(state.topo?.can_redo);
+  if (annuler) {
+    annuler.disabled = !peutAnnuler;
+    annuler.title = peutAnnuler
+      ? `Annuler : ${state.topo.undo_label} (Ctrl+Z)` : "Rien à annuler";
+  }
+  if (retablir) {
+    retablir.disabled = !peutRetablir;
+    retablir.title = peutRetablir
+      ? `Rétablir : ${state.topo.redo_label} (Ctrl+Maj+Z)` : "Rien à rétablir";
+  }
+}
+
+/**
+ * Un annuler ou un rétablir.
+ *
+ * Toute la vue est rafraîchie, y compris les fenêtres d'équipement ouvertes : annuler une
+ * commande `region US915` dans la console doit se voir dans la case « Région » de la
+ * fenêtre, sinon l'interface continuerait d'afficher un état que le serveur a quitté.
+ */
+async function annulerOuRetablir(sens) {
+  if (!state.sid) return;
+  if (sens === "undo" && !state.topo?.can_undo) return;
+  if (sens === "redo" && !state.topo?.can_redo) return;
+  const topo = await guard(() => (sens === "undo"
+    ? state.client.undo(state.sid) : state.client.redo(state.sid)));
+  if (!topo) return;
+  state.topo = topo;
+  // Le résultat affiché a été calculé sur un réseau qui vient de changer : le garder
+  // colorerait le plan avec des chiffres qui ne sont plus ceux d'aucun run de cette
+  // topologie. On le retire, comme à l'ouverture d'un autre chantier.
+  state.result = null;
+  state.resultats = null;
+  state.rxMatrix = null;
+  state.liens = [];
+  state.passerelles = null;
+  state.liaisonsObservees = [];
+  // La session peut avoir perdu l'équipement que la fenêtre montrait : on la ferme plutôt
+  // que de la laisser afficher un fantôme.
+  for (const id of [...deviceWindows.keys()]) {
+    if (!topo.nodes.some((n) => n.id === id)) closeDeviceWindow(id);
+  }
+  refreshTopologie();
+  renderTerrains();
+  renderDevice();
+  // Le geste qu'on vient de faire est passé dans l'autre pile : après un annuler, c'est le
+  // prochain rétablir qui le nomme, et l'inverse. Lire `undo_label` ici annoncerait
+  // l'opération **suivante**, celle qu'on n'a pas encore annulée.
+  const libelle = sens === "undo" ? topo.redo_label : topo.undo_label;
+  setStatus(sens === "undo"
+    ? (libelle ? `Annulé : ${libelle}` : "Annulé")
+    : (libelle ? `Rétabli : ${libelle}` : "Rétabli"));
 }
 
 /**
@@ -402,6 +499,223 @@ function refreshTopologie() {
   refreshViews();
   renderAdr();
   renderProtocole();
+  // Les obstacles vivent dans la topologie : le plan les dessine au même titre que les
+  // équipements, et leur liste se relit après chaque retour du serveur.
+  renderEnvironnement();
+}
+
+// --- Obstacles : les tracer sur le plan, les lister, dire ce qu'ils coutent -------------------
+
+/**
+ * L'environnement radio de la session, sous forme d'un objet toujours complet.
+ *
+ * Le serveur renvoie des valeurs par défaut quand rien n'a été réglé ; les traiter comme
+ * « réglé » afficherait un shadowing de 0 dB que l'utilisateur croirait avoir choisi.
+ */
+function environnement() {
+  const e = state.topo?.environment ?? {};
+  return {
+    shadowing_sigma_db: e.shadowing_sigma_db ?? 0,
+    gateway_height_m: e.gateway_height_m ?? 15,
+    device_height_m: e.device_height_m ?? 1.5,
+    obstacles: e.obstacles ?? [],
+  };
+}
+
+/** Ce qu'un obstacle coûte, en mots. Le matériau n'est pas une perte : il la calcule. */
+function coutObstacle(o) {
+  if (o.material) {
+    const m = state.materiaux.find((x) => x.name === o.material);
+    if (!m) return `${o.material}, ${o.thickness_m} m`;
+    // La mention « extrapolé » n'est pas un détail : à 868 MHz, 12 des 15 matériaux sortent
+    // de la plage documentée de l'UIT-R P.2040-4. Afficher la perte sans le dire la ferait
+    // passer pour mesurée.
+    return `${o.material} ${o.thickness_m} m — ${m.loss_db.toFixed(1)} dB`
+      + (m.extrapolated ? " (hors plage documentée, extrapolé)" : "");
+  }
+  return `${o.attenuation_db} dB saisis`;
+}
+
+function renderObstacles(bounds) {
+  const g = svgEl("g", { class: "obstacles" });
+  for (const [i, o] of environnement().obstacles.entries()) {
+    const a = toScreen({ x_m: o.x_min_m, y_m: o.y_max_m }, bounds, W, H);
+    const b = toScreen({ x_m: o.x_max_m, y_m: o.y_min_m }, bounds, W, H);
+    g.append(svgEl("rect", {
+      class: "obstacle", x: Math.min(a.x, b.x).toFixed(1), y: Math.min(a.y, b.y).toFixed(1),
+      width: Math.abs(b.x - a.x).toFixed(1), height: Math.abs(b.y - a.y).toFixed(1),
+      "data-index": i,
+    }));
+  }
+  return g;
+}
+
+function renderObstacleList() {
+  const liste = $("obstacle-list");
+  if (!liste) return;
+  clear(liste);
+  const env = environnement();
+  if (!env.obstacles.length) {
+    liste.append(el("li", { class: "muted",
+      text: "Aucun obstacle : les liaisons ne sont atténuées que par la distance." }));
+    return;
+  }
+  env.obstacles.forEach((o, i) => {
+    const matiere = el("select", { class: "obstacle-mat" },
+      el("option", { value: "", text: "atténuation saisie" }),
+      ...state.materiaux.filter((m) => m.name !== "air").map((m) => el("option", {
+        value: m.name, text: m.extrapolated ? `${m.name} (extrapolé)` : m.name,
+        selected: o.material === m.name ? "selected" : undefined })));
+    const epaisseur = el("input", { type: "number", class: "obstacle-ep", min: "0.01",
+      max: "10", step: "0.05", value: o.thickness_m ?? 0.2 });
+    const attenuation = el("input", { type: "number", class: "obstacle-att", min: "0",
+      max: "200", step: "0.5", value: o.attenuation_db ?? 0 });
+    // Atténuation saisie ou matériau : jamais les deux. Le sélecteur commande laquelle des
+    // deux est visible, faute de quoi le formulaire afficherait un réglage sans effet.
+    const bascule = () => {
+      const parMatiere = matiere.value !== "";
+      attenuation.hidden = parMatiere;
+      epaisseur.hidden = !parMatiere;
+    };
+    matiere.addEventListener("change", bascule);
+    bascule();
+    const li = el("li", { class: "obstacle-row" },
+      el("span", { text: `Mur ${i + 1} — ${coutObstacle(o)}` }),
+      el("span", { class: "obstacle-ctrls" },
+        matiere, epaisseur, attenuation,
+        el("label", {}, "haut", el("input", { type: "number", class: "obstacle-h",
+          min: "0.1", max: "1000", step: "0.5", value: o.height_m }), "m"),
+        el("button", { type: "button", class: "obstacle-ok", text: "OK",
+          onclick: () => modifierObstacle(i, {
+            material: matiere.value || null,
+            thickness_m: matiere.value ? Number(epaisseur.value) : null,
+            attenuation_db: matiere.value ? undefined : Number(attenuation.value),
+            height_m: Number(li.querySelector(".obstacle-h").value) }) }),
+        el("button", { type: "button", class: "obstacle-del", text: "Retirer",
+          onclick: () => supprimerObstacle(i) })));
+    liste.append(li);
+  });
+}
+
+function renderEnvironnement() {
+  const env = environnement();
+  const sigma = $("sigma"), gw = $("gw-height"), dev = $("dev-height");
+  if (sigma && document.activeElement !== sigma) sigma.value = env.shadowing_sigma_db;
+  if (gw && document.activeElement !== gw) gw.value = env.gateway_height_m;
+  if (dev && document.activeElement !== dev) dev.value = env.device_height_m;
+  renderObstacleList();
+}
+
+async function ecrireEnvironnement(partiel, message) {
+  if (!state.sid) return;
+  const topo = await guard(() => state.client.setEnvironment(state.sid, partiel));
+  if (!topo) return;
+  state.topo = topo;
+  renderEnvironnement();
+  refreshViews();          // met aussi l'historique à jour
+  const ou = $("env-status");
+  if (ou) ou.textContent = message;
+}
+
+async function modifierObstacle(index, changement) {
+  const obstacles = environnement().obstacles.map((o, i) => {
+    if (i !== index) return o;
+    const n = { ...o, height_m: changement.height_m };
+    if (changement.material) {
+      n.material = changement.material;
+      n.thickness_m = changement.thickness_m;
+      delete n.attenuation_db;          // atténuation et matériau s'excluent côté serveur
+    } else {
+      n.attenuation_db = changement.attenuation_db;
+      delete n.material;
+      delete n.thickness_m;
+    }
+    return n;
+  });
+  await ecrireEnvironnement({ obstacles }, `Mur ${index + 1} modifié`);
+}
+
+async function supprimerObstacle(index) {
+  const restants = environnement().obstacles.filter((_, i) => i !== index);
+  await ecrireEnvironnement({ obstacles: restants },
+    restants.length ? `Mur retiré : ${restants.length} restant(s)` : "Mur retiré : plus d'obstacle");
+}
+
+/**
+ * Le mode « tracer un mur ».
+ *
+ * Le tracé se fait sur le plan métrique, pas sur la carte : c'est là qu'on règle une
+ * distance, et un mur se mesure en mètres. Le rectangle est converti en emprise métrique
+ * dès le relâchement — ce que le serveur reçoit, c'est l'emprise, pas des pixels.
+ */
+function toggleTraceMur(on) {
+  state.traceMur = on ?? !state.traceMur;
+  const bouton = $("draw-obstacle");
+  const aide = $("obstacle-draw-aide");
+  if (bouton) {
+    bouton.setAttribute("aria-pressed", String(state.traceMur));
+    bouton.classList.toggle("active", state.traceMur);
+  }
+  if (aide) {
+    aide.textContent = state.traceMur
+      ? "Tirez un rectangle sur le plan, puis relâchez. Échap annule."
+      : "";
+  }
+  if (!state.traceMur) return;
+  const plan = $("plan");
+  if (!plan) return;
+  // Sans équipement, le plan n'a pas de repère métrique : tracer y serait silencieusement
+  // faux, l'emprise serait convertie depuis des bornes absentes. La topologie est la source,
+  // pas le dessin — un plan non redessiné mentirait.
+  if (!(state.topo?.nodes ?? []).length) {
+    // Le message se pose **après** la sortie du mode : celle-ci vide l'aide, et l'écrire
+    // avant l'effacerait.
+    toggleTraceMur(false);
+    if (aide) aide.textContent = "Ajoutez des équipements au plan avant de tracer un mur.";
+    return;
+  }
+  const depart = (ev) => {
+    if (ev.button !== 0 || !state.traceMur) return;
+    if (ev.target.closest(".node")) return;    // un équipement se déplace, il ne trace pas
+    const p0 = svgPoint(ev);
+    const rect = svgEl("rect", { class: "obstacle-trace", x: p0.x, y: p0.y, width: 0, height: 0 });
+    plan.append(rect);
+    const bouger = (e) => {
+      const p = svgPoint(e);
+      rect.setAttribute("x", Math.min(p0.x, p.x).toFixed(1));
+      rect.setAttribute("y", Math.min(p0.y, p.y).toFixed(1));
+      rect.setAttribute("width", Math.abs(p.x - p0.x).toFixed(1));
+      rect.setAttribute("height", Math.abs(p.y - p0.y).toFixed(1));
+    };
+    const finir = async (e) => {
+      plan.removeEventListener("pointermove", bouger);
+      plan.removeEventListener("pointerup", finir);
+      document.removeEventListener("keydown", annuler);
+      rect.remove();
+      toggleTraceMur(false);
+      const p1 = svgPoint(e);
+      if (Math.abs(p1.x - p0.x) < 4 || Math.abs(p1.y - p0.y) < 4) return;   // un clic, pas un mur
+      const a = toMeters({ x: Math.min(p0.x, p1.x), y: Math.max(p0.y, p1.y) }, state.bounds, W, H);
+      const b = toMeters({ x: Math.max(p0.x, p1.x), y: Math.min(p0.y, p1.y) }, state.bounds, W, H);
+      const mur = { x_min_m: a.x_m, y_min_m: b.y_m, x_max_m: b.x_m, y_max_m: a.y_m,
+                    height_m: 12, attenuation_db: 6 };
+      const obstacles = [...environnement().obstacles, mur];
+      await ecrireEnvironnement({ obstacles },
+        `Mur ajouté : ${obstacles.length} obstacle(s) — 6 dB saisis par défaut, modifiables ci-dessous`);
+    };
+    const annuler = (e) => {
+      if (e.key !== "Escape") return;
+      plan.removeEventListener("pointermove", bouger);
+      plan.removeEventListener("pointerup", finir);
+      document.removeEventListener("keydown", annuler);
+      rect.remove();
+      toggleTraceMur(false);
+    };
+    plan.addEventListener("pointermove", bouger);
+    plan.addEventListener("pointerup", finir);
+    document.addEventListener("keydown", annuler);
+  };
+  plan.addEventListener("pointerdown", depart, { once: true });
 }
 
 function renderPlan() {
@@ -413,6 +727,9 @@ function renderPlan() {
   const bounds = planBounds(nodes);
   state.bounds = bounds;
   svg.append(renderGrid(bounds));
+  // Les obstacles se dessinent **sous** les équipements : un mur n'a pas à masquer ce qu'il
+  // sépare, et c'est la position des équipements qu'on vient lire.
+  svg.append(renderObstacles(bounds));
   // Les liaisons se tracent **sous** les équipements : un trait qui passe par-dessus une
   // icône la masque, et l'icône est ce qu'on vient lire.
   svg.append(renderLiaisons(nodes, bounds));
@@ -619,10 +936,20 @@ function placeWindow(w) {
   // 678 px, soit 127 px de panneau d'observation recouvert en plus. On ne fait que la
   // resserrer quand la place manque. Le corps défile déjà, rien n'est donc caché.
   const borneCss = parseFloat(getComputedStyle(w.el).maxHeight);
-  const place = window.innerHeight - y - 16;
-  if (Number.isFinite(borneCss) && place < borneCss) {
-    w.el.style.maxHeight = `${Math.max(220, place)}px`;
-  }
+  // La fenêtre survole le plan : c'est sa place, et c'est donc le bas du plan qui la borne,
+  // pas le bas de l'écran. Sinon elle descend sur le panneau d'observation, juste en dessous,
+  // et recouvre le bouton « Simuler » sans rien signaler : le clic ne part pas, aucun run
+  // n'est lancé, et l'écran garde le statut du run précédent comme s'il était le sien.
+  // Mesuré à 1400 px sur un écran de 1000 px de haut — plan de 66 à 735, fenêtre de 70 à
+  // 830 (plafond CSS de 760 atteint), bouton « Simuler » vers 798 : recouvert.
+  const plan = document.querySelector(".plan-area")?.getBoundingClientRect();
+  const bas = plan ? Math.min(window.innerHeight - 16, plan.bottom - 8) : window.innerHeight - 16;
+  const place = bas - y;
+  if (!Number.isFinite(borneCss)) return;
+  // La borne est resserrée quand la place manque, et **rendue** à la CSS dès qu'elle ne
+  // manque plus : sans ce second sens, une fenêtre rouverte après avoir été réduite
+  // resterait petite sans raison. Le corps défile déjà, rien n'est donc caché.
+  w.el.style.maxHeight = place < borneCss ? `${Math.max(220, place)}px` : "";
 }
 
 function makeWindowDraggable(win, handle) {
@@ -802,6 +1129,29 @@ function renderGatewayConfig(node, body) {
   fields.mesh_max_hops = sautsMesh.querySelector("input");
   fields.mesh_bandwidth_khz = bandeMesh.querySelector("select");
 
+  // Le modèle, et ce qu'il change. Il vient du catalogue du moteur, filtré sur ce que le
+  // rôle permet : un relais exige une radio mesh documentée, un hôte sans radio publiée
+  // n'entre pas dans une passerelle. Masqué si le moteur n'en déclare aucun.
+  const modeleChamp = el("div", {});
+  const modeleAide = el("p", { class: "gw-aide", text: "" });
+  if (state.modelesPasserelle.length) {
+    const admis = modelesAdmis(state.modelesPasserelle, node.kind);
+    const modele = el("select", { name: "gateway_profile" },
+      el("option", { value: "", text: "référence du moteur" }));
+    for (const m of admis) {
+      modele.append(el("option", { value: m.name, text: m.name,
+        selected: node.gateway_profile === m.name ? "selected" : undefined }));
+    }
+    const dire = () => {
+      modeleAide.textContent = aideModele(admis.find((m) => m.name === modele.value));
+    };
+    modele.addEventListener("change", dire);
+    dire();
+    fields.gateway_profile = modele;
+    modeleChamp.append(el("label", {}, "Modèle", modele), modeleAide);
+  }
+
+  if (modeleChamp.childNodes.length) grid.append(sectionChamps("Matériel", modeleChamp));
   grid.append(sectionChamps("Relais (mesh)",
     modeMesh, sautsMesh, bandeMesh,
     el("p", { class: "gw-aide gw-aide-bloc",
@@ -932,6 +1282,25 @@ function renderDeviceInfo(node, body) {
     const modele = state.modelesMateriel.find((m) => m.name === nom);
     ligne("Matériel", modele?.label ?? (nom || "celui du run"));
   }
+  // Le serveur se pose et se dessine, mais le run ne le simule pas : le LNS est implicite
+  // derrière la passerelle frontière. Le dire ici, parce que son rôle et ses ports, en haut
+  // de cette fenêtre, décrivent un équipement qui a l'air de participer — et qu'un élève
+  // conclurait qu'une trame lui arrive vraiment.
+  if (node.kind === "server") {
+    ligne("Dans le run", "représenté, non simulé : le serveur est implicite derrière la frontière");
+  }
+  // Le modèle de la passerelle, et surtout ce qu'il change : trois des quatre modèles du
+  // catalogue ne décalent pas le seuil, leur fiche ne publiant pas le point de mesure. Le
+  // voir ici évite de croire qu'un choix a été fait alors que le run calcule la référence.
+  if (node.kind === "relay" || node.kind === "border") {
+    const m = state.modelesPasserelle.find((x) => x.name === (node.gateway_profile ?? ""));
+    ligne("Modèle", m ? `${m.name} (${m.model})` : "référence du moteur");
+    if (m) {
+      ligne("Seuil de réception", m.sensitivity_published
+        ? `${m.sensitivity_offset_db.toFixed(1).replace("-", "−")} dB par rapport à la référence`
+        : "référence : la fiche ne publie pas le point de mesure");
+    }
+  }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
 
   // Résultat du dernier run, sur l'équipement lui-même. La carte colore, la fenêtre chiffre :
@@ -1041,6 +1410,135 @@ function renderConsole(node, body) {
   body.append(el("div", { class: "console" }, out, form));
 }
 
+/**
+ * Classe d'écoute et descentes à l'initiative du réseau : un seul bloc, parce que l'une sans
+ * l'autre n'a pas de sens à montrer.
+ *
+ * Trois garde-fous, tous dictés par ce que le moteur calcule :
+ * - la classe est accompagnée de ce qu'elle **ne** change pas (un ACK tombe dans RX1/RX2
+ *   quelle que soit la classe), sinon le sélecteur se lit comme un réglage général ;
+ * - la périodicité des créneaux n'apparaît qu'en classe B : ailleurs elle n'a aucun effet, et
+ *   un champ sans effet n'est pas un champ grisé, c'est un champ absent ;
+ * - dès que la classe B peut attendre **plus** que la classe A, le bloc le dit. Présenter
+ *   « classe B » sans cette phrase laisse croire à une amélioration, ce qui est faux la
+ *   plupart du temps : un créneau par période de 128 s attend plus qu'un uplink.
+ */
+function blocEcouteEtDescente(node, values, fields) {
+  // Les libellés et les intervalles viennent du moteur. Sans sa réponse, le bloc ne s'affiche
+  // pas : plutôt rien qu'un choix dont on inventerait le sens.
+  const classes = state.classesEcoute;
+  if (!classes.length) return [];
+
+  const select = el("select", { name: "device_class" });
+  for (const c of classes) {
+    select.append(el("option", { value: c.name, text: c.label,
+      selected: (values.device_class ?? CLASSE_DEFAUT) === c.name ? "selected" : undefined }));
+  }
+  fields.device_class = select;
+
+  const ouverture = el("p", { class: "muted aide" });
+  const neChangePas = el("p", { class: "muted aide" });
+  const alerte = el("p", { class: "muted aide", hidden: "" });
+
+  // --- Le bloc descente ---------------------------------------------------------------------
+  const cocher = el("input", { type: "checkbox", name: "downlink_on",
+    ...(values.downlink ? { checked: "checked" } : {}) });
+  const champs = el("div", { class: "sensor-form", hidden: values.downlink ? undefined : "" });
+  const dl = values.downlink ?? { count: 1, first_request_s: 0, request_period_s: 0, periodicity: 0 };
+  const dlFields = {};
+  const nombre = (key, label, step = "1") => {
+    const [lo, hi] = DOWNLINK_LIMITS[key];
+    const input = el("input", { type: "number", name: `downlink_${key}`, min: lo, max: hi,
+      step, value: dl[key] ?? "" });
+    dlFields[key] = input;
+    return el("label", {}, label, input);
+  };
+  const rangPeriode = el("label", {}, "Écart entre deux envois (s)",
+    (dlFields.request_period_s = el("input", { type: "number", name: "downlink_request_period_s",
+      min: DOWNLINK_LIMITS.request_period_s[0], max: DOWNLINK_LIMITS.request_period_s[1],
+      step: "any", value: dl.request_period_s ?? "" })));
+  const choixPeriodicite = el("select", { name: "downlink_periodicity" });
+  const rangPeriodicite = el("label", {}, "Fréquence des créneaux", choixPeriodicite);
+  // La périodicité est un choix, pas un nombre : elle entre dans `dlFields` comme les autres,
+  // sinon le validateur la verrait absente et refuserait la case cochée à coup sûr.
+  dlFields.periodicity = choixPeriodicite;
+  champs.append(
+    nombre("count", "Nombre de commandes"),
+    nombre("first_request_s", "Premier envoi à (s)", "any"),
+    rangPeriode,
+    rangPeriodicite,
+  );
+
+  // Le champ « écart » n'a de sens qu'à partir de deux commandes ; la périodicité n'en a qu'en
+  // classe B. Les deux se masquent donc — un champ qui n'a pas d'effet ne se grise pas, il
+  // disparaît.
+  function rafraichir() {
+    const classe = select.value;
+    const info = classes.find((c) => c.name === classe);
+    ouverture.textContent = info?.ouverture ?? "";
+    neChangePas.textContent = info?.ne_change_pas ?? "";
+
+    champs.hidden = !cocher.checked;
+    rangPeriode.hidden = Number(dlFields.count.value) <= 1;
+
+    const estB = classe === CLASSE_A_PERIODICITE;
+    rangPeriodicite.hidden = !estB;
+    // Les périodicités et leurs intervalles sont celles du moteur ; on ne recalcule rien.
+    if (estB && !choixPeriodicite.options.length) {
+      for (const p of info?.periodicites ?? []) {
+        const texte = `un créneau toutes les ${formatSecondes(p.intervalle_s)}`
+          + ` (${p.slots_par_periode} par période de 128 s)`;
+        choixPeriodicite.append(el("option", { value: String(p.value), text: texte,
+          selected: String(dl.periodicity ?? 0) === String(p.value) ? "selected" : undefined }));
+      }
+    }
+
+    // L'avertissement qui compte : une classe B lente attend plus longtemps qu'une classe A.
+    const intervalle = estB
+      ? (info?.periodicites ?? []).find((p) => String(p.value) === choixPeriodicite.value)
+          ?.intervalle_s
+      : undefined;
+    const periode = Number(fields.period_s?.value);
+    const plusLente = estB ? classeBPlusLenteQueA(intervalle, periode) : null;
+    if (plusLente === true) {
+      alerte.textContent = `À cette fréquence, le terminal attend son créneau jusqu'à`
+        + ` ${formatSecondes(intervalle)} — davantage que la classe A, qui n'attend que sa`
+        + ` prochaine émission (${formatSecondes(periode)}). La classe B n'est pas une classe A`
+        + ` plus rapide : c'est la fréquence des créneaux qui décide.`;
+      alerte.hidden = undefined;
+    } else {
+      alerte.hidden = "";
+    }
+  }
+
+  select.addEventListener("change", rafraichir);
+  cocher.addEventListener("change", rafraichir);
+  dlFields.count.addEventListener("input", rafraichir);
+  choixPeriodicite.addEventListener("change", rafraichir);
+  fields.period_s?.addEventListener("input", rafraichir);
+  rafraichir();
+
+  // Le champ `downlink` transmis n'existe que si la case est cochée : l'absence est publiée,
+  // pas un bloc de zéros qui dirait « une commande à l'instant 0 ».
+  const lire = () => {
+    if (!cocher.checked) return null;
+    const out = {};
+    for (const [k, input] of Object.entries(dlFields)) out[k] = input.value;
+    return out;
+  };
+  fields.__downlink = lire;
+  fields.__downlinkChamps = dlFields;
+
+  return [
+    el("label", {}, "Classe d'écoute", select),
+    ouverture,
+    neChangePas,
+    el("label", { class: "case" }, cocher, " Le serveur envoie une commande"),
+    champs,
+    alerte,
+  ];
+}
+
 function renderSensorForm(node, body) {
   const values = sensorFormFrom(node);
   const fields = {};
@@ -1064,6 +1562,7 @@ function renderSensorForm(node, body) {
   for (const r of REGIONS) regionSelect.append(el("option", { value: r, text: r, selected: values.region === r ? "selected" : undefined }));
   fields.region = regionSelect;
   grid.append(el("label", {}, "Plan régional", regionSelect));
+  grid.append(...blocEcouteEtDescente(node, values, fields));
   // Le matériel, par équipement. Deux capteurs de matériel différent ne consomment pas la
   // même chose (mesuré : 10 à 11 % de courant moyen), et pouvoir les comparer dans un même
   // run est précisément l'intérêt du réglage. « celui du run » est le défaut : un chantier
@@ -1085,12 +1584,20 @@ function renderSensorForm(node, body) {
       ev.preventDefault();
       const raw = {};
       for (const [k, input] of Object.entries(fields)) {
+        if (k.startsWith("__")) continue;
         input.classList.remove("field-error");
         raw[k] = input.value;
       }
+      // Le bloc descente publie son absence (`null`) plutôt qu'un bloc de zéros.
+      if (fields.__downlink) raw.downlink = fields.__downlink();
       const checked = validateSensor(raw);
       if (!checked.ok) {
-        fields[checked.field]?.classList.add("field-error");
+        // Les champs du bloc descente sont nommés `downlink_*` dans le formulaire et `key`
+        // dans le validateur : l'erreur retrouve donc son champ par ce préfixe.
+        const champ = checked.field?.startsWith("downlink_")
+          ? fields.__downlinkChamps?.[checked.field.slice("downlink_".length)]
+          : fields[checked.field];
+        champ?.classList.add("field-error");
         message.textContent = checked.message;
         return;
       }
@@ -1109,7 +1616,13 @@ function renderSensorForm(node, body) {
 // Le matériel n'a de sens que pour un capteur : le champ se masque pour les autres types,
 // comme la sous-bande se grise hors des plans qui en ont une. Mieux vaut un champ absent
 // qu'un champ sans objet.
-$("add-form").querySelector('[name="kind"]').addEventListener("change", appliquerMaterielAjout);
+$("add-form").querySelector('[name="kind"]').addEventListener("change", () => {
+  appliquerMaterielAjout();
+  // Le rôle a pu changer : un relais n'accepte pas les mêmes modèles qu'une frontière.
+  renderModeleAjout();
+});
+$("add-form").querySelector('[name="gateway_profile"]')
+  .addEventListener("change", appliquerModeleAjout);
 
 $("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1129,6 +1642,7 @@ $("add-form").addEventListener("submit", async (ev) => {
     ev.target.reset();
     // Le type est revenu à « passerelle » : le matériel n'a plus d'objet.
     appliquerMaterielAjout();
+    appliquerModeleAjout();
     // Poser une passerelle rend l'ADR possible, poser un relais l'interdit : les réglages
     // qui en dépendent se réévaluent ici, sans quoi la case garderait l'état d'avant l'ajout.
     refreshTopologie();
@@ -1179,6 +1693,23 @@ const player = createPlayer({
   onActive: (index) => showFrame(index),
 });
 
+/**
+ * Segments d'animation des descentes réseau, ou rien.
+ *
+ * `passerelle` : ces descentes ne sont publiées que sur un run mono-passerelle, donc la
+ * première passerelle de la session est la bonne — il n'y en a pas d'autre.
+ *
+ * `capteurs` : l'instant voulu vient du réglage du capteur, pas d'une supposition. Un capteur
+ * dont le réglage a changé depuis le run n'animerait rien, faute de pouvoir dater quoi que ce
+ * soit : c'est voulu, mieux vaut pas de flèche qu'une flèche au mauvais endroit.
+ */
+function descentesSegments(deviceRows, deviceGroups) {
+  const noeuds = state.topo?.nodes ?? [];
+  const passerelle = noeuds.find((n) => n.kind === "border" || n.kind === "relay")?.id ?? null;
+  const capteurs = new Map(noeuds.map((n) => [n.id, n.sensor]));
+  return segmentsDescentes({ deviceRows, deviceGroups, capteurs, passerelle });
+}
+
 // Charge les événements et la table dispositif -> capteur du run, puis prépare le lecteur.
 async function loadAnimation(runId) {
   try {
@@ -1186,7 +1717,11 @@ async function loadAnimation(runId) {
     state.events = events;
     const rows = await collectPages((cursor) => state.client.devicesPage(runId, cursor));
     const groups = deviceGroupsFromRows(rows);
-    player.load({ events, segs: segmentsFromEvents(events, groups), groups });
+    // Les descentes réseau ne sont pas des événements de la trace : elles sont reconstituées
+    // de l'instant voulu (scénario) et de l'attente mesurée (run). Elles s'ajoutent aux
+    // segments, et le lecteur les montre comme les autres.
+    const segs = segmentsFromEvents(events, groups).concat(descentesSegments(rows, groups));
+    player.load({ events, segs, groups });
   } catch (err) {
     player.clear();
     $("sim-status").textContent += ` Animation indisponible : ${err.message}`;
@@ -1206,13 +1741,20 @@ function renderSimulationIdle() {
 
 $("sim-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!state.sid || state.busy) return;
+  // Un run qui ne part pas en silence laisse à l'écran le statut du précédent, et fait croire
+  // à un résultat qui n'est pas le sien. La raison est donc énoncée.
+  if (!state.sid) { showError(new Error("aucune session : créez ou sélectionnez un chantier")); return; }
+  if (state.busy) { $("sim-status").textContent = "Run déjà en cours."; return; }
   state.busy = true;
   $("simulate").disabled = true;
   try {
     const seed = Number($("seed").value);
     const started = await guard(() => state.client.simulate(state.sid, seed));
-    if (!started) return;
+    if (!started) {
+      // `guard` a déjà affiché la raison ; le statut doit cesser de parler du run d'avant.
+      $("sim-status").textContent = "Run non lancé — voir le message d'erreur.";
+      return;
+    }
     clear($("sim-notes"));
     for (const note of started.notes) $("sim-notes").append(el("li", { text: note }));
     // Le bilan du run précédent ne survit pas au lancement : un encadré qui reste affiché
@@ -1223,6 +1765,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     $("proto-bilan").hidden = true;
     clear($("proto-bilan-liste"));
     $("proto-bilan-aide").textContent = "";
+    $("dl-bilan").hidden = true;
+    clear($("dl-bilan-liste"));
+    $("dl-bilan-aide").textContent = "";
     $("sim-status").textContent = `Run ${started.run_id} : ${started.state}…`;
     const status = await waitForRun(started.run_id);
     if (!status) return;
@@ -1294,7 +1839,82 @@ function renderResults(summary, linkedNames, deviceRows = []) {
   }
   table.hidden = rows.length === 0;
   renderAdrBilan(deviceRows);
+  renderBilanDescentes(summary, deviceRows);
   renderMetrics(summary, deviceRows);
+}
+
+/**
+ * Les commandes que le serveur a voulu envoyer, et l'attente qu'elles ont subie.
+ *
+ * Rien ne s'affiche si le run n'en a planifié aucune : un encadré de zéros se lirait comme
+ * « aucune commande n'est arrivée », alors que la vérité est qu'aucune n'a été demandée.
+ *
+ * Les chiffres viennent du run, jamais du formulaire. En particulier l'attente affichée est
+ * celle que le moteur a mesurée — ce n'est pas le « jusqu'à » annoncé au moment du réglage,
+ * qui n'était qu'un ordre de grandeur de la fenêtre.
+ */
+function renderBilanDescentes(summary, deviceRows) {
+  const bloc = $("dl-bilan");
+  const liste = $("dl-bilan-liste");
+  const aide = $("dl-bilan-aide");
+  clear(liste);
+  const d = summary?.downlink;
+  if (!d) {
+    bloc.hidden = true;
+    aide.textContent = "";
+    return;
+  }
+  const manquees = d.requested - d.delivered;
+  liste.append(el("li", { text: `${d.requested} commande(s) envoyée(s) par le serveur, `
+    + `${d.delivered} partie(s) de la passerelle.` }));
+  if (d.delivered > 0) {
+    liste.append(el("li", { text: `Attente avant l'émission : `
+      + `${formatSecondes(d.latency_mean_s)} en moyenne, `
+      + `${formatSecondes(d.latency_max_s)} au plus.` }));
+  }
+  if (manquees > 0) {
+    // Une commande non acheminée n'est pas une panne : la fenêtre est arrivée après la fin de
+    // l'observation, ou le terminal n'en a jamais ouvert. Le dire sans accuser.
+    liste.append(el("li", { text: `${manquees} non acheminée(s) : la fenêtre n'est jamais `
+      + `arrivée avant la fin du run.` }));
+  }
+  // Ce que la classe a réellement changé, lu dans le run : c'est la phrase qui compte, et
+  // elle n'est pas écrite ici — ce sont les chiffres du run qui la composent.
+  const parClasse = attendesParGroupe(deviceRows);
+  if (parClasse.length > 1) {
+    const [plusRapide, ... reste] = parClasse;
+    const plusLent = reste[reste.length - 1];
+    if (plusLent && plusLent.latence > plusRapide.latence) {
+      aide.textContent = `Du premier au dernier : ${plusRapide.nom} `
+        + `(${formatSecondes(plusRapide.latence)}) contre ${plusLent.nom} `
+        + `(${formatSecondes(plusLent.latence)}). C'est la classe d'écoute, et elle seule, `
+        + `qui explique cet écart — sur un ACK, les trois classes se comporteraient `
+        + `exactement de la même façon.`;
+    }
+  } else if (parClasse.length === 1) {
+    aide.textContent = "";
+  }
+  bloc.hidden = false;
+}
+
+/**
+ * Attente moyenne par groupe, triée du plus rapide au plus lent.
+ *
+ * Les groupes sans descente demandée sont écartés : ils n'ont pas d'attente, et les mettre
+ * à zéro les ferait gagner la comparaison sans avoir rien attendu.
+ */
+function attendesParGroupe(deviceRows) {
+  const somme = new Map();
+  for (const r of deviceRows ?? []) {
+    if (r.downlink_latency_s == null) continue;
+    const avant = somme.get(r.group) ?? { total: 0, n: 0 };
+    avant.total += r.downlink_latency_s;
+    avant.n += 1;
+    somme.set(r.group, avant);
+  }
+  return [...somme.entries()]
+    .map(([nom, v]) => ({ nom, latence: v.total / v.n }))
+    .sort((a, b) => a.latence - b.latence);
 }
 
 /**
@@ -1534,6 +2154,41 @@ function renderMaterielAjout() {
   appliquerMaterielAjout();
 }
 
+function renderModeleAjout() {
+  const champ = $("add-modele");
+  const select = champ?.querySelector("select");
+  if (!champ || !select) return;
+  if (!state.modelesPasserelle.length) { champ.hidden = true; return; }
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  // Un relais exige une radio mesh documentée : le scénario le refuse sinon, autant ne pas
+  // le proposer. Et un hôte sans radio publiée n'a rien à faire dans une passerelle.
+  const admis = modelesAdmis(state.modelesPasserelle, role);
+  clear(select);
+  select.append(el("option", { value: "", text: "référence du moteur" }));
+  for (const m of admis) select.append(el("option", { value: m.name, text: m.name }));
+  const garde = select.value;
+  appliquerModeleAjout();
+  select.value = garde;
+  appliquerModeleAjout();
+}
+
+function appliquerModeleAjout() {
+  const champ = $("add-modele");
+  const aide = $("add-modele-aide");
+  const select = champ?.querySelector("select");
+  const role = $("add-form")?.querySelector('[name="kind"]')?.value;
+  if (!champ || !select) return;
+  const passerelle = role === "relay" || role === "border";
+  champ.hidden = !passerelle || state.modelesPasserelle.length === 0;
+  if (aide) {
+    const m = state.modelesPasserelle.find((x) => x.name === select.value);
+    // L'aide ne s'affiche que si le champ est visible : une explication orpheline décrirait
+    // un réglage absent.
+    aide.hidden = champ.hidden;
+    aide.textContent = champ.hidden ? "" : aideModele(m);
+  }
+}
+
 function appliquerMaterielAjout() {
   const champ = $("add-materiel");
   const kind = $("add-form")?.querySelector('[name="kind"]')?.value;
@@ -1559,6 +2214,7 @@ async function choisirTerrain(terrainId) {
   if (!topo) return;
   state.topo = topo;
   renderTerrains();
+  majHistorique();               // choisir un relief est un geste annulable, comme un autre
   setStatus(vide ? `Relief « ${vide} » appliqué aux prochains runs` : "Relief retiré");
 }
 
@@ -1598,6 +2254,7 @@ async function basculerProtocole(join, confirmed) {
   if (!topo) return;
   state.topo = topo;
   renderProtocole();
+  majHistorique();
   // L'ADR et la jointure s'excluent : activer l'un peut griser l'autre, donc l'ADR est
   // relu lui aussi — sans quoi sa case garderait un état que le serveur vient de changer.
   renderAdr();
@@ -1628,6 +2285,7 @@ async function basculerAdr(actif) {
   if (!topo) return;
   state.topo = topo;
   renderAdr();
+  majHistorique();
   renderProtocole();
   setStatus(adrStatut({ possible: topo.adr_possible === true, raison: topo.adr_raison ?? "",
     actif: topo.adr === true }));
@@ -1761,6 +2419,8 @@ async function prolongerRun(capteurs) {
   } finally {
     if (bouton) bouton.disabled = false;
   }
+  // Chaque capteur visité a écrit un réglage : l'historique a bougé d'autant.
+  majHistorique();
   renderDevice();               // la fenêtre ouverte chiffre le nouveau réglage
   $("sim-form").requestSubmit();
 }
@@ -2284,6 +2944,31 @@ function demarrerDeplacement(ev, noeud) {
   return true;
 }
 
+/**
+ * Le panneau « Obstacles » : tracer, lister, et régler ce qui s'applique à toutes les
+ * liaisons. Le formulaire n'envoie que les champs affichés — les trois sont toujours là,
+ * donc les trois partent toujours, et c'est voulu : c'est ce panneau qui les possède.
+ */
+function wireEnvironnement() {
+  const bouton = $("draw-obstacle");
+  bouton?.addEventListener("click", () => toggleTraceMur());
+  $("env-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    await ecrireEnvironnement({
+      shadowing_sigma_db: Number($("sigma").value),
+      gateway_height_m: Number($("gw-height").value),
+      device_height_m: Number($("dev-height").value),
+    }, "Environnement appliqué aux prochains runs");
+  });
+  // Quitter l'onglet pendant un tracé laisserait le plan en attente du pointeur, sans
+  // sortie visible : le mode tombe dès que le panneau se masque.
+  for (const t of document.querySelectorAll(".tab")) {
+    t.addEventListener("click", () => {
+      if (t.dataset.tab !== "environment" && state.traceMur) toggleTraceMur(false);
+    });
+  }
+}
+
 function showView(view) {
   state.view = view;
   const estCarte = view === "map";
@@ -2491,6 +3176,19 @@ $("chantier-file").addEventListener("change", async (ev) => {
 });
 
 // Onglets d'observation, onglets d'équipement, fermeture de la fenêtre.
+wireEnvironnement();
+// Annuler / rétablir : les deux boutons, et les raccourcis. Le raccourci est ignoré dans un
+// champ de saisie, où Ctrl+Z appartient à la saisie — annuler la topologie pendant qu'on
+// tape une commande effacerait la commande au lieu du réseau.
+$("undo").addEventListener("click", () => annulerOuRetablir("undo"));
+$("redo").addEventListener("click", () => annulerOuRetablir("redo"));
+document.addEventListener("keydown", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== "z") return;
+  const cible = ev.target;
+  if (cible instanceof HTMLInputElement || cible instanceof HTMLTextAreaElement) return;
+  ev.preventDefault();
+  annulerOuRetablir(ev.shiftKey ? "redo" : "undo");
+});
 for (const b of document.querySelectorAll(".tab"))
   b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
 wireTabs(document.querySelector(".tabs"));

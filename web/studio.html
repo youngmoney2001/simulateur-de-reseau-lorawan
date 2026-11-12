@@ -118,6 +118,14 @@
         <button type="button" class="tool" id="new-session" title="Nouvelle session"><span>&#43;</span>Nouvelle</button>
         <button type="button" class="tool danger" id="delete-session" title="Supprimer la session"><span>&#10005;</span>Supprimer</button>
         <div class="tool-sep"></div>
+        <!-- Annuler et rétablir. Le libellé nomme l'opération concernée : « Annuler » sans
+             objet est un bouton qu'on n'ose pas presser, et l'historique sait de quoi il
+             parle puisque c'est lui qui l'a empilé. Raccourcis : Ctrl+Z, Ctrl+Maj+Z. -->
+        <button type="button" class="tool" id="undo" title="Rien à annuler" disabled>
+          <span>&#8630;</span>Annuler</button>
+        <button type="button" class="tool" id="redo" title="Rien à rétablir" disabled>
+          <span>&#8631;</span>Rétablir</button>
+        <div class="tool-sep"></div>
         <!-- Sauvegarder et charger un chantier : l'équivalent du `.pkt`. Le champ de fichier
              reste invisible, le bouton « Charger » l'actionne — un champ de fichier brut au
              milieu d'une barre d'outils n'a rien à y faire. -->
@@ -151,6 +159,13 @@
                s'il n'en déclare aucun : un sélecteur vide serait une promesse non tenue.
                Masqué aussi pour les autres types, qui n'ont pas de matériel à choisir. -->
           <label id="add-materiel" hidden>Matériel <select name="energy_profile"></select></label>
+          <!-- Le modèle de la passerelle. Rempli depuis le catalogue du moteur, filtré sur
+               ce que le rôle permet (un relais exige une radio mesh documentée), et masqué
+               pour les types qui n'en ont pas. Ce que le modèle change est rappelé dessous :
+               trois des quatre modèles ne décalent pas le seuil, leur fiche ne publiant pas
+               le point de mesure. -->
+          <label id="add-modele" hidden>Modèle <select name="gateway_profile"></select></label>
+          <p id="add-modele-aide" class="hint" hidden></p>
           <!-- On saisit des degrés, pas des mètres : c'est ainsi qu'on relève un lieu, et
                c'est l'invariant D2. Les mètres partent au moteur, ils ne s'affichent pas. -->
           <div class="row">
@@ -171,6 +186,7 @@
           <button type="button" class="tab" data-tab="journal" role="tab">Journal</button>
           <button type="button" class="tab" data-tab="frame" role="tab">Trame</button>
           <button type="button" class="tab" data-tab="exercise" role="tab">Exercice</button>
+          <button type="button" class="tab" data-tab="environment" role="tab">Obstacles</button>
         </div>
 
         <div class="tab-body" data-panel="sim">
@@ -214,6 +230,14 @@
             <h3>Échanges avec le serveur</h3>
             <ul id="proto-bilan-liste" class="notes"></ul>
             <p id="proto-bilan-aide" class="gw-aide muted"></p>
+          </div>
+          <!-- Les descentes à l'initiative du réseau : combien le serveur en a voulu, combien
+               sont parties, et après quelle attente. Bloc masqué si le run n'en a planifié
+               aucune — un encadré de zéros laisserait croire à une mesure qui n'a pas eu lieu. -->
+          <div id="dl-bilan" hidden>
+            <h3>Commandes envoyées par le serveur</h3>
+            <ul id="dl-bilan-liste" class="notes"></ul>
+            <p id="dl-bilan-aide" class="gw-aide muted"></p>
           </div>
           <table id="sim-results" hidden>
             <thead>
@@ -275,6 +299,38 @@
           <p id="frame-empty" class="muted">Avancez dans le journal : la trame de l'événement courant s'affichera ici.</p>
         </div>
 
+        <!-- Obstacles, shadowing et hauteurs d'antennes : ce qui sépare deux équipements que
+             la distance seule ne suffirait pas à départager. L'atténuation est le chemin
+             principal — à 868 MHz, 12 des 15 matériaux sortent de la plage documentée de
+             l'UIT-R P.2040-4, et l'interface le dit au lieu d'afficher une perte qu'on
+             croirait mesurée. -->
+        <div class="tab-body" data-panel="environment" hidden>
+          <p class="hint">
+            Un mur se trace sur le plan : cliquez « Tracer un mur », puis tirez un rectangle.
+            Mesuré à 10 km, SF10 : 20 trames sur 20 sans obstacle, <strong>0 sur 20</strong>
+            dès 3 dB d'atténuation — le réglage est décisif, pas cosmétique.
+          </p>
+          <button type="button" id="draw-obstacle" class="primary" aria-pressed="false">
+            Tracer un mur</button>
+          <p id="obstacle-draw-aide" class="gw-aide muted" role="status"></p>
+          <ul id="obstacle-list" class="notes"></ul>
+          <form id="env-form" class="gw-form">
+            <label>Shadowing σ <input id="sigma" type="number" min="0" max="30" step="0.5"
+              value="0" /> dB
+              <span class="hint">Écart-type du tirage log-normal, un tirage par capteur.
+                0 : liaisons déterministes.</span></label>
+            <div class="row">
+              <label>Hauteur passerelle <input id="gw-height" type="number" min="0.1"
+                max="1000" step="0.5" value="15" /> m</label>
+              <label>Hauteur capteur <input id="dev-height" type="number" min="0.1"
+                max="1000" step="0.1" value="1.5" /> m</label>
+            </div>
+            <p class="hint">La hauteur compte : face à un mur de 12 m, une passerelle à 40 m
+              reçoit encore là où une passerelle à 15 m a tout perdu.</p>
+            <button type="submit">Appliquer</button>
+          </form>
+          <p id="env-status" class="muted" role="status"></p>
+        </div>
         <div class="tab-body" data-panel="exercise" hidden>
           <div class="row exercise-pick">
             <label>Exercice <select id="exercise-start"></select></label>
