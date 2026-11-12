@@ -796,21 +796,20 @@ try {
     // Et la liste remarque la ligne qu'on regarde : deux runs marqués, ou aucun, laisseraient
     // croire qu'on lit l'autre.
     await obsTab("Runs");
-    // La liste est relue à l'ouverture de l'onglet : les lignes reviennent avec le serveur.
-    // On attend le compte attendu, pas une seule ligne : une lecture faite entre deux rendus
-    // verrait un tableau à moitié refait.
+    // La liste est relue à l'ouverture de l'onglet : la table affichée est d'abord celle
+    // d'avant le clic, qui compte déjà le bon nombre de lignes. Attendre un compte revient
+    // donc à lire une table périmée — on attend la condition elle-même : la dernière ligne
+    // marquée, et une seule.
     try {
-      await page.waitForFunction(
-        (n) => document.querySelectorAll("#runs-table tbody tr").length >= n,
-        { timeout: 20_000 }, lignes.length);
+      await page.waitForFunction(() => {
+        const trs = document.querySelectorAll("#runs-table tbody tr");
+        return trs.length >= 2
+          && trs[trs.length - 1].classList.contains("affiche")
+          && [...trs].filter((tr) => tr.classList.contains("affiche")).length === 1;
+      }, { timeout: 20_000 });
     } catch (err) {
-      throw new Error(`lignes non revenues : ${JSON.stringify(await lire())}\n`
-        + `${await etatPanneauRuns()}`);
-    }
-    const marques = (await lire()).map((l) => l.affiche);
-    if (marques.filter(Boolean).length !== 1 || !marques[marques.length - 1]) {
-      throw new Error(`marquage de la ligne affichée : ${JSON.stringify(marques)}\n`
-        + `${await etatPanneauRuns()}`);
+      throw new Error(`la ligne du run rouvert n'est pas marquée : `
+        + `${JSON.stringify((await lire()).map((l) => l.affiche))}\n${await etatPanneauRuns()}`);
     }
     await obsTab("Simulation");
   });
