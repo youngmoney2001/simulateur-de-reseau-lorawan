@@ -107,7 +107,10 @@ jobs:
         if: always()
         run: |
           mort=0
-          for journal in audit.log clavier.log; do
+          # `capture.log` aussi : le script de capture est en `continue-on-error` pour ne pas
+          # bloquer sur une image manquante, mais une exception n'est pas une image manquante
+          # — c'est un script qui s'arrête et n'en produit aucune.
+          for journal in audit.log clavier.log capture.log; do
             if grep -qaE 'Node\.js v[0-9]|UnhandledPromiseRejection|ERR_UNHANDLED' "$journal"; then
               echo "::error::$journal : l'audit a planté, il n'a rien mesuré"
               mort=1
