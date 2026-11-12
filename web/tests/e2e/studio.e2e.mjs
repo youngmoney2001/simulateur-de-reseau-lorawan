@@ -811,6 +811,33 @@ try {
       throw new Error(`la ligne du run rouvert n'est pas marquée : `
         + `${JSON.stringify((await lire()).map((l) => l.affiche))}\n${await etatPanneauRuns()}`);
     }
+    // Comparer, enfin : c'est la raison d'être de la liste. L'écart se lit entre le run
+    // affiché (qu'on vient de rouvrir) et celui qu'on lui compare.
+    await page.evaluate(() => {
+      const trs = document.querySelectorAll("#runs-table tbody tr");
+      const bouton = [...trs[0].querySelectorAll("button")]
+        .find((b) => b.textContent.trim() === "Comparer");
+      bouton.click();
+    });
+    await page.waitForFunction(() => !document.getElementById("runs-compare").hidden,
+      { timeout: 10_000 });
+    const compare = await page.evaluate(() => {
+      const t = document.querySelector("#runs-compare table");
+      return t ? [...t.querySelectorAll("tbody tr")]
+        .map((tr) => [...tr.children].map((c) => c.textContent.trim())) : null;
+    });
+    if (!compare || compare.length === 0) {
+      throw new Error(`comparaison vide : ${await etatPanneauRuns()}`);
+    }
+    for (const ligne of compare) {
+      if (ligne.length !== 4) {
+        throw new Error(`ligne de comparaison incomplète : ${JSON.stringify(compare)}`);
+      }
+    }
+    if (!compare.some((l) => /PDR|Taux de réception/.test(l[0]))) {
+      throw new Error(`comparaison sans taux de réception : ${JSON.stringify(compare)}`);
+    }
+    console.log(`Comparaison : ${JSON.stringify(compare)}`);
     await obsTab("Simulation");
   });
 

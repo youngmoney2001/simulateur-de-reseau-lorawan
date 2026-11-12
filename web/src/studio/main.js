@@ -1740,6 +1740,10 @@ function renderSimulationIdle() {
 }
 
 // --- Runs déjà lancés : revoir une simulation au lieu de n'avoir que la dernière -------------
+// Le run auquel on compare, et la dernière liste lue : la comparaison se recalcule à partir
+// de cette liste, pas d'un souvenir de ce qu'on avait cliqué.
+let comparerAvec = null;
+let dernierRuns = [];
 //
 // Comparer deux réglages suppose de revoir le premier. Sans cette liste, un run qu'on n'a pas
 // noté est un run perdu : l'atelier ne connaissait que le dernier.
@@ -1775,6 +1779,7 @@ async function renderRuns() {
   // Les lignes se construisent **avant** de remplacer : vider la table puis attendre le
   // serveur donnait un tableau vide pendant l'aller-retour, et un clic arrivant là ne
   // trouvait plus rien à ouvrir.
+  dernierRuns = items;
   const rows = [];
   for (const r of items) {
     const tr = el("tr", { class: r.run_id === state.runId ? "affiche" : undefined });
@@ -1800,13 +1805,92 @@ async function renderRuns() {
     revoir.addEventListener("click", (ev) => { ev.stopPropagation(); ouvrirRun(r); });
     tr.append(el("td", {}, revoir));
     tr.addEventListener("click", () => ouvrirRun(r));
+    // Comparer vient après Revoir, dans l'ordre de l'en-tête : une colonne décalée ferait
+    // lire l'écart sous le bouton, et inversement.
+    if (fini && r.run_id !== state.runId) {
+      const comparer = el("button", { type: "button", text: "Comparer",
+        "aria-label": `Comparer le run affiché avec celui de la graine ${r.seed ?? "?"}` });
+      comparer.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        comparerAvec = r;
+        const affiche = dernierRuns.find((x) => x.run_id === state.runId);
+        if (affiche) renderComparaison(affiche, r);
+      });
+      tr.append(el("td", {}, comparer));
+    } else {
+      tr.append(el("td", {}));
+    }
     rows.push(tr);
   }
   lignes.replaceChildren(...rows);
+  // La comparaison reste affichée tant qu'on ne change pas de run affiché : la relire à
+  // chaque rendu la ferait disparaître au premier rafraîchissement.
+  const affiche = items.find((r) => r.run_id === state.runId) ?? null;
+  if (comparerAvec && affiche && comparerAvec.run_id !== affiche.run_id) {
+    renderComparaison(affiche, comparerAvec);
+  } else if (comparerAvec && comparerAvec.run_id === state.runId) {
+    comparerAvec = null;
+    $("runs-compare").hidden = true;
+  }
   $("runs-note").textContent = items.length === 1
     ? "Un run gardé par ce chantier. Cliquez pour le revoir."
     : `${items.length} runs gardés par ce chantier. Cliquez pour en revoir un : `
       + "les chiffres affichés deviennent les siens.";
+}
+
+/**
+ * Deux runs l'un à côté de l'autre, avec l'écart.
+ *
+ * Seules les grandeurs que **les deux** runs ont mesurées sont comparées. Un écart calculé
+ * contre une case vide inventerait une différence : l'attente des descentes, par exemple, ne
+ * se compare que si les deux runs en ont planifié — sinon la ligne n'apparaît pas.
+ *
+ * `a` est le run affiché, `b` celui qu'on lui compare : l'écart est lu de l'un vers l'autre,
+ * et le sens est écrit dans l'en-tête plutôt que supposé.
+ */
+function renderComparaison(a, b) {
+  const bloc = $("runs-compare");
+  clear(bloc);
+  const signe = (v, unite = "") => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}${unite}`;
+  const lignes = [];
+  if (a.pdr !== null && a.pdr !== undefined && b.pdr !== null && b.pdr !== undefined) {
+    lignes.push(["Taux de réception (PDR)", formatPercent(a.pdr), formatPercent(b.pdr),
+      signe(Math.round((b.pdr - a.pdr) * 1000) / 10, " pts")]);
+  }
+  if (a.received !== undefined && b.received !== undefined) {
+    lignes.push(["Trames reçues", `${a.received} / ${a.sent}`, `${b.received} / ${b.sent}`,
+      signe(b.received - a.received)]);
+  }
+  if (a.downlink && b.downlink) {
+    const ecart = b.downlink.latency_mean_s - a.downlink.latency_mean_s;
+    lignes.push(["Attente de la commande", formatSecondes(a.downlink.latency_mean_s),
+      formatSecondes(b.downlink.latency_mean_s),
+      // Une attente se lit en secondes, mais l'écart d'une classe B à l'autre se joue sur
+      // des dizaines de secondes : garder deux décimales ici noierait la différence.
+      signe(Math.round(ecart * 10) / 10, " s")]);
+  }
+  if (!lignes.length) {
+    bloc.hidden = false;
+    bloc.append(el("p", { class: "muted",
+      text: "Ces deux runs n'ont aucune grandeur comparable : ils n'ont pas mesuré les mêmes"
+        + " choses." }));
+    return;
+  }
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { scope: "col", text: "Grandeur" }),
+      el("th", { scope: "col", text: `Affiché (graine ${a.seed ?? "?"})` }),
+      el("th", { scope: "col", text: `Comparé (graine ${b.seed ?? "?"})` }),
+      el("th", { scope: "col", text: "Écart" }))));
+  const corps = el("tbody");
+  for (const [nom, va, vb, ecart] of lignes) {
+    corps.append(el("tr", {}, el("th", { scope: "row", text: nom }),
+      el("td", { text: va }), el("td", { text: vb }), el("td", { text: ecart })));
+  }
+  table.append(corps);
+  bloc.hidden = false;
+  bloc.append(el("h3", { text: "Comparaison" }), table,
+    el("p", { class: "muted", text: "L'écart est lu du run affiché vers le run comparé." }));
 }
 
 /**
