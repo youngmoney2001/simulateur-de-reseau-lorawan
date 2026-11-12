@@ -68,6 +68,28 @@ fût-elle à une seule passerelle ; le réserver au mono l'y aurait rendu invisi
 instants d'émission sont identiques dans les deux formes, or l'attente n'est faite que de ces
 instants et de la classe.
 
+### Les runs d'un chantier — revoir une simulation au lieu de n'avoir que la dernière
+
+Comparer deux réglages suppose de revoir le premier. Or l'atelier ne connaissait que le
+dernier run : les autres n'étaient atteignables que par leur identifiant, et un run qu'on
+n'avait pas noté était un run perdu.
+
+Nouvel onglet **Runs** dans le panneau d'observation, servi par `GET /sessions/{id}/runs` :
+graine, date, état, trames reçues, PDR et attente des descentes, du plus récent au plus
+ancien. Un clic rouvre un run — ses chiffres, son plan et son journal remplacent ceux de
+l'écran, et le chantier ne bouge pas : le run n'est **pas** relié à nouveau (`bind` sert à
+noter un exercice sur l'état courant, pas à regarder un résultat passé).
+
+**Un run non terminé ne publie aucun chiffre.** Pas de mesure ne veut pas dire mesure nulle :
+ses colonnes restent vides plutôt qu'à zéro, et « 0 reçu » ne se lit pas comme un résultat.
+Même règle pour l'attente des descentes, absente d'un run qui n'en a pas planifié.
+
+**L'historique est celui du chantier, pas du stockage.** Le chantier rattache ses 16 derniers
+runs (`MAX_COMPILED`) ; un run évincé est sauté sans faire échouer la liste, et un run plus
+ancien n'est pas effacé — il cesse d'être rattaché, et reste consultable par son identifiant.
+Chaque entrée porte les liaisons équipement ↔ passerelle du run, sans lesquelles le revoir
+afficherait des équipements sans jamais dire qui a entendu qui.
+
 ### U0.5 — Convergence du point fixe : budget de réémissions cumulé
 
 Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre

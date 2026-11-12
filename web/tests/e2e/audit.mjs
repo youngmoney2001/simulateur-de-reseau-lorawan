@@ -470,6 +470,9 @@ try {
     { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
     { nom: "observation · Trame", action: () => cliquerTexte(".tab", "Trame") },
     { nom: "observation · Exercice", action: () => cliquerTexte(".tab", "Exercice") },
+    // L'onglet Runs porte un tableau : une colonne trop large y sortirait du panneau sans
+    // que rien ne le voie, l'état n'existant pas avant lui.
+    { nom: "observation · Runs", action: () => cliquerTexte(".tab", "Runs") },
     { nom: "équipement · Physique", action: () => cliquerTexte(".dtab", "Physique") },
     { nom: "équipement · Config", action: () => cliquerTexte(".dtab", "Config") },
     { nom: "équipement · CLI", action: () => cliquerTexte(".dtab", "CLI") },

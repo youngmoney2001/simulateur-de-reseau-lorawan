@@ -738,6 +738,51 @@ try {
     console.log(`ADR : ${lignes.length} changement(s) · ${canaux}`);
   });
 
+  // Les runs déjà lancés. Comparer deux réglages suppose de revoir le premier : sans cette
+  // liste, un run qu'on n'a pas noté est un run perdu. Le test porte sur le plus ancien, qui
+  // est précisément celui qu'on ne peut pas revoir autrement.
+  await step("runs du chantier : le plus ancien se revoit", async () => {
+    await obsTab("Runs");
+    await page.waitForSelector("#runs-table tbody tr", { timeout: 20_000 });
+    const lire = () => page.$$eval("#runs-table tbody tr", (trs) => trs.map((tr) => ({
+      graine: tr.children[0].textContent.trim(),
+      etat: tr.children[2].textContent.trim(),
+      recues: tr.children[3].textContent.trim(),
+      affiche: tr.classList.contains("affiche"),
+    })));
+    const lignes = await lire();
+    if (lignes.length < 2) {
+      throw new Error(`historique trop court pour comparer : ${JSON.stringify(lignes)}`);
+    }
+    // Le plus récent d'abord, et c'est celui qu'on vient de faire qui est marqué affiché.
+    if (!lignes[0].affiche) throw new Error(`run affiché non marqué : ${JSON.stringify(lignes)}`);
+    // Un run terminé publie ses chiffres : la colonne des reçues n'est pas un tiret. C'est
+    // l'inverse qu'on garde ici — des zéros sur un run en cours se liraient comme une mesure.
+    if (!/^\d+ \/ \d+$/.test(lignes[0].recues)) {
+      throw new Error(`reçues illisibles : « ${lignes[0].recues} » · ${JSON.stringify(lignes)}`);
+    }
+    await waitText("#runs-note", /runs gardés/);
+
+    const ancien = lignes[lignes.length - 1];
+    await page.evaluate(() => {
+      const trs = document.querySelectorAll("#runs-table tbody tr");
+      trs[trs.length - 1].querySelector("button").click();
+    });
+    await waitText("#sim-status", /rouvert/, 20_000);
+    const statut = await textOf("#sim-status");
+    if (!statut.includes(`graine ${ancien.graine}`)) {
+      throw new Error(`run rouvert annoncé « ${statut} », graine attendue ${ancien.graine}`);
+    }
+    // Et la liste remarque la ligne qu'on regarde : deux runs marqués, ou aucun, laisseraient
+    // croire qu'on lit l'autre.
+    await obsTab("Runs");
+    const marques = (await lire()).map((l) => l.affiche);
+    if (marques.filter(Boolean).length !== 1 || !marques[marques.length - 1]) {
+      throw new Error(`marquage de la ligne affichée : ${JSON.stringify(marques)}`);
+    }
+    await obsTab("Simulation");
+  });
+
   // Liaisons mesh observées : un relais qui a livré des trames à la frontière. C'est la seule
   // partie de la topologie que le plan puisse tracer sans inventer — voir `liaisons.js` pour
   // ce qu'on refuse de dessiner, et pourquoi.

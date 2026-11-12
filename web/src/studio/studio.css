@@ -273,6 +273,16 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .device-win .console pre { max-height:none; }
 .frame-panel { margin-top:0; border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fbfcfd; }
 .frame-panel h3 { margin:0 0 6px; font-size:13px; }
+/* --- Runs déjà lancés ------------------------------------------------------------------ */
+/* La ligne entière est cliquable : c'est le run qu'on veut revoir, pas une cellule. Le
+   survol le dit, et la ligne du run affiché reste marquée — sans quoi on ne sait plus
+   lequel des deux on a sous les yeux. */
+table.runs tbody tr { cursor:pointer; }
+table.runs tbody tr:hover { background:var(--palette); }
+table.runs tbody tr.affiche { background:#eef4fb; font-weight:600; }
+table.runs td { white-space:nowrap; }
+table.runs th { color:var(--muted); font-weight:600; }
+
 .frame-panel table { margin-top:0; }
 .frame-panel th { color:var(--muted); font-weight:600; white-space:nowrap; }
 .frame-panel td { font:12px/1.35 ui-monospace, monospace; word-break:break-all; }

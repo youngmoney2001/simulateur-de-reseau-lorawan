@@ -1739,6 +1739,132 @@ function renderSimulationIdle() {
   state.liaisonsObservees = [];
 }
 
+// --- Runs déjà lancés : revoir une simulation au lieu de n'avoir que la dernière -------------
+//
+// Comparer deux réglages suppose de revoir le premier. Sans cette liste, un run qu'on n'a pas
+// noté est un run perdu : l'atelier ne connaissait que le dernier.
+
+/** Une date courte : le jour et l'heure suffisent à retrouver un run, l'année encombre. */
+function formatInstant(secondes) {
+  if (!secondes) return "—";
+  return new Date(secondes * 1000).toLocaleString("fr-FR",
+    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+async function renderRuns() {
+  const vide = $("runs-vide"), table = $("runs-table"), lignes = $("runs-lignes");
+  if (!vide || !table || !lignes) return;
+  clear(lignes);
+  $("runs-note").textContent = "";
+  if (!state.sid) {
+    table.hidden = true;
+    vide.hidden = false;
+    vide.textContent = "Aucun chantier sélectionné.";
+    return;
+  }
+  const liste = await guard(() => state.client.runs(state.sid));
+  if (!liste) return;
+  const items = liste.items ?? [];
+  table.hidden = items.length === 0;
+  vide.hidden = items.length > 0;
+  if (!items.length) {
+    vide.textContent = "Aucun run lancé depuis ce chantier.";
+    return;
+  }
+  for (const r of items) {
+    const tr = el("tr", { class: r.run_id === state.runId ? "affiche" : undefined });
+    // Un run non terminé n'a pas de résultat : ses cases restent vides plutôt qu'à zéro.
+    // « 0 reçu » se lirait comme une mesure, alors qu'il n'y en a pas eu.
+    const fini = r.state === "done";
+    tr.append(
+      el("td", { text: r.seed === null || r.seed === undefined ? "—" : String(r.seed) }),
+      el("td", { text: formatInstant(r.created_at) }),
+      el("td", { text: r.state + (r.state === "done" ? "" : r.problem ? " : " + r.problem.message : "") }),
+      el("td", { text: fini ? `${r.received} / ${r.sent}` : "—" }),
+      el("td", { text: fini && r.pdr !== null && r.pdr !== undefined ? formatPercent(r.pdr) : "—" }),
+      el("td", { text: fini && r.downlink ? formatSecondes(r.downlink.latency_mean_s) : "—" }),
+    );
+    // La ligne entière est cliquable à la souris ; le bouton est ce qui la rend atteignable
+    // au clavier. Une ligne de tableau ne prend pas le focus : sans lui, revoir un run
+    // demanderait la souris, et le clavier ne verrait jamais l'historique.
+    const revoir = el("button", { type: "button", text: "Revoir",
+      "aria-label": `Revoir le run de la graine ${r.seed ?? "?"}, lancé `
+        + `${formatInstant(r.created_at)}`,
+      ...(fini ? {} : { disabled: "disabled",
+        title: "Ce run n'est pas terminé : il n'a pas de résultat." }) });
+    revoir.addEventListener("click", (ev) => { ev.stopPropagation(); ouvrirRun(r); });
+    tr.append(el("td", {}, revoir));
+    tr.addEventListener("click", () => ouvrirRun(r));
+    lignes.append(tr);
+  }
+  $("runs-note").textContent = items.length === 1
+    ? "Un run gardé par ce chantier. Cliquez pour le revoir."
+    : `${items.length} runs gardés par ce chantier. Cliquez pour en revoir un : `
+      + "les chiffres affichés deviennent les siens.";
+}
+
+/**
+ * Rouvre un run déjà lancé : ses résultats remplacent ceux de l'écran.
+ *
+ * Le run n'est **pas** relié à nouveau (`bind`) : relier sert à noter un exercice sur l'état
+ * courant du chantier, alors qu'ici on ne fait que regarder un résultat passé. Le chantier ne
+ * bouge donc pas.
+ */
+async function ouvrirRun(r) {
+  if (r.state !== "done") {
+    $("runs-note").textContent = `Le run ${r.run_id} n'est pas terminé : il n'a pas de résultat.`;
+    return;
+  }
+  if (state.busy) {
+    $("runs-note").textContent = "Un run est déjà en cours d'affichage.";
+    return;
+  }
+  state.busy = true;
+  try {
+    const summary = await guard(() => state.client.summary(r.run_id));
+    if (!summary) return;
+    const rows = await guard(() => collectPages(
+      (cursor) => state.client.devicesPage(r.run_id, cursor), MAX_METRIC_DEVICES));
+    if (!rows) return;
+    // Les bilans comptent les événements du run affiché : ceux du précédent n'ont plus rien à
+    // dire ici, et les laisser ferait lire l'ancien résultat comme celui qu'on vient d'ouvrir.
+    $("adr-bilan").hidden = true;
+    clear($("adr-bilan-liste"));
+    $("adr-bilan-aide").textContent = "";
+    $("proto-bilan").hidden = true;
+    clear($("proto-bilan-liste"));
+    $("proto-bilan-aide").textContent = "";
+    $("dl-bilan").hidden = true;
+    clear($("dl-bilan-liste"));
+    $("dl-bilan-aide").textContent = "";
+    clear($("sim-notes"));
+
+    state.runId = r.run_id;
+    state.deviceRows = rows;
+    state.resultats = resultatsParNoeud(rows, state.topo?.nodes ?? []);
+    state.fenetreNs = fenetreObservationNs(summary);
+    // Les liaisons viennent du run, pas de la session : le chantier a pu changer depuis, et
+    // c'est le réseau d'alors qu'on veut revoir.
+    state.liens = r.links ?? [];
+    state.passerelles = summary.gateways ?? null;
+    state.rxMatrix = summary.rx_matrix ?? null;
+    state.liaisonsObservees = calculerLiaisons();
+    renderResults(summary, (r.links ?? []).map((l) => l.gateway), rows);
+    renderLegend();
+    renderDevice();
+    syncMap();
+    await loadAnimation(r.run_id);
+    renderBilanProtocole();
+    // Le résultat se lit dans l'onglet Simulation : y ramener, sinon le clic semble sans effet.
+    selectObservationTab("sim");
+    $("sim-status").textContent = `Run ${r.run_id} (graine ${r.seed ?? "?"}) rouvert : `
+      + "les chiffres affichés sont les siens.";
+  } finally {
+    state.busy = false;
+    await renderRuns();          // la ligne affichée se marque
+  }
+}
+
 $("sim-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   // Un run qui ne part pas en silence laisse à l'écran le statut du précédent, et fait croire
@@ -1805,6 +1931,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     // L'appeler depuis `renderResults` l'aurait fait lire ceux du run précédent.
     renderBilanProtocole();
     $("sim-status").textContent = `Run ${started.run_id} terminé (graine ${seed}).`;
+    // Ce run est désormais dans l'historique du chantier : la liste le montre, sans quoi
+    // « relancer » et « revoir » resteraient la même action.
+    if (!document.querySelector('.tab-body[data-panel="runs"]').hidden) await renderRuns();
   } finally {
     state.busy = false;
     $("simulate").disabled = false;
@@ -3190,7 +3319,12 @@ document.addEventListener("keydown", (ev) => {
   annulerOuRetablir(ev.shiftKey ? "redo" : "undo");
 });
 for (const b of document.querySelectorAll(".tab"))
-  b.addEventListener("click", () => selectObservationTab(b.dataset.tab));
+  b.addEventListener("click", () => {
+    selectObservationTab(b.dataset.tab);
+    // La liste se relit à l'ouverture : un run lancé depuis une autre session, ou il y a une
+    // heure, ne serait pas connu autrement.
+    if (b.dataset.tab === "runs") renderRuns();
+  });
 wireTabs(document.querySelector(".tabs"));
 // Les onglets d'équipement et la fermeture sont câblés par fenêtre (openDeviceWindow).
 $("windows").addEventListener("pointerdown", (ev) => {

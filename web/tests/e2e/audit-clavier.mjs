@@ -283,6 +283,9 @@ try {
     { nom: "observation · Journal", action: () => cliquerTexte(".tab", "Journal") },
     { nom: "observation · Trame", action: () => cliquerTexte(".tab", "Trame") },
     { nom: "observation · Exercice", action: () => cliquerTexte(".tab", "Exercice") },
+    // L'onglet Runs est une table de lignes cliquables : au clavier, une ligne qui ne
+    // s'atteint pas est un run qu'on ne peut pas revoir.
+    { nom: "observation · Runs", action: () => cliquerTexte(".tab", "Runs") },
     { nom: "équipement · Physique", action: async () => {
       await page.evaluate(() => {
         document.querySelector('.device-win[data-node-id="capteur-a"] .close')?.click();
