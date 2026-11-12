@@ -1754,10 +1754,10 @@ function formatInstant(secondes) {
 async function renderRuns() {
   const vide = $("runs-vide"), table = $("runs-table"), lignes = $("runs-lignes");
   if (!vide || !table || !lignes) return;
-  clear(lignes);
   $("runs-note").textContent = "";
   if (!state.sid) {
     table.hidden = true;
+    lignes.replaceChildren();
     vide.hidden = false;
     vide.textContent = "Aucun chantier sélectionné.";
     return;
@@ -1768,9 +1768,14 @@ async function renderRuns() {
   table.hidden = items.length === 0;
   vide.hidden = items.length > 0;
   if (!items.length) {
+    lignes.replaceChildren();
     vide.textContent = "Aucun run lancé depuis ce chantier.";
     return;
   }
+  // Les lignes se construisent **avant** de remplacer : vider la table puis attendre le
+  // serveur donnait un tableau vide pendant l'aller-retour, et un clic arrivant là ne
+  // trouvait plus rien à ouvrir.
+  const rows = [];
   for (const r of items) {
     const tr = el("tr", { class: r.run_id === state.runId ? "affiche" : undefined });
     // Un run non terminé n'a pas de résultat : ses cases restent vides plutôt qu'à zéro.
@@ -1795,8 +1800,9 @@ async function renderRuns() {
     revoir.addEventListener("click", (ev) => { ev.stopPropagation(); ouvrirRun(r); });
     tr.append(el("td", {}, revoir));
     tr.addEventListener("click", () => ouvrirRun(r));
-    lignes.append(tr);
+    rows.push(tr);
   }
+  lignes.replaceChildren(...rows);
   $("runs-note").textContent = items.length === 1
     ? "Un run gardé par ce chantier. Cliquez pour le revoir."
     : `${items.length} runs gardés par ce chantier. Cliquez pour en revoir un : `

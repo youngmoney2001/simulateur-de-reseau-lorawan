@@ -776,6 +776,8 @@ try {
     // Et la liste remarque la ligne qu'on regarde : deux runs marqués, ou aucun, laisseraient
     // croire qu'on lit l'autre.
     await obsTab("Runs");
+    // La liste est relue à l'ouverture de l'onglet : les lignes reviennent avec le serveur.
+    await page.waitForSelector("#runs-table tbody tr", { timeout: 20_000 });
     const marques = (await lire()).map((l) => l.affiche);
     if (marques.filter(Boolean).length !== 1 || !marques[marques.length - 1]) {
       throw new Error(`marquage de la ligne affichée : ${JSON.stringify(marques)}`);
