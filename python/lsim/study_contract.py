@@ -63,6 +63,44 @@ class SensorSettings(_Strict):
     # ne consomment pas la même chose (mesuré : 10 à 11 % de courant moyen), et les
     # comparer dans un même run est précisément l'intérêt du réglage.
     energy_profile: Optional[EnergyProfileName] = None
+    # Classe d'écoute et descentes à l'initiative du réseau. Les deux sont optionnels et
+    # quittent le scénario compilé quand ils valent leur défaut : un chantier écrit avant
+    # garde ses chiffres.
+    device_class: DeviceClass = "A"
+    downlink: Optional[DownlinkSettings] = None
+
+
+# Classe d'écoute d'un capteur. « A » est le défaut et n'est **pas** écrit dans le scénario
+# compilé : un chantier écrit avant garde donc ses chiffres et son empreinte.
+DeviceClass = Literal["A", "B", "C"]
+
+
+class DownlinkSettings(_Strict):
+    """Le serveur veut envoyer une commande au terminal, sans que le terminal l'ait demandée.
+
+    C'est le seul réglage de l'atelier que la classe d'écoute change vraiment. Un ACK est
+    déclenché par un uplink : il tombe dans RX1 ou RX2 quelle que soit la classe. Ici la
+    demande naît à un instant que le terminal n'a pas choisi, et la classe décide de la
+    fenêtre — donc de l'attente.
+
+    `count` > 1 exige `request_period_s` : sinon toutes les demandes partiraient au même
+    instant, ce qui n'a pas de sens et que le moteur refuse.
+    """
+
+    count: int = Field(1, ge=1, le=100_000)
+    first_request_s: float = Field(0.0, ge=0, le=86_400)
+    request_period_s: float = Field(0.0, ge=0, le=86_400)
+    # Classe B : 0 = un slot de ping toutes les ~0,96 s, 7 = un slot par période de 128 s.
+    # Sans effet en A et en C — il est accepté partout pour qu'un chantier puisse changer de
+    # classe sans perdre le réglage, mais il ne pèse que sur B.
+    periodicity: int = Field(0, ge=0, le=7)
+    clock_drift_ppm: int = Field(0, ge=0, le=1000)
+
+    @model_validator(mode="after")
+    def _une_periode_si_plusieurs(self) -> "DownlinkSettings":
+        if self.count > 1 and self.request_period_s <= 0:
+            raise ValueError("request_period_s doit être strictement positif si count > 1")
+        return self
 
 
 MeshBandwidth = Literal["203", "406", "812", "1625"]      # comme `MeshModel` (scénario)

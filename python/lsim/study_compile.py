@@ -309,6 +309,17 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         # chiffres et son empreinte.
         if r.energy_profile is not None:
             group["energy"] = {"profile": r.energy_profile}
+        # Classe d'écoute et descentes réseau : posés seulement s'ils quittent le défaut.
+        # Un chantier écrit avant garde donc exactement son scénario — empreinte comprise.
+        if r.device_class != "A":
+            group["device_class"] = r.device_class
+        if r.downlink is not None:
+            d = r.downlink
+            bloc = {"count": d.count, "first_request_s": d.first_request_s,
+                    "periodicity": d.periodicity, "clock_drift_ppm": d.clock_drift_ppm}
+            if d.count > 1:
+                bloc["request_period_s"] = d.request_period_s
+            group["downlink"] = bloc
         groups.append(group)
 
     scenario: dict = {

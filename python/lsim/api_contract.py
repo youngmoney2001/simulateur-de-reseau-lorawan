@@ -191,6 +191,22 @@ class DeviceRowOut(_Strict):
     lost_mesh: Optional[int] = Field(default=None, ge=0)  # mesh seulement (voir Totals)
     energy_per_message_j: Optional[float] = None
     average_current_ua: Optional[float] = None
+    # Descentes à l'initiative du réseau, **pour ce dispositif**. `None` : il n'en a demandé
+    # aucune, ou le chemin de calcul ne les porte pas.
+    #
+    # `downlink_latency_s` est la moyenne des attentes de ses propres descentes. Jointe à
+    # l'instant de la demande, que détient le scénario, elle dit **quand** la passerelle a
+    # émis — c'est ce qui permet d'animer l'attente au lieu de la résumer en un chiffre.
+    # La prudence est de mise : cette date d'arrivée est reconstituée de deux grandeurs
+    # calculées par le run, ce n'est pas un événement lu dans la trace.
+    downlink_delivered: Optional[int] = Field(default=None, ge=0)
+    downlink_latency_s: Optional[float] = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _latence_seulement_si_livree(self) -> "DeviceRowOut":
+        if self.downlink_latency_s is not None and self.downlink_delivered is None:
+            raise ValueError("downlink_latency_s exige downlink_delivered")
+        return self
 
 
 class MeshInboundOut(_Strict):
@@ -390,6 +406,98 @@ class RegionInfo(_Strict):
     sub_bands: bool
 
 
+class PeriodiciteInfo(_Strict):
+    """Une périodicité de ping slot (classe B) : 0 à 7, du plus bavard au plus rare.
+
+    L'intervalle entre deux slots vient du moteur, pas d'une table recopiée : la période de
+    balise est de 128 s, et une périodicité `k` ouvre `2**(7 - k)` slots par période.
+    """
+
+    value: int = Field(ge=0, le=7)
+    slots_par_periode: int = Field(ge=1)
+    intervalle_s: float = Field(gt=0)
+
+
+class DeviceClassInfo(_Strict):
+    """Une classe d'écoute, **et ce qu'elle change** — ou ne change pas.
+
+    `change` est le point sensible. Un ACK, une réponse MAC ou une charge descendante
+    périodique sont déclenchés par un uplink : ils tombent dans RX1 ou RX2 quelle que soit
+    la classe. La classe ne pèse que sur les descentes à l'initiative du réseau. Le dire ici
+    évite un sélecteur qui laisserait croire à un réglage général.
+
+    `ordre` : rang indicatif d'attente, pour que l'interface puisse avertir. La classe B
+    n'est pas « meilleure que A » : selon sa périodicité elle l'encadre. C'est `periodicity`
+    qui décide, et l'intervalle est servi avec.
+    """
+
+    name: str = Field(max_length=1, pattern=r"^[ABC]$")
+    label: str = Field(max_length=128)
+    # Quand la fenêtre est ouverte, en une phrase. Vide de tout chiffre : les chiffres sont
+    # mesurés par le run, pas promis par le catalogue.
+    ouverture: str = Field(max_length=256)
+    # Ce que la classe ne change **pas** : c'est le garde-fou contre un réglage qu'on croirait
+    # général. Renseigné ici plutôt que dans l'interface, pour que les deux disent la même chose.
+    ne_change_pas: str = Field(max_length=256)
+    periodicites: tuple[PeriodiciteInfo, ...] = ()      # classe B seulement
+
+
+class DeviceClassList(_Strict):
+    classes: list[DeviceClassInfo] = Field(max_length=8)
+    # Rappel servi avec la liste : une classe plus « réactive » coûte l'écoute, donc
+    # l'énergie. Sans cette phrase, choisir C paraîtrait gratuit.
+    cout: str = Field(max_length=256)
+
+
+def classes_ecoute() -> DeviceClassList:
+    """Les classes d'écoute et ce qu'elles changent, depuis le moteur.
+
+    Source unique : `lsim.class_b` pour la période de balise et le nombre de slots. Rien
+    n'est recopié, donc rien ne peut dériver du moteur.
+    """
+    from lsim.class_b import BEACON_PERIOD_NS
+
+    periode_s = BEACON_PERIOD_NS / 1e9
+    periodicites = tuple(
+        PeriodiciteInfo(value=k, slots_par_periode=2 ** (7 - k),
+                        intervalle_s=periode_s / 2 ** (7 - k))
+        for k in range(8))
+    return DeviceClassList(
+        classes=[
+            DeviceClassInfo(
+                name="A",
+                label="Classe A — écoute après avoir émis",
+                ouverture="Juste après chacune de ses émissions (RX1, puis RX2 en repli). "
+                          "Le reste du temps, le terminal dort.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+            ),
+            DeviceClassInfo(
+                name="B",
+                label="Classe B — écoute à des créneaux annoncés",
+                ouverture="En plus de RX1/RX2, à des créneaux de ping réguliers calés sur "
+                          "une balise de la passerelle, tous les 128 s.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+                # Servies ici pour que l'interface n'ait pas à recalculer un intervalle, et
+                # surtout pour qu'elle puisse montrer que la périodicité décide — une classe
+                # B lente attend plus longtemps qu'une classe A.
+                periodicites=periodicites,
+            ),
+            DeviceClassInfo(
+                name="C",
+                label="Classe C — écoute en permanence",
+                ouverture="Presque tout le temps ; le terminal ne renonce à écouter que "
+                          "pendant ses propres émissions.",
+                ne_change_pas="Un ACK ou une réponse MAC : déclenchés par un uplink, ils "
+                              "tombent dans RX1 ou RX2 quelle que soit la classe.",
+            ),
+        ],
+        cout="Une classe plus réactive coûte l'écoute : C écoute en permanence, B à chaque "
+             "créneau. Le surcoût d'énergie se lit dans le courant moyen du run, pas ici.",
+    )
+
+
 class RegionList(_Strict):
     regions: list[RegionInfo] = Field(max_length=16)
 
@@ -535,6 +643,7 @@ _MODELS = {
     "trace_event": TraceEvent,
     "problem": Problem,
     "region_list": RegionList,
+    "device_class_list": DeviceClassList,
     "material_list": MaterialList,
     "terrain_list": TerrainList,
     **_STUDY_MODELS,

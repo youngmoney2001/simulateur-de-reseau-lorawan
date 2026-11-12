@@ -128,12 +128,19 @@ def descentes_reseau(devices, scenario: Scenario) -> Optional[DownlinkSummary]:
     emprunte donc **que** les compteurs de descente ; ses compteurs d'uplink sont jetés, le
     run gardant ceux de son propre chemin.
 
-    Ce que ce passage ne voit pas, et pourquoi c'est sans conséquence mesurable : la charge
-    MAC réservée et l'ADR allongent les trames **sans décaler leur début** (vérifié par
-    `test_mac_payload_does_not_move_transmission_starts`), or l'attente se compte sur les
-    instants de début. Reste RX1, qui s'ouvre après la **fin** de l'émission : une trame
-    allongée décale donc la latence d'au plus la durée ajoutée — 15 ms pour 10 octets à
-    SF7, soit 0,03 % des 51 s que la classe A attend.
+    Ce que ce passage ne voit pas, et pourquoi c'est sans conséquence mesurable :
+
+    - la charge MAC réservée et l'ADR allongent les trames **sans décaler leur début**
+      (vérifié par `test_mac_payload_does_not_move_transmission_starts`), or l'attente se
+      compte sur les instants de début. Reste RX1, qui s'ouvre après la **fin** de
+      l'émission : une trame allongée décale donc la latence d'au plus la durée ajoutée —
+      15 ms pour 10 octets à SF7, soit 0,03 % des 51 s que la classe A attend ;
+    - sur un scénario **multi-passerelles**, le passage ne voit que la première. Les
+      instants d'émission sont pourtant les mêmes dans les deux formes (vérifié par
+      `test_emissions_start_at_the_same_instants_in_single_and_multi_gateway`), et l'attente
+      n'est faite que de ces instants et de la classe : la latence est donc la même. Le
+      restreindre au mono-passerelle l'aurait rendue invisible depuis l'atelier, dont toute
+      session compile en forme `gateways` — fût-elle à une seule passerelle.
 
     `None` si aucun terminal n'en déclare : un objet de zéros dirait « aucune descente
     livrée », ce qui serait faux d'un run qui n'en a pas demandé.

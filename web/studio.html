@@ -231,6 +231,14 @@
             <ul id="proto-bilan-liste" class="notes"></ul>
             <p id="proto-bilan-aide" class="gw-aide muted"></p>
           </div>
+          <!-- Les descentes à l'initiative du réseau : combien le serveur en a voulu, combien
+               sont parties, et après quelle attente. Bloc masqué si le run n'en a planifié
+               aucune — un encadré de zéros laisserait croire à une mesure qui n'a pas eu lieu. -->
+          <div id="dl-bilan" hidden>
+            <h3>Commandes envoyées par le serveur</h3>
+            <ul id="dl-bilan-liste" class="notes"></ul>
+            <p id="dl-bilan-aide" class="gw-aide muted"></p>
+          </div>
           <table id="sim-results" hidden>
             <thead>
               <tr><th>Passerelle</th><th>Reçues</th><th>Pertes</th><th>Latence p95</th><th>Relais mesh</th></tr>

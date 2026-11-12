@@ -148,13 +148,26 @@ export function createPlayer({ svg, panel, positionOf, onActive = null }) {
     // events : TraceEvent[] ; segments : sortie de segmentsFromEvents ; groups : table dispositif -> capteur.
     load({ events, segs, groups }) {
       segments = segs;
+      // Le journal ne porte que des événements : les descentes réseau n'en sont pas, elles
+      // sont reconstituées. Les y ajouter décalerait les index, et l'inspecteur de trames
+      // ouvrirait la mauvaise trame. Elles vivent donc dans les segments et dans la note.
       rows = events.map((e) => journalRow(e, groups));
       bounds = timelineBounds(events);
+      // La fenêtre doit couvrir les descentes : une classe A répond après son dernier
+      // uplink, et une timeline arrêtée à la dernière trame ne la montrerait jamais.
+      for (const seg of segs) {
+        if (seg.t0 > bounds.endNs) bounds = { ...bounds, endNs: seg.t0 };
+      }
       clock = Number(bounds.startNs);
       setPlaying(false);
       renderJournal();
       panel.hidden = false;
-      $("play-note").textContent = `${events.length} événements, ${segs.length} sauts.`;
+      const descentes = segs.filter((s) => s.downlink).length;
+      const note = descentes
+        ? `${events.length} événements, ${segs.length} sauts `
+          + `(dont ${descentes} de descentes réseau).`
+        : `${events.length} événements, ${segs.length} sauts.`;
+      $("play-note").textContent = note;
       draw();
     },
     // Appelé après chaque redessin du plan (qui supprime la couche).

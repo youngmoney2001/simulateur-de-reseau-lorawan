@@ -51,7 +51,7 @@ from pydantic import ValidationError
 from lsim.api_contract import (
     API_VERSION, MAX_BODY_BYTES, MAX_PAGE_SIZE, MAX_TRACE_EVENTS_PER_RUN, TERRAIN_ID_PATTERN,
     DevicePage, DeviceRowOut, DownlinkOut, DutyCycleOut, GatewayLoadOut, GatewayReportOut,
-    Problem,
+    Problem, classes_ecoute,
     RunCreate, RunStatus,
     RunSummary, TerrainInfo, TerrainList, Totals, TracePage, TraceEvent, ValidateRequest,
     ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
@@ -512,7 +512,14 @@ def _sf_final_par_dispositif(records) -> dict[int, int]:
     return out
 
 
-def _descentes_reseau(devices, scenario: Scenario) -> Optional[dict[str, Any]]:
+def _descentes_reseau(devices, scenario: Scenario) -> tuple[Optional[dict[str, Any]], tuple]:
+    """(résumé publié, détail par dispositif) des descentes réseau, en un seul passage.
+
+    Le détail est rendu en même temps que le résumé parce qu'un seul appel natif produit les
+    deux : le séparer obligerait soit à calculer deux fois, soit à mémoriser le résultat dans
+    un état partagé — or `_compute` tourne dans un thread par run, et un état partagé y serait
+    une race, pas une économie.
+    """
     """Descentes à l'initiative du réseau : latence par classe, calculée par le moteur.
 
     Pourquoi un second passage natif plutôt qu'un greffon sur la trace : le seul point
@@ -528,16 +535,22 @@ def _descentes_reseau(devices, scenario: Scenario) -> Optional[dict[str, Any]]:
     décale donc la latence d'au plus la durée ajoutée — 15 ms pour 10 octets à SF7, soit
     0,03 % des 51 s que la classe A attend.
 
-    `None` si aucun terminal n'en déclare, ou hors mono-passerelle : un objet de zéros
-    dirait « aucune descente livrée », ce qui serait faux d'un run qui n'en a pas demandé.
+    S'applique aussi en multi-passerelles : les instants d'émission y sont les mêmes qu'en
+    mono (mesuré), et l'attente n'est faite que de ces instants et de la classe. Le réserver
+    au mono l'aurait rendu invisible depuis l'atelier, dont toute session compile en forme
+    `gateways`.
+
+    `None` si aucun terminal n'en déclare : un objet de zéros dirait « aucune descente
+    livrée », ce qui serait faux d'un run qui n'en a pas demandé.
     """
     # Même fabrique que l'export : un scénario donne les mêmes chiffres par les deux chemins.
-    from lsim.export import descentes_reseau
-    resume = descentes_reseau(devices, scenario)
-    return None if resume is None else DownlinkOut(
+    from lsim.export import passage_descentes
+    resume, dl_par = passage_descentes(devices, scenario)
+    publie = None if resume is None else DownlinkOut(
         requested=resume.requested, delivered=resume.delivered,
         latency_mean_s=resume.latency_mean_s,
         latency_max_s=resume.latency_max_s).model_dump(exclude_none=True)
+    return publie, dl_par
 
 
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
@@ -755,7 +768,6 @@ class RunService:
             totals, per_device, events = mt.totals, mt.per_device, mt.events
             mesh_lost_total, mesh_lost_by_device = mt.lost_mesh, mt.lost_mesh_by_device
             loads = mt.mesh_loads if mt.mesh_loads is not None else [None] * len(mt.gateway_names)
-            descentes = None
             metrics = gateway_metrics(events, mt.gateway_names)
             gateway_load, gateways = None, [
                 GatewayReportOut(name=name, received=g.received, lost_sensitivity=g.lost_sensitivity,
@@ -771,10 +783,6 @@ class RunService:
             tr = build_trace(scenario, job.options)
             totals, per_device, events = tr.totals, tr.per_device, tr.events
             gateway_load, gateways = tr.gateway, None
-            # Descentes réseau : mono-passerelle seulement, comme `rx_matrix` — hors de ce
-            # chemin le second passage ne verrait pas les autres passerelles et publierait
-            # une latence calculée sur une topologie qui n'est pas celle du run.
-            descentes = _descentes_reseau(devices, scenario)
             # Seule la voie mono porte les enregistrements d'émission, et c'est aussi la seule
             # où l'ADR est simulé : le SF final n'a de sens que là. Sur la voie multi il reste
             # absent, plutôt que de recopier le SF initial en laissant croire à une observation.
@@ -788,6 +796,9 @@ class RunService:
             # configuration de départ en laissant croire à une décision du serveur.
             canaux = dict(tr.device_channels or {})
         self._set(run_id, 0.7)
+        # Les descentes se calculent quel que soit le chemin, et après lui : le passage ne
+        # dépend ni de la trace ni du nombre de passerelles.
+        descentes, dl_par = _descentes_reseau(devices, scenario)
         if job.energy_profile is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
             dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
@@ -815,6 +826,12 @@ class RunService:
                 lost_mesh=(mesh_lost_by_device[i] if mesh_lost_by_device is not None else None),
                 energy_per_message_j=getattr(e, "energy_per_message_j", None),
                 average_current_ua=getattr(e, "average_current_ua", None),
+                # Latence de descente de ce dispositif, publiée pour que l'atelier puisse
+                # situer l'émission dans le temps au lieu de n'afficher qu'une moyenne.
+                # `dl_par` est vide hors mono-passerelle : le champ reste alors absent.
+                downlink_delivered=(dl_par[i].delivered if dl_par else None),
+                downlink_latency_s=(dl_par[i].latency_sum_ns / 1e9 / dl_par[i].requested
+                                    if dl_par and dl_par[i].requested else None),
             ).model_dump(exclude_none=True))
         # Invariant : la somme des compteurs par dispositif égale les totaux publiés.
         if (sum(r["sent"] for r in rows) != totals.sent
@@ -1107,6 +1124,11 @@ class _Handler(BaseHTTPRequestHandler):
         # choix par équipement, et les libellés doivent venir du moteur, pas de lui.
         if method == "GET" and rest == "energy-profiles":
             return 200, list_energy_profiles().model_dump()
+        # Classes d'écoute, avec ce qu'elles changent — et ce qu'elles ne changent pas. Les
+        # intervalles entre créneaux de ping viennent du moteur : l'interface n'a donc aucune
+        # table à recopier, et ne peut pas annoncer un intervalle que le moteur ne tient pas.
+        if method == "GET" and rest == "device-classes":
+            return 200, classes_ecoute().model_dump()
         # Modèles de passerelle du catalogue, avec ce que chacun change : sans cela,
         # présenter trois modèles au seuil identique ferait croire à un choix.
         if method == "GET" and rest == "gateway-profiles":

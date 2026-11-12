@@ -178,3 +178,36 @@ def test_the_published_example_keeps_its_numbers():
     assert par_groupe["classe-c"] == pytest.approx(0.0, abs=1e-6)
     assert 50.0 < par_groupe["classe-a"] < 52.0
     assert 0.0 < par_groupe["classe-b"] < par_groupe["classe-a"]
+
+
+def test_emissions_start_at_the_same_instants_in_single_and_multi_gateway():
+    """Mesure dont dépend la latence publiée depuis l'atelier.
+
+    Toute session de l'atelier compile en forme `gateways`, fût-elle à une seule passerelle.
+    Réserver les descentes au mono les y aurait rendues invisibles. On les publie donc aussi
+    en multi, et ce test dit pourquoi c'est légitime : **les instants d'émission sont les
+    mêmes dans les deux formes**, or l'attente n'est faite que de ces instants et de la
+    classe d'écoute. Deux passerelles changent qui entend quoi, pas quand le terminal émet.
+    """
+    from lsim.scenario import Scenario, ScenarioModel
+    from lsim.trace_events import ProtocolOptions, build_multi_trace, build_trace
+
+    gr = [{"name": "c1", "count": 1,
+           "placement": {"type": "explicit", "positions": [[100.0, 0.0]]},
+           "spreading_factor": 7, "period_s": 60, "messages": 3},
+          {"name": "c2", "count": 1,
+           "placement": {"type": "explicit", "positions": [[250.0, 0.0]]},
+           "spreading_factor": 9, "period_s": 60, "messages": 3}]
+    entete = {"schema_version": 1, "name": "t", "seed": 7}
+    multi = Scenario(ScenarioModel.model_validate(
+        {**entete, "gateways": [{"x_m": 0, "y_m": 0, "name": "g1"},
+                                {"x_m": 500, "y_m": 0, "name": "g2"}],
+         "groups": gr}))
+    mono = Scenario(ScenarioModel.model_validate(
+        {**entete, "gateway": {"x_m": 0, "y_m": 0}, "groups": gr}))
+    assert multi.is_multi_gateway and not mono.is_multi_gateway
+
+    opt = ProtocolOptions()
+    instants_multi = sorted({e.t_ns for e in build_multi_trace(multi, opt).events})
+    instants_mono = sorted({e.t_ns for e in build_trace(mono, opt).events})
+    assert instants_multi == instants_mono == [0, 60 * 10**9, 120 * 10**9]

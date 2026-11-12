@@ -409,6 +409,11 @@ body.en-pose .tool:hover { background:var(--accent); color:#fff; }
 .anim-ok { stroke:#2e7d32; fill:#2e7d32; }
 .anim-lost { stroke:#c62828; fill:#c62828; }
 .anim-neutral { stroke:#546e7a; fill:#546e7a; }
+/* Descentes à l'initiative du réseau : ni vert (reçue) ni rouge (perdue). Une couleur à part,
+   parce que ce sont les seules flèches que le réseau déclenche de lui-même — les autres
+   répondent à un uplink. Violet, distinct des trois, pour qu'une flèche descendante ne se
+   lise pas comme un acquittement. */
+.anim-dl { stroke:#6a1b9a; fill:#6a1b9a; }
 #anim-layer .trail { stroke-width:2; stroke-opacity:.45; stroke-dasharray:4 3; }
 #anim-layer .frame { stroke:#fff; stroke-width:1; }
 #anim-layer .ring { fill:none; stroke-width:2; }

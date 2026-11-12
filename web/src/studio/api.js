@@ -56,6 +56,10 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     attempts: (sid) => request("GET", `${s(sid)}/attempts`),
     exercises: () => request("GET", "/api/v1/exercises"),
     energyProfiles: () => request("GET", "/api/v1/energy-profiles"),
+    // Classes d'écoute, avec ce qu'elles changent et les intervalles entre créneaux de ping
+    // de la classe B. Tout vient du moteur : rien n'est recopié dans l'interface, donc rien
+    // ne peut annoncer un intervalle que le moteur ne tient pas.
+    deviceClasses: () => request("GET", "/api/v1/device-classes"),
     gatewayProfiles: () => request("GET", "/api/v1/gateway-profiles"),
     terrains: () => request("GET", "/api/v1/terrains"),
     // Matériaux d'obstacle : la perte est calculée par le moteur à la fréquence et à

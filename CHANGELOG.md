@@ -50,6 +50,24 @@ de l'ordre de 15 ms, soit 0,03 % des 51 s de la classe A. Gardé par
 son empreinte (`downlink` quitte le hachage quand il est absent, comme `device_class` valant
 `"A"`). Colonnes Parquet et lignes de rapport ajoutées seulement si le run en planifie.
 
+**Exposé dans l'atelier.** Réglage par capteur (classe d'écoute + « le serveur envoie une
+commande ») et animation de l'attente sur le plan : la flèche « serveur → passerelle » part à
+l'instant voulu, la flèche « passerelle → capteur » à l'instant où la fenêtre s'est ouverte, et
+l'écart visible **est** l'attente. Nouvel endpoint `GET /device-classes` : les libellés, la
+phrase d'ouverture et les intervalles entre créneaux de ping viennent du moteur, jamais
+recopiés.
+
+Le bloc dit ce que la classe **ne** change pas (un ACK tombe dans RX1/RX2 quelle que soit la
+classe), et avertit dès qu'une classe B peut attendre plus longtemps qu'une classe A. La
+périodicité n'apparaît qu'en classe B : ailleurs elle n'a aucun effet. L'animation ne trace
+rien pour plusieurs commandes, la latence publiée étant alors une moyenne — dater chaque
+émission de cette moyenne inventerait un instant.
+
+**Publié aussi en multi-passerelles.** Toute session de l'atelier compile en forme `gateways`,
+fût-elle à une seule passerelle ; le réserver au mono l'y aurait rendu invisible. Mesuré : les
+instants d'émission sont identiques dans les deux formes, or l'attente n'est faite que de ces
+instants et de la classe.
+
 ### U0.5 — Convergence du point fixe : budget de réémissions cumulé
 
 Septième jalon de la refonte U0. Il traite le défaut laissé ouvert par U0.4-bis : **quatre

@@ -6,16 +6,18 @@ import {
   validateNewNode, validateNewNodeGeo, validateSensor, sensorFormFrom, nodeCaption,
   validateGateway, REGIONS_A_SOUS_BANDE, SOUS_BANDES, BANDES_MESH_KHZ,
   GATEWAY_LIMITS, AVANCE_EN_CLI, adrMessage, adrStatut, modelesAdmis, aideModele,
+  CLASSES_ECOUTE, CLASSE_DEFAUT, DOWNLINK_LIMITS, CLASSE_A_PERIODICITE,
+  attenteAttendue, classeBPlusLenteQueA,
 } from "./topology.js";
 import { protocoleMessage, protocoleStatut } from "./topology.js";
 import { createHistory, promptText } from "./console.js";
-import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows } from "./results.js";
+import { gatewayRows, scoreLine, criteriaRows, formatPercent, frameRows, formatSecondes } from "./results.js";
 import { indicateursReseau, ventilationGroupes, ventilationTable, fenetreObservationNs,
   resultatsParNoeud, echellePdr, lignesResultat,
   limitesParGroupe, fenetreVerdictTexte, texteFenetreACouvrir, messagesPourFenetre,
   autonomieAns, autonomieTexte, entier,
   bilanAdr, bilanProtocole, planCanaux } from "./metrics.js";
-import { collectPages, deviceGroupsFromRows, segmentsFromEvents } from "./animation.js";
+import { collectPages, deviceGroupsFromRows, segmentsFromEvents, segmentsDescentes } from "./animation.js";
 import { createPlayer } from "./player.js";
 // `toMeters` existe déjà dans topology.js (écran -> mètres) : on préfixe pour éviter
 // toute confusion entre les deux conversions.
@@ -59,6 +61,7 @@ const state = {
   modelesMateriel: [],   // lus au moteur : les libelles viennent de lui, jamais recopies
   modelesPasserelle: [], // catalogue du moteur : modele, seuil, et ce qu'il sait faire
   materiaux: [],         // catalogue du moteur : perte et caractere extrapole, a 868 MHz
+  classesEcoute: [],     // classes d'ecoute : libelles, ouverture et creneaux viennent du moteur
   traceMur: false,       // mode « tracer un mur » : le plan attend un rectangle
   map: null,         // carte 3D, creee au premier affichage : Cesium est volumineux
   mapFailed: false,  // WebGL refuse : on ne retente pas et le plan 2D prend le relais
@@ -145,6 +148,10 @@ async function connect() {
   // son caractère extrapolé aussi. EU868 par défaut — c'est le plan de la plupart des runs.
   const materiaux = await guard(() => state.client.materials(868.1e6, 0.2));
   if (materiaux) state.materiaux = materiaux.materials ?? [];
+  // Classes d'écoute : les intervalles entre créneaux de la classe B viennent du moteur, donc
+  // l'interface ne peut pas annoncer une attente qu'il ne tiendrait pas.
+  const classes = await guard(() => state.client.deviceClasses());
+  if (classes) state.classesEcoute = classes.classes ?? [];
   // La palette et le formulaire d'ajout sont dessinés au chargement, avant que le moteur
   // ait répondu : ils se redessinent donc ici, sinon les capteurs resteraient un modèle
   // générique alors que le moteur en déclare deux.
@@ -1393,6 +1400,132 @@ function renderConsole(node, body) {
   body.append(el("div", { class: "console" }, out, form));
 }
 
+/**
+ * Classe d'écoute et descentes à l'initiative du réseau : un seul bloc, parce que l'une sans
+ * l'autre n'a pas de sens à montrer.
+ *
+ * Trois garde-fous, tous dictés par ce que le moteur calcule :
+ * - la classe est accompagnée de ce qu'elle **ne** change pas (un ACK tombe dans RX1/RX2
+ *   quelle que soit la classe), sinon le sélecteur se lit comme un réglage général ;
+ * - la périodicité des créneaux n'apparaît qu'en classe B : ailleurs elle n'a aucun effet, et
+ *   un champ sans effet n'est pas un champ grisé, c'est un champ absent ;
+ * - dès que la classe B peut attendre **plus** que la classe A, le bloc le dit. Présenter
+ *   « classe B » sans cette phrase laisse croire à une amélioration, ce qui est faux la
+ *   plupart du temps : un créneau par période de 128 s attend plus qu'un uplink.
+ */
+function blocEcouteEtDescente(node, values, fields) {
+  // Les libellés et les intervalles viennent du moteur. Sans sa réponse, le bloc ne s'affiche
+  // pas : plutôt rien qu'un choix dont on inventerait le sens.
+  const classes = state.classesEcoute;
+  if (!classes.length) return [];
+
+  const select = el("select", { name: "device_class" });
+  for (const c of classes) {
+    select.append(el("option", { value: c.name, text: c.label,
+      selected: (values.device_class ?? CLASSE_DEFAUT) === c.name ? "selected" : undefined }));
+  }
+  fields.device_class = select;
+
+  const ouverture = el("p", { class: "muted aide" });
+  const neChangePas = el("p", { class: "muted aide" });
+  const alerte = el("p", { class: "muted aide", hidden: "" });
+
+  // --- Le bloc descente ---------------------------------------------------------------------
+  const cocher = el("input", { type: "checkbox", name: "downlink_on",
+    ...(values.downlink ? { checked: "checked" } : {}) });
+  const champs = el("div", { class: "sensor-form", hidden: values.downlink ? undefined : "" });
+  const dl = values.downlink ?? { count: 1, first_request_s: 0, request_period_s: 0, periodicity: 0 };
+  const dlFields = {};
+  const nombre = (key, label, step = "1") => {
+    const [lo, hi] = DOWNLINK_LIMITS[key];
+    const input = el("input", { type: "number", name: `downlink_${key}`, min: lo, max: hi,
+      step, value: dl[key] ?? "" });
+    dlFields[key] = input;
+    return el("label", {}, label, input);
+  };
+  const rangPeriode = el("label", {}, "Écart entre deux envois (s)",
+    (dlFields.request_period_s = el("input", { type: "number", name: "downlink_request_period_s",
+      min: DOWNLINK_LIMITS.request_period_s[0], max: DOWNLINK_LIMITS.request_period_s[1],
+      step: "any", value: dl.request_period_s ?? "" })));
+  const choixPeriodicite = el("select", { name: "downlink_periodicity" });
+  const rangPeriodicite = el("label", {}, "Fréquence des créneaux", choixPeriodicite);
+  champs.append(
+    nombre("count", "Nombre de commandes"),
+    nombre("first_request_s", "Premier envoi à (s)", "any"),
+    rangPeriode,
+    rangPeriodicite,
+  );
+
+  // Le champ « écart » n'a de sens qu'à partir de deux commandes ; la périodicité n'en a qu'en
+  // classe B. Les deux se masquent donc — un champ qui n'a pas d'effet ne se grise pas, il
+  // disparaît.
+  function rafraichir() {
+    const classe = select.value;
+    const info = classes.find((c) => c.name === classe);
+    ouverture.textContent = info?.ouverture ?? "";
+    neChangePas.textContent = info?.ne_change_pas ?? "";
+
+    champs.hidden = !cocher.checked;
+    rangPeriode.hidden = Number(dlFields.count.value) <= 1;
+
+    const estB = classe === CLASSE_A_PERIODICITE;
+    rangPeriodicite.hidden = !estB;
+    // Les périodicités et leurs intervalles sont celles du moteur ; on ne recalcule rien.
+    if (estB && !choixPeriodicite.options.length) {
+      for (const p of info?.periodicites ?? []) {
+        const texte = `un créneau toutes les ${formatSecondes(p.intervalle_s)}`
+          + ` (${p.slots_par_periode} par période de 128 s)`;
+        choixPeriodicite.append(el("option", { value: String(p.value), text: texte,
+          selected: String(dl.periodicity ?? 0) === String(p.value) ? "selected" : undefined }));
+      }
+    }
+
+    // L'avertissement qui compte : une classe B lente attend plus longtemps qu'une classe A.
+    const intervalle = estB
+      ? (info?.periodicites ?? []).find((p) => String(p.value) === choixPeriodicite.value)
+          ?.intervalle_s
+      : undefined;
+    const periode = Number(fields.period_s?.value);
+    const plusLente = estB ? classeBPlusLenteQueA(intervalle, periode) : null;
+    if (plusLente === true) {
+      alerte.textContent = `À cette fréquence, le terminal attend son créneau jusqu'à`
+        + ` ${formatSecondes(intervalle)} — davantage que la classe A, qui n'attend que sa`
+        + ` prochaine émission (${formatSecondes(periode)}). La classe B n'est pas une classe A`
+        + ` plus rapide : c'est la fréquence des créneaux qui décide.`;
+      alerte.hidden = undefined;
+    } else {
+      alerte.hidden = "";
+    }
+  }
+
+  select.addEventListener("change", rafraichir);
+  cocher.addEventListener("change", rafraichir);
+  dlFields.count.addEventListener("input", rafraichir);
+  choixPeriodicite.addEventListener("change", rafraichir);
+  fields.period_s?.addEventListener("input", rafraichir);
+  rafraichir();
+
+  // Le champ `downlink` transmis n'existe que si la case est cochée : l'absence est publiée,
+  // pas un bloc de zéros qui dirait « une commande à l'instant 0 ».
+  const lire = () => {
+    if (!cocher.checked) return null;
+    const out = {};
+    for (const [k, input] of Object.entries(dlFields)) out[k] = input.value;
+    return out;
+  };
+  fields.__downlink = lire;
+  fields.__downlinkChamps = dlFields;
+
+  return [
+    el("label", {}, "Classe d'écoute", select),
+    ouverture,
+    neChangePas,
+    el("label", { class: "case" }, cocher, " Le serveur envoie une commande"),
+    champs,
+    alerte,
+  ];
+}
+
 function renderSensorForm(node, body) {
   const values = sensorFormFrom(node);
   const fields = {};
@@ -1416,6 +1549,7 @@ function renderSensorForm(node, body) {
   for (const r of REGIONS) regionSelect.append(el("option", { value: r, text: r, selected: values.region === r ? "selected" : undefined }));
   fields.region = regionSelect;
   grid.append(el("label", {}, "Plan régional", regionSelect));
+  grid.append(...blocEcouteEtDescente(node, values, fields));
   // Le matériel, par équipement. Deux capteurs de matériel différent ne consomment pas la
   // même chose (mesuré : 10 à 11 % de courant moyen), et pouvoir les comparer dans un même
   // run est précisément l'intérêt du réglage. « celui du run » est le défaut : un chantier
@@ -1437,12 +1571,20 @@ function renderSensorForm(node, body) {
       ev.preventDefault();
       const raw = {};
       for (const [k, input] of Object.entries(fields)) {
+        if (k.startsWith("__")) continue;
         input.classList.remove("field-error");
         raw[k] = input.value;
       }
+      // Le bloc descente publie son absence (`null`) plutôt qu'un bloc de zéros.
+      if (fields.__downlink) raw.downlink = fields.__downlink();
       const checked = validateSensor(raw);
       if (!checked.ok) {
-        fields[checked.field]?.classList.add("field-error");
+        // Les champs du bloc descente sont nommés `downlink_*` dans le formulaire et `key`
+        // dans le validateur : l'erreur retrouve donc son champ par ce préfixe.
+        const champ = checked.field?.startsWith("downlink_")
+          ? fields.__downlinkChamps?.[checked.field.slice("downlink_".length)]
+          : fields[checked.field];
+        champ?.classList.add("field-error");
         message.textContent = checked.message;
         return;
       }
@@ -1538,6 +1680,23 @@ const player = createPlayer({
   onActive: (index) => showFrame(index),
 });
 
+/**
+ * Segments d'animation des descentes réseau, ou rien.
+ *
+ * `passerelle` : ces descentes ne sont publiées que sur un run mono-passerelle, donc la
+ * première passerelle de la session est la bonne — il n'y en a pas d'autre.
+ *
+ * `capteurs` : l'instant voulu vient du réglage du capteur, pas d'une supposition. Un capteur
+ * dont le réglage a changé depuis le run n'animerait rien, faute de pouvoir dater quoi que ce
+ * soit : c'est voulu, mieux vaut pas de flèche qu'une flèche au mauvais endroit.
+ */
+function descentesSegments(deviceRows, deviceGroups) {
+  const noeuds = state.topo?.nodes ?? [];
+  const passerelle = noeuds.find((n) => n.kind === "border" || n.kind === "relay")?.id ?? null;
+  const capteurs = new Map(noeuds.map((n) => [n.id, n.sensor]));
+  return segmentsDescentes({ deviceRows, deviceGroups, capteurs, passerelle });
+}
+
 // Charge les événements et la table dispositif -> capteur du run, puis prépare le lecteur.
 async function loadAnimation(runId) {
   try {
@@ -1545,7 +1704,11 @@ async function loadAnimation(runId) {
     state.events = events;
     const rows = await collectPages((cursor) => state.client.devicesPage(runId, cursor));
     const groups = deviceGroupsFromRows(rows);
-    player.load({ events, segs: segmentsFromEvents(events, groups), groups });
+    // Les descentes réseau ne sont pas des événements de la trace : elles sont reconstituées
+    // de l'instant voulu (scénario) et de l'attente mesurée (run). Elles s'ajoutent aux
+    // segments, et le lecteur les montre comme les autres.
+    const segs = segmentsFromEvents(events, groups).concat(descentesSegments(rows, groups));
+    player.load({ events, segs, groups });
   } catch (err) {
     player.clear();
     $("sim-status").textContent += ` Animation indisponible : ${err.message}`;
@@ -1582,6 +1745,9 @@ $("sim-form").addEventListener("submit", async (ev) => {
     $("proto-bilan").hidden = true;
     clear($("proto-bilan-liste"));
     $("proto-bilan-aide").textContent = "";
+    $("dl-bilan").hidden = true;
+    clear($("dl-bilan-liste"));
+    $("dl-bilan-aide").textContent = "";
     $("sim-status").textContent = `Run ${started.run_id} : ${started.state}…`;
     const status = await waitForRun(started.run_id);
     if (!status) return;
@@ -1653,7 +1819,82 @@ function renderResults(summary, linkedNames, deviceRows = []) {
   }
   table.hidden = rows.length === 0;
   renderAdrBilan(deviceRows);
+  renderBilanDescentes(summary, deviceRows);
   renderMetrics(summary, deviceRows);
+}
+
+/**
+ * Les commandes que le serveur a voulu envoyer, et l'attente qu'elles ont subie.
+ *
+ * Rien ne s'affiche si le run n'en a planifié aucune : un encadré de zéros se lirait comme
+ * « aucune commande n'est arrivée », alors que la vérité est qu'aucune n'a été demandée.
+ *
+ * Les chiffres viennent du run, jamais du formulaire. En particulier l'attente affichée est
+ * celle que le moteur a mesurée — ce n'est pas le « jusqu'à » annoncé au moment du réglage,
+ * qui n'était qu'un ordre de grandeur de la fenêtre.
+ */
+function renderBilanDescentes(summary, deviceRows) {
+  const bloc = $("dl-bilan");
+  const liste = $("dl-bilan-liste");
+  const aide = $("dl-bilan-aide");
+  clear(liste);
+  const d = summary?.downlink;
+  if (!d) {
+    bloc.hidden = true;
+    aide.textContent = "";
+    return;
+  }
+  const manquees = d.requested - d.delivered;
+  liste.append(el("li", { text: `${d.requested} commande(s) envoyée(s) par le serveur, `
+    + `${d.delivered} partie(s) de la passerelle.` }));
+  if (d.delivered > 0) {
+    liste.append(el("li", { text: `Attente avant l'émission : `
+      + `${formatSecondes(d.latency_mean_s)} en moyenne, `
+      + `${formatSecondes(d.latency_max_s)} au plus.` }));
+  }
+  if (manquees > 0) {
+    // Une commande non acheminée n'est pas une panne : la fenêtre est arrivée après la fin de
+    // l'observation, ou le terminal n'en a jamais ouvert. Le dire sans accuser.
+    liste.append(el("li", { text: `${manquees} non acheminée(s) : la fenêtre n'est jamais `
+      + `arrivée avant la fin du run.` }));
+  }
+  // Ce que la classe a réellement changé, lu dans le run : c'est la phrase qui compte, et
+  // elle n'est pas écrite ici — ce sont les chiffres du run qui la composent.
+  const parClasse = attendesParGroupe(deviceRows);
+  if (parClasse.length > 1) {
+    const [plusRapide, ... reste] = parClasse;
+    const plusLent = reste[reste.length - 1];
+    if (plusLent && plusLent.latence > plusRapide.latence) {
+      aide.textContent = `Du premier au dernier : ${plusRapide.nom} `
+        + `(${formatSecondes(plusRapide.latence)}) contre ${plusLent.nom} `
+        + `(${formatSecondes(plusLent.latence)}). C'est la classe d'écoute, et elle seule, `
+        + `qui explique cet écart — sur un ACK, les trois classes se comporteraient `
+        + `exactement de la même façon.`;
+    }
+  } else if (parClasse.length === 1) {
+    aide.textContent = "";
+  }
+  bloc.hidden = false;
+}
+
+/**
+ * Attente moyenne par groupe, triée du plus rapide au plus lent.
+ *
+ * Les groupes sans descente demandée sont écartés : ils n'ont pas d'attente, et les mettre
+ * à zéro les ferait gagner la comparaison sans avoir rien attendu.
+ */
+function attendesParGroupe(deviceRows) {
+  const somme = new Map();
+  for (const r of deviceRows ?? []) {
+    if (r.downlink_latency_s == null) continue;
+    const avant = somme.get(r.group) ?? { total: 0, n: 0 };
+    avant.total += r.downlink_latency_s;
+    avant.n += 1;
+    somme.set(r.group, avant);
+  }
+  return [...somme.entries()]
+    .map(([nom, v]) => ({ nom, latence: v.total / v.n }))
+    .sort((a, b) => a.latence - b.latence);
 }
 
 /**

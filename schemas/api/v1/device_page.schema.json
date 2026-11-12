@@ -40,6 +40,32 @@
           "title": "Device Index",
           "type": "integer"
         },
+        "downlink_delivered": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downlink Delivered"
+        },
+        "downlink_latency_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downlink Latency S"
+        },
         "enabled_channels": {
           "anyOf": [
             {
