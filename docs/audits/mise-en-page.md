@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**4 problème(s)** sur 23 états mesurés.
+**3 problème(s)** sur 23 états mesurés.
 
 ## 1400px
 
@@ -408,13 +408,9 @@ Aucun problème.
 
 ## 1400 · équipement · Config
 
-1 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### cible-trop-petite (1)
-
-| élément | détail |
-|---|---|
-| input | 157x13 (seuil 20) |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -773,4 +769,4 @@ Aucun problème.
 
 </details>
 
-TOTAL : 4 problème(s)
+TOTAL : 3 problème(s)
