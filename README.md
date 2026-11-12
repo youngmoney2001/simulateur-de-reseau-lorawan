@@ -66,7 +66,15 @@ PYTHONPATH=python python -m lsim run examples/quartier_sf9.yaml -o resultats.par
 
 ## Documentation
 
+- [Manuel d'utilisation (PDF)](docs/manuel-utilisation.pdf) — installer, écrire un scénario,
+  commander, lire un résultat
+- [Manuel technique (PDF)](docs/manuel-technique.pdf) — hypothèses, formules et références du
+  modèle
 - [Utilisation (scénarios, CLI, énergie, Python)](docs/USAGE.md)
+- Les deux manuels PDF sont générés depuis le logiciel, et non écrits à la main — les valeurs
+  qu'ils publient sont lues au moteur : `python scripts/manuel_technique.py` et
+  `python scripts/manuel_utilisation.py` (un miroir `.txt` est écrit à côté, pour relire et
+  comparer une génération à l'autre)
 - [Journal des changements](CHANGELOG.md) et [politique de release](docs/RELEASE.md)
 - [Feuille de route](docs/ROADMAP.md) et [priorités](docs/PRIORITIES.md)
 
