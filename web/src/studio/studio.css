@@ -521,3 +521,14 @@ rect.obstacle-trace { fill:#d9534f; fill-opacity:.10; stroke:#d9534f; stroke-wid
 .obstacle-ctrls select { max-width:130px; }
 .obstacle-ctrls button { font-size:11px; padding:1px 6px; }
 .obstacle-del { color:var(--danger); }
+/* Pertes mesurées : même mise en page que les murs, la provenance prenant la place
+   restante — un champ d'origine trop étroit invite à écrire « banc » au lieu de la
+   phrase qui permet de juger la mesure. */
+.calib-row { display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+  padding:4px 0; border-bottom:1px solid var(--line); }
+.calib-row > span:first-child { flex:1 1 100%; font-size:12px; }
+.calib-ctrls { display:flex; flex-wrap:wrap; gap:3px; align-items:center; }
+.calib-ctrls input, .calib-ctrls button { font-size:11px; padding:1px 4px; }
+.calib-ctrls .calib-db { width:62px; }
+.calib-ctrls .calib-prov { flex:1 1 140px; min-width:120px; }
+.calib-raz { color:var(--danger); }

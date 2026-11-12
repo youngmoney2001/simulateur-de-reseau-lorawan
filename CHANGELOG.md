@@ -2,6 +2,23 @@
 
 ## 0.1.0 (non publiée)
 
+### Atelier : une perte mesurée par matériau, sans quitter le plan
+
+La calibration existait dans le schéma de scénario, pas dans le contrat du chantier : depuis
+l'atelier, entrer une mesure obligeait à éditer le YAML. `EnvironmentSettings.material_calibration`
+ouvre le chemin, et l'interface propose une perte en dB/m pour chaque matériau **posé** — calibrer
+un matériau absent des murs n'aurait aucun effet, et afficher un réglage sans effet est le piège
+que le formulaire d'obstacle évite déjà entre atténuation et matériau.
+
+La note de compilation disait « matériaux UIT-R P.2040-4 ». Elle le dit toujours quand c'est
+vrai, et nomme les matériaux mesurés quand ça ne l'est plus.
+
+### Atelier : l'origine des courants, quand ils sont mesurés
+
+Un relevé remplace la fiche constructeur, mais l'atelier affichait ses grandeurs d'énergie sans
+jamais le dire. L'indicateur « Origine des courants » n'apparaît que dans ce cas : absent sur un
+run de catalogue, comme `energy_provenance` côté serveur.
+
 ### API : un relevé d'énergie ne passait plus à travers le serveur
 
 Le calcul d'énergie de l'API ne se déclenchait que sur l'option de requête

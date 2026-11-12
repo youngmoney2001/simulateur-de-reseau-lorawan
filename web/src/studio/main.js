@@ -527,6 +527,7 @@ function environnement() {
     gateway_height_m: e.gateway_height_m ?? 15,
     device_height_m: e.device_height_m ?? 1.5,
     obstacles: e.obstacles ?? [],
+    material_calibration: e.material_calibration ?? {},
   };
 }
 
@@ -612,6 +613,71 @@ function renderEnvironnement() {
   if (gw && document.activeElement !== gw) gw.value = env.gateway_height_m;
   if (dev && document.activeElement !== dev) dev.value = env.device_height_m;
   renderObstacleList();
+  renderCalibration();
+}
+
+/** Les matériaux posés sur ce chantier, dans l'ordre du catalogue. */
+function materiauxPoses() {
+  const poses = new Set(environnement().obstacles.map((o) => o.material).filter(Boolean));
+  return state.materiaux.filter((m) => m.name !== "air" && poses.has(m.name));
+}
+
+/**
+ * Une perte mesurée par matériau, à la place de la table P.2040-4.
+ *
+ * Seuls les matériaux **posés** sont proposés : calibrer un matériau absent des murs
+ * n'aurait aucun effet sur ce chantier, et afficher un réglage sans effet est le piège que
+ * le formulaire d'obstacle évite déjà entre atténuation et matériau.
+ */
+function renderCalibration() {
+  const liste = $("calib-list");
+  if (!liste) return;
+  clear(liste);
+  const calib = environnement().material_calibration ?? {};
+  const poses = materiauxPoses();
+  if (!poses.length) {
+    liste.append(el("li", { class: "muted",
+      text: "Aucun mur avec matériau : tracez un mur et choisissez sa matière." }));
+    return;
+  }
+  for (const m of poses) {
+    const mesure = calib[m.name];
+    const perte = el("input", { type: "number", class: "calib-db", min: "0", max: "200",
+      step: "0.5", value: mesure ? mesure.loss_db_per_m : "" });
+    const origine = el("input", { type: "text", class: "calib-prov", maxlength: "200",
+      placeholder: "d’où vient cette mesure ?", value: mesure ? mesure.provenance : "" });
+    const appliquer = el("button", { type: "button", class: "calib-ok", text: "Appliquer",
+      onclick: async () => {
+        const db = Number(perte.value);
+        if (!Number.isFinite(db) || db < 0 || db > 200) {
+          setStatus("perte mesurée : entre 0 et 200 dB/m");
+          return;
+        }
+        if (!origine.value.trim()) {
+          // Même règle qu'un relevé d'énergie : un chiffre sans origine se présente comme
+          // une donnée du moteur.
+          setStatus("provenance obligatoire : d’où vient cette mesure ?");
+          return;
+        }
+        const suivant = { ...calib,
+          [m.name]: { loss_db_per_m: db, provenance: origine.value.trim() } };
+        await ecrireEnvironnement({ material_calibration: suivant },
+          `${m.name} : ${db} dB/m mesurés`);
+      } });
+    liste.append(el("li", { class: "calib-row" },
+      el("span", { text: mesure
+        ? `${m.name} — ${mesure.loss_db_per_m} dB/m mesurés (${mesure.provenance})`
+        : `${m.name} — table P.2040-4`
+          + (m.extrapolated ? `, ${m.loss_db.toFixed(1)} dB extrapolés` : "") }),
+      el("span", { class: "calib-ctrls" }, perte, origine, appliquer,
+        mesure && el("button", { type: "button", class: "calib-raz", text: "Revenir à la table",
+          onclick: async () => {
+            const suivant = { ...calib };
+            delete suivant[m.name];
+            await ecrireEnvironnement({ material_calibration: suivant },
+              `${m.name} : retour à la table P.2040-4`);
+          } }))));
+  }
 }
 
 async function ecrireEnvironnement(partiel, message) {

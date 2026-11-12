@@ -17,6 +17,7 @@ from typing import Literal, Optional
 TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from lsim.materials import MATERIAL_NAMES
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
 # Obstacles par session de l'atelier. Le moteur en accepte 10 000 ; une session d'apprentissage
@@ -303,6 +304,30 @@ class Obstacle(_Strict):
         return self
 
 
+class MaterialCalibration(_Strict):
+    """Perte d'un matériau **mesurée**, en dB par mètre, à la place d'UIT-R P.2040-4.
+
+    À 868 MHz, 12 des 15 matériaux du catalogue sortent de la plage documentée du Tableau 3 :
+    la valeur de la table est alors extrapolée, et le moteur le dit. Une mesure vaut mieux
+    qu'une extrapolation — encore faut-il pouvoir la déclarer depuis l'atelier, sinon la
+    seule issue reste d'éditer le YAML à la main.
+
+    `provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un
+    chiffre sans origine se présente comme une donnée du moteur. C'est la contrepartie de
+    la mention « extrapolé » affichée sur la table — taire l'origine dans les deux sens
+    reviendrait au même.
+    """
+
+    loss_db_per_m: float = Field(ge=0, le=200)
+    provenance: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _provenance_non_vide(self) -> "MaterialCalibration":
+        if not self.provenance.strip():
+            raise ValueError("provenance : d'où vient cette mesure ?")
+        return self
+
+
 class EnvironmentSettings(_Strict):
     """Environnement radio d'une session.
 
@@ -316,11 +341,26 @@ class EnvironmentSettings(_Strict):
     gateway_height_m: float = Field(15.0, gt=0, le=1000)
     device_height_m: float = Field(1.5, gt=0, le=1000)
     obstacles: list[Obstacle] = Field(default_factory=list, max_length=MAX_OBSTACLES_ATELIER)
+    # Pertes mesurées par matériau, qui remplacent P.2040-4 pour les obstacles concernés.
+    # Vide : la table s'applique, exactement comme avant.
+    material_calibration: dict[str, MaterialCalibration] = Field(
+        default_factory=dict, max_length=len(MATERIAL_NAMES))
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentSettings":
+        # Refuser un matériau inconnu ici, et non au compile : une faute de frappe
+        # (« beton » pour « concrete ») produirait sinon une calibration silencieusement
+        # sans effet, et le mur resterait sur une valeur extrapolée.
+        for nom in self.material_calibration:
+            if nom not in MATERIAL_NAMES:
+                raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
 
     def est_vierge(self) -> bool:
         """Rien n'a été réglé : le scénario compilé n'émet alors aucun bloc `environment`."""
         return (not self.obstacles and self.shadowing_sigma_db == 0.0
-                and self.gateway_height_m == 15.0 and self.device_height_m == 1.5)
+                and self.gateway_height_m == 15.0 and self.device_height_m == 1.5
+                and not self.material_calibration)
 
 
 class EnvironmentChoice(_Strict):
@@ -331,6 +371,16 @@ class EnvironmentChoice(_Strict):
     gateway_height_m: Optional[float] = Field(None, gt=0, le=1000)
     device_height_m: Optional[float] = Field(None, gt=0, le=1000)
     obstacles: Optional[list[Obstacle]] = Field(None, max_length=MAX_OBSTACLES_ATELIER)
+    material_calibration: Optional[dict[str, MaterialCalibration]] = Field(
+        None, max_length=len(MATERIAL_NAMES))
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentChoice":
+        if self.material_calibration:
+            for nom in self.material_calibration:
+                if nom not in MATERIAL_NAMES:
+                    raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
 
 
 class SessionList(_Strict):
@@ -496,6 +546,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_environment": EnvironmentSettings,
     "study_environment_choice": EnvironmentChoice,
     "study_obstacle": Obstacle,
+    # Une mesure par matériau, publiée pour elle-même : l'atelier la saisit seule, sans
+    # redéposer les murs.
+    "study_material_calibration": MaterialCalibration,
     # Le reste du contrat, publié pour lui-même : un client qui lit un nœud, un état
     # résumé, un critère ou un rebond de passerelle doit pouvoir le valider sans
     # reconstruire la session entière.

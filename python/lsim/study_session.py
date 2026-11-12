@@ -618,7 +618,13 @@ class StudyService:
                 device_height_m=settings.device_height_m
                 if settings.device_height_m is not None else actuel.device_height_m,
                 obstacles=settings.obstacles if settings.obstacles is not None
-                else actuel.obstacles)
+                else actuel.obstacles,
+                # Un dictionnaire : fourni, il remplace — une fusion laisserait traîner une
+                # mesure retirée, et il n'y aurait aucun moyen de la supprimer. Vide, il
+                # efface : c'est le geste qui revient à la table P.2040-4.
+                material_calibration=settings.material_calibration
+                if settings.material_calibration is not None
+                else actuel.material_calibration)
             # Renvoyer l'environnement qu'on a déjà n'est pas une opération : l'entrer dans
             # l'historique ferait un « annuler » qui ne change rien, la même règle que pour
             # une case ADR recliquée telle quelle.

@@ -404,3 +404,77 @@ def test_raising_the_gateway_over_the_wall_reopens_the_link(api):
     api.call("POST", f"/api/v1/sessions/{sid}/environment",
              {"obstacles": [MUR], "gateway_height_m": 40.0})
     assert _recus(api, sid) == 20
+
+
+MUR_BETON = {"x_min_m": 1350.0, "y_min_m": -300.0, "x_max_m": 1650.0, "y_max_m": 300.0,
+             "height_m": 12.0, "material": "concrete", "thickness_m": 0.25}
+
+
+def test_a_measured_loss_keeps_the_link_the_extrapolated_table_cuts(api):
+    """Même mur, même géométrie : la table coupe, la mesure garde.
+
+    Béton de 25 cm à 3 km, SF10, 20 trames. La table P.2040-4 coûte 8,98 dB à cette
+    épaisseur — extrapolée hors de la plage documentée à 868 MHz — et coupe la liaison ;
+    la même épaisseur mesurée à 8 dB/m ne coûte que 2 dB, et les 20 trames passent.
+
+    C'est tout l'intérêt de la calibration, lu sur le run et non sur un champ : une
+    extrapolation et une mesure ne donnent pas le même réseau.
+    """
+    sid = _session_prete(api, x_capteur=3_000)
+    assert _recus(api, sid) == 20          # sans mur : tout passe
+
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/environment",
+                           {"obstacles": [MUR_BETON]})
+    assert status == 200, out
+    assert _recus(api, sid) == 0           # la table, extrapolée : coupé
+
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/environment",
+                           {"material_calibration": {"concrete": {
+                               "loss_db_per_m": 8.0,
+                               "provenance": "banc 2026-03, 4 épaisseurs"}}})
+    assert status == 200, out
+    assert _recus(api, sid) == 20          # la mesure : reçu
+
+
+def test_a_measured_loss_can_also_be_worse_than_the_table(api):
+    """Une mesure n'est pas un avantage : elle peut couper là où la table passait.
+
+    Sans ce sens, le réglage laisserait croire que déclarer une mesure améliore toujours
+    les choses — ce serait un interrupteur déguisé en donnée.
+    """
+    sid = _session_prete(api, x_capteur=3_000)
+    api.call("POST", f"/api/v1/sessions/{sid}/environment",
+             {"obstacles": [MUR_BETON],
+              "material_calibration": {"concrete": {"loss_db_per_m": 8.0,
+                                                    "provenance": "banc"}}})
+    assert _recus(api, sid) == 20
+
+    api.call("POST", f"/api/v1/sessions/{sid}/environment",
+             {"material_calibration": {"concrete": {"loss_db_per_m": 60.0,
+                                                    "provenance": "banc"}}})
+    assert _recus(api, sid) == 0
+
+
+def test_an_empty_calibration_returns_to_the_table(api):
+    """Effacer la mesure rend la table : c'est le geste inverse, et il doit exister."""
+    sid = _session_prete(api, x_capteur=3_000)
+    api.call("POST", f"/api/v1/sessions/{sid}/environment",
+             {"obstacles": [MUR_BETON],
+              "material_calibration": {"concrete": {"loss_db_per_m": 8.0,
+                                                    "provenance": "banc"}}})
+    assert _recus(api, sid) == 20
+    api.call("POST", f"/api/v1/sessions/{sid}/environment", {"material_calibration": {}})
+    assert _recus(api, sid) == 0
+
+
+def test_an_unknown_material_is_refused_by_the_server(api):
+    """Un matériau hors catalogue est refusé à la saisie, pas au run.
+
+    « beton » pour « concrete » donnerait une calibration sans effet : le mur resterait
+    sur une valeur extrapolée en laissant croire à une mesure.
+    """
+    sid = _session_prete(api)
+    status, out = api.call("POST", f"/api/v1/sessions/{sid}/environment",
+                           {"material_calibration": {"beton": {"loss_db_per_m": 8.0,
+                                                               "provenance": "banc"}}})
+    assert status == 422
