@@ -2,7 +2,7 @@
 
 Généré par `web/tests/e2e/audit.mjs`.
 
-**32 problème(s)** sur 27 états mesurés.
+**0 problème(s)** sur 27 états mesurés.
 
 ## 1400px
 
@@ -39,14 +39,9 @@ Aucun problème.
 
 ## 1180px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 34px |
-| text | sort de 34px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -77,14 +72,9 @@ Aucun problème.
 
 ## 1100px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 31px |
-| text | sort de 31px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -115,14 +105,9 @@ Aucun problème.
 
 ## 1040px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 29px |
-| text | sort de 29px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -153,14 +138,9 @@ Aucun problème.
 
 ## 1000px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 28px |
-| text | sort de 28px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -191,14 +171,9 @@ Aucun problème.
 
 ## 900px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -229,14 +204,9 @@ Aucun problème.
 
 ## 760px
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 19px |
-| text | sort de 19px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -591,21 +561,15 @@ Aucun problème.
 | button.tool | 17 | 877 | 154×57 |
 | div.observation | 356 | 742 | 1036×224 |
 | footer.statusbar | 0 | 974 | 1400×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · vue · Plan
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -630,21 +594,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · observation · Journal
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -669,21 +627,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×489 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · observation · Trame
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -708,21 +660,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×361 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · observation · Exercice
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -747,21 +693,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · observation · Runs
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -786,21 +726,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · équipement · Physique
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -825,21 +759,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×656 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×656 |
 
 </details>
 
 ## 900 · équipement · Config
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -864,21 +792,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×641 |
 
 </details>
 
 ## 900 · équipement · CLI
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -903,21 +825,15 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×220 |
-| section.device-win.active | 116 | 96 | 430×630 |
+| section.device-win.active | 90 | 70 | 430×220 |
 
 </details>
 
 ## 900 · serveur · Config
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -948,14 +864,9 @@ Aucun problème.
 
 ## 900 · passerelle · Config
 
-2 problème(s) · défilement horizontal : non
+0 problème(s) · défilement horizontal : non
 
-### debordement (2)
-
-| élément | détail |
-|---|---|
-| g | sort de 24px |
-| text | sort de 24px |
+Aucun problème.
 
 <details><summary>géométrie</summary>
 
@@ -980,9 +891,8 @@ Aucun problème.
 | button.tool | 248 | 824 | 198×38 |
 | div.observation | 8 | 918 | 884×260 |
 | footer.statusbar | 0 | 974 | 900×26 |
-| section.device-win | 90 | 70 | 430×333 |
-| section.device-win.active | 116 | 96 | 430×603 |
+| section.device-win.active | 90 | 70 | 430×629 |
 
 </details>
 
-TOTAL : 32 problème(s)
+TOTAL : 0 problème(s)
