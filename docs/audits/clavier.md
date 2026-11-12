@@ -40,7 +40,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab.active | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -91,7 +91,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab.active | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -142,7 +142,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab.active | tab | Trame | oui |
@@ -189,7 +189,7 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
@@ -237,14 +237,14 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
 | 31 | button.tab | tab | Exercice | oui |
 | 32 | button.tab.active | tab | Runs | oui |
 | 33 | button.tab | tab | Obstacles | oui |
-| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:29 | oui |
+| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:39 | oui |
 
 </details>
 
@@ -284,14 +284,14 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
 | 31 | button.tab | tab | Exercice | oui |
 | 32 | button.tab.active | tab | Runs | oui |
 | 33 | button.tab | tab | Obstacles | oui |
-| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:29 | oui |
+| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:39 | oui |
 | 35 | button.close | button | Fermer | oui |
 | 36 | button.dtab.active | tab | Physique | oui |
 | 37 | button.dtab | tab | Config | oui |
@@ -339,14 +339,14 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
 | 31 | button.tab | tab | Exercice | oui |
 | 32 | button.tab.active | tab | Runs | oui |
 | 33 | button.tab | tab | Obstacles | oui |
-| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:29 | oui |
+| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:39 | oui |
 | 35 | button.close | button | Fermer | oui |
 | 36 | button.dtab | tab | Physique | oui |
 | 37 | button.dtab.active | tab | Config | oui |
@@ -406,14 +406,14 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
 | 31 | button.tab | tab | Exercice | oui |
 | 32 | button.tab.active | tab | Runs | oui |
 | 33 | button.tab | tab | Obstacles | oui |
-| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:29 | oui |
+| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:39 | oui |
 | 35 | button.close | button | Fermer | oui |
 | 36 | button.dtab | tab | Physique | oui |
 | 37 | button.dtab | tab | Config | oui |
@@ -457,14 +457,14 @@ Aucun problème.
 | 24 | button.tool | button | Serveur | oui |
 | 25 | button.tool | button | Passerelle frontière — glissez sur la carte, ou  | oui |
 | 26 | button.tool | button | Passerelle relais — glissez sur la carte, ou cli | oui |
-| 27 | select#session-select | select | Session NkMXU60j · 3 équip. | oui |
+| 27 | select#session-select | select | Session JdUurUQr · 3 équip. | oui |
 | 28 | button.tab | tab | Simulation | oui |
 | 29 | button.tab | tab | Journal | oui |
 | 30 | button.tab | tab | Trame | oui |
 | 31 | button.tab | tab | Exercice | oui |
 | 32 | button.tab.active | tab | Runs | oui |
 | 33 | button.tab | tab | Obstacles | oui |
-| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:29 | oui |
+| 34 | button | button | Revoir le run de la graine 7, lancé 12/11 07:39 | oui |
 | 35 | button.close | button | Fermer | oui |
 | 36 | button.dtab | tab | Physique | oui |
 | 37 | button.dtab.active | tab | Config | oui |
