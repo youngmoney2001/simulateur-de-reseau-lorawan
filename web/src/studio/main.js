@@ -936,10 +936,20 @@ function placeWindow(w) {
   // 678 px, soit 127 px de panneau d'observation recouvert en plus. On ne fait que la
   // resserrer quand la place manque. Le corps défile déjà, rien n'est donc caché.
   const borneCss = parseFloat(getComputedStyle(w.el).maxHeight);
-  const place = window.innerHeight - y - 16;
-  if (Number.isFinite(borneCss) && place < borneCss) {
-    w.el.style.maxHeight = `${Math.max(220, place)}px`;
-  }
+  // La fenêtre survole le plan : c'est sa place, et c'est donc le bas du plan qui la borne,
+  // pas le bas de l'écran. Sinon elle descend sur le panneau d'observation, juste en dessous,
+  // et recouvre le bouton « Simuler » sans rien signaler : le clic ne part pas, aucun run
+  // n'est lancé, et l'écran garde le statut du run précédent comme s'il était le sien.
+  // Mesuré à 1400 px sur un écran de 1000 px de haut — plan de 66 à 735, fenêtre de 70 à
+  // 830 (plafond CSS de 760 atteint), bouton « Simuler » vers 798 : recouvert.
+  const plan = document.querySelector(".plan-area")?.getBoundingClientRect();
+  const bas = plan ? Math.min(window.innerHeight - 16, plan.bottom - 8) : window.innerHeight - 16;
+  const place = bas - y;
+  if (!Number.isFinite(borneCss)) return;
+  // La borne est resserrée quand la place manque, et **rendue** à la CSS dès qu'elle ne
+  // manque plus : sans ce second sens, une fenêtre rouverte après avoir été réduite
+  // resterait petite sans raison. Le corps défile déjà, rien n'est donc caché.
+  w.el.style.maxHeight = place < borneCss ? `${Math.max(220, place)}px` : "";
 }
 
 function makeWindowDraggable(win, handle) {

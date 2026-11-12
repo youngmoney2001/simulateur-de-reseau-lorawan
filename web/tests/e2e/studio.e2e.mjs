@@ -664,14 +664,27 @@ try {
     // trace est un statut qui ne bouge pas. On regarde donc ce qui se trouve au point de
     // clic avant de cliquer — un recouvrement silencieux se lit ici, pas dans un délai expiré.
     const devant = await page.evaluate(() => {
+      const decrire = (e) => e ? `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}`
+        + `${e.className ? "." + String(e.className).trim().split(/\s+/).join(".") : ""}`
+        + ` [${Math.round(e.getBoundingClientRect().top)}..${Math.round(e.getBoundingClientRect().bottom)}]`
+        : "(rien)";
       const b = document.getElementById("simulate");
       const r = b.getBoundingClientRect();
       const x = r.left + r.width / 2, y = r.top + r.height / 2;
       const e = document.elementFromPoint(x, y);
-      return { x, y, bouton: b.id, devant: e ? (e.id || e.className || e.tagName) : null,
+      const chaine = [];
+      for (let n = e; n && n !== document.body; n = n.parentElement) chaine.push(decrire(n));
+      const plan = document.querySelector(".plan-area")?.getBoundingClientRect();
+      return { x, y, bouton: decrire(b), devant: decrire(e), chaine,
+        plan: plan ? `${Math.round(plan.top)}..${Math.round(plan.bottom)}` : "(pas de plan)",
         recouvre: e !== b && !b.contains(e) };
     });
-    if (devant.recouvre) throw new Error(`bouton Simuler recouvert par « ${devant.devant} »`);
+    // Le recouvrement est silencieux : le clic part dans le vide, aucun run n'est lancé, et
+    // le statut garde celui du run précédent. On nomme donc l'obstacle et la chaîne qui
+    // l'amène, plutôt que d'attendre un délai expiré sans savoir ce qui a manqué.
+    if (devant.recouvre) throw new Error(`bouton Simuler recouvert : ${devant.bouton}`
+      + ` couvert par ${devant.devant}\n  chaîne : ${devant.chaine.join(" < ")}`
+      + `\n  plan : ${devant.plan}`);
     await page.click("#simulate");
     try {
       await page.waitForFunction((avant) => {
