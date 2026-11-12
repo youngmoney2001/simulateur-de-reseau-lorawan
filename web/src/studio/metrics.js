@@ -213,6 +213,25 @@ export function indicateursReseau(summary, lignes = []) {
     },
   ];
 
+  // D'où viennent les courants, quand ce sont des courants mesurés. Un indicateur à part,
+  // et non une mention répétée sous chaque grandeur d'énergie : elle s'y noierait, et un
+  // lecteur qui ne voit que le chiffre croirait à des valeurs du moteur.
+  //
+  // La valeur est le texte lui-même, comme le nom d'une passerelle : le filtre final écarte
+  // les indicateurs sans valeur, ce qui est la règle partout ailleurs — mais ici il y a
+  // réellement quelque chose à afficher.
+  //
+  // Absent sur un run de catalogue : `energy_provenance` ne voyage qu'avec des courants
+  // mesurés, faute de quoi une fiche constructeur s'habillerait en mesure.
+  if (summary?.energy_provenance) {
+    out.push({
+      id: "provenance_energie",
+      label: "Origine des courants",
+      value: summary.energy_provenance,
+      text: summary.energy_provenance,
+      hint: "relevé mesuré déclaré dans le scénario — ces courants viennent de là, pas d'une fiche constructeur",
+    });
+  }
   if (energieParMessage != null) {
     out.push({
       id: "energie_message",
