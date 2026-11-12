@@ -68,6 +68,23 @@ fût-elle à une seule passerelle ; le réserver au mono l'y aurait rendu invisi
 instants d'émission sont identiques dans les deux formes, or l'attente n'est faite que de ces
 instants et de la classe.
 
+### Le serveur ne se configure pas — il commande, et dit ce qu'il a vu
+
+Sa fenêtre d'équipement disait « pas de configuration dans cette version ». C'était vrai, et
+ce n'était pas le défaut : le serveur n'a rien à régler dans l'atelier, puisque c'est **lui**
+qui commande le débit, les canaux et les descentes. Le défaut était de n'y rien mettre.
+
+Elle montre désormais ce que le serveur a **vu** du run affiché, par équipement : trames
+remises sur émises, pertes (hors portée, puis en collision), débit commandé, canaux laissés au
+terminal — plus, quand le run en a planifié, les commandes envoyées et leur attente moyenne.
+C'est le seul endroit de l'atelier qui montre le réseau du point de vue de celui qui décide.
+
+**Rien n'y est recopié depuis les formulaires.** Un champ que le run n'a pas observé reste
+vide plutôt que d'afficher une valeur que personne n'a mesurée : les canaux d'un run qui ne
+les a pas relevés s'écrivent « — », pas « aucun ». Le débit ne porte une flèche
+(`SF7 → SF9`) que si le serveur a commandé un changement **et** que le terminal l'a appliqué ;
+sinon il recopierait le réglage de départ en laissant croire à une décision du réseau.
+
 ### Les runs d'un chantier — revoir une simulation au lieu de n'avoir que la dernière
 
 Comparer deux réglages suppose de revoir le premier. Or l'atelier ne connaissait que le

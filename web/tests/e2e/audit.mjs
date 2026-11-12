@@ -495,11 +495,16 @@ try {
     // par équipement. Cinq colonnes en 430 px : un débordement y passerait inaperçu sans
     // cet état.
     { nom: "serveur · Config", action: async () => {
+      // Toute fenêtre ouverte est fermée : une fenêtre laissée là recouvre le nœud visé, et
+      // le clic ouvrirait alors tout sauf la fenêtre du serveur.
       await page.evaluate(() => {
-        document.querySelector('.device-win[data-node-id="gw-nord"] .close')?.click();
+        for (const w of document.querySelectorAll(".device-win .close")) w.click();
       });
       await pause(300);
-      await page.click('g.node[data-id="lns"] rect');
+      // Au clavier plutôt qu'au pointeur : le nœud est un bouton, et la touche ne peut pas
+      // être interceptée par un recouvrement.
+      await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
+      await page.keyboard.press("Enter");
       await page.waitForSelector('.device-win[data-node-id="lns"]');
       return cliquerTexte('.device-win[data-node-id="lns"] .dtab', "Config");
     } },

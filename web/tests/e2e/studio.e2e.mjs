@@ -949,7 +949,14 @@ try {
     await page.waitForSelector('g.node[data-id="lns"]');
 
     // Le run de l'étape mesh est terminé : la fenêtre se lit sur son résultat, sans relancer.
-    await page.click('g.node[data-id="lns"] rect');
+    // Ajouter un serveur n'y change rien — `compile_session` ne retient que les passerelles
+    // et les capteurs — donc les chiffres affichés restent bien ceux du run qu'on a lancé.
+    //
+    // Ouverture au clavier : le nœud est un bouton, et la touche ne peut pas être
+    // interceptée par la fenêtre du capteur, restée ouverte et placée en cascade par-dessus
+    // le plan. C'est aussi le seul chemin sans souris vers cette fenêtre.
+    await page.evaluate(() => document.querySelector('g.node[data-id="lns"]').focus());
+    await page.keyboard.press("Enter");
     await page.waitForSelector('.device-win[data-node-id="lns"]', { timeout: 20_000 });
     await deviceTab("Config", "lns");
     await page.waitForSelector('.device-win[data-node-id="lns"] table tbody tr',
