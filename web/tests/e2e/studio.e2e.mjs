@@ -941,10 +941,12 @@ try {
   await step("serveur : la fenêtre dit ce que le serveur a vu du run", async () => {
     await setValue('#add-form [name="id"]', "lns");
     await page.select('#add-form [name="kind"]', "server");
-    // À l'écart des autres : deux nœuds au même endroit se recouvriraient, et le clic
-    // ouvrirait la fenêtre du voisin.
-    await setValue('#add-form [name="lat"]', "4.053500");
-    await setValue('#add-form [name="lon"]', "9.770000");
+    // À l'écart des autres : deux nœuds au même endroit se recouvriraient, et l'ouverture
+    // au clavier viserait le voisin. Mais **à l'intérieur** de la boîte déjà occupée par la
+    // session mesh (lat 4.051100 → 4.052899, lon 9.767900 → 9.782325) : un nœud posé au-delà
+    // élargit la boîte et change l'échelle du plan.
+    await setValue('#add-form [name="lat"]', "4.051500");
+    await setValue('#add-form [name="lon"]', "9.774000");
     await submitForm("#add-form");
     await page.waitForSelector('g.node[data-id="lns"]');
 

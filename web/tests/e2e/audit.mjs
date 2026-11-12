@@ -311,8 +311,13 @@ try {
   // run mesuré plus bas n'en est pas changé.
   await setValue('#add-form [name="id"]', "lns");
   await page.select('#add-form [name="kind"]', "server");
-  await setValue('#add-form [name="lat"]', "4.049000");
-  await setValue('#add-form [name="lon"]', "9.765000");
+  // Coordonnées reprises **à l'intérieur** de la boîte que les cinq équipements occupent déjà
+  // (lat 4.047952 → 4.054158, lon 9.767900 → 9.773490). Un nœud posé au-delà élargit la boîte,
+  // change l'échelle du plan, et les étiquettes — dont la taille est en pixels, donc fixe —
+  // sortent alors du cadre à toutes les largeurs en dessous de 1180 px. Mesuré : 32 problèmes
+  // sur 27 états, tous dus à ce seul déplacement.
+  await setValue('#add-form [name="lat"]', "4.050000");
+  await setValue('#add-form [name="lon"]', "9.769500");
   await submitForm("#add-form");
   await page.waitForSelector('g.node[data-id="lns"]');
 
