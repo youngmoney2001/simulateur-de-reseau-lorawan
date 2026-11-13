@@ -136,6 +136,13 @@ namespace expected {
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_model = 32;
     inline constexpr size_t off_lsim_gateway_v2__present = 36;
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_dbm = 40;
+    // lsim_antenna_pattern
+    inline constexpr size_t size_lsim_antenna_pattern = 36;
+    inline constexpr size_t off_lsim_antenna_pattern__kind = 0;
+    inline constexpr size_t off_lsim_antenna_pattern__peak_gain_dbi = 4;
+    inline constexpr size_t off_lsim_antenna_pattern__beamwidth_deg = 12;
+    inline constexpr size_t off_lsim_antenna_pattern__pointing_deg = 20;
+    inline constexpr size_t off_lsim_antenna_pattern__front_to_back_db = 28;
     // lsim_propagation
     inline constexpr size_t size_lsim_propagation = 52;
     inline constexpr size_t off_lsim_propagation__frequency_hz = 0;
@@ -762,6 +769,13 @@ namespace expected {
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_model = 32;
     inline constexpr size_t off_lsim_gateway_v2__present = 36;
     inline constexpr size_t off_lsim_gateway_v2__sensitivity_dbm = 40;
+    // lsim_antenna_pattern
+    inline constexpr size_t size_lsim_antenna_pattern = 40;
+    inline constexpr size_t off_lsim_antenna_pattern__kind = 0;
+    inline constexpr size_t off_lsim_antenna_pattern__peak_gain_dbi = 8;
+    inline constexpr size_t off_lsim_antenna_pattern__beamwidth_deg = 16;
+    inline constexpr size_t off_lsim_antenna_pattern__pointing_deg = 24;
+    inline constexpr size_t off_lsim_antenna_pattern__front_to_back_db = 32;
     // lsim_propagation
     inline constexpr size_t size_lsim_propagation = 56;
     inline constexpr size_t off_lsim_propagation__frequency_hz = 0;
@@ -1383,6 +1397,12 @@ static_assert(offsetof(lsim_gateway_v2, base) == expected::off_lsim_gateway_v2__
 static_assert(offsetof(lsim_gateway_v2, sensitivity_model) == expected::off_lsim_gateway_v2__sensitivity_model, "lsim_gateway_v2::sensitivity_model");
 static_assert(offsetof(lsim_gateway_v2, present) == expected::off_lsim_gateway_v2__present, "lsim_gateway_v2::present");
 static_assert(offsetof(lsim_gateway_v2, sensitivity_dbm) == expected::off_lsim_gateway_v2__sensitivity_dbm, "lsim_gateway_v2::sensitivity_dbm");
+static_assert(sizeof(lsim_antenna_pattern) == expected::size_lsim_antenna_pattern, "lsim_antenna_pattern : taille");
+static_assert(offsetof(lsim_antenna_pattern, kind) == expected::off_lsim_antenna_pattern__kind, "lsim_antenna_pattern::kind");
+static_assert(offsetof(lsim_antenna_pattern, peak_gain_dbi) == expected::off_lsim_antenna_pattern__peak_gain_dbi, "lsim_antenna_pattern::peak_gain_dbi");
+static_assert(offsetof(lsim_antenna_pattern, beamwidth_deg) == expected::off_lsim_antenna_pattern__beamwidth_deg, "lsim_antenna_pattern::beamwidth_deg");
+static_assert(offsetof(lsim_antenna_pattern, pointing_deg) == expected::off_lsim_antenna_pattern__pointing_deg, "lsim_antenna_pattern::pointing_deg");
+static_assert(offsetof(lsim_antenna_pattern, front_to_back_db) == expected::off_lsim_antenna_pattern__front_to_back_db, "lsim_antenna_pattern::front_to_back_db");
 static_assert(sizeof(lsim_propagation) == expected::size_lsim_propagation, "lsim_propagation : taille");
 static_assert(offsetof(lsim_propagation, frequency_hz) == expected::off_lsim_propagation__frequency_hz, "lsim_propagation::frequency_hz");
 static_assert(offsetof(lsim_propagation, reference_distance_m) == expected::off_lsim_propagation__reference_distance_m, "lsim_propagation::reference_distance_m");

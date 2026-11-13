@@ -250,6 +250,18 @@ class _CEndDevice(ctypes.Structure):
     ]
 
 
+class _CAntennaPattern(ctypes.Structure):
+    """`lsim_antenna_pattern` : diagramme de rayonnement horizontal."""
+
+    _fields_ = [
+        ("kind", ctypes.c_uint32),
+        ("peak_gain_dbi", ctypes.c_double),
+        ("beamwidth_deg", ctypes.c_double),
+        ("pointing_deg", ctypes.c_double),
+        ("front_to_back_db", ctypes.c_double),
+    ]
+
+
 class _CGateway(ctypes.Structure):
     _fields_ = [
         ("x_m", ctypes.c_double),
@@ -782,6 +794,17 @@ LIB.lsim_env_path_loss_matrix.argtypes = [
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
+    ctypes.POINTER(_CEnvironment), ctypes.c_double, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_double)]
+LIB.lsim_antenna_validate.restype = ctypes.c_int32
+LIB.lsim_antenna_validate.argtypes = [ctypes.POINTER(_CAntennaPattern)]
+LIB.lsim_antenna_gain_offset_db.restype = ctypes.c_double
+LIB.lsim_antenna_gain_offset_db.argtypes = [ctypes.POINTER(_CAntennaPattern),
+                                            ctypes.c_double]
+LIB.lsim_antenna_coverage_radii.restype = ctypes.c_int32
+LIB.lsim_antenna_coverage_radii.argtypes = [
+    ctypes.POINTER(_CGateway), ctypes.POINTER(_CAntennaPattern),
+    ctypes.POINTER(_CPropagation), ctypes.c_double,
     ctypes.POINTER(_CEnvironment), ctypes.c_double, ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_encode_join_request.restype = ctypes.c_int32
