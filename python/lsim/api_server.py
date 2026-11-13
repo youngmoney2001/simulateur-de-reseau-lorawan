@@ -77,6 +77,7 @@ from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
 )
+from lsim.geo import terrain_dem_document
 from lsim.frame_view import frames_for_run
 
 log = logging.getLogger("lsim.api")
@@ -1230,6 +1231,32 @@ class _Handler(BaseHTTPRequestHandler):
             connus = svc.terrains.ids()
             return 200, self._study(lambda: study.set_terrain(
                 owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        # MNT de la session, pour que la carte de l'atelier montre le **vrai sol** et non
+        # une ellipsoïde plate. Le relief vient du catalogue serveur : le client ne fournit
+        # jamais de chemin. L'origine est celle que l'atelier affiche, passée en paramètre
+        # — elle vit côté client, c'est un repère d'affichage, pas une donnée de run.
+        m_dem = re.fullmatch(r"sessions/([^/]+)/dem", rest)
+        if m_dem is not None and method == "GET":
+            lat = _nombre(query, "lat")
+            lon = _nombre(query, "lon")
+            if lat is None or lon is None:
+                raise ApiError(422, "validation_error", "lat et lon sont requis", "lat")
+            sid_dem = m_dem.group(1)
+            terrain_id = self._study(lambda: study.topology(owner, sid_dem)).terrain_id
+            if terrain_id is None:
+                # Pas de relief choisi n'est pas une erreur : c'est un chantier à plat,
+                # et la carte doit pouvoir le distinguer d'un serveur sans catalogue.
+                return 200, {"terrain_id": None, "dem": None}
+            try:
+                relief = svc.terrains.get(terrain_id)
+            except ApiError:
+                return 200, {"terrain_id": terrain_id, "dem": None,
+                             "absent": "relief retiré du catalogue"}
+            try:
+                return 200, {"terrain_id": terrain_id,
+                             "dem": terrain_dem_document(relief, lat, lon)}
+            except ValueError as exc:
+                raise ApiError(422, "validation_error", str(exc)) from None
         # Zone de couverture de chaque passerelle : rayons par azimut, par palier de
         # qualité. Le calcul est entièrement dans le moteur — relief, obstacles et lobe
         # d'antenne — parce que l'atelier ne sait pas faire un bilan de liaison, et qu'une

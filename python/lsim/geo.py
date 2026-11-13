@@ -15,6 +15,7 @@ import sys
 from array import array
 from typing import Any, Optional
 
+from lsim.environment import Terrain
 from lsim.export import RunResult
 from lsim.gateway_profiles import get_profile, rx_sensitivity_offset_db
 from lsim.radio import LinkBudget, LogDistanceModel, receiver_sensitivity_dbm
@@ -139,11 +140,20 @@ def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) ->
     Les coordonnées locales restent celles du scénario ; l'origine géographique
     permet à la carte de projeter la grille. Lève ValueError sans relief déclaré.
     """
-    _validate_origin(origin_lat, origin_lon)
     env = scenario.environment
     if env is None or env.terrain is None:
         raise ValueError("le scénario ne déclare pas de relief")
-    t = env.terrain
+    return terrain_dem_document(env.terrain, origin_lat, origin_lon)
+
+
+def terrain_dem_document(t: Terrain, origin_lat: float, origin_lon: float) -> dict[str, Any]:
+    """MNT d'un relief déjà chargé, pour la carte : grille float32 encodée en base64.
+
+    Séparé de `to_dem_document` parce que l'atelier connaît son relief par le catalogue
+    du serveur, sans passer par un scénario : le reconstruire pour lui rendre une
+    grille qu'on a déjà en mémoire serait un détour coûteux et sans objet.
+    """
+    _validate_origin(origin_lat, origin_lon)
     raw = array("f", t.z)
     if sys.byteorder == "big":
         raw.byteswap()

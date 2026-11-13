@@ -101,3 +101,38 @@ def test_une_session_etrangere_est_refusee(api):
     sid = creer(api)
     status, _ = api.call("GET", f"/api/v1/sessions/{sid}/coverage", token=api.bob)
     assert status == 404
+
+
+# ---------------------------------------------------------------- MNT
+
+def test_le_mnt_de_la_session_est_servi(api_relief):
+    """Sans cette route, la carte de l'atelier reste une ellipsoïde plate."""
+    api = api_relief
+    sid = creer(api)
+    status, body = api.call(
+        "GET", f"/api/v1/sessions/{sid}/dem?lat=4.0511&lon=9.7679")
+    assert status == 200
+    assert body["terrain_id"] is None and body["dem"] is None   # pas de relief choisi
+
+    api.call("POST", f"/api/v1/sessions/{sid}/terrain", {"terrain_id": "quartier"})
+    status, body = api.call(
+        "GET", f"/api/v1/sessions/{sid}/dem?lat=4.0511&lon=9.7679")
+    assert status == 200
+    dem = body["dem"]
+    assert body["terrain_id"] == "quartier"
+    assert dem["format"] == "lsim-dem-v1" and dem["nx"] == 61 and dem["ny"] == 61
+    assert dem["origin"]["latitude"] == 4.0511
+    # La grille est bien transmise, et elle est décodable : une carte qui recevrait
+    # une chaîne vide afficherait un relief plat sans rien signaler.
+    import base64
+    assert len(base64.b64decode(dem["z"])) == 61 * 61 * 4
+
+
+def test_le_mnt_refuse_une_origine_absente_ou_hors_domaine(api_relief):
+    api = api_relief
+    sid = creer(api)
+    api.call("POST", f"/api/v1/sessions/{sid}/terrain", {"terrain_id": "quartier"})
+    status, body = api.call("GET", f"/api/v1/sessions/{sid}/dem")
+    assert status == 422 and body["field"] == "lat"
+    status, _ = api.call("GET", f"/api/v1/sessions/{sid}/dem?lat=95&lon=9.7")
+    assert status == 422
