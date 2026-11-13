@@ -307,10 +307,14 @@ EnvStatus path_loss_db(const radio::LogDistanceModel& model, double tx_x_m, doub
 
 EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_x_m,
                            double gateway_y_m, const Environment& e, double max_path_loss_db,
-                           double step_m, std::size_t azimuths, double* radii_out) {
+                           double step_m, std::size_t azimuths, double* radii_out,
+                           const antenna::Pattern* pattern) {
     if (radii_out == nullptr || azimuths == 0 || azimuths > kMaxAzimuths ||
         !finite(gateway_x_m) || !finite(gateway_y_m) || !finite(max_path_loss_db) ||
         !finite(step_m) || step_m < kMinCoverageStepM) {
+        return EnvStatus::InvalidInput;
+    }
+    if (pattern != nullptr && antenna::validate_pattern(*pattern) != antenna::AntennaStatus::Ok) {
         return EnvStatus::InvalidInput;
     }
     const EnvStatus vs = validate_environment(e);
@@ -336,24 +340,35 @@ EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_
         return EnvStatus::WorkLimit;
     }
 
-    const auto ok_at = [&](double theta, double r) {
+    const auto ok_at = [&](double theta, double r, double budget_db) {
         PathLoss pl;
         const double px = gateway_x_m + r * std::cos(theta);
         const double py = gateway_y_m + r * std::sin(theta);
         if (path_loss_db(model, px, py, gateway_x_m, gateway_y_m, e, pl) != EnvStatus::Ok) {
             return false;
         }
-        return pl.total_db <= max_path_loss_db;
+        return pl.total_db <= budget_db;
     };
 
     constexpr double kTwoPi = 6.283185307179586;
+    constexpr double kFullTurnDeg = 360.0;
     for (std::size_t k = 0; k < azimuths; ++k) {
         const double theta = kTwoPi * static_cast<double>(k) / static_cast<double>(azimuths);
+        // Budget disponible dans cette direction : celui du gain de crête, diminué de ce
+        // que le diagramme retire hors de l'axe. L'offset est négatif ou nul, donc le
+        // budget ne fait que se réduire — jamais s'élargir.
+        const double budget_db =
+            pattern == nullptr
+                ? max_path_loss_db
+                : max_path_loss_db + antenna::gain_offset_db(
+                                         *pattern,
+                                         kFullTurnDeg * static_cast<double>(k) /
+                                             static_cast<double>(azimuths));
         double last_ok = 0.0;
         double first_fail = -1.0;
         for (double r = step_m; ; r += step_m) {
             const double rr = std::min(r, range);
-            if (ok_at(theta, rr)) {
+            if (ok_at(theta, rr, budget_db)) {
                 last_ok = rr;
             } else {
                 first_fail = rr;
@@ -369,7 +384,7 @@ EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_
             double hi = first_fail;
             for (int it = 0; it < kCoverageBisections; ++it) {
                 const double mid = 0.5 * (lo + hi);
-                if (ok_at(theta, mid)) {
+                if (ok_at(theta, mid, budget_db)) {
                     lo = mid;
                 } else {
                     hi = mid;

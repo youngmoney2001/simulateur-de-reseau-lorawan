@@ -15,6 +15,7 @@ void run_loop_adr_tests();
 void run_c_api_tests();
 void run_join_tests();
 void run_environment_tests();
+void run_antenna_tests();
 void run_mac_commands_tests();
 void run_rejoin_tests();
 void run_join_registry_tests();
@@ -63,6 +64,7 @@ int main() {
     run_c_api_tests();
     run_join_tests();
     run_environment_tests();
+    run_antenna_tests();
     run_mac_commands_tests();
     run_rejoin_tests();
     run_join_registry_tests();

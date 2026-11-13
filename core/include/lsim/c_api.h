@@ -374,6 +374,27 @@ typedef struct lsim_gateway_v2 {
     double sensitivity_dbm[3][8];
 } lsim_gateway_v2;
 
+/* Antenne : diagramme de rayonnement horizontal (voir core/include/lsim/antenna.hpp).
+ * types : 0 = omnidirectionnelle, 1 = unidirectionnelle, 2 = bidirectionnelle,
+ *         3 = sectorielle (sommet plat : beamwidth_deg = largeur du secteur servi).
+ * peak_gain_dbi  : gain au maximum du lobe (dBi), borne -40..40
+ * beamwidth_deg  : ouverture à -3 dB, 5..360 (sectorielle : largeur du secteur)
+ * pointing_deg   : azimut de l'axe du lobe, 0 = est, sens trigonométrique
+ * front_to_back_db : plancher du diagramme, 0..60
+ * Une omnidirectionnelle ignore beamwidth_deg et front_to_back_db. */
+typedef struct lsim_antenna_pattern {
+    uint32_t kind;              /* LSIM_ANTENNA_* */
+    double   peak_gain_dbi;
+    double   beamwidth_deg;
+    double   pointing_deg;
+    double   front_to_back_db;
+} lsim_antenna_pattern;
+
+#define LSIM_ANTENNA_OMNIDIRECTIONAL 0u
+#define LSIM_ANTENNA_UNIDIRECTIONAL  1u
+#define LSIM_ANTENNA_BIDIRECTIONAL   2u
+#define LSIM_ANTENNA_SECTOR          3u
+
 typedef struct lsim_propagation {
     double frequency_hz;
     double reference_distance_m;
@@ -647,6 +668,28 @@ LSIM_API int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices,
 LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                                      double max_path_loss_db, const lsim_environment* env,
                                      double step_m, size_t azimuths, double* radii_out);
+
+/* Décalage de gain d'antenne (dB, négatif ou nul) dans la direction `azimuth_deg`,
+ * par rapport au gain de crête. `pattern` NULL ou omnidirectionnelle donne 0.
+ * `azimuth_deg` est ramené à un tour : 370° vaut 10°. */
+LSIM_API double lsim_antenna_gain_offset_db(const lsim_antenna_pattern* pattern,
+                                            double azimuth_deg);
+
+/* Vérifie un diagramme d'antenne : type connu, valeurs finies et dans les bornes.
+ * Renvoie 0 si valide, 1 sinon. */
+LSIM_API int32_t lsim_antenna_validate(const lsim_antenna_pattern* pattern);
+
+/* Portée par azimut **avec diagramme d'antenne** : radii_out reçoit `azimuths`
+ * distances (m). `max_path_loss_db` est le budget établi au gain de crête (celui que
+ * renvoie lsim_max_allowable_path_loss_db avec antenna_gain_dbi = peak_gain_dbi) ;
+ * chaque azimut n'en dispose plus que de la part que le lobe lui laisse.
+ * `antenna` NULL reproduit exactement lsim_coverage_radii. */
+LSIM_API int32_t lsim_antenna_coverage_radii(const lsim_gateway* gateway,
+                                             const lsim_antenna_pattern* antenna,
+                                             const lsim_propagation* prop,
+                                             double max_path_loss_db,
+                                             const lsim_environment* env,
+                                             double step_m, size_t azimuths, double* radii_out);
 
 /* Perte de propagation totale (dB) entre toutes les paires de points (relief et obstacles
  * inclus). out_db[i*n+j] : émetteur i, récepteur j ; diagonale 0. 1 <= n <= 64 et
