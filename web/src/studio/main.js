@@ -30,7 +30,8 @@ import { liaisonsObservees, etiquetteLiaison } from "./liaisons.js";
 import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
 // Zone de couverture : les rayons viennent du moteur, le tracé est un calcul pur, vérifiable
 // hors navigateur. Le plan 2D et la carte 3D consomment le même, comme pour les liaisons.
-import { COULEURS_QUALITE, anneauZone, etiquettePalier, etiquetteModele } from "./zone.js";
+import { COULEURS_QUALITE, anneauZone, etiquettePalier, etiquetteModele, porteeMax }
+  from "./zone.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 // Borne des lignes de dispositifs ramenées pour les indicateurs : au-delà, l'agrégation par
@@ -1903,6 +1904,15 @@ const player = createPlayer({
     const node = state.topo?.nodes?.find((n) => n.id === id);
     return node && state.bounds ? toScreen(node, state.bounds, W, H) : null;
   },
+  // La vague prend la forme de l'antenne : il faut donc savoir projeter des mètres, pas
+  // seulement des centres. Ces fonctions lisent la même topologie et les mêmes bornes que
+  // le plan, donc la vague est exactement à l'échelle de ce qu'elle éclaire.
+  project: (p) => (state.bounds ? toScreen(p, state.bounds, W, H) : null),
+  metresOf: (id) => state.topo?.nodes?.find((n) => n.id === id) ?? null,
+  antennaOf: (id) => state.topo?.nodes?.find((n) => n.id === id)?.antenna ?? null,
+  // Le front s'arrête à la portée de la zone : une vague qui la franchirait démentirait
+  // la zone affichée juste à côté.
+  rayonVague: (id) => porteeVague(id),
   onActive: (index) => showFrame(index),
 });
 
@@ -3289,6 +3299,22 @@ function porteeDesEquipements() {
 /** Portée de la plus grande zone affichée, depuis la carte si elle existe. */
 function porteeZoneAffichee() {
   return state.map?.porteeZone?.() ?? null;
+}
+
+/**
+ * Jusqu'où s'étend la vague d'un émetteur, en mètres.
+ *
+ * La portée de la zone du moteur si elle existe : une vague qui la franchirait démentirait
+ * la zone affichée juste à côté. Sinon un dixième de l'étendue du plan, parce qu'une vague
+ * sans échelle ne veut rien dire, et qu'elle ne doit pas couvrir l'écran d'un seul coup.
+ */
+function porteeVague(id) {
+  const zone = (state.couverture?.gateways ?? []).find((z) => z.node_id === id);
+  const portee = zone ? porteeMax(zone) : null;
+  if (Number.isFinite(portee)) return portee;
+  const b = state.bounds;
+  if (!b) return null;
+  return Math.max(b.maxX - b.minX, b.maxY - b.minY) * 0.1;
 }
 
 // --- Pose des équipements (phase H) -------------------------------------------------------

@@ -1,6 +1,10 @@
 // Lecteur d'animation des trames : horloge, vitesse, curseur, journal par saut.
 // Le dessin est une couche SVG ajoutée au plan ; la logique est dans animation.js.
 import { SPEEDS, activeAt, journalRow, timelineBounds } from "./animation.js";
+// La forme de la vague : le lobe de l'antenne, calculé sans dépendance au DOM. Une trame
+// émise par une sectorielle ne s'étale pas en rond, et le montrer est tout l'intérêt de
+// l'animation — sinon autant regarder un disque.
+import { contourVague } from "./zone.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYER_ID = "anim-layer";
@@ -11,7 +15,19 @@ function svgEl(tag, attrs = {}) {
   return node;
 }
 
-export function createPlayer({ svg, panel, positionOf, onActive = null }) {
+/**
+ * @param {object} options
+ * @param {(id: string) => {x: number, y: number}|null} options.positionOf écran, par équipement
+ * @param {((p: {x_m: number, y_m: number}) => {x: number, y: number})|null} options.project
+ *   mètres -> écran. Sans lui, les vagues restent des cercles : on ne peut pas projeter
+ *   un lobe avec la seule position de son centre.
+ * @param {(id: string) => {x_m: number, y_m: number}|null} options.metresOf position métrique
+ * @param {(id: string) => object|null} options.antennaOf antenne déclarée de l'équipement
+ * @param {(p: {x_m: number, y_m: number}) => number|null} options.rayonVague portée de la
+ *   vague en mètres, à l'instant courant
+ */
+export function createPlayer({ svg, panel, positionOf, project = null, metresOf = null,
+  antennaOf = null, rayonVague = null, onActive = null }) {
   let segments = [];
   let rows = [];
   let bounds = { startNs: 0n, endNs: 0n };
@@ -77,6 +93,40 @@ export function createPlayer({ svg, panel, positionOf, onActive = null }) {
     return layer;
   }
 
+  /**
+   * Le front d'onde d'une émission, à l'instant courant.
+   *
+   * Un cercle si l'antenne est omnidirectionnelle, inconnue, ou si le plan n'a pas pu
+   * être projeté : dans ces cas-là le rond est la forme **neutre**, celle qui n'affirme
+   * rien. Un lobe n'est tracé que lorsqu'il est calculable — une vague aplatie faute de
+   * projection serait lue comme une antenne défaillante.
+   */
+  function frontOnde(seg, centreEcran, cls) {
+    const r = 14 + 10 * seg.progress;             // pixels : l'échelle de l'anneau d'avant
+    const source = metresOf?.(seg.from) ?? null;
+    const antenne = antennaOf?.(seg.from) ?? null;
+    const porteeM = rayonVague?.(seg.from) ?? null;
+    if (project && source && Number.isFinite(porteeM) && porteeM > 0) {
+      const contour = contourVague(antenne, source, porteeM, 48);
+      const points = [];
+      for (const p of contour) {
+        const q = project(p);
+        // Un sommet qui ne se projette pas : on abandonne le lobe, pas la vague.
+        if (!Number.isFinite(q?.x) || !Number.isFinite(q?.y)) {
+          return svgEl("circle", { cx: centreEcran.x, cy: centreEcran.y, r, class: `${cls} ring` });
+        }
+        points.push(`${q.x.toFixed(1)},${q.y.toFixed(1)}`);
+      }
+      if (points.length >= 4) {
+        // Le front pâlit en s'étalant : l'énergie se répartit sur un front plus long, et
+        // le voir s'estomper dit « ça s'éloigne » mieux qu'un contour d'épaisseur fixe.
+        return svgEl("polygon", { points: points.join(" "), class: `${cls} ring lobe`,
+          "stroke-opacity": (1 - 0.55 * (seg.progress ?? 0)).toFixed(3) });
+      }
+    }
+    return svgEl("circle", { cx: centreEcran.x, cy: centreEcran.y, r, class: `${cls} ring` });
+  }
+
   function draw() {
     const layer = ensureLayer();
     while (layer.firstChild) layer.removeChild(layer.firstChild);
@@ -94,10 +144,10 @@ export function createPlayer({ svg, panel, positionOf, onActive = null }) {
         const y = from.y + (to.y - from.y) * seg.progress;
         layer.append(svgEl("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: 5, class: `${cls} frame` }));
       } else {
-        // Vers le réseau : anneau autour de la passerelle source.
-        layer.append(svgEl("circle", {
-          cx: from.x, cy: from.y, r: 14 + 10 * seg.progress, class: `${cls} ring`,
-        }));
+        // Vers le réseau : le front d'onde autour de l'émetteur. Il prend la forme de
+        // l'antenne — une sectorielle éclaire son secteur, un fouet éclaire partout —
+        // parce qu'un anneau rond raconterait une antenne que personne n'a déclarée.
+        layer.append(frontOnde(seg, from, cls));
       }
     }
     slider.value = String(span() > 0 ? Math.round(((clock - Number(bounds.startNs)) / span()) * 1000) : 0);

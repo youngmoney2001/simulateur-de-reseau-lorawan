@@ -123,6 +123,65 @@ export function facteurLobe(antenne, azimuthDeg) {
 }
 
 /**
+ * De combien la **portée** se réduit dans une direction, entre 0 et 1 (1 sur l'axe).
+ *
+ * Ce n'est pas `facteurLobe`, et la différence compte. Celui-ci est un rapport de
+ * puissance : à −25 dB il vaut 0,003, si bien qu'une vague tracée à cette échelle
+ * disparaîtrait dans le dos de l'antenne. Or une vague doit rester visible partout —
+ * c'est justement **l'inégalité** de son étalement qu'on veut lire, pas une zone morte.
+ *
+ * Ce que la vue veut, c'est le rapport des portées : de combien le front recule quand
+ * le budget perd `db`. Le moteur passe de l'un à l'autre par l'exposant de propagation
+ * (log-distance), où l'atténuation vaut `10 n log10(d)` : une perte de `db` retire donc
+ * `db / (10 n)` décades à la distance. Avec `n = 2,5`, −30 dB donne 0,063 au lieu de
+ * 0,001 — le lobe se lit, et le front reste présent dans toutes les directions.
+ *
+ * Plus `n` est haut, plus le lobe paraît **doux** à l'écran : dans un milieu très
+ * atténuant la portée est courte et varie moins vite avec le budget, donc l'écart relatif
+ * entre l'axe et le dos se resserre. C'est conforme au modèle, ce n'est pas un lissage
+ * qu'on se serait accordé pour faire joli.
+ *
+ * @param {number} exposant exposant de propagation du scénario (2,5 en urbain)
+ * @returns {number|null} `null` si l'antenne ou l'exposant est inexploitable
+ */
+export const EXPOSANT_PROPAGATION = 2.5;
+
+export function facteurPortee(antenne, azimuthDeg, exposant = EXPOSANT_PROPAGATION) {
+  const db = attenuationLobeDb(antenne, azimuthDeg);
+  if (db === null) return null;
+  if (!Number.isFinite(exposant) || !(exposant > 0)) return null;
+  return Math.pow(10, -db / (10 * exposant));
+}
+
+/**
+ * Contour d'une vague : un anneau dont chaque point est à `rayon · facteurPortee(θ)`.
+ *
+ * Ni la zone de couverture, ni le diagramme de la fiche technique : c'est le front d'une
+ * onde, à l'instant qu'on regarde. Il s'étire dans le secteur de l'antenne et recule dans
+ * son dos — sans jamais s'annuler, faute de quoi une antenne directive semblerait ne rien
+ * émettre du tout dans trois quarts des directions.
+ *
+ * @param {number} rayon échelle du tracé, en mètres
+ * @param {number} azimuths nombre de points de l'anneau
+ * @param {number} exposant exposant de propagation du scénario
+ */
+export function contourVague(antenne, centre, rayon, azimuths = 72, exposant) {
+  if (!Number.isFinite(rayon) || rayon <= 0) return [];
+  if (!Number.isFinite(centre?.x_m) || !Number.isFinite(centre?.y_m)) return [];
+  const out = [];
+  for (let k = 0; k < azimuths; k += 1) {
+    const a = (2 * Math.PI * k) / azimuths;
+    // Une antenne inexploitable donne `null` : on trace alors le rayon plein plutôt que
+    // zéro, qui dessinerait une vague écrasée au centre. Omnidirectionnelle par défaut,
+    // jamais silencieusement directive.
+    const f = facteurPortee(antenne, (360 * k) / azimuths, exposant) ?? 1;
+    out.push({ x: centre.x_m + rayon * f * Math.cos(a), y: centre.y_m + rayon * f * Math.sin(a) });
+  }
+  if (out.length) out.push({ ...out[0] });
+  return out;
+}
+
+/**
  * Contour du lobe à l'échelle `rayon` mètres : un anneau dont chaque point est à
  * `rayon · facteurLobe(θ)` de l'antenne. C'est le diagramme polaire de l'antenne, la
  * courbe qu'on voit sur une fiche technique — pas une zone de portée.

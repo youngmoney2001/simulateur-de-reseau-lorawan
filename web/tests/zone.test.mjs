@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  COULEURS_QUALITE, QUALITES, anneauZone, attenuationLobeDb, contourLobe, etiquetteModele,
-  etiquettePalier, facteurLobe, porteeMax,
+  COULEURS_QUALITE, QUALITES, anneauZone, attenuationLobeDb, contourLobe, contourVague,
+  etiquetteModele, etiquettePalier, facteurLobe, facteurPortee, porteeMax,
 } from "../src/studio/zone.js";
 
 const UNI = { kind: "unidirectionnelle", beamwidth_deg: 90, pointing_deg: 0,
@@ -155,4 +155,72 @@ test("les libellés disent ce qu'ils mesurent", () => {
   assert.match(etiquettePalier({ qualite: "limite", marge_db: 0 }), /marge nulle/);
   assert.equal(etiquetteModele("environment"), "relief et obstacles");
   assert.equal(etiquetteModele("log_distance"), "log-distance seul");
+});
+
+// --- Vagues : la portée, pas la puissance ------------------------------------------------
+
+test("le facteur de portee reste lisible la ou la puissance s'ecrase", () => {
+  // Une sectorielle de 120 degres n'atteint pas son plancher avant/arriere a 180 degres :
+  // la formule 3GPP y donne 12 dB, pas les 30 declares. Le dos vaut donc 0,331 en portee
+  // contre 0,063 en puissance — cinq fois plus grand, et surtout visible a l'ecran.
+  assert.ok(Math.abs(facteurPortee(SECTEUR, 180) - 10 ** (-12 / 25)) < 1e-12);
+  assert.ok(Math.abs(facteurLobe(SECTEUR, 180) - 10 ** -1.2) < 1e-12);
+  assert.ok(facteurPortee(SECTEUR, 180) > facteurLobe(SECTEUR, 180) * 5);
+});
+
+test("une vague est plus longue dans l'axe que dans le dos de l'antenne", () => {
+  // Le dos se lit a l'indice 36 d'un anneau a 72 points, pas au minimum des x : le point
+  // le plus a l'ouest n'est pas celui ou le rayon est le plus court, l'angle compte aussi.
+  const anneau = contourVague(SECTEUR, { x_m: 0, y_m: 0 }, 100, 72);
+  const rayon = (k) => Math.hypot(anneau[k].x, anneau[k].y);
+  assert.ok(rayon(0) > rayon(36) * 2, `axe ${rayon(0)} devrait dominer le dos ${rayon(36)}`);
+  // Le sommet du secteur est plat : a 10 degres d'axe, sur une ouverture de 120, rien
+  // n'a encore decroit.
+  assert.ok(Math.abs(rayon(0) - rayon(2)) < 1e-9);
+});
+
+test("une vague garde un front dans toutes les directions, meme hors du lobe", () => {
+  const anneau = contourVague(SECTEUR, { x_m: 0, y_m: 0 }, 100, 72);
+  // 6 % du rayon au pire : le front recule nettement, il ne disparait pas. Une antenne
+  // directive doit se lire comme une antenne directive, pas comme une panne d'emission.
+  for (const p of anneau) {
+    assert.ok(Math.hypot(p.x, p.y) > 5, "le front ne doit pas s'ecraser au centre");
+  }
+});
+
+test("une antenne omnidirectionnelle donne un cercle, pas un lobe", () => {
+  const anneau = contourVague({ kind: "omnidirectionnelle" }, { x_m: 10, y_m: -20 }, 50, 36);
+  for (const p of anneau) {
+    assert.ok(Math.abs(Math.hypot(p.x - 10, p.y + 20) - 50) < 1e-9);
+  }
+});
+
+test("une antenne inexploitable s'etale en rond plutot que de disparaitre", () => {
+  // Un degrade silencieux en directivite dessinerait une antenne que personne n'a
+  // declaree. Le contraire — un cercle — est au moins neutre.
+  const anneau = contourVague({ kind: "inconnu" }, { x_m: 0, y_m: 0 }, 40, 36);
+  assert.equal(anneau.length, 37);
+  for (const p of anneau) assert.ok(Math.abs(Math.hypot(p.x, p.y) - 40) < 1e-9);
+});
+
+test("l'exposant de propagation resserre ou etale le lobe", () => {
+  // Contre-intuitif, mais conforme au modele : plus le milieu attenue, plus la portee
+  // varie lentement avec le budget, donc plus le lobe parait doux a l'ecran. Un exposant
+  // nul ou negatif n'a pas de sens et se refuse, plutot que de diviser par zero.
+  const serre = facteurPortee(SECTEUR, 180, 2.0);
+  const large = facteurPortee(SECTEUR, 180, 3.5);
+  assert.ok(serre < large, `${serre} devrait etre plus serre que ${large}`);
+  assert.equal(facteurPortee(SECTEUR, 180, 0), null);
+  assert.equal(facteurPortee(SECTEUR, 180, -2), null);
+});
+
+test("une vague de rayon nul ou de centre inexploitable ne se trace pas", () => {
+  assert.deepEqual(contourVague(SECTEUR, { x_m: 0, y_m: 0 }, 0, 36), []);
+  assert.deepEqual(contourVague(SECTEUR, { x_m: NaN, y_m: 0 }, 100, 36), []);
+});
+
+test("le contour d'une vague est referme et centre sur l'antenne", () => {
+  const anneau = contourVague(SECTEUR, { x_m: 30, y_m: 40 }, 60, 24);
+  assert.equal(anneau.length, 25);              // 24 points + le premier, répété
+  assert.deepEqual(anneau[0], anneau[24]);
 });

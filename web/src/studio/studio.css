@@ -450,6 +450,9 @@ table.runs th { color:var(--muted); font-weight:600; }
 #anim-layer .trail { stroke-width:2; stroke-opacity:.45; stroke-dasharray:4 3; }
 #anim-layer .frame { stroke:#fff; stroke-width:1; }
 #anim-layer .ring { fill:none; stroke-width:2; }
+/* Le lobe, lui, éclaire légèrement son secteur : un simple contour ne dit pas « c'est par
+   là que l'antenne émet », alors que c'est précisément ce qu'on veut lire. */
+#anim-layer .ring.lobe { fill-opacity:.10; stroke-width:2.5; }
 .player .journal { max-height:260px; overflow:auto; padding-left:0; list-style:none; font-size:.9em; }
 .journal-row { border-bottom:1px solid var(--line); padding:2px 0; }
 .journal-row.ok { border-left:3px solid #2e7d32; padding-left:6px; }
