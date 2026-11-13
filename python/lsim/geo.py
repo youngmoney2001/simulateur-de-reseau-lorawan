@@ -58,24 +58,32 @@ def _mapl_db(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
 
 
 def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
-                      gateway: Optional[GatewayModel] = None) -> float:
+                      gateway: Optional[GatewayModel] = None,
+                      marge_db: float = 0.0) -> float:
     """Portée (m) pour un SF et une puissance donnés, via le bilan de liaison natif.
 
     Log-distance seul, sans relief ni obstacle : c'est une borne haute de la portée réelle.
+    `marge_db` : réserve exigée au-dessus du seuil, retirée du bilan (voir
+    `coverage_radii_m`) — sans quoi tous les paliers de qualité sortiraient égaux.
     """
     p = scenario.propagation()
     model = LogDistanceModel(frequency_hz=p.frequency_hz,
                              reference_distance_m=p.reference_distance_m,
                              exponent=p.exponent)
-    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway))
+    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway) - marge_db)
 
 
 def coverage_radii_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
-                     gateway: Optional[GatewayModel] = None
+                     gateway: Optional[GatewayModel] = None, marge_db: float = 0.0
                      ) -> tuple[tuple[float, ...], str]:
     """Portée (m) par azimut autour d'une passerelle, et modèle utilisé.
 
     `gateway` : passerelle concernée (défaut : « gateway » du scénario).
+
+    `marge_db` : réserve exigée au-dessus du seuil de sensibilité. La portée publiée est
+    alors celle où la liaison garde encore cette marge — c'est ce qui distingue « reçu
+    juste » de « reçu large », et donc les paliers de qualité d'une zone. Zéro (défaut) :
+    le bord de la zone, la portée d'avant.
 
     Avec environnement, la portée suit le relief et les obstacles (calcul natif). Sans
     environnement **et** sans antenne directive, c'est un disque log-distance : le
@@ -94,13 +102,15 @@ def coverage_radii_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: fl
     # le modèle cohérent pour qui relirait le diagramme seul.
     antenna = gw.antenna.pattern(gw.antenna_gain_dbi) if gw.antenna is not None else None
     if env is None and antenna is None:
-        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw)
+        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw, marge_db)
         return tuple([radius] * COVERAGE_AZIMUTHS), "log_distance"
 
+    # La marge se retire du budget : exiger 10 dB de réserve, c'est ne compter que la
+    # portée où le bilan les garde. La perte croissant avec la distance, la zone rétrécit.
+    budget = _mapl_db(scenario, spreading_factor, tx_power_dbm, gw) - marge_db
     radii = coverage_radii(
         Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
-        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm, gw), env,
-        COVERAGE_STEP_M, COVERAGE_AZIMUTHS, antenna)
+        scenario.propagation(), budget, env, COVERAGE_STEP_M, COVERAGE_AZIMUTHS, antenna)
     return tuple(radii), "environment" if env is not None else "log_distance"
 
 

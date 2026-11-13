@@ -131,6 +131,33 @@ class GatewaySettings(_Strict):
     # quoi une passerelle posée depuis la palette resterait au seuil de référence sans
     # pouvoir en changer. `None` : aucun modèle appliqué, comportement d'avant.
     gateway_profile: Optional[GatewayProfileName] = None
+    # Antenne : même remarque que le modèle, ce n'est pas un réglage du CLI mais du
+    # matériel, et il se règle au même endroit. `None` explicite = retour à l'omnidirec-
+    # tionnelle ; champ absent = rien ne change.
+    antenna: Optional[AntennaSettings] = None
+
+
+class AntennaSettings(_Strict):
+    """Diagramme de rayonnement horizontal : la **forme** du lobe, jamais son gain.
+
+    Le gain de crête reste `antenna_gain_dbi`, déjà compté dans le bilan de liaison et
+    réglé ailleurs (au CLI). Le redéclarer ici donnerait deux sources à un même chiffre,
+    et le diagramme n'a de sens que relatif à un sommet.
+
+    `beamwidth_deg` : ouverture à −3 dB sur une directive, largeur du secteur servi au
+    gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle ignore
+    `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle.
+
+    `pointing_deg` : azimut de l'axe du lobe, 0 = l'est, sens trigonométrique — le même
+    repère que le plan de l'atelier, pour que la flèche du formulaire et la zone tracée
+    désignent la même direction.
+    """
+
+    kind: Literal["omnidirectionnelle", "unidirectionnelle", "bidirectionnelle",
+                  "sectorielle"] = "omnidirectionnelle"
+    beamwidth_deg: float = Field(90.0, ge=5.0, le=360.0)
+    pointing_deg: float = 0.0
+    front_to_back_db: float = Field(20.0, ge=0.0, le=60.0)
 
 
 class Node(_Strict):
@@ -146,6 +173,10 @@ class Node(_Strict):
     # passe alors de 0 à 20 trames reçues sur 20. Les fiches qui ne publient pas le point
     # (SF et bande) ne décalent rien : le catalogue le dit, l'interface doit le redire.
     gateway_profile: Optional[GatewayProfileName] = None
+    # Antenne de la passerelle. `None` : omnidirectionnelle — le comportement d'avant,
+    # une zone circulaire. Comme le modèle, c'est du matériel : cela vit sur le nœud et
+    # se règle avec les autres réglages passerelle.
+    antenna: Optional[AntennaSettings] = None
 
     @model_validator(mode="after")
     def _gateway_profile_only_on_gateways(self) -> "Node":
@@ -155,6 +186,13 @@ class Node(_Strict):
             raise ValueError(
                 f"modèle de passerelle « {self.gateway_profile} » sur un équipement "
                 f"qui n'est pas une passerelle (kind={self.kind})")
+        return self
+
+    @model_validator(mode="after")
+    def _antenna_only_on_gateways(self) -> "Node":
+        if self.antenna is not None and self.kind not in ("relay", "border"):
+            raise ValueError(
+                f"antenne sur un équipement qui n'est pas une passerelle (kind={self.kind})")
         return self
 
     @model_validator(mode="after")
@@ -523,6 +561,67 @@ class SubmitResult(_Strict):
     criteria: list[CriterionResult] = Field(max_length=50)
 
 
+# Paliers de qualité d'une zone de couverture : marge (dB) au-dessus du seuil de
+# sensibilité exigée pour être classé dans ce palier. Trois niveaux, parce qu'une
+# zone uniforme ne dit pas où une liaison tient vraiment : entre « reçu juste » et
+# « reçu large » il y a toute la marge qui sépare un réseau qui fonctionne d'un
+# réseau qui fonctionnera.
+#
+# Les valeurs ne sont pas décoratives : chaque palier est une vraie portée, calculée
+# par le moteur avec un budget diminué de la marge. « Limite » est le bord de la zone
+# (marge nulle) ; « excellent » est l'endroit où la liaison garde 20 dB de réserve,
+# de quoi encaisser une saison de pluie et un camion devant l'antenne.
+COVERAGE_TIERS: tuple[tuple[str, float], ...] = (
+    ("excellent", 20.0),
+    ("bon", 10.0),
+    ("limite", 0.0),
+)
+# Nombre d'azimuts de la zone : le même que le calcul natif, pour qu'un rayon
+# publié soit un rayon calculé — l'interface n'interpole pas.
+COVERAGE_AZIMUTHS = 180
+
+
+class CoverageTier(_Strict):
+    """Une portée par azimut pour un palier de qualité.
+
+    `radii_m` compte `COVERAGE_AZIMUTHS` rayons, dans le sens trigonométrique à
+    partir de l'est (azimut 0 = index 0). Ces mètres sont ceux du plan de l'atelier
+    et de la carte : les deux vues partagent le repère, elles ne le convertissent pas.
+    """
+
+    qualite: Literal["excellent", "bon", "limite"]
+    marge_db: float
+    radii_m: list[float] = Field(min_length=COVERAGE_AZIMUTHS, max_length=COVERAGE_AZIMUTHS)
+
+
+class GatewayCoverage(_Strict):
+    """Zone de couverture d'une passerelle de la session."""
+
+    node_id: str = Field(pattern=ID_PATTERN)
+    # Modèle ayant produit les rayons : « log_distance » (formule seule) ou
+    # « environment » (relief et obstacles, calcul natif). Le dire, c'est permettre
+    # à l'interface d'annoncer ce que la zone vaut, au lieu d'un disque muet.
+    modele: Literal["log_distance", "environment"]
+    paliers: list[CoverageTier] = Field(min_length=1, max_length=8)
+    # L'antenne déclarée, rappelée telle quelle : la forme de la zone s'explique par
+    # elle, et l'interface n'a pas à la retrouver ailleurs.
+    antenna: Optional[AntennaSettings] = None
+
+
+class CoverageOut(_Strict):
+    """Couverture de toutes les passerelles d'une session.
+
+    `sf` et `tx_power_dbm` sont ceux du capteur de référence, et `source` dit d'où
+    ils viennent : une zone sans son capteur de référence ne veut rien dire — à
+    14 dBm en SF7 on ne couvre pas la même chose qu'en SF12.
+    """
+
+    sf: int = Field(ge=5, le=12)
+    tx_power_dbm: float = Field(ge=-10.0, le=30.0)
+    source: Literal["demande", "capteurs", "defaut"]
+    gateways: list[GatewayCoverage] = Field(max_length=MAX_NODES)
+
+
 MODELS: dict[str, type[BaseModel]] = {
     "study_session_create": SessionCreate,
     "study_session": SessionOut,
@@ -549,6 +648,10 @@ MODELS: dict[str, type[BaseModel]] = {
     # Une mesure par matériau, publiée pour elle-même : l'atelier la saisit seule, sans
     # redéposer les murs.
     "study_material_calibration": MaterialCalibration,
+    "study_antenna": AntennaSettings,
+    "study_coverage_tier": CoverageTier,
+    "study_gateway_coverage": GatewayCoverage,
+    "study_coverage": CoverageOut,
     # Le reste du contrat, publié pour lui-même : un client qui lit un nœud, un état
     # résumé, un critère ou un rebond de passerelle doit pouvoir le valider sans
     # reconstruire la session entière.

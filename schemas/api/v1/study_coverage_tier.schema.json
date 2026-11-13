@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "Une portée par azimut pour un palier de qualité.\n\n`radii_m` compte `COVERAGE_AZIMUTHS` rayons, dans le sens trigonométrique à\npartir de l'est (azimut 0 = index 0). Ces mètres sont ceux du plan de l'atelier\net de la carte : les deux vues partagent le repère, elles ne le convertissent pas.",
+  "properties": {
+    "marge_db": {
+      "title": "Marge Db",
+      "type": "number"
+    },
+    "qualite": {
+      "enum": [
+        "excellent",
+        "bon",
+        "limite"
+      ],
+      "title": "Qualite",
+      "type": "string"
+    },
+    "radii_m": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 180,
+      "minItems": 180,
+      "title": "Radii M",
+      "type": "array"
+    }
+  },
+  "required": [
+    "qualite",
+    "marge_db",
+    "radii_m"
+  ],
+  "title": "CoverageTier",
+  "type": "object"
+}

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import secrets
+from pathlib import Path
 import threading
 import time
 from collections import deque
@@ -29,11 +30,15 @@ from lsim import study_cli, study_exercises
 from lsim.study_compile import CompileError, Compiled, compile_session
 from lsim.study_contract import (
     MAX_NODES, AttemptList, AttemptOut, CliError, CliRequest, CliResponse, CriterionResult,
+    COVERAGE_AZIMUTHS, COVERAGE_TIERS, CoverageOut, CoverageTier, GatewayCoverage,
     GatewayLink, GatewaySettings, HintOut, Node, NodeState, Position, SensorSettings,
     SessionCreate, SessionList, SessionOut, SessionSummary, SessionTopology, SimulationBind,
     SimulationBound, SubmitResult,
     EnvironmentSettings, EnvironmentChoice,)
+from lsim.geo import coverage_radii_m
 from lsim.materials import MATERIAL_NAMES
+from lsim.environment import Terrain
+from lsim.scenario import EnvironmentModel, Scenario, ScenarioModel, _build_environment
 from lsim.study_store import StudyStore
 
 SESSION_TTL_S = 4 * 3600
@@ -482,6 +487,12 @@ class StudyService:
                 _push(st, f"modèle de {node_id}")
                 st.nodes[node_id] = node.model_copy(
                     update={"gateway_profile": settings.gateway_profile})
+            # L'antenne, elle non plus, n'est pas un réglage du CLI : c'est le matériel.
+            # Même traitement, même endroit, même distinction entre « absent » (rien ne
+            # change) et « nul » (retour à l'omnidirectionnelle).
+            if "antenna" in settings.model_fields_set:
+                _push(st, f"antenne de {node_id}")
+                st.nodes[node_id] = node.model_copy(update={"antenna": settings.antenna})
             self._save(sid, st)
             return self._topology_locked(sid, st)
 
@@ -538,6 +549,96 @@ class StudyService:
                                         adr=st.adr, join=st.join, confirmed=st.confirmed)
         except CompileError as exc:
             raise StudyError(422, "validation_error", exc.message, exc.field) from None
+
+    def coverage(self, owner: str, sid: str, sf: Optional[int] = None,
+                 tx_power_dbm: Optional[float] = None,
+                 terrain: Optional[Terrain] = None) -> CoverageOut:
+        """Zone de couverture de chaque passerelle, par palier de qualité.
+
+        Les rayons viennent du moteur (`lsim.geo.coverage_radii_m`) : relief, obstacles
+        et lobe d'antenne, le plus contraignant bornant. Rien n'est recalculé ici —
+        l'atelier ne sait pas faire un bilan de liaison, et ne doit pas le deviner.
+
+        `sf` et `tx_power_dbm` sont ceux du **capteur de référence** : une zone sans lui
+        ne veut rien dire. À défaut de demande explicite, on prend le capteur le plus
+        défavorable de la session — SF le plus haut, puis puissance la plus basse — parce
+        que c'est lui qui décide si le réseau tient. Sans capteur du tout, SF12 à 14 dBm,
+        le cas d'école, et la réponse le dit par `source`.
+
+        `terrain` : le relief résolu par l'appelant, qui seul connaît le catalogue. Un
+        chantier sans relief reste valide : la zone est alors le lobe seul.
+        """
+        with self._lock:
+            st = self._get_locked(owner, sid)
+            nodes = list(st.nodes.values())
+            configs = {nid: cli.config.copy() for nid, cli in st.cli.items()}
+            terrain_id = st.terrain_id
+            environment = st.environment
+        try:
+            compiled = compile_session(nodes, configs, 0, terrain_id=terrain_id,
+                                       environment=environment, adr=st.adr, join=st.join,
+                                       confirmed=st.confirmed)
+        except CompileError as exc:
+            raise StudyError(422, "validation_error", exc.message, exc.field) from None
+        body = compiled.body["scenario"]
+        model = ScenarioModel.model_validate(body)
+        # Un relief sans bloc `environment` serait perdu : `_build_environment` n'est
+        # appelé que si le bloc existe, et la session n'en émet aucun tant qu'aucun
+        # obstacle n'est posé. On le crée donc vide — exactement ce que fait le chemin
+        # du run (`_build_scenario`), pour que la couverture et la simulation voient le
+        # même sol. Sans cela, choisir un relief ne changeait rien à la zone dès lors
+        # qu'on n'avait tracé aucun mur.
+        if terrain is not None and model.environment is None:
+            model = model.model_copy(update={"environment": EnvironmentModel()})
+        env = None
+        if model.environment is not None:
+            env = _build_environment(model.environment, Path("."),
+                                     model.propagation.frequency_hz)
+            if terrain is not None:
+                env = dataclasses.replace(env, terrain=terrain)
+        scenario = Scenario(model, environment=env)
+
+        capteurs = [n.sensor for n in nodes if n.kind == "sensor" and n.sensor is not None]
+        if sf is not None and tx_power_dbm is not None:
+            source = "demande"
+        elif capteurs:
+            # Le plus défavorable d'abord : c'est sa portée qui borne le réseau, pas celle
+            # du capteur le mieux placé.
+            pire = max(capteurs, key=lambda s: (s.spreading_factor, -s.tx_power_dbm))
+            sf = pire.spreading_factor
+            tx_power_dbm = pire.tx_power_dbm
+            source = "capteurs"
+        else:
+            sf, tx_power_dbm, source = 12, 14.0, "defaut"
+
+        modeles = list(scenario.gateway_models())
+        par_nom = {g.name: g for g in modeles if g.name is not None}
+        zones = []
+        for n in nodes:
+            if n.kind not in CLI_NODE_KINDS:
+                continue
+            gw = par_nom.get(n.id)
+            if gw is None:
+                continue      # passerelle hors compilation (désactivée) : pas de zone
+            try:
+                plein, modele = coverage_radii_m(scenario, sf, tx_power_dbm, gw)
+            except ValueError as exc:
+                raise StudyError(422, "validation_error", str(exc), "coverage") from None
+            paliers = []
+            for qualite, marge in COVERAGE_TIERS:
+                try:
+                    if marge == 0.0:
+                        radii = plein
+                    else:
+                        radii, _ = coverage_radii_m(scenario, sf, tx_power_dbm, gw,
+                                                    marge_db=marge)
+                except ValueError as exc:
+                    raise StudyError(422, "validation_error", str(exc), "coverage") from None
+                paliers.append(CoverageTier(qualite=qualite, marge_db=marge,
+                                            radii_m=list(radii)))
+            zones.append(GatewayCoverage(node_id=n.id, modele=modele, paliers=paliers,
+                                         antenna=n.antenna))
+        return CoverageOut(sf=sf, tx_power_dbm=tx_power_dbm, source=source, gateways=zones)
 
     def set_protocol(self, owner: str, sid: str, join: bool, confirmed: bool) -> SessionTopology:
         """Règle la jointure OTAA et les trames confirmées.

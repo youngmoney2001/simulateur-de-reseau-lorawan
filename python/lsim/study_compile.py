@@ -255,6 +255,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
             # Passerelle d'accès : le modèle décale le seuil de réception de la différence
             # entre la sensibilité publiée et la référence du moteur au même point.
             gw["profile"] = n.gateway_profile
+        # L'antenne n'est pas un réglage, c'est le matériau de la zone : elle se déclare
+        # sur la passerelle du scénario, et la couverture en hérite (relief, obstacles et
+        # lobe, le plus contraignant bornant). Absente : disque, comportement d'avant.
+        if n.antenna is not None:
+            gw["antenna"] = n.antenna.model_dump()
         scenario_gateways.append(gw)
 
     # L'ADR n'existe que sur la forme `gateway` (une seule passerelle, sans mesh). On ne
@@ -341,8 +346,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         # l'indicateur mesh sont retirés, non pas par coquetterie mais parce que le schéma les
         # refuse sur `gateway` (« nom, profil et mesh exigent gateways »).
         seule = scenario_gateways[0]
-        scenario["gateway"] = {"x_m": seule["x_m"], "y_m": seule["y_m"],
-                               "antenna_gain_dbi": seule["antenna_gain_dbi"]}
+        seule_mono = {"x_m": seule["x_m"], "y_m": seule["y_m"],
+                      "antenna_gain_dbi": seule["antenna_gain_dbi"]}
+        if "antenna" in seule:
+            seule_mono["antenna"] = seule["antenna"]
+        scenario["gateway"] = seule_mono
         scenario["mac"] = {"link_adr": True}
         notes.append("ADR du serveur activé : ce run ne simule ni relais ni liaisons radio "
                      "par couple (une seule passerelle)")

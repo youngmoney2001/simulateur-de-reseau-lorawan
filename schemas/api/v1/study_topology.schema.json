@@ -1,5 +1,43 @@
 {
   "$defs": {
+    "AntennaSettings": {
+      "additionalProperties": false,
+      "description": "Diagramme de rayonnement horizontal : la **forme** du lobe, jamais son gain.\n\nLe gain de crête reste `antenna_gain_dbi`, déjà compté dans le bilan de liaison et\nréglé ailleurs (au CLI). Le redéclarer ici donnerait deux sources à un même chiffre,\net le diagramme n'a de sens que relatif à un sommet.\n\n`beamwidth_deg` : ouverture à −3 dB sur une directive, largeur du secteur servi au\ngain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle ignore\n`beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle.\n\n`pointing_deg` : azimut de l'axe du lobe, 0 = l'est, sens trigonométrique — le même\nrepère que le plan de l'atelier, pour que la flèche du formulaire et la zone tracée\ndésignent la même direction.",
+      "properties": {
+        "beamwidth_deg": {
+          "default": 90.0,
+          "maximum": 360.0,
+          "minimum": 5.0,
+          "title": "Beamwidth Deg",
+          "type": "number"
+        },
+        "front_to_back_db": {
+          "default": 20.0,
+          "maximum": 60.0,
+          "minimum": 0.0,
+          "title": "Front To Back Db",
+          "type": "number"
+        },
+        "kind": {
+          "default": "omnidirectionnelle",
+          "enum": [
+            "omnidirectionnelle",
+            "unidirectionnelle",
+            "bidirectionnelle",
+            "sectorielle"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointing_deg": {
+          "default": 0.0,
+          "title": "Pointing Deg",
+          "type": "number"
+        }
+      },
+      "title": "AntennaSettings",
+      "type": "object"
+    },
     "DownlinkSettings": {
       "additionalProperties": false,
       "description": "Le serveur veut envoyer une commande au terminal, sans que le terminal l'ait demandée.\n\nC'est le seul réglage de l'atelier que la classe d'écoute change vraiment. Un ACK est\ndéclenché par un uplink : il tombe dans RX1 ou RX2 quelle que soit la classe. Ici la\ndemande naît à un instant que le terminal n'a pas choisi, et la classe décide de la\nfenêtre — donc de l'attente.\n\n`count` > 1 exige `request_period_s` : sinon toutes les demandes partiraient au même\ninstant, ce qui n'a pas de sens et que le moteur refuse.",
@@ -92,6 +130,17 @@
       "additionalProperties": false,
       "description": "Réglages d'une passerelle exposés dans l'atelier 3D.\n\nCe n'est **pas** toute la configuration : le gain d'antenne, la fréquence, le facteur\nd'étalement du mesh et l'arrêt d'interface restent au CLI, et la fenêtre le dit\nexplicitement. Le partage est un choix, pas un oubli — ces quatre réglages-là sont ceux\nque réclament les exercices, les autres relèvent du dépannage.\n\nLes bornes sont exactement celles du CLI (`study_cli.COMMANDS`) : un réglage refusé dans\nla fenêtre l'est donc aussi dans la console, avec le même mot. Les deux chemins écrivent\nau même endroit (`Session.config`), ils ne peuvent pas diverger.",
       "properties": {
+        "antenna": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AntennaSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "gateway_profile": {
           "anyOf": [
             {
@@ -238,6 +287,17 @@
     "Node": {
       "additionalProperties": false,
       "properties": {
+        "antenna": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AntennaSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "gateway_profile": {
           "anyOf": [
             {

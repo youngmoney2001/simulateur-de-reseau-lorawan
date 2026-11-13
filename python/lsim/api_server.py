@@ -112,6 +112,21 @@ def _problem(code: str, message: str, field_name: Optional[str] = None) -> dict[
     return Problem(code=code, message=message, field=field_name).model_dump(exclude_none=True)
 
 
+def _nombre(query: dict[str, list[str]], cle: str) -> Optional[float]:
+    """Un paramètre de requête numérique, absent ou `None`.
+
+    Refuse silencieusement une valeur illisible ? Non : elle est un paramètre invalide,
+    et la route décide du statut. Renvoyer `None` laisserait croire à une absence, donc
+    à un calcul sur le capteur de la session au lieu de l'erreur due à l'appelant.
+    """
+    if cle not in query:
+        return None
+    try:
+        return float(query[cle][0])
+    except (ValueError, IndexError, TypeError):
+        raise ApiError(422, "validation_error", f"{cle} doit être numérique", cle) from None
+
+
 def _validation_error(exc: ValidationError) -> ApiError:
     err = exc.errors()[0]
     loc = ".".join(str(p) for p in err.get("loc", ()))
@@ -1215,6 +1230,40 @@ class _Handler(BaseHTTPRequestHandler):
             connus = svc.terrains.ids()
             return 200, self._study(lambda: study.set_terrain(
                 owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        # Zone de couverture de chaque passerelle : rayons par azimut, par palier de
+        # qualité. Le calcul est entièrement dans le moteur — relief, obstacles et lobe
+        # d'antenne — parce que l'atelier ne sait pas faire un bilan de liaison, et qu'une
+        # zone qu'il devinerait serait une zone fausse.
+        # `sf` et `tx_power_dbm` : le capteur de référence. Facultatifs : sans eux, c'est le
+        # capteur le plus défavorable de la session, et la réponse le dit.
+        m_cov = re.fullmatch(r"sessions/([^/]+)/coverage", rest)
+        if m_cov is not None and method == "GET":
+            sid_cov = m_cov.group(1)
+            sf = _nombre(query, "sf")
+            tx = _nombre(query, "tx_power_dbm")
+            if sf is not None and not (5 <= sf <= 12):
+                raise ApiError(422, "validation_error", "sf doit être compris entre 5 et 12",
+                               "sf")
+            # Le SF est un entier et le natif le refuse en flottant : « 7.0 » dans
+            # l'URL doit valoir 7, pas échouer plus loin sur un ctypes bourru.
+            sf = None if sf is None else int(sf)
+            if tx is not None and not (-10.0 <= tx <= 30.0):
+                raise ApiError(422, "validation_error",
+                               "tx_power_dbm doit être compris entre -10 et 30", "tx_power_dbm")
+            # Le relief se résout ici : le catalogue est au service des runs, pas à celui
+            # de l'étude, qui ne doit pas connaître les fichiers du serveur. Un relief
+            # retiré du catalogue entre-temps ne fait pas échouer la zone : elle est
+            # calculée sans lui, ce qui reste vrai.
+            relief = None
+            terrain_id = self._study(lambda: study.topology(owner, sid_cov)).terrain_id
+            if terrain_id is not None:
+                try:
+                    relief = svc.terrains.get(terrain_id)
+                except ApiError:
+                    relief = None
+            return 200, self._study(
+                lambda: study.coverage(owner, sid_cov, sf=sf, tx_power_dbm=tx,
+                                       terrain=relief)).model_dump()
         # Environnement radio : obstacles tracés sur le plan, shadowing, hauteurs d'antennes.
         # Le matériau est vérifié côté service — un nom inconnu se refuse à la pose du mur.
         m_env = re.fullmatch(r"sessions/([^/]+)/environment", rest)
