@@ -2,6 +2,39 @@
 
 ## 0.1.0 (non publiée)
 
+### Obstacles : un mur était payé deux fois
+
+Pénétration et diffraction s'additionnaient. Un mur traversé coûtait donc à la fois sa perte
+de matériau **et** la diffraction par-dessus son sommet — comme si l'onde devait traverser la
+dalle et contourner l'arête.
+
+La conséquence était sans appel : un mur réglé à **0 dB coupait quand même** la liaison. Un
+mur sans perte devenait un bloqueur parfait, quel que soit son matériau, et aucune mesure n'y
+pouvait rien changer — `material_calibration` était sans effet sur le run. C'est en cherchant
+à démontrer cette calibration que le défaut est apparu.
+
+Le rayon dispose de deux chemins et prend désormais le **meilleur** :
+
+```
+surplus = min(pénétration, contournement)
+```
+
+Un mur de 0 dB redevient transparent ; un mur opaque se contourne, et coûte exactement ce que
+coûte passer au-dessus. Deux conséquences assumées, décrites au §2.1 de `RF_MODEL.md` : la
+perte d'un obstacle est plafonnée — le matériau n'est pas un interrupteur — et la pénétration
+ne se voit que là où elle coûte moins cher que le contournement.
+
+**Ce changement modifie des chiffres publiés.** Tout scénario déclarant un obstacle voit son
+bilan évoluer, à la baisse. Sept tests encodaient l'ancienne arithmétique et ont été repris
+un par un, en vérifiant chaque fois que c'était l'attente qui était fausse et non le modèle ;
+leurs nouvelles valeurs sont mesurées, non ajustées. En particulier, la couverture derrière un
+mur de 40 m passe de 300 m à 310 m : la borne de 300 m correspondait au bord avant du mur,
+seule conséquence visible du double compte.
+
+Un test C vérifie la règle sur cinq atténuations, en lisant le prix du contournement au lieu
+de le recopier : 0, 5 et 12 dB se traversent (le surplus suit la perte), 60 et 200 dB se
+contournent (le surplus se cale sur la diffraction).
+
 ### Atelier : une perte mesurée par matériau, sans quitter le plan
 
 La calibration existait dans le schéma de scénario, pas dans le contrat du chantier : depuis

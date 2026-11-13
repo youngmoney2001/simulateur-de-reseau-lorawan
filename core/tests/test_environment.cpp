@@ -237,11 +237,50 @@ void test_coverage_radii_follow_obstacles() {
     CHECK_EQ(static_cast<int>(coverage_radii_m(m, 0, 0, walled, mapl, 10.0, kAz, with_wall)),
              static_cast<int>(EnvStatus::Ok));
     // Azimut 0 (est) : la portée est coupée par le mur ; azimut opposé (ouest) : inchangé.
-    CHECK_TRUE(with_wall[0] < 300.0 + 1.0);
+    //
+    // La borne était 300 m — le bord **avant** du mur — parce que le mur était payé deux
+    // fois, comme dalle absorbante et comme arête diffractante. Le rayon prenant désormais
+    // le meilleur des deux chemins, il atteint 310 m : le bilan ferme encore juste avant la
+    // face arrière (320 m), puis plus. La portée reste divisée par six (1 941 -> 310 m).
+    CHECK_TRUE(with_wall[0] < 320.0 + 10.0);
+    CHECK_TRUE(with_wall[0] < flat[0] / 4.0);
     CHECK_NEAR(with_wall[kAz / 2], flat[kAz / 2], 10.0 + 1e-6);
     for (std::size_t k = 0; k < kAz; ++k) {
         CHECK_TRUE(with_wall[k] <= flat[k] + 1e-6);  // jamais plus que le log-distance
     }
+}
+
+void test_a_wall_costs_the_better_of_two_paths() {
+    // Mur de 20 m entre 1000 et 1100 m, rayon de 0 à 2000 m, antennes 1,5 et 15 m.
+    //
+    // Le rayon dispose de deux chemins et prend le meilleur : **traverser** le mur
+    // (pénétration) ou le **contourner** (diffraction). L'ancienne version additionnait
+    // les deux, si bien qu'un mur sans aucune perte coûtait quand même sa diffraction —
+    // un bloqueur quasi parfait, quel que soit son matériau, et qu'aucune mesure de
+    // matériau ne pouvait infléchir.
+    const auto surplus = [](double att) {
+        const Obstacle wall{1000, -50, 1100, 50, 20.0, att};
+        Environment e;
+        e.obstacles = &wall;
+        e.obstacle_count = 1;
+        PathLoss pl;
+        CHECK_EQ(static_cast<int>(path_loss_db(model(), 0, 0, 2000, 0, e, pl)),
+                 static_cast<int>(EnvStatus::Ok));
+        CHECK_NEAR(pl.penetration_db, att, 1e-9);
+        return pl.total_db - pl.log_distance_db;
+    };
+    // Prix du contournement : un mur opaque force le passage au-dessus, donc le surplus
+    // observé **est** la diffraction. On le lit au lieu de le recopier — une constante
+    // recopiée casserait au premier réglage du modèle.
+    const double contour = surplus(200.0);
+    CHECK_TRUE(contour > 1.0);          // un mur de 20 m ne se contourne pas gratuitement
+
+    CHECK_NEAR(surplus(0.0), 0.0, 1e-9);        // mur transparent : on le traverse
+    CHECK_NEAR(surplus(5.0), 5.0, 1e-9);        // moins cher à traverser qu'à contourner
+    CHECK_NEAR(surplus(12.0), 12.0, 1e-9);      // idem
+    CHECK_NEAR(surplus(60.0), contour, 1e-9);   // plus cher à traverser : on passe au-dessus
+    // Et surtout pas leur somme, qui était le défaut corrigé ici.
+    CHECK_TRUE(surplus(12.0) < 12.0 + contour - 1e-9);
 }
 
 void test_coverage_input_and_work_limits() {
@@ -280,4 +319,5 @@ void run_environment_tests() {
     test_deygout_two_ridges_add_loss();
     test_coverage_radii_follow_obstacles();
     test_coverage_input_and_work_limits();
+    test_a_wall_costs_the_better_of_two_paths();
 }

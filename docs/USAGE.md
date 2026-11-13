@@ -340,7 +340,12 @@ Trois points, pour que le résultat reste interprétable :
 - la mesure **n'est pas une extrapolation**, et l'avertissement P.2040-4 ne la concerne donc
   pas — le faire porter sur un relevé ferait douter d'une valeur solide ;
 - `provenance` est obligatoire, comme sur un relevé d'énergie : un chiffre sans origine se
-  présente comme une donnée du moteur.
+  présente comme une donnée du moteur ;
+- la perte est **plafonnée par le prix du contournement** (§2.1 de `RF_MODEL.md`) : le rayon
+  prend le meilleur des deux chemins, traverser ou contourner. Au-delà d'un certain seuil,
+  alourdir le matériau ne change plus rien — le mur se contourne. Une mesure ne se voit donc
+  que là où la marge est mince : sur un chantier à 2 km, aucune perte de matériau ne coupe
+  une liaison que le bilan ferme avec vingt décibels d'avance.
 
 Un obstacle qui déclare `attenuation_db` au lieu d'un matériau n'est pas concerné : la
 calibration porte sur un matériau, pas sur une valeur déjà saisie.

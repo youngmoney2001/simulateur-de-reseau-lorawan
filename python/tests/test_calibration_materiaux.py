@@ -44,7 +44,7 @@ groups:
     placement:
       type: disk
       radius_m: 100
-      center_x_m: 1500
+      center_x_m: 8000
       center_y_m: 0
     spreading_factor: 10
     payload_bytes: 10
@@ -106,7 +106,12 @@ def test_une_mesure_n_est_pas_une_extrapolation():
 
 
 def test_l_effet_se_voit_sur_le_run():
-    """Une perte plus forte fait tomber la liaison : la mesure change le résultat."""
+    """Une perte plus forte fait tomber la liaison : la mesure change le résultat.
+
+    Le capteur est à 8 km, là où la marge est mince : c'est la condition pour que la
+    mesure se voie. Plus près, le bilan ferme largement et **aucune** perte de matériau
+    ne suffirait à couper — le rayon contourne le mur pour bien moins cher.
+    """
     from lsim.export import run_scenario
     from lsim.scenario import load_scenario
 
@@ -116,6 +121,26 @@ def test_l_effet_se_voit_sur_le_run():
     assert leger.totals.received == 4, "0 dB/m : le mur ne coûte rien"
     assert lourd.totals.received == 0, "50 dB : plus rien ne passe"
     assert lourd.totals.lost_sensitivity == 4
+
+
+def test_une_mesure_trop_lourde_est_plafonnee_par_le_contournement():
+    """Au-delà du prix du contournement, alourdir le matériau ne change plus rien.
+
+    Conséquence directe du modèle à deux chemins : le rayon prend le **meilleur** des
+    deux, donc un mur vraiment opaque coûte exactement ce que coûte passer au-dessus.
+    Sans ce plafonnement, le matériau serait un interrupteur — et il suffirait
+    d'augmenter la perte pour couper n'importe quelle liaison, même à bout portant.
+    """
+    from lsim.export import run_scenario
+    from lsim.scenario import load_scenario
+
+    with tempfile.TemporaryDirectory() as d:
+        opaque = run_scenario(load_scenario(_scenario(d, _calibration(200.0))))
+        encore_plus = run_scenario(load_scenario(_scenario(d, _calibration(200.0, "mur epais"))))
+    # 200 dB/m est déjà la borne du schéma : au-delà du contournement, les deux se
+    # valent — seul le scénario diffère, le résultat est le même.
+    assert opaque.totals.received == encore_plus.totals.received == 0
+    assert opaque.totals.lost_sensitivity == 4
 
 
 # --- Validation --------------------------------------------------------------------------------

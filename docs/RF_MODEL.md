@@ -46,7 +46,34 @@ que 60 m de la passerelle, faire passer `d0` de 1 m à 10 m ne change **rien** �
 dépend de `n` et du domaine de distances réellement utilisé.
 
 Le relief et les obstacles (`environment`) s'ajoutent à `PL(d)` ; sans environnement, le résultat
-est celui du modèle log-distance seul.
+est celui du modèle log-distance seul. La façon dont ils s'ajoutent fait l'objet du §2.1.
+
+### 2.1 Obstacles : deux chemins, le meilleur gagne
+
+Un obstacle dont le sommet dépasse le rayon offre deux chemins, et le moteur retient le
+**moins coûteux** des deux — jamais leur somme :
+
+```
+surplus        = min(pénétration, contournement)
+pénétration    = Σ attenuation_db des obstacles traversés
+contournement  = diffraction de Deygout (3 arêtes) sur le profil relief + sommets d'obstacles
+```
+
+Un mur dont on connaît la perte se **traverse** ; un mur opaque se **contourne**. Deux
+conséquences valent d'être connues avant d'exploiter un chiffre :
+
+- la perte d'un obstacle est **plafonnée** par le prix du contournement. Alourdir le
+  matériau au-delà ne change plus rien : le matériau n'est pas un interrupteur, et il est
+  impossible de couper une liaison à bout portant en durcissant un mur ;
+- la pénétration ne se voit donc que là où elle coûte **moins** que le contournement —
+  murs peu absorbants, ou vus de loin. De près, le bilan ferme largement et aucune perte
+  de matériau ne suffit à couper : c'est pourquoi les tests de calibration portent leurs
+  capteurs à 8–10 km, là où la marge est mince.
+
+**Historique.** Les deux termes étaient additionnés. Un mur réglé à **0 dB** coupait alors
+la liaison, l'onde payant à la fois la traversée et le contournement : un bloqueur parfait,
+quel que soit son matériau, et insensible à toute mesure — la `material_calibration` du §5
+bis de `USAGE.md` n'y pouvait rien changer. Corrigé : le rayon prend le meilleur chemin.
 
 ## 3. Sensibilité et décision de réception
 

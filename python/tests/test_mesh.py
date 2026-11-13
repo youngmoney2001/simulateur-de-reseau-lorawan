@@ -180,7 +180,12 @@ def test_obstacle_on_mesh_link_removes_route_when_native_loss_is_used():
     env = Environment(obstacles=(wall,))
     prop = Propagation(frequency_hz=2.4e9, exponent=4.0)
     matrix = environment_path_loss_matrix([(0.0, 0.0), (800.0, 0.0)], prop, env)
-    assert matrix[0 * 2 + 1] >= STEEP.path_loss_db(800.0) + 60.0 - 1e-6  # mur traversé
+    # Le mur coûte le **meilleur** des deux chemins — le traverser (60 dB) ou le
+    # contourner — et non leur somme. La borne haute est donc la pénétration seule ;
+    # l'ancienne attente, « log-distance + 60 », encodait le double compte.
+    assert matrix[0 * 2 + 1] >= STEEP.path_loss_db(800.0) - 1e-6          # jamais moins
+    assert matrix[0 * 2 + 1] <= STEEP.path_loss_db(800.0) + 60.0 + 1e-6   # jamais plus
+    assert matrix[0 * 2 + 1] > STEEP.path_loss_db(800.0) + 1.0            # un mur de 40 m coûte
     walled = build_mesh(nodes, border_id="border", radio=RADIO, path_loss_db=matrix)
     assert walled.route("r1") is None
 
