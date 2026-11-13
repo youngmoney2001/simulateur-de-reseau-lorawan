@@ -53,6 +53,9 @@ const state = {
   runId: null,       // dernier run reussi : la carte 3D situe ce resultat, pas un exemple
   deviceRows: [],    // lignes par dispositif du dernier run : matiere des indicateurs
   resultats: null,   // Map node_id -> resultat : la carte colore par la, plus par type
+  couverture: null,  // zones de couverture du serveur : les rayons viennent du moteur
+  reliefCle: null,   // "sid|lat|lon" du MNT deja charge : evite de le redemander a chaque sync
+  couvertureCle: null, // meme idee pour les zones : la cle porte ce qui change une zone
   fenetreNs: null,   // fenetre d observation du dernier run : denominators des taux
   liens: [],         // GatewayLink[] du dernier run : equipement <-> passerelle du run
   passerelles: null, // summary.gateways : d'ou viennent les liaisons mesh observees
@@ -329,6 +332,11 @@ async function selectSession(sid) {
   state.passerelles = null;
   state.rxMatrix = null;
   state.liaisonsObservees = [];
+  // Le relief et les zones appartiennent à une session et à une ancre : les garder en
+  // changeant de chantier afficherait la colline d'un autre, le temps d'un clic.
+  state.couverture = null;
+  state.couvertureCle = null;
+  state.reliefCle = null;
   renderAdr();
   renderProtocole();
   renderSessionChoices();
@@ -3087,6 +3095,14 @@ function syncMap(fly = false) {
   // Mêmes liaisons sur les deux vues : le plan les trace, la carte aussi. Elles n'existent
   // qu'après un run — la topologie d'un réseau radio se mesure, elle ne se déclare pas.
   carte.setLiaisons(state.liaisonsObservees ?? [], state.topo?.nodes ?? []);
+  // Le décor réel : relief, murs, zones. Sans lui la carte montrait un réseau posé à plat
+  // alors que la couverture, elle, est calculée avec le relief et les obstacles — deux
+  // vérités sur le même écran. Le relief et les zones sont des allers-retours réseau :
+  // on les lance ici et la carte se redessinera à l'arrivée.
+  carte.setObstacles(environnement().obstacles);
+  carte.setCoverage(state.couverture?.gateways ?? []);
+  chargerRelief();
+  chargerCouverture();
   // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
   // encore la planète entière. La seconde compte autant que la première — c'est elle qui
   // fait que « la carte est centrée sur le lieu choisi » dès l'ouverture.
@@ -3105,6 +3121,68 @@ function syncMap(fly = false) {
 }
 
 // Encombrement du réseau, en mètres : sert à cadrer la caméra.
+/**
+ * Le relief de la session, demandé au serveur autour de l'ancre courante.
+ *
+ * L'ancre est envoyée en paramètre : c'est un repère d'affichage, il vit dans le
+ * navigateur et ne regarde pas le serveur. Un chantier sans relief n'est **pas** une
+ * erreur — `dem: null` est un chantier à plat, et la carte doit pouvoir le distinguer
+ * d'un serveur qui n'a pas répondu.
+ */
+async function chargerRelief() {
+  const carte = state.map;
+  if (!carte || !state.sid) return;
+  const o = readOrigin();
+  if (!o) return;                     // sans ancre, pas de découpage possible
+  // Arrondi au mètre : au-delà, on redemanderait le même MNT après chaque clic alors
+  // que le serveur renverrait exactement la même grille.
+  const cle = `${state.sid}|${o.lat.toFixed(6)}|${o.lon.toFixed(6)}`;
+  if (cle === state.reliefCle) return;
+  state.reliefCle = cle;
+  try {
+    carte.setTerrain(await state.client.dem(state.sid, o.lat, o.lon));
+  } catch (err) {
+    // Un échec ici ne doit pas vider la carte : on reste à plat, et on le dit. Avalé en
+    // silence, un relief absent passerait pour un relief chargé.
+    state.reliefCle = null;           // réessayer au prochain passage vaut mieux que rien
+    console.error("relief indisponible :", err);
+    const note = $("map-hint");
+    if (note) note.textContent = `Relief indisponible : ${err.message}. La carte reste plane.`;
+  }
+}
+
+/**
+ * Les zones de couverture des passerelles, demandées au serveur.
+ *
+ * Les rayons sont calculés par le moteur, relief et obstacles compris : l'atelier ne sait
+ * pas faire un bilan de liaison, et une zone qu'il devinerait serait une zone fausse. La
+ * clé porte ce qui change la zone — position, antenne, obstacles, shadowing — pour ne pas
+ * redemander après chaque clic sans conséquence.
+ */
+async function chargerCouverture() {
+  if (!state.sid) return;
+  const noeuds = (state.topo?.nodes ?? []).filter((n) => n.kind === "gateway" || n.antenna);
+  if (!noeuds.length) { state.couverture = null; return; }
+  const cle = JSON.stringify([state.sid, noeuds.map((n) =>
+    [n.id, n.x_m, n.y_m, n.antenna ?? null]), environnement()]);
+  if (cle === state.couvertureCle) return;
+  state.couvertureCle = cle;
+  try {
+    state.couverture = await state.client.coverage(state.sid);
+    // La carte n'est peut-être plus à l'écran, ou n'a pas encore été créée : dans les deux
+    // cas la zone attend patiemment dans l'état et sera tracée au prochain `syncMap`.
+    if (state.view === "map" && state.map) {
+      state.map.setCoverage(state.couverture?.gateways ?? []);
+    }
+  } catch (err) {
+    state.couvertureCle = null;
+    // Une zone refusée n'est pas un disque : on trace rien plutôt que n'importe quoi.
+    state.couverture = null;
+    if (state.view === "map" && state.map) state.map.setCoverage([]);
+    console.error("couverture indisponible :", err);
+  }
+}
+
 function porteeDesEquipements() {
   const ns = state.topo?.nodes ?? [];
   if (!ns.length) return 300;
@@ -3113,7 +3191,15 @@ function porteeDesEquipements() {
     minX = Math.min(minX, n.x_m); maxX = Math.max(maxX, n.x_m);
     minY = Math.min(minY, n.y_m); maxY = Math.max(maxY, n.y_m);
   }
-  return Math.max(maxX - minX, maxY - minY, 60) * 1.4;
+  const etale = Math.max(maxX - minX, maxY - minY, 60) * 1.4;
+  // La zone de couverture compte aussi : un réseau serré peut couvrir loin, et cadrer sur
+  // les seuls équipements couperait la zone qu'on vient justement de tracer.
+  return Math.max(etale, state.couverture ? (porteeZoneAffichee() ?? 0) : 0);
+}
+
+/** Portée de la plus grande zone affichée, depuis la carte si elle existe. */
+function porteeZoneAffichee() {
+  return state.map?.porteeZone?.() ?? null;
 }
 
 // --- Pose des équipements (phase H) -------------------------------------------------------
@@ -3635,6 +3721,8 @@ function appliquerZone(o, { garder = true, voler = true } = {}) {
   // `sessionStorage`, comme le faisait le refactor, laissait l'ancre affichée inchangée —
   // le message annonçait « zone déplacée » alors que rien n'avait bougé.
   writeOrigin(o);
+  // Le MNT est découpé autour de l'ancre : elle bouge, le relief chargé n'est plus le bon.
+  state.reliefCle = null;
   if (garder) sessionStorage.setItem(ORIGIN_KEY, JSON.stringify(o));
   refreshAddHint();
   refreshOriginState();
