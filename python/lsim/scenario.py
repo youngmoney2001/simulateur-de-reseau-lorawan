@@ -31,8 +31,9 @@ from lsim.environment import (
     Terrain,
     load_dem_csv,
 )
-from lsim.simulator import (DownlinkRequests, EndDevice, Gateway, Propagation,
-                             MAX_DOWNLINKS_PER_DEVICE, MAX_DRIFT_PPM, MAX_PERIODICITY)
+from lsim.simulator import (AntennaKind, AntennaPattern, DownlinkRequests, EndDevice,
+                             Gateway, Propagation, MAX_DOWNLINKS_PER_DEVICE, MAX_DRIFT_PPM,
+                             MAX_PERIODICITY)
 from lsim.gateway_sensitivity import (CATALOG, MODEL_ID, SF5_REGION, AbsoluteSensitivity,
                                      SensitivityError)
 from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
@@ -87,6 +88,54 @@ class SensitivityModel(_Strict):
             raise ValueError(str(exc)) from None
 
 
+# Noms du scénario vers types de l'ABI. Un « Literal » protège déjà l'entrée ; cette table
+# évite de faire dépendre le vocabulaire du fichier YAML de l'ordre des entiers du cœur.
+_ANTENNA_KINDS = {
+    "omnidirectionnelle": AntennaKind.OMNIDIRECTIONAL,
+    "unidirectionnelle": AntennaKind.UNIDIRECTIONAL,
+    "bidirectionnelle": AntennaKind.BIDIRECTIONAL,
+    "sectorielle": AntennaKind.SECTOR,
+}
+
+
+class AntennaModel(_Strict):
+    """Diagramme de rayonnement horizontal d'une antenne de passerelle.
+
+    Ce modèle décrit la **forme** du lobe, pas son gain : le gain de crête reste celui
+    de la passerelle (`antenna_gain_dbi`, ou `rf.antenna_gain_dbi`). Deux champs pour
+    une même grandeur finiraient par diverger — le frontal RF a déjà coûté une garde
+    pour cette raison —, et le diagramme n'a de sens que relatif à un sommet.
+
+    `beamwidth_deg` est l'ouverture à −3 dB sur une directive, et la largeur du secteur
+    servi au gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle
+    ignore `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle ; les
+    exiger reviendrait à refuser une antenne valide pour un réglage sans effet.
+
+    Modèle, bornes et réserves : `core/include/lsim/antenna.hpp`.
+    """
+
+    kind: Literal["omnidirectionnelle", "unidirectionnelle", "bidirectionnelle",
+                  "sectorielle"] = "omnidirectionnelle"
+    beamwidth_deg: float = Field(90.0, ge=5.0, le=360.0)
+    pointing_deg: float = 0.0
+    front_to_back_db: float = Field(20.0, ge=0.0, le=60.0)
+
+    def pattern(self, peak_gain_dbi: float) -> "AntennaPattern":
+        """Diagramme du simulateur, avec le gain de crête de la passerelle.
+
+        Le gain n'est pas un champ du modèle : c'est celui de la passerelle, qu'il
+        vienne de `antenna_gain_dbi` ou du frontal RF. Le passer ici plutôt que de le
+        relire évite qu'un même chiffre ait deux sources.
+        """
+        return AntennaPattern(
+            kind=_ANTENNA_KINDS[self.kind],
+            peak_gain_dbi=peak_gain_dbi,
+            beamwidth_deg=self.beamwidth_deg,
+            pointing_deg=self.pointing_deg,
+            front_to_back_db=self.front_to_back_db,
+        )
+
+
 class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
@@ -106,6 +155,11 @@ class GatewayModel(_Strict):
     sensitivity: Optional[SensitivityModel] = None
     # Frontal RF v4 de la passerelle (None = neutre). Le gain remplace `antenna_gain_dbi`.
     rf: Optional[RfModel] = None
+    # Diagramme de rayonnement horizontal (None = omnidirectionnelle). Déclare la forme
+    # du lobe, jamais son gain : le sommet est `antenna_gain_dbi` (ou celui du frontal).
+    # Sans environnement, la couverture reste un disque : la portée log-distance ne
+    # dépend pas de la direction, le relief et les obstacles sont seuls à la creuser.
+    antenna: Optional[AntennaModel] = None
 
     @model_validator(mode="after")
     def _rf_gain_not_duplicated(self) -> "GatewayModel":
@@ -856,6 +910,11 @@ class Scenario:
             # inchangés (elle est alors fournie par les options de protocole).
             if gw_dump.get("tx_power_dbm") is None:
                 gw_dump.pop("tx_power_dbm", None)
+            # Pas d'antenne déclarée : hors du hash, donc un scénario écrit avant cette
+            # possibilité garde exactement son empreinte — et ses chiffres, puisque sans
+            # diagramme la couverture est celle d'avant.
+            if gw_dump.get("antenna") is None:
+                gw_dump.pop("antenna", None)
         if model.gateways is not None:
             # `gateways` déclaré : le champ scalaire `gateway` subsiste à sa valeur par défaut
             # et reste haché tel quel (comportement historique, y compris ses valeurs nulles).

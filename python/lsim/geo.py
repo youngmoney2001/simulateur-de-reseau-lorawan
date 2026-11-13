@@ -70,38 +70,57 @@ def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: f
     return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway))
 
 
+def coverage_radii_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
+                     gateway: Optional[GatewayModel] = None
+                     ) -> tuple[tuple[float, ...], str]:
+    """Portée (m) par azimut autour d'une passerelle, et modèle utilisé.
+
+    `gateway` : passerelle concernée (défaut : « gateway » du scénario).
+
+    Avec environnement, la portée suit le relief et les obstacles (calcul natif). Sans
+    environnement **et** sans antenne directive, c'est un disque log-distance : le
+    raccourci exact d'avant, conservé pour ne rien changer aux scénarios existants.
+
+    Une antenne directive suffit à rendre la portée directionnelle, même à plat : le
+    budget varie avec l'azimut, la portée aussi. Le modèle reste « log_distance » —
+    c'est bien cette formule qui donne chaque rayon — mais le disque devient un lobe.
+
+    Retourne (`COVERAGE_AZIMUTHS` rayons, nom du modèle).
+    """
+    gw = gateway if gateway is not None else scenario.model.gateway
+    env = scenario.environment
+    # Le sommet du diagramme est le gain déjà compté dans le budget (`_mapl_db`). Seul
+    # l'écart à ce sommet est appliqué ensuite : le reprendre ici, à l'identique, garde
+    # le modèle cohérent pour qui relirait le diagramme seul.
+    antenna = gw.antenna.pattern(gw.antenna_gain_dbi) if gw.antenna is not None else None
+    if env is None and antenna is None:
+        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw)
+        return tuple([radius] * COVERAGE_AZIMUTHS), "log_distance"
+
+    radii = coverage_radii(
+        Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
+        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm, gw), env,
+        COVERAGE_STEP_M, COVERAGE_AZIMUTHS, antenna)
+    return tuple(radii), "environment" if env is not None else "log_distance"
+
+
 def coverage_ring(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
                   origin_lat: float, origin_lon: float,
                   gateway: Optional[GatewayModel] = None) -> tuple[list[list[float]], str, float]:
     """Anneau de couverture (lon/lat) et modèle utilisé, pour une passerelle.
 
-    `gateway` : passerelle concernée (défaut : « gateway » du scénario).
-    Avec environnement : portée réelle par azimut (relief et obstacles, calcul natif).
-    Sans environnement : cercle log-distance, identique au calcul précédent.
+    Même calcul que `coverage_radii_m`, projeté en degrés pour la carte.
     Retourne (anneau fermé, nom du modèle, portée maximale en m).
     """
     gw = gateway if gateway is not None else scenario.model.gateway
-    env = scenario.environment
-    if env is None:
-        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw)
-        ring = []
-        for k in range(_CIRCLE_VERTICES + 1):
-            a = 2.0 * math.pi * k / _CIRCLE_VERTICES
-            ring.append(list(_to_lonlat(gw.x_m + radius * math.cos(a), gw.y_m + radius * math.sin(a),
-                                        origin_lat, origin_lon)))
-        return ring, "log_distance", radius
-
-    radii = coverage_radii(
-        Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
-        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm, gw), env,
-        COVERAGE_STEP_M, COVERAGE_AZIMUTHS)
+    radii, modele = coverage_radii_m(scenario, spreading_factor, tx_power_dbm, gw)
     ring = []
     for k, r in enumerate(radii):
         a = 2.0 * math.pi * k / COVERAGE_AZIMUTHS
         ring.append(list(_to_lonlat(gw.x_m + r * math.cos(a), gw.y_m + r * math.sin(a),
                                     origin_lat, origin_lon)))
     ring.append(list(ring[0]))
-    return ring, "environment", max(radii)
+    return ring, modele, max(radii)
 
 
 def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) -> dict[str, Any]:

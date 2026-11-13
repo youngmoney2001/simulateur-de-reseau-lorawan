@@ -1,5 +1,43 @@
 {
   "$defs": {
+    "AntennaModel": {
+      "additionalProperties": false,
+      "description": "Diagramme de rayonnement horizontal d'une antenne de passerelle.\n\nCe modèle décrit la **forme** du lobe, pas son gain : le gain de crête reste celui\nde la passerelle (`antenna_gain_dbi`, ou `rf.antenna_gain_dbi`). Deux champs pour\nune même grandeur finiraient par diverger — le frontal RF a déjà coûté une garde\npour cette raison —, et le diagramme n'a de sens que relatif à un sommet.\n\n`beamwidth_deg` est l'ouverture à −3 dB sur une directive, et la largeur du secteur\nservi au gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle\nignore `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle ; les\nexiger reviendrait à refuser une antenne valide pour un réglage sans effet.\n\nModèle, bornes et réserves : `core/include/lsim/antenna.hpp`.",
+      "properties": {
+        "beamwidth_deg": {
+          "default": 90.0,
+          "maximum": 360.0,
+          "minimum": 5.0,
+          "title": "Beamwidth Deg",
+          "type": "number"
+        },
+        "front_to_back_db": {
+          "default": 20.0,
+          "maximum": 60.0,
+          "minimum": 0.0,
+          "title": "Front To Back Db",
+          "type": "number"
+        },
+        "kind": {
+          "default": "omnidirectionnelle",
+          "enum": [
+            "omnidirectionnelle",
+            "unidirectionnelle",
+            "bidirectionnelle",
+            "sectorielle"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointing_deg": {
+          "default": 0.0,
+          "title": "Pointing Deg",
+          "type": "number"
+        }
+      },
+      "title": "AntennaModel",
+      "type": "object"
+    },
     "ApiScenario": {
       "additionalProperties": false,
       "description": "Scénario accepté par l'API : comme `ScenarioModel`, sans lecture de fichier serveur.",
@@ -29,6 +67,7 @@
         "gateway": {
           "$ref": "#/$defs/GatewayModel",
           "default": {
+            "antenna": null,
             "antenna_gain_dbi": 0.0,
             "mesh": false,
             "name": null,
@@ -374,6 +413,17 @@
     "GatewayModel": {
       "additionalProperties": false,
       "properties": {
+        "antenna": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AntennaModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "antenna_gain_dbi": {
           "default": 0.0,
           "title": "Antenna Gain Dbi",
