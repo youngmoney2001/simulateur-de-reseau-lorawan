@@ -127,8 +127,15 @@ export function createMap3D(container, onPick) {
   // plate, si bien qu'un réseau posé sur une colline s'affichait comme sur une plaine —
   // alors que la couverture, elle, est calculée **avec** le relief. Les deux vues
   // racontaient donc deux réseaux différents.
-  const obstacles = viewer.dataSources.add(new Cesium.CustomDataSource("obstacles"));
-  const couvertures = viewer.dataSources.add(new Cesium.CustomDataSource("couvertures"));
+  // `dataSources.add` rend une **promesse**, pas la source : c'est `Promise.resolve(d).then(...)`
+  // dans Cesium, pour attendre le chargement d'une source asynchrone. Garder sa valeur de
+  // retour et s'en servir comme d'une entité lève donc « Cannot read properties of undefined »
+  // au premier tracé. On garde la référence et on ajoute pour l'effet de bord — au contraire
+  // de `scene.primitives.add`, qui rend bien l'objet ajouté.
+  const obstacles = new Cesium.CustomDataSource("obstacles");
+  viewer.dataSources.add(obstacles);
+  const couvertures = new Cesium.CustomDataSource("couvertures");
+  viewer.dataSources.add(couvertures);
 
   // Relief local, décodé. `null` : ellipsoïde plate, état valide — un chantier sans
   // relief n'est pas une erreur.

@@ -97,7 +97,9 @@ export class Viewer {
       requestRender: () => {},
     };
     this.canvas = {};
-    this.dataSources = { add: (d) => d, remove: () => {} };
+    // Comme Cesium : `add` rend une promesse. Rendre la source masquerait la faute
+    // consistant à se servir de la valeur de retour comme d'une entité.
+    this.dataSources = { add: (d) => Promise.resolve(d), remove: () => {} };
     this.entities = new Collection();
     this.camera = new Camera();
     this.imageryLayers = { add: (l) => l };
