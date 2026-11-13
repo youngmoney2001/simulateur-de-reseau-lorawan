@@ -28,6 +28,9 @@ import { lireCoordonnees, formaterCoordonnees, distanceM } from "./geo.js";
 import { drawDevice, DEVICE_SPECS } from "./device-art.js";
 import { liaisonsObservees, etiquetteLiaison } from "./liaisons.js";
 import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
+// Zone de couverture : les rayons viennent du moteur, le tracé est un calcul pur, vérifiable
+// hors navigateur. Le plan 2D et la carte 3D consomment le même, comme pour les liaisons.
+import { COULEURS_QUALITE, anneauZone, etiquettePalier, etiquetteModele } from "./zone.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
 // Borne des lignes de dispositifs ramenées pour les indicateurs : au-delà, l'agrégation par
@@ -805,10 +808,16 @@ function renderPlan() {
   clear(svg);
   const nodes = state.topo?.nodes ?? [];
   $("empty-plan").hidden = nodes.length > 0 || !state.sid;
+  // La légende se rend avant la sortie anticipée : elle décrit des zones, et peut donc
+  // exister sur un plan qui n'a pas encore d'équipement.
+  renderCouvertureLegend();
   if (!nodes.length) return;
   const bounds = planBounds(nodes);
   state.bounds = bounds;
   svg.append(renderGrid(bounds));
+  // La couverture se dessine **sous** les murs : c'est le fond du décor, et c'est le mur
+  // qui explique pourquoi la zone s'arrête là où elle s'arrête.
+  svg.append(renderCouverture(nodes, bounds));
   // Les obstacles se dessinent **sous** les équipements : un mur n'a pas à masquer ce qu'il
   // sépare, et c'est la position des équipements qu'on vient lire.
   svg.append(renderObstacles(bounds));
@@ -864,6 +873,49 @@ function calculerLiaisons() {
     rxMatrix: state.rxMatrix,
     deviceRows: state.deviceRows,
   });
+}
+
+/**
+ * Zones de couverture sur le plan, par palier de qualité.
+ *
+ * Les rayons sont ceux du moteur — mêmes valeurs que la carte 3D, même repère métrique —
+ * si bien qu'une zone ne raconte pas une histoire différente selon la vue. On les projette
+ * avec `toScreen`, exactement comme les équipements : pas de conversion propre à la zone,
+ * donc pas d'écart possible entre ce que couvre la zone et ce qu'elle couvre.
+ */
+function renderCouverture(nodes, bounds) {
+  const couche = svgEl("g", { class: "couverture" });
+  const parId = new Map(nodes.map((n) => [n.id, n]));
+  for (const z of state.couverture?.gateways ?? []) {
+    const passerelle = parId.get(z.node_id);
+    if (!passerelle) continue;         // passerelle inconnue : pas de zone dans le vide
+    // Du plus large au plus serré : le meilleur palier reste lisible par-dessus les autres.
+    const paliers = [...(z.paliers ?? [])].sort(
+      (a, b) => Math.max(...(b.radii_m ?? [0])) - Math.max(...(a.radii_m ?? [0])));
+    for (const palier of paliers) {
+      const anneau = anneauZone(palier, passerelle);
+      if (anneau.length < 4) continue;
+      const points = anneau.map((p) => toScreen({ x_m: p.x, y_m: p.y }, bounds, W, H))
+        .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+      // Un anneau amputé n'est pas un anneau : le tracé serait une zone fausse.
+      if (points.length !== anneau.length) continue;
+      const teinte = COULEURS_QUALITE[palier.qualite] ?? "#1f6feb";
+      const forme = svgEl("polygon", {
+        class: `zone zone-${palier.qualite}`,
+        points: points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "),
+        fill: teinte,
+      });
+      // Le palier est nommé dans un attribut : la légende et le survol le relisent ici,
+      // sans recalculer. Une zone sans son modèle se prendrait pour une mesure, alors
+      // qu'elle est un bilan de liaison.
+      forme.setAttribute("data-palier", palier.qualite);
+      forme.setAttribute("data-modele", z.modele);
+      forme.setAttribute("aria-label",
+        `${z.node_id} : ${etiquettePalier(palier)} (${etiquetteModele(z.modele)})`);
+      couche.append(forme);
+    }
+  }
+  return couche;
 }
 
 // Liaisons observées sur le plan. Elles n'existent qu'après un run : la topologie d'un réseau
@@ -2833,6 +2885,39 @@ function renderLegend() {
   }
 }
 
+/**
+ * Légende des zones de couverture, commune au plan et à la carte.
+ *
+ * Affichée seulement si une zone est réellement tracée : une légende sans zone décrirait
+ * des couleurs absentes. Elle porte aussi le **capteur de référence** et le modèle, parce
+ * qu'une zone sans eux ne veut rien dire — à 14 dBm en SF7 on ne couvre pas la même chose
+ * qu'en SF12, et un disque muet laisserait croire à une portée absolue.
+ */
+function renderCouvertureLegend() {
+  const boite = $("cov-legend");
+  clear(boite);
+  const zones = state.couverture?.gateways ?? [];
+  const paliers = zones.flatMap((z) => z.paliers ?? []);
+  boite.hidden = paliers.length === 0;
+  if (boite.hidden) return;
+  const c = state.couverture;
+  // Le plus large d'abord, comme sur le plan : on lit du dehors vers le centre.
+  const ordre = [...paliers].sort(
+    (a, b) => Math.max(...(b.radii_m ?? [0])) - Math.max(...(a.radii_m ?? [0])));
+  boite.append(el("span", { class: "lg-titre", text: "Couverture" }));
+  for (const p of ordre) {
+    boite.append(el("span", { class: "lg-item" },
+      el("span", { class: "lg-rond", style: `background:${COULEURS_QUALITE[p.qualite]}` }),
+      el("span", { text: etiquettePalier(p) })));
+  }
+  // Le capteur de référence et sa provenance : « le plus défavorable de la session » n'est
+  // pas la même promesse que « celui que vous avez demandé ».
+  const source = { demande: "capteur demandé", capteurs: "capteur le plus défavorable",
+    defaut: "cas d'école" }[c.source] ?? c.source;
+  boite.append(el("span", { class: "lg-source",
+    text: `SF${c.sf} à ${c.tx_power_dbm} dBm — ${source} — ${etiquetteModele(zones[0]?.modele)}` }));
+}
+
 // --- Exercices -----------------------------------------------------------------------------
 function currentExercise() {
   const meta = state.sessions.find((s) => s.session_id === state.sid);
@@ -3101,6 +3186,7 @@ function syncMap(fly = false) {
   // on les lance ici et la carte se redessinera à l'arrivée.
   carte.setObstacles(environnement().obstacles);
   carte.setCoverage(state.couverture?.gateways ?? []);
+  renderCouvertureLegend();
   chargerRelief();
   chargerCouverture();
   // Deux raisons de recadrer : l'ancre a changé, ou la carte vient d'apparaître et montre
@@ -3169,16 +3255,19 @@ async function chargerCouverture() {
   state.couvertureCle = cle;
   try {
     state.couverture = await state.client.coverage(state.sid);
-    // La carte n'est peut-être plus à l'écran, ou n'a pas encore été créée : dans les deux
-    // cas la zone attend patiemment dans l'état et sera tracée au prochain `syncMap`.
-    if (state.view === "map" && state.map) {
-      state.map.setCoverage(state.couverture?.gateways ?? []);
+    // La vue a pu changer, et la carte n'est peut-être pas encore créée : la zone attend
+    // patiemment dans l'état et se redessinera au prochain passage.
+    if (state.view === "map") {
+      state.map?.setCoverage(state.couverture?.gateways ?? []);
+    } else {
+      renderPlan();
     }
   } catch (err) {
     state.couvertureCle = null;
-    // Une zone refusée n'est pas un disque : on trace rien plutôt que n'importe quoi.
+    // Une zone refusée n'est pas un disque : on ne trace rien plutôt que n'importe quoi.
     state.couverture = null;
-    if (state.view === "map" && state.map) state.map.setCoverage([]);
+    if (state.view === "map") state.map?.setCoverage([]);
+    else renderPlan();
     console.error("couverture indisponible :", err);
   }
 }

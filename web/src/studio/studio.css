@@ -503,6 +503,30 @@ table.runs th { color:var(--muted); font-weight:600; }
   .plan-area { min-height:260px; }
 }
 
+/* --- Zones de couverture --------------------------------------------------------------- */
+/* Légende, visible sur les deux vues : mêmes pastilles que `pdr-legend`, donc même lecture
+   d'une vue à l'autre. */
+.cov-legend { position:absolute; left:10px; bottom:10px; z-index:5; display:flex;
+  flex-wrap:wrap; gap:4px 12px; align-items:center; max-width:calc(100% - 20px);
+  padding:6px 9px; border:1px solid var(--line); border-radius:6px;
+  background:color-mix(in srgb, var(--panel) 88%, transparent); font-size:11.5px; }
+.cov-legend .lg-source { flex:1 1 100%; color:var(--muted); font-size:10.5px; }
+.cov-legend[hidden] { display:none; }   /* display:flex écraserait hidden sinon */
+.cov-legend .lg-item { display:flex; align-items:center; gap:6px; }
+
+/* --- Zones de couverture (tracé) ------------------------------------------------------- */
+/* Trois qualités, trois teintes, toutes transparentes : une zone opaque effacerait le plan
+   qu'elle est censée expliquer. Seule la limite extérieure est soulignée — c'est elle qui
+   dit jusqu'où le signal tient, les paliers intermédiaires se lisent par leur teinte. */
+.couverture polygon.zone { fill-opacity:.13; stroke-opacity:0; stroke-width:1.5;
+  pointer-events:none; }
+/* Le palier « limite » est le bord de la zone : lui seul porte un trait, faute de quoi on
+   ne saurait pas où s'arrête la couverture. */
+.couverture polygon.zone-limite { stroke-opacity:.75; stroke-dasharray:7 4; }
+/* Aucune zone ne capte le pointeur : elle laisse passer le tracé d'un mur et le
+   déplacement d'un équipement. Ses chiffres sont donc donnés par la légende et par le
+   survol d'un équipement, pas par une infobulle qui volerait les gestes. */
+
 /* --- Obstacles : ce qui sépare deux équipements ---------------------------------------- */
 /* Hachurés, jamais pleins : un mur opaque masquerait le plan qu'il est censé expliquer, et
    ce sont les équipements de part et d'autre qu'on vient lire. */
