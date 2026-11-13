@@ -166,6 +166,34 @@ export function isMacEvent(event) {
   return event.kind === "mac_request" || event.kind === "mac_answer";
 }
 
+/**
+ * Ce qu'un saut porte de mesurable, en mots.
+ *
+ * Un « delivered » sans son niveau reçu ne dit rien de la marge : la trame est passée, on
+ * ne sait pas de combien, et le réglage qu'on vient de changer semble sans effet. Le RSSI,
+ * la fréquence et le débit sont ceux du saut lui-même — pas ceux du réglage du capteur —
+ * donc ce qu'on lit est ce qui s'est réellement propagé.
+ *
+ * Le débit reste un DR et n'est pas converti en SF : DR0 vaut SF12 en EU868 mais SF10 en
+ * US915. Afficher un SF serait affirmer une région que l'événement ne porte pas.
+ *
+ * @param {{from_id: string, to_id: string, outcome: string, rssi_dbm?: number,
+ *          freq_hz?: number, dr?: number}} h
+ */
+export function etiquetteSaut(h) {
+  // `Number(null)` vaut 0 : une mesure absente s'afficherait en 0 dBm, c'est-à-dire une
+  // liaison parfaite. La garde porte donc sur le type, pas sur `isFinite`.
+  const nombre = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const morceaux = [`${h.from_id} → ${h.to_id} : ${h.outcome}`];
+  const rssi = nombre(h.rssi_dbm);
+  if (rssi !== null) morceaux.push(`${rssi.toFixed(1)} dBm`);
+  const freq = nombre(h.freq_hz);
+  if (freq !== null && freq > 0) morceaux.push(`${(freq / 1e6).toFixed(3)} MHz`);
+  const dr = nombre(h.dr);
+  if (dr !== null) morceaux.push(`DR${dr}`);
+  return morceaux.join(" · ");
+}
+
 // Ligne de journal lisible pour un événement.
 export function journalRow(event, deviceGroups) {
   const source = event.device_index !== undefined && event.device_index !== null
@@ -181,7 +209,7 @@ export function journalRow(event, deviceGroups) {
     source,
     outcome: event.outcome,
     cls: isMacEvent(event) ? "mac" : outcomeClass(event.outcome),
-    hops: (event.hops ?? []).map((h) => `${h.from_id} → ${h.to_id} : ${h.outcome}`),
+    hops: (event.hops ?? []).map(etiquetteSaut),
   };
 }
 

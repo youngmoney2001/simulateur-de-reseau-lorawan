@@ -203,6 +203,64 @@ export function contourLobe(antenne, centre, rayon, azimuths = 180) {
 }
 
 /**
+ * De quoi lire une zone en chiffres, pas seulement en couleurs.
+ *
+ * Une portée n'est pas un seul nombre dès que l'antenne est directive ou que le relief
+ * n'est pas plat : `radii_m` compte un rayon par azimut. Donner le minimum et le maximum
+ * dit « la zone va de 340 m à 1 200 m », ce qui est vrai ; n'en donner que la moyenne, ou
+ * le maximum seul, décrirait une zone qui n'est pas celle qui est tracée.
+ *
+ * @param {object} couverture une `GatewayCoverage` du serveur
+ * @returns {{modele: string, paliers: Array<{qualite: string, marge_db: number,
+ *   min_m: number, max_m: number, circulaire: boolean}>}|null}
+ */
+export function bilanZone(couverture) {
+  const paliers = couverture?.paliers ?? [];
+  if (!paliers.length) return null;
+  const out = [];
+  for (const p of paliers) {
+    const rayons = (p.radii_m ?? []).filter((r) => Number.isFinite(r));
+    if (!rayons.length) continue;
+    const min = Math.min(...rayons);
+    const max = Math.max(...rayons);
+    out.push({ qualite: p.qualite, marge_db: p.marge_db, min_m: min, max_m: max,
+      // Assez proche d'un disque pour être annoncé comme tel : au-delà, dire « jusqu'à »
+      // pour un seul nombre serait trompeur.
+      circulaire: max > 0 && (max - min) / max < 0.02 });
+  }
+  return out.length ? { modele: couverture.modele ?? "", paliers: out } : null;
+}
+
+/** Portée d'un palier, en mots : un nombre si la zone est ronde, un intervalle sinon. */
+export function porteeTexte(palier, { unite = "m" } = {}) {
+  const arrondi = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} km` : `${Math.round(v)} ${unite}`);
+  if (palier.circulaire) return arrondi(palier.max_m);
+  return `${arrondi(palier.min_m)} à ${arrondi(palier.max_m)}`;
+}
+
+/**
+ * Étiquette lisible d'une antenne déclarée, ou `null` si elle n'a rien de particulier.
+ *
+ * Rien n'est inventé : une antenne absente est « omnidirectionnelle », pas une ligne vide —
+ * le moteur la traite ainsi, la fenêtre doit le dire.
+ */
+export function etiquetteAntenne(antenne) {
+  if (!antenne) return "omnidirectionnelle";
+  const genre = antenne.kind ?? "omnidirectionnelle";
+  if (genre === "omnidirectionnelle") return "omnidirectionnelle";
+  const ouverture = Number(antenne.beamwidth_deg);
+  const axe = Number(antenne.pointing_deg);
+  const nom = { unidirectionnelle: "unidirectionnelle", bidirectionnelle: "bidirectionnelle",
+    sectorielle: "sectorielle" }[genre] ?? genre;
+  if (!Number.isFinite(ouverture)) return nom;
+  const ouvertureTxt = `${ouverture}°`;
+  // L'azimut n'a de sens que dans le repère du plan : 0° = l'est, comme le moteur.
+  return Number.isFinite(axe)
+    ? `${nom} ${ouvertureTxt}, axe à ${axe}°`
+    : `${nom} ${ouvertureTxt}`;
+}
+
+/**
  * Étiquette lisible d'un palier. Un nom seul (« bon ») ne dit pas de quoi il est la
  * mesure : c'est une marge au-dessus du seuil de sensibilité.
  */

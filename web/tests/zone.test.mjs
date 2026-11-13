@@ -6,6 +6,7 @@ import {
   COULEURS_QUALITE, QUALITES, anneauZone, attenuationLobeDb, contourLobe, contourVague,
   etiquetteModele, etiquettePalier, facteurLobe, facteurPortee, porteeMax,
 } from "../src/studio/zone.js";
+import { bilanZone, etiquetteAntenne, porteeTexte } from "../src/studio/zone.js";
 
 const UNI = { kind: "unidirectionnelle", beamwidth_deg: 90, pointing_deg: 0,
   front_to_back_db: 20 };
@@ -223,4 +224,50 @@ test("le contour d'une vague est referme et centre sur l'antenne", () => {
   const anneau = contourVague(SECTEUR, { x_m: 30, y_m: 40 }, 60, 24);
   assert.equal(anneau.length, 25);              // 24 points + le premier, répété
   assert.deepEqual(anneau[0], anneau[24]);
+});
+
+// --- Lire une zone en chiffres ----------------------------------------------------------
+
+function zoneDe(rayons, { modele = "environment", qualite = "limite", marge = 0 } = {}) {
+  return { node_id: "gw1", modele,
+    paliers: [{ qualite, marge_db: marge, radii_m: rayons }] };
+}
+
+test("une zone ronde s'annonce d'un seul nombre", () => {
+  const b = bilanZone(zoneDe(Array(36).fill(1200)));
+  assert.equal(b.paliers[0].circulaire, true);
+  assert.equal(porteeTexte(b.paliers[0]), "1.2 km");
+});
+
+test("une zone qui ne l'est pas s'annonce par un intervalle", () => {
+  // Une sectorielle couvre loin dans son axe et peu dans son dos : un seul nombre
+  // decrirait une zone qui n'est pas celle qui est tracee.
+  const rayons = Array.from({ length: 36 }, (_, k) => (k === 0 ? 1200 : 400));
+  const b = bilanZone(zoneDe(rayons));
+  assert.equal(b.paliers[0].circulaire, false);
+  assert.equal(porteeTexte(b.paliers[0]), "400 m à 1.2 km");
+});
+
+test("un palier sans rayon exploitable est passe, pas annonce a zero", () => {
+  const b = bilanZone({ node_id: "gw1", modele: "log_distance",
+    paliers: [{ qualite: "bon", marge_db: 6, radii_m: [] },
+      { qualite: "limite", marge_db: 0, radii_m: Array(36).fill(900) }] });
+  assert.equal(b.paliers.length, 1);
+  assert.equal(b.paliers[0].qualite, "limite");
+});
+
+test("une zone sans palier n'a pas de bilan plutot qu'un bilan vide", () => {
+  assert.equal(bilanZone(null), null);
+  assert.equal(bilanZone({ node_id: "gw1", paliers: [] }), null);
+  assert.equal(bilanZone({ node_id: "gw1", paliers: [{ qualite: "bon", marge_db: 6,
+    radii_m: [Number.NaN, Number.NaN] }] }), null);
+});
+
+test("l'antenne est nommee, et une absence d'antenne se dit", () => {
+  assert.equal(etiquetteAntenne(null), "omnidirectionnelle");
+  assert.equal(etiquetteAntenne({ kind: "omnidirectionnelle" }), "omnidirectionnelle");
+  assert.equal(etiquetteAntenne({ kind: "sectorielle", beamwidth_deg: 120,
+    pointing_deg: 30 }), "sectorielle 120°, axe à 30°");
+  // Une ouverture absente ne fabrique pas « undefined° » : le genre suffit.
+  assert.equal(etiquetteAntenne({ kind: "unidirectionnelle" }), "unidirectionnelle");
 });

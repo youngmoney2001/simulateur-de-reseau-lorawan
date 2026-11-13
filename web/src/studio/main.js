@@ -30,7 +30,8 @@ import { liaisonsObservees, etiquetteLiaison } from "./liaisons.js";
 import { ChantierInvalide, lireChantier, nomFichier, serialiserChantier } from "./chantier.js";
 // Zone de couverture : les rayons viennent du moteur, le tracé est un calcul pur, vérifiable
 // hors navigateur. Le plan 2D et la carte 3D consomment le même, comme pour les liaisons.
-import { COULEURS_QUALITE, anneauZone, etiquettePalier, etiquetteModele, porteeMax }
+import { COULEURS_QUALITE, anneauZone, etiquettePalier, etiquetteModele, porteeMax,
+  bilanZone, etiquetteAntenne, porteeTexte }
   from "./zone.js";
 
 const W = 800, H = 520, RUN_POLL_MS = 500, RUN_TIMEOUT_MS = 120_000;
@@ -1510,6 +1511,7 @@ function renderDeviceInfo(node, body) {
     }
   }
   info.append(el("h3", { class: "phys-titre", text: "État" }), etat);
+  info.append(...blocCouverture(node));
 
   // Résultat du dernier run, sur l'équipement lui-même. La carte colore, la fenêtre chiffre :
   // les deux viennent du même `state.resultats`, donc ne peuvent pas se contredire.
@@ -1563,6 +1565,39 @@ function renderDeviceInfo(node, body) {
     }
     info.append(el("h3", { class: "phys-titre", text: "Voyants" }), liste);
   }
+}
+
+/**
+ * La zone de couverture de l'équipement, en chiffres. Vide s'il n'en a pas.
+ *
+ * La carte et le plan montrent la zone en couleurs ; la fenêtre la chiffre, et les deux
+ * viennent du même objet, donc ne peuvent pas se contredire. Les portées sont des
+ * **intervalles** dès que l'antenne est directive ou le relief accidenté : annoncer un
+ * seul nombre décrirait un disque qui n'est pas celui qu'on voit.
+ *
+ * @returns {Element[]} zéro, un titre, ou un titre et une liste
+ */
+function blocCouverture(node) {
+  const zone = (state.couverture?.gateways ?? []).find((z) => z.node_id === node.id);
+  const bilan = bilanZone(zone);
+  if (!bilan) return [];
+  const dl = el("dl", { class: "phys-etat phys-couverture" });
+  dl.append(el("dt", { text: "Antenne" }),
+    el("dd", { text: etiquetteAntenne(zone.antenna) }));
+  for (const p of bilan.paliers) {
+    dl.append(el("dt", { text: etiquettePalier(p) }),
+      el("dd", { text: porteeTexte(p) }));
+  }
+  // Le modèle dit ce que vaut la zone : un disque log-distance et une zone calculée avec
+  // le relief ne sont pas la même promesse, et le voir évite de la surinterpréter.
+  dl.append(el("dt", { text: "Calculée par" }),
+    el("dd", { text: etiquetteModele(bilan.modele) }));
+  const capteur = state.couverture;
+  const source = { demande: "capteur demandé", capteurs: "capteur le plus défavorable",
+    defaut: "cas d'école" }[capteur.source] ?? capteur.source;
+  dl.append(el("dt", { text: "Pour un capteur en" }),
+    el("dd", { text: `SF${capteur.sf} à ${capteur.tx_power_dbm} dBm (${source})` }));
+  return [el("h3", { class: "phys-titre", text: "Couverture" }), dl];
 }
 
 function renderConsole(node, body) {
@@ -3272,12 +3307,16 @@ async function chargerCouverture() {
     } else {
       renderPlan();
     }
+    // La fenêtre d'équipement ouverte chiffre la zone : elle doit suivre, sinon elle
+    // afficherait les portées d'avant le déplacement qu'on vient de faire.
+    renderDevice();
   } catch (err) {
     state.couvertureCle = null;
     // Une zone refusée n'est pas un disque : on ne trace rien plutôt que n'importe quoi.
     state.couverture = null;
     if (state.view === "map") state.map?.setCoverage([]);
     else renderPlan();
+    renderDevice();
     console.error("couverture indisponible :", err);
   }
 }
