@@ -15,6 +15,7 @@ import sys
 from array import array
 from typing import Any, Optional
 
+from lsim.environment import Terrain
 from lsim.export import RunResult
 from lsim.gateway_profiles import get_profile, rx_sensitivity_offset_db
 from lsim.radio import LinkBudget, LogDistanceModel, receiver_sensitivity_dbm
@@ -58,16 +59,60 @@ def _mapl_db(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
 
 
 def coverage_radius_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
-                      gateway: Optional[GatewayModel] = None) -> float:
+                      gateway: Optional[GatewayModel] = None,
+                      marge_db: float = 0.0) -> float:
     """Portée (m) pour un SF et une puissance donnés, via le bilan de liaison natif.
 
     Log-distance seul, sans relief ni obstacle : c'est une borne haute de la portée réelle.
+    `marge_db` : réserve exigée au-dessus du seuil, retirée du bilan (voir
+    `coverage_radii_m`) — sans quoi tous les paliers de qualité sortiraient égaux.
     """
     p = scenario.propagation()
     model = LogDistanceModel(frequency_hz=p.frequency_hz,
                              reference_distance_m=p.reference_distance_m,
                              exponent=p.exponent)
-    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway))
+    return model.range_m(_mapl_db(scenario, spreading_factor, tx_power_dbm, gateway) - marge_db)
+
+
+def coverage_radii_m(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
+                     gateway: Optional[GatewayModel] = None, marge_db: float = 0.0
+                     ) -> tuple[tuple[float, ...], str]:
+    """Portée (m) par azimut autour d'une passerelle, et modèle utilisé.
+
+    `gateway` : passerelle concernée (défaut : « gateway » du scénario).
+
+    `marge_db` : réserve exigée au-dessus du seuil de sensibilité. La portée publiée est
+    alors celle où la liaison garde encore cette marge — c'est ce qui distingue « reçu
+    juste » de « reçu large », et donc les paliers de qualité d'une zone. Zéro (défaut) :
+    le bord de la zone, la portée d'avant.
+
+    Avec environnement, la portée suit le relief et les obstacles (calcul natif). Sans
+    environnement **et** sans antenne directive, c'est un disque log-distance : le
+    raccourci exact d'avant, conservé pour ne rien changer aux scénarios existants.
+
+    Une antenne directive suffit à rendre la portée directionnelle, même à plat : le
+    budget varie avec l'azimut, la portée aussi. Le modèle reste « log_distance » —
+    c'est bien cette formule qui donne chaque rayon — mais le disque devient un lobe.
+
+    Retourne (`COVERAGE_AZIMUTHS` rayons, nom du modèle).
+    """
+    gw = gateway if gateway is not None else scenario.model.gateway
+    env = scenario.environment
+    # Le sommet du diagramme est le gain déjà compté dans le budget (`_mapl_db`). Seul
+    # l'écart à ce sommet est appliqué ensuite : le reprendre ici, à l'identique, garde
+    # le modèle cohérent pour qui relirait le diagramme seul.
+    antenna = gw.antenna.pattern(gw.antenna_gain_dbi) if gw.antenna is not None else None
+    if env is None and antenna is None:
+        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw, marge_db)
+        return tuple([radius] * COVERAGE_AZIMUTHS), "log_distance"
+
+    # La marge se retire du budget : exiger 10 dB de réserve, c'est ne compter que la
+    # portée où le bilan les garde. La perte croissant avec la distance, la zone rétrécit.
+    budget = _mapl_db(scenario, spreading_factor, tx_power_dbm, gw) - marge_db
+    radii = coverage_radii(
+        Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
+        scenario.propagation(), budget, env, COVERAGE_STEP_M, COVERAGE_AZIMUTHS, antenna)
+    return tuple(radii), "environment" if env is not None else "log_distance"
 
 
 def coverage_ring(scenario: Scenario, spreading_factor: int, tx_power_dbm: float,
@@ -75,33 +120,18 @@ def coverage_ring(scenario: Scenario, spreading_factor: int, tx_power_dbm: float
                   gateway: Optional[GatewayModel] = None) -> tuple[list[list[float]], str, float]:
     """Anneau de couverture (lon/lat) et modèle utilisé, pour une passerelle.
 
-    `gateway` : passerelle concernée (défaut : « gateway » du scénario).
-    Avec environnement : portée réelle par azimut (relief et obstacles, calcul natif).
-    Sans environnement : cercle log-distance, identique au calcul précédent.
+    Même calcul que `coverage_radii_m`, projeté en degrés pour la carte.
     Retourne (anneau fermé, nom du modèle, portée maximale en m).
     """
     gw = gateway if gateway is not None else scenario.model.gateway
-    env = scenario.environment
-    if env is None:
-        radius = coverage_radius_m(scenario, spreading_factor, tx_power_dbm, gw)
-        ring = []
-        for k in range(_CIRCLE_VERTICES + 1):
-            a = 2.0 * math.pi * k / _CIRCLE_VERTICES
-            ring.append(list(_to_lonlat(gw.x_m + radius * math.cos(a), gw.y_m + radius * math.sin(a),
-                                        origin_lat, origin_lon)))
-        return ring, "log_distance", radius
-
-    radii = coverage_radii(
-        Gateway(x_m=gw.x_m, y_m=gw.y_m, antenna_gain_dbi=gw.antenna_gain_dbi),
-        scenario.propagation(), _mapl_db(scenario, spreading_factor, tx_power_dbm, gw), env,
-        COVERAGE_STEP_M, COVERAGE_AZIMUTHS)
+    radii, modele = coverage_radii_m(scenario, spreading_factor, tx_power_dbm, gw)
     ring = []
     for k, r in enumerate(radii):
         a = 2.0 * math.pi * k / COVERAGE_AZIMUTHS
         ring.append(list(_to_lonlat(gw.x_m + r * math.cos(a), gw.y_m + r * math.sin(a),
                                     origin_lat, origin_lon)))
     ring.append(list(ring[0]))
-    return ring, "environment", max(radii)
+    return ring, modele, max(radii)
 
 
 def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) -> dict[str, Any]:
@@ -110,11 +140,20 @@ def to_dem_document(scenario: Scenario, origin_lat: float, origin_lon: float) ->
     Les coordonnées locales restent celles du scénario ; l'origine géographique
     permet à la carte de projeter la grille. Lève ValueError sans relief déclaré.
     """
-    _validate_origin(origin_lat, origin_lon)
     env = scenario.environment
     if env is None or env.terrain is None:
         raise ValueError("le scénario ne déclare pas de relief")
-    t = env.terrain
+    return terrain_dem_document(env.terrain, origin_lat, origin_lon)
+
+
+def terrain_dem_document(t: Terrain, origin_lat: float, origin_lon: float) -> dict[str, Any]:
+    """MNT d'un relief déjà chargé, pour la carte : grille float32 encodée en base64.
+
+    Séparé de `to_dem_document` parce que l'atelier connaît son relief par le catalogue
+    du serveur, sans passer par un scénario : le reconstruire pour lui rendre une
+    grille qu'on a déjà en mémoire serait un détour coûteux et sans objet.
+    """
+    _validate_origin(origin_lat, origin_lon)
     raw = array("f", t.z)
     if sys.byteorder == "big":
         raw.byteswap()

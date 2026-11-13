@@ -1,5 +1,43 @@
 {
   "$defs": {
+    "AntennaModel": {
+      "additionalProperties": false,
+      "description": "Diagramme de rayonnement horizontal d'une antenne de passerelle.\n\nCe modèle décrit la **forme** du lobe, pas son gain : le gain de crête reste celui\nde la passerelle (`antenna_gain_dbi`, ou `rf.antenna_gain_dbi`). Deux champs pour\nune même grandeur finiraient par diverger — le frontal RF a déjà coûté une garde\npour cette raison —, et le diagramme n'a de sens que relatif à un sommet.\n\n`beamwidth_deg` est l'ouverture à −3 dB sur une directive, et la largeur du secteur\nservi au gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle\nignore `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle ; les\nexiger reviendrait à refuser une antenne valide pour un réglage sans effet.\n\nModèle, bornes et réserves : `core/include/lsim/antenna.hpp`.",
+      "properties": {
+        "beamwidth_deg": {
+          "default": 90.0,
+          "maximum": 360.0,
+          "minimum": 5.0,
+          "title": "Beamwidth Deg",
+          "type": "number"
+        },
+        "front_to_back_db": {
+          "default": 20.0,
+          "maximum": 60.0,
+          "minimum": 0.0,
+          "title": "Front To Back Db",
+          "type": "number"
+        },
+        "kind": {
+          "default": "omnidirectionnelle",
+          "enum": [
+            "omnidirectionnelle",
+            "unidirectionnelle",
+            "bidirectionnelle",
+            "sectorielle"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointing_deg": {
+          "default": 0.0,
+          "title": "Pointing Deg",
+          "type": "number"
+        }
+      },
+      "title": "AntennaModel",
+      "type": "object"
+    },
     "ChannelDefModel": {
       "additionalProperties": false,
       "description": "Canal défini du terminal (RP002 EU863-870) : index 0..79, débits supportés dr_min..dr_max.",
@@ -112,20 +150,36 @@
     },
     "EnergyModel": {
       "additionalProperties": false,
-      "description": "Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace).",
+      "description": "Profil énergie du scénario (optionnel ; la ligne de commande le remplace).\n\nSoit un profil du catalogue (`profile`), soit un relevé (`measured`). Renseigner les\ndeux n'a pas de sens : lequel le rapport aurait-il utilisé ?",
       "properties": {
-        "profile": {
-          "enum": [
-            "rak4631",
-            "sx1262-stm32l072"
+        "measured": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MeasuredEnergyModel"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Profile",
-          "type": "string"
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "rak4631",
+                "sx1262-stm32l072"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
         }
       },
-      "required": [
-        "profile"
-      ],
       "title": "EnergyModel",
       "type": "object"
     },
@@ -145,6 +199,21 @@
           "maximum": 1000,
           "title": "Gateway Height M",
           "type": "number"
+        },
+        "material_calibration": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/MaterialCalibrationModel"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Calibration"
         },
         "obstacles": {
           "items": {
@@ -206,6 +275,17 @@
     "GatewayModel": {
       "additionalProperties": false,
       "properties": {
+        "antenna": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AntennaModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "antenna_gain_dbi": {
           "default": 0.0,
           "title": "Antenna Gain Dbi",
@@ -556,6 +636,93 @@
       "title": "MacModel",
       "type": "object"
     },
+    "MaterialCalibrationModel": {
+      "additionalProperties": false,
+      "description": "Perte d'un matériau **mesurée**, en dB par mètre, à la place de UIT-R P.2040-4.\n\nLa table du moteur vient de la recommandation P.2040-4 (diélectriques), et à 868 MHz\n12 des 15 matériaux sortent de la plage documentée : la valeur est alors extrapolée.\nUne mesure vaut mieux qu'une extrapolation, et elle se déclare ici.\n\n`provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un\nchiffre sans origine se présente comme une donnée du moteur.",
+      "properties": {
+        "loss_db_per_m": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Loss Db Per M",
+          "type": "number"
+        },
+        "provenance": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loss_db_per_m",
+        "provenance"
+      ],
+      "title": "MaterialCalibrationModel",
+      "type": "object"
+    },
+    "MeasuredEnergyModel": {
+      "additionalProperties": false,
+      "description": "Courants **mesurés**, au lieu d'un profil du catalogue.\n\nLes deux profils du moteur viennent de fiches constructeur : bons pour comparer deux\narchitectures, insuffisants pour garantir une autonomie. Ce bloc est là pour qui a\nsorti la pince ampèremétrique.\n\n`provenance` est obligatoire : un rapport qui afficherait ces chiffres sans dire d'où\nils viennent les présenterait comme une donnée du moteur. `tx_points` : 1 à 4 couples\n(dBm, mA), puissances strictement croissantes — la règle d'émission est celle du\ncatalogue (point de puissance ≥ demandée, refus au-delà du dernier).",
+      "properties": {
+        "mcu_run_ma": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Mcu Run Ma",
+          "type": "number"
+        },
+        "provenance": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "rx_ma_125khz": {
+          "minimum": 0,
+          "title": "Rx Ma 125Khz",
+          "type": "number"
+        },
+        "rx_ma_250khz": {
+          "minimum": 0,
+          "title": "Rx Ma 250Khz",
+          "type": "number"
+        },
+        "rx_ma_500khz": {
+          "minimum": 0,
+          "title": "Rx Ma 500Khz",
+          "type": "number"
+        },
+        "sleep_ua": {
+          "minimum": 0,
+          "title": "Sleep Ua",
+          "type": "number"
+        },
+        "supply_v": {
+          "exclusiveMinimum": 0,
+          "title": "Supply V",
+          "type": "number"
+        },
+        "tx_points": {
+          "items": {
+            "$ref": "#/$defs/TxPointModel"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Tx Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "supply_v",
+        "rx_ma_125khz",
+        "rx_ma_250khz",
+        "rx_ma_500khz",
+        "sleep_ua",
+        "provenance",
+        "tx_points"
+      ],
+      "title": "MeasuredEnergyModel",
+      "type": "object"
+    },
     "MeshModel": {
       "additionalProperties": false,
       "description": "Backhaul mesh 2,4 GHz : la passerelle frontière est reliée au LNS par le réseau.",
@@ -737,6 +904,15 @@
           "default": 868100000.0,
           "title": "Frequency Hz",
           "type": "number"
+        },
+        "inter_sf": {
+          "default": "orthogonal",
+          "enum": [
+            "orthogonal",
+            "sx1276"
+          ],
+          "title": "Inter Sf",
+          "type": "string"
         },
         "reference_distance_m": {
           "default": 1.0,
@@ -1047,6 +1223,27 @@
       ],
       "title": "TerrainModel",
       "type": "object"
+    },
+    "TxPointModel": {
+      "additionalProperties": false,
+      "description": "Point du profil d'émission mesuré : puissance demandée (dBm) et courant (mA).",
+      "properties": {
+        "dbm": {
+          "title": "Dbm",
+          "type": "number"
+        },
+        "ma": {
+          "minimum": 0,
+          "title": "Ma",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dbm",
+        "ma"
+      ],
+      "title": "TxPointModel",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -1077,6 +1274,7 @@
     "gateway": {
       "$ref": "#/$defs/GatewayModel",
       "default": {
+        "antenna": null,
         "antenna_gain_dbi": 0.0,
         "mesh": false,
         "name": null,
@@ -1147,6 +1345,7 @@
         "capture_threshold_db": 6.0,
         "exponent": 2.7,
         "frequency_hz": 868100000.0,
+        "inter_sf": "orthogonal",
         "reference_distance_m": 1.0,
         "shadowing_seed": null,
         "shadowing_sigma_db": 0.0

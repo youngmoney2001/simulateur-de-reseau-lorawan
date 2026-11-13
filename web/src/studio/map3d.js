@@ -16,6 +16,12 @@ import {
 // Le calcul des liaisons vit dans `liaisons.js`, sans dépendance à Cesium : il est donc
 // vérifiable hors navigateur, ce qu'un calcul enfoui dans cette carte ne serait pas.
 import { boutsLiaison, etiquetteLiaison } from "./liaisons.js";
+// Le relief et la zone : décodage du MNT et tracé des lobes, sans dépendance à Cesium
+// (voir `../model.js` et `zone.js`). Les reprendre ici plutôt que de les recalculer
+// évite deux vérités sur une même altitude.
+import { footprintBase, heightmapTile, parseDem } from "../model.js";
+import { COULEURS_QUALITE, anneauZone, etiquetteModele, etiquettePalier, porteeMax }
+  from "./zone.js";
 
 export { EARTH_RADIUS_M, toLonLat, toMeters };
 
@@ -117,6 +123,31 @@ export function createMap3D(container, onPick) {
   // au sol. On trace un cercle à l'échelle du réseau, et une croix au centre.
   const zone = viewer.scene.primitives.add(new Cesium.PolylineCollection());
 
+  // Environnement réel : obstacles et relief. La carte travaillait sur une ellipsoïde
+  // plate, si bien qu'un réseau posé sur une colline s'affichait comme sur une plaine —
+  // alors que la couverture, elle, est calculée **avec** le relief. Les deux vues
+  // racontaient donc deux réseaux différents.
+  // `dataSources.add` rend une **promesse**, pas la source : c'est `Promise.resolve(d).then(...)`
+  // dans Cesium, pour attendre le chargement d'une source asynchrone. Garder sa valeur de
+  // retour et s'en servir comme d'une entité lève donc « Cannot read properties of undefined »
+  // au premier tracé. On garde la référence et on ajoute pour l'effet de bord — au contraire
+  // de `scene.primitives.add`, qui rend bien l'objet ajouté.
+  const obstacles = new Cesium.CustomDataSource("obstacles");
+  viewer.dataSources.add(obstacles);
+  const couvertures = new Cesium.CustomDataSource("couvertures");
+  viewer.dataSources.add(couvertures);
+
+  // Relief local, décodé. `null` : ellipsoïde plate, état valide — un chantier sans
+  // relief n'est pas une erreur.
+  let dem = null;
+  const SCHEMA_TUILES = new Cesium.GeographicTilingScheme();
+  const TAILLE_TUILE = 65;
+  // Derniers obstacles et zones reçus, gardés pour être refaits si le relief arrive
+  // après eux : un pavé calé sur un sol plat flotte dès que le sol s'élève.
+  let obstaclesAttendus = null;
+  let couvertureAttendue = null;
+  let noeudsAttendus = null;
+
   let origine = { lat: 4.0511, lon: 9.7679 };
 
   // Les équipements affichés, gardés pour retrouver lequel est sous le curseur. On les
@@ -170,8 +201,152 @@ export function createMap3D(container, onPick) {
     if (ll) onPick(ll.lat, ll.lon);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
+  /** Position locale d'un équipement, en mètres. `null` si inconnu ou inexploitable. */
+  function centreLocal(id) {
+    const n = (noeudsAttendus ?? []).find((c) => c.id === id);
+    if (!n || !Number.isFinite(n.x_m) || !Number.isFinite(n.y_m)) return null;
+    return { x_m: n.x_m, y_m: n.y_m };
+  }
+
+  /**
+   * Dessine les obstacles de l'environnement : pavés extrudés depuis le sol le plus bas
+   * de leur emprise jusqu'à leur hauteur. Sans relief, le sol vaut 0.
+   *
+   * @param {Array<{x_min_m:number,y_min_m:number,x_max_m:number,y_max_m:number,
+   *                height_m:number,attenuation_db?:number}>} liste
+   */
+  function setObstacles(liste = []) {
+    obstaclesAttendus = liste;
+    obstacles.entities.removeAll();
+    for (const o of liste ?? []) {
+      const coins = [[o.x_min_m, o.y_min_m], [o.x_max_m, o.y_min_m],
+        [o.x_max_m, o.y_max_m], [o.x_min_m, o.y_max_m]].map(([x, y]) => {
+          const d = toLonLat(x, y, origine);
+          return [d.lon, d.lat];
+        });
+      if (!coins.every(([lo, la]) => Number.isFinite(lo) && Number.isFinite(la))) continue;
+      const base = dem ? footprintBase(dem, coins) : 0;
+      obstacles.entities.add({
+        name: "Obstacle",
+        description: `hauteur ${o.height_m} m, atténuation ${o.attenuation_db ?? 0} dB`,
+        polygon: {
+          hierarchy: Cesium.Cartesian3.fromDegreesArray(coins.flat()),
+          height: base,
+          extrudedHeight: base + Number(o.height_m ?? 0),
+          material: Cesium.Color.DARKSLATEGRAY.withAlpha(0.85),
+          outline: true,
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.4),
+        },
+      });
+    }
+  }
+
+  /**
+   * Trace la zone de couverture de chaque passerelle, par palier de qualité.
+   *
+   * Les rayons viennent du moteur : relief, obstacles et lobe d'antenne. La carte ne
+   * fait que les projeter — un disque qu'elle devinerait serait une zone fausse, et la
+   * seule vue qu'on ne pourrait pas croiser avec le plan 2D.
+   *
+   * @param {Array<{node_id:string, modele:string, paliers:Array, antenna?:object}>} zones
+   */
+  function setCoverage(zones = []) {
+    couvertureAttendue = zones;
+    couvertures.entities.removeAll();
+    for (const z of zones ?? []) {
+      const centre = centreLocal(z?.node_id);
+      if (!centre) continue;      // passerelle inconnue : pas de zone dans le vide
+      // Du plus large au plus serré : le meilleur palier reste ainsi lisible par-dessus
+      // les autres, au lieu d'être recouvert.
+      const ordonne = [...(z.paliers ?? [])].sort(
+        (a, b) => Math.max(...(b.radii_m ?? [0])) - Math.max(...(a.radii_m ?? [0])));
+      for (const palier of ordonne) {
+        const anneau = anneauZone(palier, centre);
+        if (anneau.length < 4) continue;
+        const positions = anneau.map((p) => {
+          const d = toLonLat(p.x, p.y, origine);
+          return Cesium.Cartesian3.fromDegrees(d.lon, d.lat);
+        });
+        if (!positions.every(Boolean)) continue;
+        const teinte = COULEURS_QUALITE[palier.qualite] ?? "#1f6feb";
+        couvertures.entities.add({
+          name: `Zone ${palier.qualite} — ${z.node_id}`,
+          description: `${etiquettePalier(palier)} · ${etiquetteModele(z.modele)}`,
+          polygon: {
+            hierarchy: new Cesium.PolygonHierarchy(positions),
+            // Posé sur le sol : une zone suspendue à l'altitude de la passerelle serait
+            // un plafond, pas une couverture.
+            clampToGround: true,
+            material: Cesium.Color.fromCssColorString(teinte).withAlpha(0.14),
+            outline: palier.qualite === "limite",
+            outlineColor: Cesium.Color.fromCssColorString(teinte).withAlpha(0.7),
+          },
+        });
+      }
+    }
+  }
+
+  /**
+   * Applique le relief de la session. `null` remet l'ellipsoïde plate.
+   *
+   * Le MNT vient du serveur, jamais d'un chemin : le client ne sait pas où sont les
+   * fichiers, et ne doit pas le savoir. Un document illisible n'est pas avalé en
+   * silence — la carte resterait plate en laissant croire à un relief chargé, ce qui
+   * est pire qu'une erreur franche.
+   *
+   * @param {object|null} reponse `{"terrain_id": .., "dem": ..}` de la route
+   */
+  function setTerrain(reponse) {
+    const brut = reponse?.dem ?? null;
+    dem = brut ? parseDem(brut) : null;
+    if (dem) {
+      viewer.terrainProvider = new Cesium.CustomHeightmapTerrainProvider({
+        width: TAILLE_TUILE,
+        height: TAILLE_TUILE,
+        tilingScheme: SCHEMA_TUILES,
+        callback: (x, y, niveau) => {
+          const r = SCHEMA_TUILES.tileXYToRectangle(x, y, niveau);
+          return heightmapTile(dem,
+            Cesium.Math.toDegrees(r.west), Cesium.Math.toDegrees(r.south),
+            Cesium.Math.toDegrees(r.east), Cesium.Math.toDegrees(r.north),
+            TAILLE_TUILE, TAILLE_TUILE);
+        },
+      });
+    } else {
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+    }
+    // Les pavés et les zones posés avant le relief reposaient sur un sol plat : les
+    // refaire, sinon ils flottent ou s'enfoncent.
+    if (obstaclesAttendus) setObstacles(obstaclesAttendus);
+    if (couvertureAttendue) setCoverage(couvertureAttendue);
+  }
+
   return {
     viewer,
+    setTerrain,
+    setObstacles,
+    setCoverage,
+
+    /** Plus grande portée affichée, en mètres. `null` sans zone : l'atelier s'en sert
+     *  pour cadrer la caméra, et ne doit pas cadrer sur zéro. */
+    porteeZone() {
+      let max = null;
+      for (const z of couvertureAttendue ?? []) {
+        const p = porteeMax(z);
+        if (p !== null && (max === null || p > max)) max = p;
+      }
+      return max;
+    },
+
+    /** Le relief est-il chargé ? Sert à ne pas annoncer un sol plat comme un relief. */
+    aRelief() {
+      return dem !== null;
+    },
+
+    // Entités posées, telles quelles. Exposées parce qu'un décor invisible ne se débogue
+    // pas : sans elles, un pavé absent et un pavé mal placé se ressemblent.
+    obstacles() { return obstacles.entities.values.slice(); },
+    couvertures() { return couvertures.entities.values.slice(); },
 
     /** Origine de la zone : ancre entre les mètres du plan et les degrés de la carte. */
     setOrigin(o) {
@@ -205,6 +380,8 @@ export function createMap3D(container, onPick) {
       points.removeAll();
       labels.removeAll();
       affiches = noeuds ?? [];
+      // Gardés pour replacer les zones si le relief arrive après les équipements.
+      noeudsAttendus = affiches;
       for (const n of noeuds ?? []) {
         const { lon, lat } = toLonLat(n.x_m, n.y_m, origine);
         // Un seul équipement inexploitable ne doit pas priver la carte de tous les autres :

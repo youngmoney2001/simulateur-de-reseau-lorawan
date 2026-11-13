@@ -172,3 +172,33 @@ def test_terrain_id_pattern_refuses_paths():
         with pytest.raises(ValidationError):
             RunCreate(scenario=BASE, terrain_id=bad)
     RunCreate(scenario=BASE, terrain_id="quartier-1_a")
+
+
+def test_every_public_model_is_published():
+    """Aucun modèle public ne doit rester hors du contrat.
+
+    Un schéma qu'on oublie de publier n'échoue nulle part : le client qui le consomme
+    le reconstruit à la main, et la première divergence passe inaperçue. Ce test rend
+    l'oubli impossible — c'est lui qui répond à « était-ce volontaire ? ».
+    """
+    import inspect
+
+    from pydantic import BaseModel
+
+    from lsim import api_contract, study_contract
+
+    for module, publies in ((api_contract, api_contract._MODELS),
+                            (study_contract, study_contract.MODELS)):
+        assert set(schemas()) >= set(publies), f"{module.__name__} non publié dans v1"
+        definis = {
+            obj
+            for _, obj in inspect.getmembers(module, inspect.isclass)
+            if issubclass(obj, BaseModel)
+            and obj.__module__ == module.__name__
+            and obj is not BaseModel
+            and not obj.__name__.startswith("_")   # les classes de base ne sont pas un contrat
+        }
+        assert definis, f"aucun modèle trouvé dans {module.__name__}"
+        manquants = sorted(o.__name__ for o in definis - set(publies.values()))
+        assert not manquants, (
+            f"{module.__name__} : modèles non publiés : {', '.join(manquants)}")

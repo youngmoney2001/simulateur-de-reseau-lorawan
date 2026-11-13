@@ -103,6 +103,29 @@ LSIM_API int32_t lsim_energy_device_class_a(uint32_t profile_id, double tx_power
 LSIM_API int32_t lsim_energy_tx_current_ma(uint32_t profile_id, double tx_power_dbm,
                                            double* out_ma);
 
+/* Bilan énergétique avec un profil **mesuré**, fourni par l'appelant au lieu d'être
+ * choisi parmi les profils constructeur — c'est le seul moyen d'entrer un relevé de
+ * banc ou de terrain. `tx_dbm` / `tx_ma` : points (puissance, courant) triés par
+ * puissance croissante, `tx_count` dans [1, 4]. La règle d'émission est la même que
+ * pour un profil du catalogue : point de puissance >= demandée, refus au-delà du
+ * dernier. Les courants sont de la responsabilité de l'appelant : le moteur ne
+ * calibre rien, il applique les nombres qu'on lui donne. */
+LSIM_API int32_t lsim_energy_device_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint64_t tx_ns,
+    uint64_t rx_ns, uint64_t mcu_active_ns, uint64_t total_ns, double* out_energy_j,
+    double* out_avg_current_ua);
+
+/* Même chose, classe A (deux fenêtres RX par uplink). */
+LSIM_API int32_t lsim_energy_device_class_a_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint8_t spreading_factor,
+    uint16_t preamble_symbols, uint64_t uplinks, uint64_t airtime_ns, uint64_t rx_window_ns,
+    uint64_t downlink_ns_total, uint64_t mcu_ns_per_uplink, uint64_t total_ns,
+    double* out_energy_j, double* out_avg_current_ua);
+
 /* Paramètres d'un profil (transparence : sources dans energy.hpp). */
 LSIM_API int32_t lsim_energy_profile(uint32_t profile_id, double* supply_v,
                                      double* rx_ma_125khz, double* rx_ma_250khz,
@@ -351,6 +374,27 @@ typedef struct lsim_gateway_v2 {
     double sensitivity_dbm[3][8];
 } lsim_gateway_v2;
 
+/* Antenne : diagramme de rayonnement horizontal (voir core/include/lsim/antenna.hpp).
+ * types : 0 = omnidirectionnelle, 1 = unidirectionnelle, 2 = bidirectionnelle,
+ *         3 = sectorielle (sommet plat : beamwidth_deg = largeur du secteur servi).
+ * peak_gain_dbi  : gain au maximum du lobe (dBi), borne -40..40
+ * beamwidth_deg  : ouverture à -3 dB, 5..360 (sectorielle : largeur du secteur)
+ * pointing_deg   : azimut de l'axe du lobe, 0 = est, sens trigonométrique
+ * front_to_back_db : plancher du diagramme, 0..60
+ * Une omnidirectionnelle ignore beamwidth_deg et front_to_back_db. */
+typedef struct lsim_antenna_pattern {
+    uint32_t kind;              /* LSIM_ANTENNA_* */
+    double   peak_gain_dbi;
+    double   beamwidth_deg;
+    double   pointing_deg;
+    double   front_to_back_db;
+} lsim_antenna_pattern;
+
+#define LSIM_ANTENNA_OMNIDIRECTIONAL 0u
+#define LSIM_ANTENNA_UNIDIRECTIONAL  1u
+#define LSIM_ANTENNA_BIDIRECTIONAL   2u
+#define LSIM_ANTENNA_SECTOR          3u
+
 typedef struct lsim_propagation {
     double frequency_hz;
     double reference_distance_m;
@@ -358,6 +402,7 @@ typedef struct lsim_propagation {
     double capture_threshold_db; /* >= 0 */
     double shadowing_sigma_db;   /* 0..30 ; 0 = pas de shadowing */
     uint64_t shadowing_seed;     /* graine du tirage par dispositif */
+    bool inter_sf_collisions;    /* 0 = SF orthogonaux (défaut), 1 = seuils SX1276 */
 } lsim_propagation;
 
 typedef struct lsim_device_stats {
@@ -623,6 +668,28 @@ LSIM_API int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices,
 LSIM_API int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation* prop,
                                      double max_path_loss_db, const lsim_environment* env,
                                      double step_m, size_t azimuths, double* radii_out);
+
+/* Décalage de gain d'antenne (dB, négatif ou nul) dans la direction `azimuth_deg`,
+ * par rapport au gain de crête. `pattern` NULL ou omnidirectionnelle donne 0.
+ * `azimuth_deg` est ramené à un tour : 370° vaut 10°. */
+LSIM_API double lsim_antenna_gain_offset_db(const lsim_antenna_pattern* pattern,
+                                            double azimuth_deg);
+
+/* Vérifie un diagramme d'antenne : type connu, valeurs finies et dans les bornes.
+ * Renvoie 0 si valide, 1 sinon. */
+LSIM_API int32_t lsim_antenna_validate(const lsim_antenna_pattern* pattern);
+
+/* Portée par azimut **avec diagramme d'antenne** : radii_out reçoit `azimuths`
+ * distances (m). `max_path_loss_db` est le budget établi au gain de crête (celui que
+ * renvoie lsim_max_allowable_path_loss_db avec antenna_gain_dbi = peak_gain_dbi) ;
+ * chaque azimut n'en dispose plus que de la part que le lobe lui laisse.
+ * `antenna` NULL reproduit exactement lsim_coverage_radii. */
+LSIM_API int32_t lsim_antenna_coverage_radii(const lsim_gateway* gateway,
+                                             const lsim_antenna_pattern* antenna,
+                                             const lsim_propagation* prop,
+                                             double max_path_loss_db,
+                                             const lsim_environment* env,
+                                             double step_m, size_t azimuths, double* radii_out);
 
 /* Perte de propagation totale (dB) entre toutes les paires de points (relief et obstacles
  * inclus). out_db[i*n+j] : émetteur i, récepteur j ; diagonale 0. 1 <= n <= 64 et

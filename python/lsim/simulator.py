@@ -16,6 +16,7 @@ from typing import Optional, Sequence
 
 from lsim._native import (
     LIB,
+    _CAntennaPattern,
     _CDeviceRf,
     _CDeviceStats,
     _CDownlinkPlan,
@@ -100,6 +101,75 @@ class DownlinkRequests:
             raise ValueError(f"clock_drift_ppm doit être compris entre 0 et {MAX_DRIFT_PPM}")
 
 
+class AntennaKind(IntEnum):
+    """Type d'antenne, au sens du diagramme de rayonnement horizontal.
+
+    Les valeurs sont celles de l'ABI (`LSIM_ANTENNA_*`) : les modifier casserait
+    l'échange avec le cœur natif.
+    """
+
+    OMNIDIRECTIONAL = 0
+    UNIDIRECTIONAL = 1
+    BIDIRECTIONAL = 2
+    SECTOR = 3
+
+
+@dataclass(frozen=True)
+class AntennaPattern:
+    """Diagramme de rayonnement horizontal d'une antenne.
+
+    Le gain annoncé (`peak_gain_dbi`) est celui du sommet du lobe ; tout le reste
+    du diagramme est en retrait. Le modèle et ses deux réserves (horizontal seul,
+    plancher arrière non atteint sur un secteur large) sont décrits dans
+    `core/include/lsim/antenna.hpp`.
+
+    `beamwidth_deg` est l'ouverture à −3 dB pour une directive, et la largeur du
+    secteur servi au gain maximal pour une sectorielle. Une omnidirectionnelle
+    ignore `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle,
+    et exiger ces réglages reviendrait à refuser une antenne valide.
+    """
+
+    kind: AntennaKind = AntennaKind.OMNIDIRECTIONAL
+    peak_gain_dbi: float = 0.0
+    beamwidth_deg: float = 90.0
+    pointing_deg: float = 0.0
+    front_to_back_db: float = 20.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, AntennaKind):
+            try:
+                object.__setattr__(self, "kind", AntennaKind(self.kind))
+            except ValueError as exc:
+                raise ValueError(
+                    f"kind doit être un AntennaKind (0..3), pas {self.kind!r}") from exc
+        for name in ("peak_gain_dbi", "beamwidth_deg", "pointing_deg", "front_to_back_db"):
+            if not math.isfinite(getattr(self, name)):
+                raise ValueError(f"{name} doit être un nombre fini")
+        if not -40.0 <= self.peak_gain_dbi <= 40.0:
+            raise ValueError("peak_gain_dbi doit être compris entre -40 et 40 dBi")
+        if self.kind is not AntennaKind.OMNIDIRECTIONAL:
+            if not 5.0 <= self.beamwidth_deg <= 360.0:
+                raise ValueError("beamwidth_deg doit être compris entre 5 et 360 degrés")
+            if not 0.0 <= self.front_to_back_db <= 60.0:
+                raise ValueError("front_to_back_db doit être compris entre 0 et 60 dB")
+
+    def gain_offset_db(self, azimuth_deg: float) -> float:
+        """Décalage de gain (dB, ≤ 0) dans une direction, par rapport au sommet."""
+        return float(LIB.lsim_antenna_gain_offset_db(
+            ctypes.byref(self._c_struct()), ctypes.c_double(azimuth_deg)))
+
+    def gain_dbi(self, azimuth_deg: float) -> float:
+        """Gain absolu (dBi) dans une direction."""
+        return self.peak_gain_dbi + self.gain_offset_db(azimuth_deg)
+
+    def _c_struct(self) -> "_CAntennaPattern":
+        if LIB.lsim_antenna_validate(ctypes.byref(s := _CAntennaPattern(
+                int(self.kind), self.peak_gain_dbi, self.beamwidth_deg, self.pointing_deg,
+                self.front_to_back_db))) != 0:
+            raise ValueError(f"diagramme d'antenne refusé par le cœur : {self!r}")
+        return s
+
+
 @dataclass(frozen=True)
 class EndDevice:
     x_m: float = 0.0
@@ -166,6 +236,10 @@ class Propagation:
     capture_threshold_db: float = 6.0
     shadowing_sigma_db: float = 0.0
     shadowing_seed: int = 0
+    # Collisions entre SF différents. « orthogonal » (défaut) : deux trames de SF
+    # différents ne se gênent jamais. « sx1276 » : un interférent d'un autre SF est
+    # compté, avec le seuil de la table « LoRa Demodulator SNR » du SX1276.
+    inter_sf: str = "orthogonal"
 
     def __post_init__(self) -> None:
         for name in ("frequency_hz", "reference_distance_m", "exponent", "capture_threshold_db",
@@ -182,6 +256,8 @@ class Propagation:
             raise ValueError("shadowing_sigma_db doit être compris entre 0 et 30 dB")
         if not 0 <= self.shadowing_seed < 2**64:
             raise ValueError("shadowing_seed doit être un entier sur 64 bits non signé")
+        if self.inter_sf not in ("orthogonal", "sx1276"):
+            raise ValueError("inter_sf vaut \"orthogonal\" ou \"sx1276\"")
 
 
 @dataclass(frozen=True)
@@ -315,7 +391,8 @@ def environment_path_loss_matrix(positions: Sequence[tuple[float, float]],
         raise ValueError("entre 1 et 64 points")
     env = dataclasses.replace(environment, device_height_m=environment.gateway_height_m)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
-                           propagation.exponent, propagation.capture_threshold_db, 0.0, 0)
+                           propagation.exponent, propagation.capture_threshold_db, 0.0, 0,
+                           propagation.inter_sf == "sx1276")
     xs = (ctypes.c_double * n)(*[float(p[0]) for p in positions])
     ys = (ctypes.c_double * n)(*[float(p[1]) for p in positions])
     c_env, keep = _c_environment(env)
@@ -329,12 +406,18 @@ def environment_path_loss_matrix(positions: Sequence[tuple[float, float]],
 
 def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db: float,
                    environment: Optional[Environment], step_m: float,
-                   azimuths: int) -> tuple[float, ...]:
+                   azimuths: int,
+                   antenna: Optional[AntennaPattern] = None) -> tuple[float, ...]:
     """Portée réelle (m) par azimut autour de la passerelle, relief et obstacles inclus.
 
     Chaque valeur est la distance maximale où la perte totale reste sous
     `max_path_loss_db`. Le calcul et sa borne de travail sont dans le cœur natif.
     Le shadowing n'est pas appliqué à la couverture (portée médiane déterministe).
+
+    `antenna` applique un diagramme de rayonnement : `max_path_loss_db` est alors le
+    budget établi **au gain de crête** de l'antenne, et chaque azimut n'en reçoit que
+    la part que le lobe lui laisse. Sans diagramme (défaut), le calcul est celui
+    d'avant : omnidirectionnel.
     """
     refuse_absolute(gateway, "coverage_radii")
     if not 1 <= azimuths <= 720:
@@ -346,7 +429,8 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
     keep: list[object] = []
     if environment is None:
         c_env_ref = None
@@ -354,9 +438,18 @@ def coverage_radii(gateway: Gateway, propagation: Propagation, max_path_loss_db:
         c_env_struct, keep = _c_environment(environment)
         c_env_ref = ctypes.byref(c_env_struct)
     out = (ctypes.c_double * azimuths)()
-    status = LIB.lsim_coverage_radii(
-        ctypes.byref(c_gw), ctypes.byref(c_prop), max_path_loss_db, c_env_ref,
-        step_m, azimuths, out)
+    if antenna is None:
+        status = LIB.lsim_coverage_radii(
+            ctypes.byref(c_gw), ctypes.byref(c_prop), max_path_loss_db, c_env_ref,
+            step_m, azimuths, out)
+    else:
+        # `keep` retient la structure vivante le temps de l'appel ; le natif n'en
+        # garde aucune référence ensuite.
+        c_ant = antenna._c_struct()
+        keep.append(c_ant)
+        status = LIB.lsim_antenna_coverage_radii(
+            ctypes.byref(c_gw), ctypes.byref(c_ant), ctypes.byref(c_prop),
+            max_path_loss_db, c_env_ref, step_m, azimuths, out)
     del keep
     if status != 0:
         raise StatusError(status)
@@ -554,7 +647,8 @@ def simulate_uplinks_trace(devices: Sequence[EndDevice], gateway: Gateway,
             else _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi))
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
     c_stats = (_CDeviceStats * n)()
     c_tot = _CSimStats()
     keep: list[object] = []
@@ -690,7 +784,8 @@ def simulate_uplinks_multi(devices: Sequence[EndDevice], gateways: Sequence[Gate
         _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
     c_stats = (_CDeviceStats * n)()
     c_tot = _CNetworkStats()
     c_gw_stats = (_CGatewayRxStats * g_count)()
@@ -834,7 +929,8 @@ def simulate_multi_downlinks(devices: Sequence[EndDevice], gateways: Sequence[Ga
         _CGateway(g.x_m, g.y_m, g.antenna_gain_dbi, g.rx_sensitivity_offset_db) for g in gateways])
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
     c_rule = _CDownlinkRule(1 if rule.ack_uplinks else 0, rule.every, rule.payload_bytes,
                             rule.gateway_tx_power_dbm, rule.device_antenna_gain_dbi,
                             rule.device_rx_offset_db, 1 if rule.join else 0, rule.rx2_sf)
@@ -951,7 +1047,8 @@ def simulate_uplinks(devices: Sequence[EndDevice], gateway: Gateway,
     c_gw = _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi)
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
     c_stats = (_CDeviceStats * n)()
     c_tot = _CSimStats()
     c_dl_stats = (_CDownlinkStats * n)()

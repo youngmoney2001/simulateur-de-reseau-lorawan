@@ -31,8 +31,9 @@ from lsim.environment import (
     Terrain,
     load_dem_csv,
 )
-from lsim.simulator import (DownlinkRequests, EndDevice, Gateway, Propagation,
-                             MAX_DOWNLINKS_PER_DEVICE, MAX_DRIFT_PPM, MAX_PERIODICITY)
+from lsim.simulator import (AntennaKind, AntennaPattern, DownlinkRequests, EndDevice,
+                             Gateway, Propagation, MAX_DOWNLINKS_PER_DEVICE, MAX_DRIFT_PPM,
+                             MAX_PERIODICITY)
 from lsim.gateway_sensitivity import (CATALOG, MODEL_ID, SF5_REGION, AbsoluteSensitivity,
                                      SensitivityError)
 from lsim.gateway_profiles import (can_relay, can_simulate_radio, get_profile,
@@ -87,6 +88,54 @@ class SensitivityModel(_Strict):
             raise ValueError(str(exc)) from None
 
 
+# Noms du scénario vers types de l'ABI. Un « Literal » protège déjà l'entrée ; cette table
+# évite de faire dépendre le vocabulaire du fichier YAML de l'ordre des entiers du cœur.
+_ANTENNA_KINDS = {
+    "omnidirectionnelle": AntennaKind.OMNIDIRECTIONAL,
+    "unidirectionnelle": AntennaKind.UNIDIRECTIONAL,
+    "bidirectionnelle": AntennaKind.BIDIRECTIONAL,
+    "sectorielle": AntennaKind.SECTOR,
+}
+
+
+class AntennaModel(_Strict):
+    """Diagramme de rayonnement horizontal d'une antenne de passerelle.
+
+    Ce modèle décrit la **forme** du lobe, pas son gain : le gain de crête reste celui
+    de la passerelle (`antenna_gain_dbi`, ou `rf.antenna_gain_dbi`). Deux champs pour
+    une même grandeur finiraient par diverger — le frontal RF a déjà coûté une garde
+    pour cette raison —, et le diagramme n'a de sens que relatif à un sommet.
+
+    `beamwidth_deg` est l'ouverture à −3 dB sur une directive, et la largeur du secteur
+    servi au gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle
+    ignore `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle ; les
+    exiger reviendrait à refuser une antenne valide pour un réglage sans effet.
+
+    Modèle, bornes et réserves : `core/include/lsim/antenna.hpp`.
+    """
+
+    kind: Literal["omnidirectionnelle", "unidirectionnelle", "bidirectionnelle",
+                  "sectorielle"] = "omnidirectionnelle"
+    beamwidth_deg: float = Field(90.0, ge=5.0, le=360.0)
+    pointing_deg: float = 0.0
+    front_to_back_db: float = Field(20.0, ge=0.0, le=60.0)
+
+    def pattern(self, peak_gain_dbi: float) -> "AntennaPattern":
+        """Diagramme du simulateur, avec le gain de crête de la passerelle.
+
+        Le gain n'est pas un champ du modèle : c'est celui de la passerelle, qu'il
+        vienne de `antenna_gain_dbi` ou du frontal RF. Le passer ici plutôt que de le
+        relire évite qu'un même chiffre ait deux sources.
+        """
+        return AntennaPattern(
+            kind=_ANTENNA_KINDS[self.kind],
+            peak_gain_dbi=peak_gain_dbi,
+            beamwidth_deg=self.beamwidth_deg,
+            pointing_deg=self.pointing_deg,
+            front_to_back_db=self.front_to_back_db,
+        )
+
+
 class GatewayModel(_Strict):
     x_m: float = 0.0
     y_m: float = 0.0
@@ -106,6 +155,11 @@ class GatewayModel(_Strict):
     sensitivity: Optional[SensitivityModel] = None
     # Frontal RF v4 de la passerelle (None = neutre). Le gain remplace `antenna_gain_dbi`.
     rf: Optional[RfModel] = None
+    # Diagramme de rayonnement horizontal (None = omnidirectionnelle). Déclare la forme
+    # du lobe, jamais son gain : le sommet est `antenna_gain_dbi` (ou celui du frontal).
+    # Sans environnement, la couverture reste un disque : la portée log-distance ne
+    # dépend pas de la direction, le relief et les obstacles sont seuls à la creuser.
+    antenna: Optional[AntennaModel] = None
 
     @model_validator(mode="after")
     def _rf_gain_not_duplicated(self) -> "GatewayModel":
@@ -152,6 +206,16 @@ class PropagationModel(_Strict):
     # graine du scénario est utilisée, ce qui rend le tirage reproductible.
     shadowing_sigma_db: float = Field(0.0, ge=0, le=30.0)
     shadowing_seed: Optional[int] = Field(None, ge=0, le=2**64 - 1)
+    # Collisions entre SF différents. « orthogonal » (défaut) : deux trames de SF
+    # différents ne se gênent jamais — c'est le comportement historique, et un
+    # scénario écrit avant cette option le conserve trait pour trait. « sx1276 » :
+    # un interférent d'un autre SF est compté, avec le seuil de la table
+    # « LoRa Demodulator SNR » du SX1276 (celle qui sert déjà à l'ADR).
+    #
+    # Ce seuil ne dépend que du SF de la trame voulue : c'est l'approximation de la
+    # littérature, pas une mesure d'isolement entre deux SF. Une matrice mesurée
+    # viendrait d'une campagne, pas d'une datasheet.
+    inter_sf: Literal["orthogonal", "sx1276"] = "orthogonal"
 
 
 class DiskPlacement(_Strict):
@@ -499,16 +563,100 @@ class TerrainModel(_Strict):
         return self
 
 
+class MaterialCalibrationModel(_Strict):
+    """Perte d'un matériau **mesurée**, en dB par mètre, à la place de UIT-R P.2040-4.
+
+    La table du moteur vient de la recommandation P.2040-4 (diélectriques), et à 868 MHz
+    12 des 15 matériaux sortent de la plage documentée : la valeur est alors extrapolée.
+    Une mesure vaut mieux qu'une extrapolation, et elle se déclare ici.
+
+    `provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un
+    chiffre sans origine se présente comme une donnée du moteur.
+    """
+
+    loss_db_per_m: float = Field(ge=0, le=200)
+    provenance: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _provenance_non_vide(self) -> "MaterialCalibrationModel":
+        if not self.provenance.strip():
+            raise ValueError("provenance : d'où vient cette mesure ?")
+        return self
+
+
 class EnvironmentModel(_Strict):
     gateway_height_m: float = Field(15.0, gt=0, le=1000)
     device_height_m: float = Field(1.5, gt=0, le=1000)
     terrain: Optional[TerrainModel] = None
     obstacles: list[ObstacleModel] = Field(default_factory=list, max_length=MAX_OBSTACLES)
+    # Pertes mesurées par matériau, clé = nom du catalogue. Elles remplacent P.2040-4
+    # pour les obstacles qui déclarent ce matériau.
+    material_calibration: Optional[dict[str, MaterialCalibrationModel]] = None
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentModel":
+        if self.material_calibration:
+            for nom in self.material_calibration:
+                if nom not in MATERIAL_NAMES:
+                    raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
+
+
+class TxPointModel(_Strict):
+    """Point du profil d'émission mesuré : puissance demandée (dBm) et courant (mA)."""
+
+    dbm: float
+    ma: float = Field(ge=0)
+
+
+class MeasuredEnergyModel(_Strict):
+    """Courants **mesurés**, au lieu d'un profil du catalogue.
+
+    Les deux profils du moteur viennent de fiches constructeur : bons pour comparer deux
+    architectures, insuffisants pour garantir une autonomie. Ce bloc est là pour qui a
+    sorti la pince ampèremétrique.
+
+    `provenance` est obligatoire : un rapport qui afficherait ces chiffres sans dire d'où
+    ils viennent les présenterait comme une donnée du moteur. `tx_points` : 1 à 4 couples
+    (dBm, mA), puissances strictement croissantes — la règle d'émission est celle du
+    catalogue (point de puissance ≥ demandée, refus au-delà du dernier).
+    """
+
+    supply_v: float = Field(gt=0)
+    rx_ma_125khz: float = Field(ge=0)
+    rx_ma_250khz: float = Field(ge=0)
+    rx_ma_500khz: float = Field(ge=0)
+    sleep_ua: float = Field(ge=0)
+    provenance: str = Field(min_length=1, max_length=200)
+    tx_points: list[TxPointModel] = Field(min_length=1, max_length=4)
+    mcu_run_ma: float = Field(0.0, ge=0)
+
+    @model_validator(mode="after")
+    def _tx_points_croissants(self) -> "MeasuredEnergyModel":
+        dbm = [p.dbm for p in self.tx_points]
+        if any(b <= a for a, b in zip(dbm, dbm[1:])):
+            raise ValueError("energy.measured.tx_points : puissances strictement croissantes")
+        if not self.provenance.strip():
+            raise ValueError("energy.measured.provenance : d'où viennent ces courants ?")
+        return self
 
 
 class EnergyModel(_Strict):
-    """Profil énergie choisi par le scénario (optionnel ; la ligne de commande le remplace)."""
-    profile: Literal["rak4631", "sx1262-stm32l072"]
+    """Profil énergie du scénario (optionnel ; la ligne de commande le remplace).
+
+    Soit un profil du catalogue (`profile`), soit un relevé (`measured`). Renseigner les
+    deux n'a pas de sens : lequel le rapport aurait-il utilisé ?
+    """
+
+    profile: Optional[Literal["rak4631", "sx1262-stm32l072"]] = None
+    measured: Optional[MeasuredEnergyModel] = None
+
+    @model_validator(mode="after")
+    def _un_seul_choix(self) -> "EnergyModel":
+        if (self.profile is None) == (self.measured is None):
+            raise ValueError(
+                "energy : renseigner soit `profile` (catalogue), soit `measured` (relevé)")
+        return self
 
 
 class ChannelDefModel(_Strict):
@@ -762,6 +910,11 @@ class Scenario:
             # inchangés (elle est alors fournie par les options de protocole).
             if gw_dump.get("tx_power_dbm") is None:
                 gw_dump.pop("tx_power_dbm", None)
+            # Pas d'antenne déclarée : hors du hash, donc un scénario écrit avant cette
+            # possibilité garde exactement son empreinte — et ses chiffres, puisque sans
+            # diagramme la couverture est celle d'avant.
+            if gw_dump.get("antenna") is None:
+                gw_dump.pop("antenna", None)
         if model.gateways is not None:
             # `gateways` déclaré : le champ scalaire `gateway` subsiste à sa valeur par défaut
             # et reste haché tel quel (comportement historique, y compris ses valeurs nulles).
@@ -800,10 +953,19 @@ class Scenario:
                 if ob.get("material") is None:
                     ob.pop("material", None)
                     ob.pop("thickness_m", None)
+            # Aucune calibration déclarée : hors du hash, donc un scénario écrit avant
+            # cette possibilité garde exactement la même empreinte — et les mêmes pertes.
+            if not env_dump.get("material_calibration"):
+                env_dump.pop("material_calibration", None)
         prop = dumped.get("propagation", {})
         if prop.get("shadowing_sigma_db") == 0.0 and prop.get("shadowing_seed") is None:
             prop.pop("shadowing_sigma_db", None)
             prop.pop("shadowing_seed", None)
+        # SF orthogonaux = comportement d'avant l'option : hors du hash, donc un
+        # scénario écrit avant garde exactement la même empreinte — et les mêmes
+        # chiffres, puisque le moteur ne compte alors aucun interférent de plus.
+        if prop.get("inter_sf") == "orthogonal":
+            prop.pop("inter_sf", None)
         canonical = json.dumps(dumped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         self.sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -815,6 +977,24 @@ class Scenario:
     def energy_profile(self) -> Optional[str]:
         """Profil énergie déclaré dans le YAML, ou None."""
         return self.model.energy.profile if self.model.energy is not None else None
+
+    def measured_energy(self) -> Optional["MeasuredProfile"]:
+        """Le relevé déclaré dans le YAML, ou None.
+
+        Un relevé se distingue d'un profil du catalogue par sa provenance, qui voyage
+        avec le résultat : un rapport doit pouvoir dire que ces courants sont mesurés,
+        et par qui.
+        """
+        from lsim.energy import MeasuredProfile
+
+        m = self.model.energy.measured if self.model.energy is not None else None
+        if m is None:
+            return None
+        return MeasuredProfile(
+            supply_v=m.supply_v, rx_ma_125khz=m.rx_ma_125khz, rx_ma_250khz=m.rx_ma_250khz,
+            rx_ma_500khz=m.rx_ma_500khz, sleep_ua=m.sleep_ua, mcu_run_ma=m.mcu_run_ma,
+            provenance=m.provenance,
+            tx_points=tuple((tp.dbm, tp.ma) for tp in m.tx_points))
 
     def device_classes(self) -> list[str]:
         """Classe LoRaWAN de chaque terminal déployé, dans l'ordre de `deploy()`.
@@ -933,7 +1113,8 @@ class Scenario:
         seed = p.shadowing_seed if p.shadowing_seed is not None else self.model.seed
         return Propagation(frequency_hz=p.frequency_hz, reference_distance_m=p.reference_distance_m,
                            exponent=p.exponent, capture_threshold_db=p.capture_threshold_db,
-                           shadowing_sigma_db=p.shadowing_sigma_db, shadowing_seed=seed)
+                           shadowing_sigma_db=p.shadowing_sigma_db, shadowing_seed=seed,
+                           inter_sf=p.inter_sf)
 
 
 def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
@@ -949,9 +1130,19 @@ def _positions(g: GroupModel, rng: random.Random) -> list[tuple[float, float]]:
     return out
 
 
-def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float) -> float:
+def _obstacle_attenuation(o: ObstacleModel, frequency_hz: float,
+                          calibration: Optional[dict] = None) -> float:
     if o.material is None:
         return o.attenuation_db
+    if calibration and o.material in calibration:
+        # Une mesure remplace la recommandation. Elle n'est pas extrapolée — c'est tout
+        # l'intérêt — et l'épaisseur reste celle de l'obstacle, seul le coefficient change.
+        mesure = calibration[o.material]
+        loss = mesure.loss_db_per_m * o.thickness_m
+        if loss > 200.0:
+            raise ValueError(
+                f"atténuation mesurée {loss:.1f} dB > 200 dB (matériau {o.material})")
+        return loss
     loss, extrapolated = traversal_loss(o.material, frequency_hz, o.thickness_m)
     if extrapolated:
         warnings.warn(
@@ -975,7 +1166,7 @@ def _build_environment(model: EnvironmentModel, base_dir: Path,
         terrain = load_dem_csv(target)
     obstacles = tuple(
         Obstacle(o.x_min_m, o.y_min_m, o.x_max_m, o.y_max_m, o.height_m,
-                 _obstacle_attenuation(o, frequency_hz))
+                 _obstacle_attenuation(o, frequency_hz, model.material_calibration))
         for o in model.obstacles)
     return Environment(terrain=terrain, obstacles=obstacles,
                        gateway_height_m=model.gateway_height_m,

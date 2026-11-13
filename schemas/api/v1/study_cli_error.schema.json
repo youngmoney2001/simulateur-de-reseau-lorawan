@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "column": {
+      "maximum": 256,
+      "minimum": 0,
+      "title": "Column",
+      "type": "integer"
+    },
+    "message": {
+      "maxLength": 200,
+      "title": "Message",
+      "type": "string"
+    }
+  },
+  "required": [
+    "column",
+    "message"
+  ],
+  "title": "CliError",
+  "type": "object"
+}

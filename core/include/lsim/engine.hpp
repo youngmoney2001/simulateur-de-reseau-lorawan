@@ -180,6 +180,12 @@ struct PropagationSpec {
     // même valeur. Modèle « évanouissement lent » : constant pour un dispositif.
     double shadowing_sigma_db = 0.0;
     std::uint64_t shadowing_seed = 0;
+    // Collisions entre SF différents. `false` (défaut) : les SF sont traités comme
+    // parfaitement orthogonaux — comportement historique, qu'un scénario déjà écrit
+    // doit continuer de produire trait pour trait. `true` : un interférent d'un SF
+    // différent est compté, avec le seuil de la table « LoRa Demodulator SNR » du
+    // SX1276 (adr::required_snr_tenth_db), la même qui sert déjà à l'ADR.
+    bool inter_sf_collisions = false;
 };
 
 // Valeur de shadowing (dB) du dispositif `device_index`, gaussienne de moyenne

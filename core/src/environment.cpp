@@ -240,54 +240,81 @@ EnvStatus path_loss_db(const radio::LogDistanceModel& model, double tx_x_m, doub
         }
     }
 
-    // Diffraction : profil discrétisé (sol ou sommet de pavé), puis Deygout à 3 arêtes.
+    // Diffraction : profil discrétisé, puis Deygout à 3 arêtes.
+    //
+    // Deux profils, parce que le rayon dispose de deux chemins et prend le meilleur :
+    //  - `sol`  : le relief seul — le rayon **traverse** les murs (pénétration) et ne
+    //             diffracte que sur le terrain ;
+    //  - `tout` : relief et sommets de murs — le rayon **passe au-dessus** de tout.
+    //
+    // L'ancienne version additionnait les deux mécanismes. Un mur traversé était payé
+    // deux fois : une fois comme dalle absorbante, une fois comme arête diffractante.
+    // Un mur de 0 dB devenait alors un bloqueur quasi parfait, quel que soit son
+    // matériau — et aucune mesure de matériau ne pouvait y changer quoi que ce soit.
     const double step = has_terrain ? e.grid->cell_m : kProfileStepM;
     const double total_m = std::hypot(dx, dy);
     const std::size_t n = std::clamp<std::size_t>(
         static_cast<std::size_t>(std::ceil(total_m / step)), 2, kMaxProfileSamples);
     std::vector<double> dist(n + 1);
-    std::vector<double> obstruction(n + 1);
-    double max_h = -std::numeric_limits<double>::infinity();
+    std::vector<double> obstruction_sol(n + 1);
+    std::vector<double> obstruction_tout(n + 1);
+    double max_h_sol = -std::numeric_limits<double>::infinity();
+    double max_h_tout = -std::numeric_limits<double>::infinity();
     for (std::size_t s = 0; s <= n; ++s) {
         const double t = static_cast<double>(s) / static_cast<double>(n);
         dist[s] = t * total_m;
         if (s == 0) {
-            obstruction[s] = z_tx;
+            obstruction_sol[s] = obstruction_tout[s] = z_tx;
             continue;
         }
         if (s == n) {
-            obstruction[s] = z_rx;
+            obstruction_sol[s] = obstruction_tout[s] = z_rx;
             continue;
         }
         const double x = tx_x_m + t * dx;
         const double y = tx_y_m + t * dy;
         double top = has_terrain ? ground_elevation_m(*e.grid, x, y) : 0.0;
+        obstruction_sol[s] = top;
+        max_h_sol = std::max(max_h_sol, top - los(t));
         for (const Candidate& c : cands) {
             if (t < c.t0 || t > c.t1) continue;
             const Obstacle& o = e.obstacles[c.index];
             if (x < o.x_min_m || x > o.x_max_m || y < o.y_min_m || y > o.y_max_m) continue;
             top = std::max(top, c.ground_m + o.height_m);
         }
-        obstruction[s] = top;
-        max_h = std::max(max_h, top - los(t));
+        obstruction_tout[s] = top;
+        max_h_tout = std::max(max_h_tout, top - los(t));
     }
     // Diffraction seulement si une obstruction dépasse réellement la ligne de visée :
     // un sol sous le rayon est déjà couvert par le modèle log-distance calibré.
-    if (max_h > 0.0) {
-        const Profile profile{dist.data(), obstruction.data(),
-                              kSpeedOfLight / model.frequency_hz};
-        out.diffraction_db = deygout_loss_db(profile, 0, n, 2);
-    }
-    out.total_db = out.log_distance_db + out.diffraction_db + out.penetration_db;
+    const double wavelength_m = kSpeedOfLight / model.frequency_hz;
+    const auto deygout = [&](const std::vector<double>& z, double max_h) {
+        if (max_h <= 0.0) return 0.0;
+        const Profile profile{dist.data(), z.data(), wavelength_m};
+        return deygout_loss_db(profile, 0, n, 2);
+    };
+    const double diffraction_sol_db = deygout(obstruction_sol, max_h_sol);
+    // Aucun pavé coupé : les deux profils sont identiques, un seul calcul suffit. C'est le
+    // cas de tout scénario sans obstacle, et le seul qui compte pour le coût.
+    out.diffraction_db = cands.empty()
+        ? diffraction_sol_db
+        : deygout(obstruction_tout, max_h_tout);
+    // Le meilleur des deux chemins, jamais leur somme : traverser ou contourner.
+    out.total_db = out.log_distance_db
+        + std::min(out.diffraction_db, out.penetration_db + diffraction_sol_db);
     return EnvStatus::Ok;
 }
 
 EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_x_m,
                            double gateway_y_m, const Environment& e, double max_path_loss_db,
-                           double step_m, std::size_t azimuths, double* radii_out) {
+                           double step_m, std::size_t azimuths, double* radii_out,
+                           const antenna::Pattern* pattern) {
     if (radii_out == nullptr || azimuths == 0 || azimuths > kMaxAzimuths ||
         !finite(gateway_x_m) || !finite(gateway_y_m) || !finite(max_path_loss_db) ||
         !finite(step_m) || step_m < kMinCoverageStepM) {
+        return EnvStatus::InvalidInput;
+    }
+    if (pattern != nullptr && antenna::validate_pattern(*pattern) != antenna::AntennaStatus::Ok) {
         return EnvStatus::InvalidInput;
     }
     const EnvStatus vs = validate_environment(e);
@@ -313,24 +340,35 @@ EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_
         return EnvStatus::WorkLimit;
     }
 
-    const auto ok_at = [&](double theta, double r) {
+    const auto ok_at = [&](double theta, double r, double budget_db) {
         PathLoss pl;
         const double px = gateway_x_m + r * std::cos(theta);
         const double py = gateway_y_m + r * std::sin(theta);
         if (path_loss_db(model, px, py, gateway_x_m, gateway_y_m, e, pl) != EnvStatus::Ok) {
             return false;
         }
-        return pl.total_db <= max_path_loss_db;
+        return pl.total_db <= budget_db;
     };
 
     constexpr double kTwoPi = 6.283185307179586;
+    constexpr double kFullTurnDeg = 360.0;
     for (std::size_t k = 0; k < azimuths; ++k) {
         const double theta = kTwoPi * static_cast<double>(k) / static_cast<double>(azimuths);
+        // Budget disponible dans cette direction : celui du gain de crête, diminué de ce
+        // que le diagramme retire hors de l'axe. L'offset est négatif ou nul, donc le
+        // budget ne fait que se réduire — jamais s'élargir.
+        const double budget_db =
+            pattern == nullptr
+                ? max_path_loss_db
+                : max_path_loss_db + antenna::gain_offset_db(
+                                         *pattern,
+                                         kFullTurnDeg * static_cast<double>(k) /
+                                             static_cast<double>(azimuths));
         double last_ok = 0.0;
         double first_fail = -1.0;
         for (double r = step_m; ; r += step_m) {
             const double rr = std::min(r, range);
-            if (ok_at(theta, rr)) {
+            if (ok_at(theta, rr, budget_db)) {
                 last_ok = rr;
             } else {
                 first_fail = rr;
@@ -346,7 +384,7 @@ EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_
             double hi = first_fail;
             for (int it = 0; it < kCoverageBisections; ++it) {
                 const double mid = 0.5 * (lo + hi);
-                if (ok_at(theta, mid)) {
+                if (ok_at(theta, mid, budget_db)) {
                     lo = mid;
                 } else {
                     hi = mid;

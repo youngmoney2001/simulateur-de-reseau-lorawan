@@ -2,8 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  HOLD_NS, TRAVEL_NS, activeAt, deviceGroupsFromRows, journalRow, outcomeClass,
-  resolveId, segmentsFromEvents, timelineBounds,
+  HOLD_NS, TRAVEL_NS, activeAt, deviceGroupsFromRows, etiquetteSaut, journalRow,
+  outcomeClass, resolveId, segmentsFromEvents, timelineBounds,
 } from "../src/studio/animation.js";
 
 const GROUPS = ["capteur-a", "capteur-b"];
@@ -96,4 +96,45 @@ test("journal MAC : libellés et classe dédiée, sans lien avec l'issue radio",
   assert.equal(row.cls, "mac");
   assert.equal(row.label, "Demande MAC du dispositif : LinkCheckReq");
   assert.equal(journalRow({ seq: 5, t_ns: 1, kind: "uplink", device_index: 0, outcome: "delivered", hops: [] }, ["capteur-a"]).cls, "ok");
+});
+
+// --- Ce qu'un saut porte de mesurable ---------------------------------------------------
+
+test("un saut dit son niveau recu, sa frequence et son debit", () => {
+  // « delivered » seul ne dit pas de combien la trame est passee : sans le niveau, un
+  // reglage qu'on vient de changer semble sans effet.
+  assert.equal(etiquetteSaut({ from_id: "c1", to_id: "gw1", outcome: "delivered",
+    rssi_dbm: -87.25, freq_hz: 868_100_000, dr: 5 }),
+    "c1 → gw1 : delivered · -87.3 dBm · 868.100 MHz · DR5");
+});
+
+test("un saut sans mesure ne s'invente pas de valeur", () => {
+  // Un RSSI absent n'est pas un zero : c'est une mesure qu'on n'a pas. L'afficher en
+  // 0 dBm ferait croire a une liaison parfaite.
+  assert.equal(etiquetteSaut({ from_id: "c1", to_id: "gw1", outcome: "lost_sensitivity" }),
+    "c1 → gw1 : lost_sensitivity");
+  assert.equal(etiquetteSaut({ from_id: "c1", to_id: "gw1", outcome: "sent", rssi_dbm: null }),
+    "c1 → gw1 : sent");
+});
+
+test("le debit reste un DR, jamais un SF devine", () => {
+  // DR0 vaut SF12 en EU868 mais SF10 en US915 : convertir affirmerait une region que
+  // l'evenement ne porte pas.
+  assert.match(etiquetteSaut({ from_id: "a", to_id: "b", outcome: "sent", dr: 0 }), /DR0$/);
+  assert.doesNotMatch(etiquetteSaut({ from_id: "a", to_id: "b", outcome: "sent", dr: 0 }), /SF/);
+});
+
+test("une frequence absurde ou nulle n'est pas affichee", () => {
+  assert.equal(etiquetteSaut({ from_id: "a", to_id: "b", outcome: "sent", freq_hz: 0 }),
+    "a → b : sent");
+  assert.equal(etiquetteSaut({ from_id: "a", to_id: "b", outcome: "sent", freq_hz: NaN }),
+    "a → b : sent");
+});
+
+test("le journal d'un evenement porte les grandeurs de chacun de ses sauts", () => {
+  const row = journalRow({ seq: 1, t_ns: 1_000_000_000n ?? 1000000000, device_index: 0,
+    kind: "uplink", outcome: "delivered",
+    hops: [{ from_id: "capteur-a", to_id: "gw1", outcome: "delivered", rssi_dbm: -92,
+      freq_hz: 868_300_000, dr: 3, t_ns: 0 }] }, ["capteur-a"]);
+  assert.deepEqual(row.hops, ["capteur-a → gw1 : delivered · -92.0 dBm · 868.300 MHz · DR3"]);
 });

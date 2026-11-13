@@ -123,7 +123,12 @@ def test_coverage_is_reduced_by_obstacle_only_in_its_direction():
     flat = coverage_radii(Gateway(), p, mapl, None, 10.0, 8)
     wall = Obstacle(300.0, -200.0, 320.0, 200.0, 40.0, 60.0)
     walled = coverage_radii(Gateway(), p, mapl, Environment(obstacles=(wall,)), 10.0, 8)
-    assert walled[0] < 300.0 + 1.0
+    # La borne était 300 m — le bord **avant** du mur — parce que le mur était payé deux
+    # fois : comme dalle absorbante (60 dB) et comme arête diffractante. Le rayon prenant
+    # désormais le meilleur des deux chemins, il atteint 310 m et s'arrête à la face
+    # arrière (320 m). La portée reste divisée par six.
+    assert walled[0] < 320.0 + 10.0
+    assert walled[0] < flat[0] / 4.0
     assert walled[4] == pytest.approx(flat[4], abs=10.0 + 1e-6)
     assert all(w <= f + 1e-6 for w, f in zip(walled, flat))
 

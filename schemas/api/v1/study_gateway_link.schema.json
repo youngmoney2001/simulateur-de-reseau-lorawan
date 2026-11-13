@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "description": "Association explicite : un équipement de la session et une passerelle du run (par nom,\nunique dans le scénario). Un équipement ou une passerelle n'apparaît qu'une fois.",
+  "properties": {
+    "gateway": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Gateway",
+      "type": "string"
+    },
+    "node_id": {
+      "pattern": "^[a-z][a-z0-9-]{0,31}$",
+      "title": "Node Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "node_id",
+    "gateway"
+  ],
+  "title": "GatewayLink",
+  "type": "object"
+}

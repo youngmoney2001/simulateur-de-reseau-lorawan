@@ -299,3 +299,145 @@ def test_the_environment_is_announced_in_the_notes():
     vierge = compile_session([node("frontiere", "border"), SENSOR],
                              configs(frontiere=cfg("EU868")), seed=3)
     assert not [n for n in vierge.notes if n.startswith("environnement")]
+
+
+# --- Calibration matériau depuis l'atelier -----------------------------------------------------
+
+def _compile(environment=None):
+    return compile_session([node("frontiere", "border"), SENSOR],
+                           configs(frontiere=cfg("EU868")), seed=3,
+                           environment=environment)
+
+
+def test_a_measured_material_loss_is_compiled_into_the_environment_block():
+    """Une perte mesurée déclarée dans l'atelier atteint le scénario, et le scénario la valide.
+
+    Sans ce chemin, la seule façon d'entrer une mesure restait d'éditer le YAML à la main —
+    l'atelier, lui, en était réduit à la table extrapolée.
+    """
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration
+
+    out = _compile(EnvironmentSettings(material_calibration={
+        "concrete": MaterialCalibration(loss_db_per_m=60.0, provenance="banc 2026-03")}))
+    bloc = out.body["scenario"]["environment"]["material_calibration"]
+    assert bloc == {"concrete": {"loss_db_per_m": 60.0, "provenance": "banc 2026-03"}}
+    # Le scénario compilé doit rester valide pour le moteur : c'est lui qui tranche.
+    ScenarioModel.model_validate(out.body["scenario"])
+
+
+def test_a_calibration_alone_is_enough_to_emit_the_block():
+    """Une calibration seule fait sortir le bloc : sinon elle serait silencieusement perdue.
+
+    `est_vierge` ne regardait que les obstacles, le sigma et les hauteurs. Une session qui ne
+    réglait qu'une mesure compilait donc un scénario sans bloc `environment` du tout.
+    """
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration
+
+    out = _compile(EnvironmentSettings(material_calibration={
+        "concrete": MaterialCalibration(loss_db_per_m=60.0, provenance="banc 2026-03")}))
+    assert "environment" in out.body["scenario"]
+
+
+def test_an_empty_calibration_changes_nothing():
+    """Aucune mesure déclarée : aucun bloc `material_calibration`, empreinte comprise."""
+    from lsim.study_contract import EnvironmentSettings, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10,
+                   material="concrete", thickness_m=0.25)
+    sans = _compile(EnvironmentSettings(obstacles=[mur]))
+    avec_vide = _compile(EnvironmentSettings(obstacles=[mur], material_calibration={}))
+    assert "material_calibration" not in sans.body["scenario"]["environment"]
+    assert "material_calibration" not in avec_vide.body["scenario"]["environment"]
+
+
+def test_a_calibration_changes_the_scenario_fingerprint():
+    """Deux scénarios qui ne diffèrent que par une mesure n'ont pas la même empreinte.
+
+    L'empreinte se lit sur un scénario chargé, pas sur le modèle nu : c'est `Scenario` qui
+    décide ce qui entre dans le hachage.
+    """
+    import tempfile
+    import pathlib
+    import yaml
+    from lsim.scenario import load_scenario
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10,
+                   material="concrete", thickness_m=0.25)
+
+    def empreinte(env):
+        with tempfile.TemporaryDirectory() as d:
+            chemin = pathlib.Path(d) / "session.yaml"
+            chemin.write_text(
+                yaml.safe_dump(_compile(env).body["scenario"], allow_unicode=True,
+                               sort_keys=False), encoding="utf-8")
+            return load_scenario(chemin).sha256
+
+    table = empreinte(EnvironmentSettings(obstacles=[mur]))
+    mesure = empreinte(EnvironmentSettings(obstacles=[mur], material_calibration={
+        "concrete": MaterialCalibration(loss_db_per_m=60.0, provenance="banc 2026-03")}))
+    assert table != mesure
+
+
+def test_a_calibration_from_the_atelier_really_changes_the_loss():
+    """La mesure remplace la table dans le calcul — ce n'est pas un champ décoratif.
+
+    Béton, 0,25 m : la table P.2040-4 (extrapolée à 868 MHz) et une mesure à 60 dB/m ne
+    donnent pas la même perte. Le chiffre exact vient du moteur, il n'est pas recopié ici.
+    """
+    from lsim.scenario import _obstacle_attenuation
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10,
+                   material="concrete", thickness_m=0.25)
+    out = _compile(EnvironmentSettings(obstacles=[mur], material_calibration={
+        "concrete": MaterialCalibration(loss_db_per_m=60.0, provenance="banc 2026-03")}))
+    modele = ScenarioModel.model_validate(out.body["scenario"])
+    o = modele.environment.obstacles[0]
+    f_hz = modele.propagation.frequency_hz
+
+    par_table = _obstacle_attenuation(o, f_hz)
+    par_mesure = _obstacle_attenuation(o, f_hz, modele.environment.material_calibration)
+    # 60 dB/m x 0,25 m, exactement.
+    assert par_mesure == pytest.approx(15.0)
+    assert par_table != pytest.approx(par_mesure)
+
+
+def test_the_note_names_measured_materials_instead_of_claiming_the_table():
+    """La note annonce « P.2040-4 » — faux dès qu'une mesure s'applique."""
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration, Obstacle
+
+    mur = Obstacle(x_min_m=0, y_min_m=0, x_max_m=10, y_max_m=10,
+                   material="concrete", thickness_m=0.25)
+    mesuree = _compile(EnvironmentSettings(obstacles=[mur], material_calibration={
+        "concrete": MaterialCalibration(loss_db_per_m=60.0, provenance="banc 2026-03")}))
+    note = next(n for n in mesuree.notes if n.startswith("environnement"))
+    assert "mesuré" in note and "concrete" in note
+
+    table = _compile(EnvironmentSettings(obstacles=[mur]))
+    note_table = next(n for n in table.notes if n.startswith("environnement"))
+    assert "UIT-R P.2040-4" in note_table and "mesuré" not in note_table
+
+
+def test_an_unknown_material_is_refused_at_the_atelier():
+    """Un matériau hors catalogue est refusé à la saisie, pas au run.
+
+    « beton » pour « concrete » produirait sinon une calibration sans effet : le mur
+    resterait sur une valeur extrapolée en laissant croire à une mesure.
+    """
+    from lsim.study_contract import EnvironmentSettings, MaterialCalibration
+
+    with pytest.raises(ValidationError, match="matériau inconnu"):
+        EnvironmentSettings(material_calibration={
+            "beton": MaterialCalibration(loss_db_per_m=60.0, provenance="banc")})
+
+
+def test_a_measurement_without_provenance_is_refused():
+    """Même règle que sur un relevé d'énergie : un chiffre sans origine se présente comme
+    une donnée du moteur."""
+    from lsim.study_contract import MaterialCalibration
+
+    with pytest.raises(ValidationError):
+        MaterialCalibration(loss_db_per_m=60.0, provenance="   ")
+    with pytest.raises(ValidationError):
+        MaterialCalibration(loss_db_per_m=-1.0, provenance="banc")

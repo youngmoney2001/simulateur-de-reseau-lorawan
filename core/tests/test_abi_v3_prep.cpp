@@ -102,6 +102,9 @@ static_assert(sizeof(lsim_gateway_v2) == exp::size_lsim_gateway_v2 &&
               "lsim_gateway_v2");
 static_assert(sizeof(lsim_end_device) == exp::size_lsim_end_device, "lsim_end_device");
 static_assert(sizeof(lsim_propagation) == exp::size_lsim_propagation, "lsim_propagation");
+static_assert(offsetof(lsim_propagation, inter_sf_collisions) ==
+                  exp::off_lsim_propagation__inter_sf_collisions,
+              "lsim_propagation::inter_sf_collisions");
 static_assert(sizeof(lsim_device_stats) == exp::size_lsim_device_stats, "lsim_device_stats");
 static_assert(sizeof(lsim_sim_stats) == exp::size_lsim_sim_stats, "lsim_sim_stats");
 static_assert(sizeof(lsim_interval) == exp::size_lsim_interval, "lsim_interval");

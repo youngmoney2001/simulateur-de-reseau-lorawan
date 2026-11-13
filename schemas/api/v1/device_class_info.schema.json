@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "PeriodiciteInfo": {
+      "additionalProperties": false,
+      "description": "Une périodicité de ping slot (classe B) : 0 à 7, du plus bavard au plus rare.\n\nL'intervalle entre deux slots vient du moteur, pas d'une table recopiée : la période de\nbalise est de 128 s, et une périodicité `k` ouvre `2**(7 - k)` slots par période.",
+      "properties": {
+        "intervalle_s": {
+          "exclusiveMinimum": 0,
+          "title": "Intervalle S",
+          "type": "number"
+        },
+        "slots_par_periode": {
+          "minimum": 1,
+          "title": "Slots Par Periode",
+          "type": "integer"
+        },
+        "value": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Value",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "value",
+        "slots_par_periode",
+        "intervalle_s"
+      ],
+      "title": "PeriodiciteInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Une classe d'écoute, **et ce qu'elle change** — ou ne change pas.\n\n`change` est le point sensible. Un ACK, une réponse MAC ou une charge descendante\npériodique sont déclenchés par un uplink : ils tombent dans RX1 ou RX2 quelle que soit\nla classe. La classe ne pèse que sur les descentes à l'initiative du réseau. Le dire ici\névite un sélecteur qui laisserait croire à un réglage général.\n\n`ordre` : rang indicatif d'attente, pour que l'interface puisse avertir. La classe B\nn'est pas « meilleure que A » : selon sa périodicité elle l'encadre. C'est `periodicity`\nqui décide, et l'intervalle est servi avec.",
+  "properties": {
+    "label": {
+      "maxLength": 128,
+      "title": "Label",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 1,
+      "pattern": "^[ABC]$",
+      "title": "Name",
+      "type": "string"
+    },
+    "ne_change_pas": {
+      "maxLength": 256,
+      "title": "Ne Change Pas",
+      "type": "string"
+    },
+    "ouverture": {
+      "maxLength": 256,
+      "title": "Ouverture",
+      "type": "string"
+    },
+    "periodicites": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PeriodiciteInfo"
+      },
+      "title": "Periodicites",
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "label",
+    "ouverture",
+    "ne_change_pas"
+  ],
+  "title": "DeviceClassInfo",
+  "type": "object"
+}

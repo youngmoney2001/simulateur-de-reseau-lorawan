@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Optional, Union
 
 from lsim import __version__
-from lsim.energy_report import device_energies, device_energies_protocol
+from lsim.energy_report import (device_energies, device_energies_protocol,
+                               provenance_energie)
 from lsim.native_info import native_version
 from lsim.scenario import SCHEMA_VERSION, Scenario
 from lsim.mesh_pass import mesh_pass
@@ -88,6 +89,10 @@ class RunResult:
     totals: Counters
     gateway: Optional[GatewayLoad]   # None en multi-passerelles (charge par passerelle : à venir)
     energy_profile: Optional[str] = None  # nom CLI du profil énergie, ou None
+    # Provenance d'un relevé (`energy.measured`). Les colonnes d'énergie existent dès que
+    # l'un des deux est renseigné : un rapport qui les masquerait au prétexte qu'aucun
+    # profil du catalogue n'a été choisi afficherait un résultat tronqué.
+    energy_provenance: Optional[str] = None
     mesh: Optional[MeshSummary] = None    # présent si un backhaul mesh est déclaré
     # Multi-passerelles : une entrée par passerelle (même ordre que le fichier), charge de
     # réception sur les trames audibles. Vide en mono-passerelle.
@@ -152,13 +157,17 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
     """Déploie le scénario et lance la simulation native.
 
     `energy_profile` : « rak4631 » ou « sx1262-stm32l072 » ; ajoute l'énergie par message et
-    le courant moyen à chaque dispositif. None : pas de calcul énergie.
+    le courant moyen à chaque dispositif. None : pas de calcul énergie, **sauf** si le
+    scénario déclare un relevé (`energy.measured`), qui s'applique alors — un relevé écrit
+    dans le scénario est une demande de calcul, pas un réglage en attente d'option.
     """
     devices, groups, indices = scenario.deploy()
-    energies = (device_energies(devices, energy_profile)
-                if energy_profile is not None else None)
+    measured = scenario.measured_energy()
+    energies = (device_energies(devices, energy_profile, measured)
+                if energy_profile is not None or measured is not None else None)
     if scenario.is_multi_gateway:
-        return _run_multi(scenario, devices, groups, indices, energies, energy_profile)
+        return _run_multi(scenario, devices, groups, indices, energies, energy_profile,
+                          measured)
     # Calendrier MAC : la simulation trace porte les octets réservés dans le temps d'antenne.
     # Sans MAC, le chemin historique est inchangé.
     from lsim.mac_loop import closed_loop_applies  # import local : évite un cycle
@@ -167,10 +176,10 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
         # LinkADR / DutyCycle : compteurs de la boucle fermée (même exécution que la trace).
         from lsim.trace_events import build_trace
         result = build_trace(scenario)
-        if energy_profile is not None:
+        if energy_profile is not None or measured is not None:
             energies = device_energies_protocol(
                 devices, [0] * len(devices), [c.sent for c in result.per_device], energy_profile,
-                [c.airtime_ns for c in result.per_device])
+                [c.airtime_ns for c in result.per_device], measured=measured)
         descentes, dl_par = passage_descentes(devices, scenario)
         rows = _rows(devices, groups, indices, energies, result.per_device, None,
                      dl_par or None)
@@ -182,15 +191,16 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
             totals=result.totals,
             gateway=result.gateway,
             energy_profile=energy_profile,
+            energy_provenance=_provenance(measured, energy_profile),
             downlink=descentes,
         )
     reservations = mac_reservations(scenario, devices)
     if reservations:
         result = simulate_trace_result(devices, scenario, reservations)
-        if energy_profile is not None:
+        if energy_profile is not None or measured is not None:
             energies = device_energies_protocol(
                 devices, [0] * len(devices), [c.sent for c in result.per_device], energy_profile,
-                [c.airtime_ns for c in result.per_device])
+                [c.airtime_ns for c in result.per_device], measured=measured)
     else:
         result = simulate_uplinks(devices, scenario.gateway(), scenario.propagation(),
                                   scenario.environment)
@@ -207,6 +217,7 @@ def run_scenario(scenario: Scenario, energy_profile: Optional[str] = None) -> Ru
         totals=result.totals,
         gateway=result.gateway,
         energy_profile=energy_profile,
+        energy_provenance=_provenance(measured, energy_profile),
         downlink=descentes,
     )
 
@@ -250,7 +261,8 @@ def _rows(devices, groups, indices, energies, per_device, delivered_by_device,
 
 
 def _run_multi(scenario: Scenario, devices, groups, indices, energies,
-               energy_profile: Optional[str]) -> RunResult:
+               energy_profile: Optional[str],
+               measured: "MeasuredProfile | None" = None) -> RunResult:
     """Plusieurs passerelles, éventuellement avec relais mesh vers la frontière.
 
     Sans mesh : le serveur déduplique les copies reçues à l'accès (comportement
@@ -270,6 +282,7 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
         return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,
                          seed=scenario.model.seed, rows=rows, totals=totals, gateway=None,
                          energy_profile=energy_profile,
+                         energy_provenance=_provenance(measured, energy_profile),
                          gateway_names=_gateway_names(gw_models),
                          gateway_loads=tuple(result.per_gateway))
 
@@ -304,8 +317,14 @@ def _run_multi(scenario: Scenario, devices, groups, indices, energies,
     return RunResult(scenario_name=scenario.name, scenario_sha256=scenario.sha256,
                      seed=scenario.model.seed, rows=rows, totals=totals, gateway=None,
                      energy_profile=energy_profile, mesh=summary,
+                     energy_provenance=_provenance(measured, energy_profile),
                      gateway_names=_gateway_names(gw_models),
                      gateway_loads=tuple(result.per_gateway))
+
+
+def _provenance(measured, energy_profile: Optional[str]) -> Optional[str]:
+    """Renvoi vers la règle unique, définie et testée dans `energy_report`."""
+    return provenance_energie(measured, energy_profile)
 
 
 def _gateway_names(gw_models) -> tuple[str, ...]:

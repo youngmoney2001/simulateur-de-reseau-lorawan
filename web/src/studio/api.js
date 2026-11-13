@@ -67,6 +67,23 @@ export function createClient({ base = "", token = null, fetchImpl = globalThis.f
     materials: (frequency_hz, epaisseur_m) => request(
       "GET", `/api/v1/materials?frequency_hz=${encodeURIComponent(frequency_hz)}`
         + `&thickness_m=${encodeURIComponent(epaisseur_m)}`),
+    // Zone de couverture de chaque passerelle, par palier de qualité. Les rayons viennent
+    // du moteur — relief, obstacles, lobe d'antenne — et sont en mètres du plan de
+    // l'atelier : les deux vues partagent ce repère, elles ne le convertissent pas.
+    // `sf` et `tx_power_dbm` sont ceux du capteur de référence ; les omettre, c'est
+    // demander le plus défavorable de la session, et la réponse le dit par `source`.
+    coverage: (sid, { sf = null, tx_power_dbm: tx = null } = {}) => {
+      const q = new URLSearchParams();
+      if (sf !== null && sf !== undefined) q.set("sf", String(sf));
+      if (tx !== null && tx !== undefined) q.set("tx_power_dbm", String(tx));
+      return request("GET", s(sid) + "/coverage" + (q.size ? `?${q}` : ""));
+    },
+    // Relief de la session, découpé autour d'un point que le client choisit : c'est un
+    // repère d'affichage, il vit dans le navigateur, ce n'est pas une donnée de run.
+    // Le client ne fournit jamais de chemin — il ne sait pas où sont les fichiers.
+    dem: (sid, lat, lon) => request("GET",
+      `/api/v1/sessions/${enc(sid)}/dem?lat=${encodeURIComponent(lat)}`
+      + `&lon=${encodeURIComponent(lon)}`),
     // Environnement radio de la session : obstacles, shadowing, hauteurs d'antennes.
     setEnvironment: (sid, settings) => request("POST", `${s(sid)}/environment`, settings),
     setTerrain: (sid, terrainId) =>

@@ -149,9 +149,17 @@ def _bloc_environment(env: EnvironmentSettings) -> Optional[dict]:
         else:
             bloc["attenuation_db"] = o.attenuation_db
         obstacles.append(bloc)
-    return {"gateway_height_m": env.gateway_height_m,
+    bloc = {"gateway_height_m": env.gateway_height_m,
             "device_height_m": env.device_height_m,
             "obstacles": obstacles}
+    # Les pertes mesurées ne sortent que si l'utilisateur en a déclaré. Un bloc vide
+    # changerait l'empreinte du scénario pour rien, et surtout mentirait : il dirait « des
+    # matériaux ont été mesurés » là où aucune mesure n'a été faite.
+    if env.material_calibration:
+        bloc["material_calibration"] = {
+            nom: {"loss_db_per_m": c.loss_db_per_m, "provenance": c.provenance}
+            for nom, c in env.material_calibration.items()}
+    return bloc
 
 
 def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: int,
@@ -247,6 +255,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
             # Passerelle d'accès : le modèle décale le seuil de réception de la différence
             # entre la sensibilité publiée et la référence du moteur au même point.
             gw["profile"] = n.gateway_profile
+        # L'antenne n'est pas un réglage, c'est le matériau de la zone : elle se déclare
+        # sur la passerelle du scénario, et la couverture en hérite (relief, obstacles et
+        # lobe, le plus contraignant bornant). Absente : disque, comportement d'avant.
+        if n.antenna is not None:
+            gw["antenna"] = n.antenna.model_dump()
         scenario_gateways.append(gw)
 
     # L'ADR n'existe que sur la forme `gateway` (une seule passerelle, sans mesh). On ne
@@ -333,8 +346,11 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         # l'indicateur mesh sont retirés, non pas par coquetterie mais parce que le schéma les
         # refuse sur `gateway` (« nom, profil et mesh exigent gateways »).
         seule = scenario_gateways[0]
-        scenario["gateway"] = {"x_m": seule["x_m"], "y_m": seule["y_m"],
-                               "antenna_gain_dbi": seule["antenna_gain_dbi"]}
+        seule_mono = {"x_m": seule["x_m"], "y_m": seule["y_m"],
+                      "antenna_gain_dbi": seule["antenna_gain_dbi"]}
+        if "antenna" in seule:
+            seule_mono["antenna"] = seule["antenna"]
+        scenario["gateway"] = seule_mono
         scenario["mac"] = {"link_adr": True}
         notes.append("ADR du serveur activé : ce run ne simule ni relais ni liaisons radio "
                      "par couple (une seule passerelle)")
@@ -381,11 +397,20 @@ def compile_session(nodes: list[Node], configs: dict[str, GatewayConfig], seed: 
         scenario["environment"] = _bloc_environment(environment)
         if environment.shadowing_sigma_db > 0.0:
             scenario["propagation"] = {"shadowing_sigma_db": environment.shadowing_sigma_db}
+        # La mention change dès qu'une mesure remplace la table : écrire « P.2040-4 » alors
+        # qu'une perte mesurée s'applique annoncerait une extrapolation là où il y a un
+        # relevé — l'exact contraire de ce que la calibration cherche à dire.
+        if environment.material_calibration:
+            noms = ", ".join(sorted(environment.material_calibration))
+            origine = (f"— {len(environment.material_calibration)} matériau(x) mesuré(s) "
+                       f"({noms}), les autres UIT-R P.2040-4")
+        else:
+            origine = "— matériaux UIT-R P.2040-4"
         notes.append(
             f"environnement : {len(environment.obstacles)} obstacle(s), "
             f"shadowing sigma {environment.shadowing_sigma_db:g} dB, "
             f"antennes {environment.device_height_m:g} m / {environment.gateway_height_m:g} m "
-            "— matériaux UIT-R P.2040-4, tirage log-normal par dispositif")
+            f"{origine}, tirage log-normal par dispositif")
     # Le relief n'entre dans le corps que s'il a ete choisi : une cle absente et une cle a
     # `null` n'ont pas le meme sens cote serveur, et seul le choix doit se voir.
     if terrain_id is not None:

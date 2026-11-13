@@ -46,7 +46,34 @@ que 60 m de la passerelle, faire passer `d0` de 1 m à 10 m ne change **rien** �
 dépend de `n` et du domaine de distances réellement utilisé.
 
 Le relief et les obstacles (`environment`) s'ajoutent à `PL(d)` ; sans environnement, le résultat
-est celui du modèle log-distance seul.
+est celui du modèle log-distance seul. La façon dont ils s'ajoutent fait l'objet du §2.1.
+
+### 2.1 Obstacles : deux chemins, le meilleur gagne
+
+Un obstacle dont le sommet dépasse le rayon offre deux chemins, et le moteur retient le
+**moins coûteux** des deux — jamais leur somme :
+
+```
+surplus        = min(pénétration, contournement)
+pénétration    = Σ attenuation_db des obstacles traversés
+contournement  = diffraction de Deygout (3 arêtes) sur le profil relief + sommets d'obstacles
+```
+
+Un mur dont on connaît la perte se **traverse** ; un mur opaque se **contourne**. Deux
+conséquences valent d'être connues avant d'exploiter un chiffre :
+
+- la perte d'un obstacle est **plafonnée** par le prix du contournement. Alourdir le
+  matériau au-delà ne change plus rien : le matériau n'est pas un interrupteur, et il est
+  impossible de couper une liaison à bout portant en durcissant un mur ;
+- la pénétration ne se voit donc que là où elle coûte **moins** que le contournement —
+  murs peu absorbants, ou vus de loin. De près, le bilan ferme largement et aucune perte
+  de matériau ne suffit à couper : c'est pourquoi les tests de calibration portent leurs
+  capteurs à 8–10 km, là où la marge est mince.
+
+**Historique.** Les deux termes étaient additionnés. Un mur réglé à **0 dB** coupait alors
+la liaison, l'onde payant à la fois la traversée et le contournement : un bloqueur parfait,
+quel que soit son matériau, et insensible à toute mesure — la `material_calibration` du §5
+bis de `USAGE.md` n'y pouvait rien changer. Corrigé : le rayon prend le meilleur chemin.
 
 ## 3. Sensibilité et décision de réception
 
@@ -62,8 +89,38 @@ distance fixe par débit — 15 à 25 km en SF9 et 40 km en SF12 dans la configu
 
 Deux trames de même débit qui se chevauchent entrent en collision ; la plus forte n'est reçue que
 si elle dépasse l'autre d'au moins `propagation.capture_threshold_db` (6 dB par défaut, frontière
-**inclusive** : un écart exactement égal au seuil est capturé). Des débits différents ne
-collisionnent pas.
+**inclusive** : un écart exactement égal au seuil est capturé).
+
+Des débits différents **ne collisionnent pas par défaut** : les spreading factors sont réputés
+orthogonaux. C'est un choix, pas une propriété d'un vrai récepteur. `propagation.inter_sf:
+sx1276` le lève.
+
+### 4.1 Collisions entre SF différents (`propagation.inter_sf`)
+
+`orthogonal` (défaut) : deux trames de SF différents qui se chevauchent ne se gênent jamais.
+Un scénario qui ne mentionne pas la clé garde exactement ses chiffres **et** son empreinte.
+
+`sx1276` : un interférent d'un SF différent est compté. La trame voulue, de SF `s`, survit si
+
+    P_voulue − P_interférent ≥ SNR_s
+
+où `SNR_s` est la valeur de la table « LoRa Demodulator SNR » du SX1276 (datasheet Rev. 4),
+celle-là même qui sert à l'ADR et à la sensibilité : −7,5 dB en SF7, −10 en SF8, −12,5 en SF9,
+−15 en SF10, −17,5 en SF11, −20 en SF12. Ces valeurs sont négatives : plus le SF voulu est
+élevé, plus il tolère un interférent fort. Ainsi un SF12 supporte un SF7 reçu 20 dB au-dessus
+de lui, alors qu'un SF7 cède dès 7,5 dB.
+
+Deux réserves, qui valent d'être lues avant d'exploiter un résultat :
+
+- **le seuil ne dépend que du SF voulu**, jamais de la paire (voulu, interférent). Une vraie
+  isolation se mesure entre deux SF : c'est une matrice, pas une droite.
+- **c'est l'approximation de la littérature, pas une mesure.** Les valeurs viennent d'une
+  datasheet (seuil de démodulation face au bruit), et sont employées ici comme seuil
+  d'interférence. Une matrice d'isolement crédible viendrait d'une campagne de mesures.
+
+Quand plusieurs interférents se cumulent, la contrainte la plus sévère l'emporte : la trame
+survit si elle respecte le seuil de **chacun**, les mêmes-SF face au seuil de capture et les
+SF-différents face au seuil inter-SF.
 
 ## 5. Descente : réciprocité
 
@@ -121,6 +178,12 @@ Les frontaux se déclarent **uniquement dans l'API Python** (`DeviceRf`, `Gatewa
 fonctions du §7. Un scénario chargé depuis YAML décrit donc une population **sans frontal** : pour
 mesurer un gain d'antenne, il faut passer par l'API et fournir la table correspondante.
 
+Le bloc `propagation` porte les réglages du canal, tous facultatifs : `frequency_hz`,
+`reference_distance_m`, `exponent`, `capture_threshold_db`, `shadowing_sigma_db`,
+`shadowing_seed` et `inter_sf`. Ce dernier vaut `orthogonal` ou `sx1276` (§4.1) ; à
+`orthogonal`, sa valeur par défaut, la clé quitte le hachage du scénario — un scénario écrit
+avant son introduction garde donc exactement la même empreinte.
+
 ## 9. Géographie et radio : séparation
 
 L'export GeoJSON contient de la **géométrie et des compteurs**, jamais de radio fréquence :
@@ -162,4 +225,10 @@ Ces valeurs servent de garde aux tests de non-régression RF (`test_rf_character
 2. Aucun fading aléatoire ; la réception est déterministe au dB près.
 3. Aucun gain d'antenne pour le mesh ni pour le chemin causal.
 4. Aucun EIRP, aucun diagramme d'antenne, aucune polarisation.
+5. **Aucune grandeur énergétique** : le bilan d'un dispositif n'entre dans aucune équation de ce
+   document. Ce n'est pas une absence de calcul — le moteur évalue l'énergie par message et le
+   courant moyen (`core/src/energy.cpp`), à partir du temps d'antenne et, le cas échéant, d'un
+   relevé mesuré (`energy.measured`) qui remplace la fiche constructeur. Ces grandeurs relèvent
+   d'un autre modèle, décrit dans `USAGE.md` et dans les deux manuels ; les confondre avec le
+   modèle radio ferait croire qu'une portée dépend d'une batterie.
 5. Aucune table RF dans un scénario YAML ni dans un export géographique.

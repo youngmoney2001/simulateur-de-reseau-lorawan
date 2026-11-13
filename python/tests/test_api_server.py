@@ -249,6 +249,85 @@ def test_mesh_run_with_energy_profile_completes_and_reports_energy(api):
     assert all(x.get("energy_per_message_j") is not None for x in devices["items"])
 
 
+# --- Énergie mesurée : un relevé écrit dans le scénario ----------------------------------------
+
+_RELEVE = {
+    "supply_v": 3.3, "rx_ma_125khz": 6.1, "rx_ma_250khz": 6.3, "rx_ma_500khz": 6.6,
+    "sleep_ua": 2.4, "provenance": "releve banc, 2026-03, pince Keysight",
+    "tx_points": [{"dbm": 14.0, "ma": 92.0}, {"dbm": 20.0, "ma": 128.0}],
+}
+
+
+def test_run_with_measured_energy_reports_energy_and_provenance(api):
+    """Un relevé suffit à déclencher le calcul : sans option de requête, et en disant d'où il vient.
+
+    Avant, la condition d'énergie ne testait que l'option de requête. Un scénario déclarant
+    `energy.measured` rendait des dispositifs sans énergie du tout, sans erreur : le client
+    ne pouvait pas distinguer « aucun modèle » d'« oublié ».
+    """
+    d = _scenario(count=10, energy={"measured": _RELEVE})
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": d})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+
+    _, devices = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    assert devices["items"]
+    assert all(x.get("energy_per_message_j") is not None for x in devices["items"])
+    assert all(x.get("average_current_ua") is not None for x in devices["items"])
+
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    RunSummary.model_validate(summary)
+    assert summary["energy_provenance"] == "releve banc, 2026-03, pince Keysight"
+    # Le relevé n'est pas un profil du catalogue : rien ne prétend le contraire.
+    assert summary.get("energy_profile") is None
+    # `GET /runs/{id}` n'est pas vérifié ici : son contrat (`RunStatus`) ne publie aucun
+    # champ d'énergie, pas même `energy_profile`. La provenance voyage par le résumé et par
+    # la liste des runs d'un chantier (`SessionRunOut`), qui est ce que rouvre un exercice.
+
+
+def test_measured_energy_does_not_outrank_an_explicit_profile(api):
+    """Un profil nommé dans la requête prime : la provenance ne voyage pas avec des chiffres qu'elle n'a pas servis.
+
+    C'est le symétrique du test précédent, et la raison d'être de la règle : afficher
+    « mesuré » en face de courants de catalogue habillerait une fiche constructeur en mesure.
+    """
+    d = _scenario(count=10, energy={"measured": _RELEVE})
+    status, created = api.call("POST", "/api/v1/runs",
+                               {"scenario": d, "energy_profile": "rak4631"})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    assert summary["energy_profile"] == "rak4631"
+    assert summary.get("energy_provenance") is None
+
+
+def test_catalog_profile_publishes_no_provenance(api):
+    """Profil du catalogue : présent, mais aucune provenance — il n'y en a pas à revendiquer."""
+    status, created = api.call("POST", "/api/v1/runs",
+                               {"scenario": _scenario(count=10), "energy_profile": "rak4631"})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    assert summary["energy_profile"] == "rak4631"
+    assert summary.get("energy_provenance") is None
+
+
+def test_run_without_any_energy_model_publishes_neither_field(api):
+    """Sans modèle : ni profil ni provenance. Des champs vides laisseraient croire à un calcul."""
+    status, created = api.call("POST", "/api/v1/runs", {"scenario": _scenario(count=10)})
+    assert status == 202
+    rid = created["run_id"]
+    assert _wait_done(api, rid)["state"] == "done"
+    _, devices = api.call("GET", f"/api/v1/runs/{rid}/devices?limit=500")
+    assert all(x.get("energy_per_message_j") is None for x in devices["items"])
+    _, summary = api.call("GET", f"/api/v1/runs/{rid}/summary")
+    assert summary.get("energy_profile") is None
+    assert summary.get("energy_provenance") is None
+
+
 def test_mesh_run_reports_totals_and_per_device_losses(api):
     # L'exemple du dépôt, SF12 sur le mesh : des trames décodées sont perdues sur le relais.
     import yaml

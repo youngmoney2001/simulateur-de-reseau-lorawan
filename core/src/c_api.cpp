@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lsim/c_api.h"
+
+#include <cmath>
+
 #include "lsim/energy.hpp"
 #include "lsim/materials.hpp"
 
@@ -99,6 +102,48 @@ lsim::lora::Status energy_profile(uint32_t profile_id, const lsim::energy::Profi
     return lsim::energy::profile_from_id(profile_id, p);
 }
 
+// Profil construit depuis des courants fournis par l'appelant. `nom` n'est pas copié :
+// il n'existe que le temps de l'appel, ce qui suffit puisque rien ne le conserve.
+lsim::lora::Status energy_profile_mesure(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, lsim::energy::Profile& out) {
+    using lsim::lora::Status;
+    if (supply_v <= 0.0 || rx_ma_125khz < 0.0 || rx_ma_250khz < 0.0 || rx_ma_500khz < 0.0 ||
+        sleep_ua < 0.0 || mcu_run_ma < 0.0) {
+        return Status::InvalidParameter;
+    }
+    if (!std::isfinite(supply_v) || !std::isfinite(rx_ma_125khz) ||
+        !std::isfinite(rx_ma_250khz) || !std::isfinite(rx_ma_500khz) ||
+        !std::isfinite(sleep_ua) || !std::isfinite(mcu_run_ma)) {
+        return Status::InvalidParameter;
+    }
+    if (tx_count == 0 || tx_count > lsim::energy::kMaxTxPoints || tx_dbm == nullptr ||
+        tx_ma == nullptr) {
+        return Status::InvalidParameter;
+    }
+    out = lsim::energy::Profile{};
+    out.name = "mesure";
+    out.supply_v = supply_v;
+    out.rx_current_ma_125khz = rx_ma_125khz;
+    out.rx_current_ma_250khz = rx_ma_250khz;
+    out.rx_current_ma_500khz = rx_ma_500khz;
+    out.sleep_current_ua = sleep_ua;
+    out.mcu_run_current_ma = mcu_run_ma;
+    out.tx_points = {};
+    out.tx_point_count = tx_count;
+    for (size_t k = 0; k < tx_count; ++k) {
+        if (!std::isfinite(tx_dbm[k]) || !std::isfinite(tx_ma[k]) || tx_ma[k] < 0.0) {
+            return Status::InvalidParameter;
+        }
+        if (k > 0 && tx_dbm[k] <= tx_dbm[k - 1]) {
+            return Status::InvalidParameter;  // tri strictement croissant exigé
+        }
+        out.tx_points[k] = lsim::energy::TxPoint{tx_dbm[k], tx_ma[k]};
+    }
+    return Status::Ok;
+}
+
 }  // namespace
 
 uint32_t lsim_energy_profile_count(void) {
@@ -124,6 +169,73 @@ int32_t lsim_energy_device(uint32_t profile_id, double tx_power_dbm, uint32_t ba
     lsim::energy::Result r;
     st = lsim::energy::device_energy(*p, tx_power_dbm, to_bandwidth(bandwidth_hz), tx_ns, rx_ns,
                                      mcu_active_ns, total_ns, r);
+    if (st != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st);
+    }
+    *out_energy_j = r.energy_j;
+    *out_avg_current_ua = r.average_current_ua;
+    return static_cast<int32_t>(lsim::lora::Status::Ok);
+}
+
+int32_t lsim_energy_device_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint64_t tx_ns,
+    uint64_t rx_ns, uint64_t mcu_active_ns, uint64_t total_ns, double* out_energy_j,
+    double* out_avg_current_ua) {
+    if (out_energy_j == nullptr || out_avg_current_ua == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_energy_j = 0.0;
+    *out_avg_current_ua = 0.0;
+    if (bandwidth_hz != 125000u && bandwidth_hz != 250000u && bandwidth_hz != 500000u) {
+        return static_cast<int32_t>(lsim::lora::Status::InvalidBandwidth);
+    }
+    lsim::energy::Profile p{};
+    lsim::lora::Status st = energy_profile_mesure(
+        supply_v, rx_ma_125khz, rx_ma_250khz, rx_ma_500khz, sleep_ua, mcu_run_ma, tx_dbm,
+        tx_ma, tx_count, p);
+    if (st != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st);
+    }
+    lsim::energy::Result r;
+    st = lsim::energy::device_energy(p, tx_power_dbm, to_bandwidth(bandwidth_hz), tx_ns, rx_ns,
+                                     mcu_active_ns, total_ns, r);
+    if (st != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st);
+    }
+    *out_energy_j = r.energy_j;
+    *out_avg_current_ua = r.average_current_ua;
+    return static_cast<int32_t>(lsim::lora::Status::Ok);
+}
+
+int32_t lsim_energy_device_class_a_measured(
+    double supply_v, double rx_ma_125khz, double rx_ma_250khz, double rx_ma_500khz,
+    double sleep_ua, double mcu_run_ma, const double* tx_dbm, const double* tx_ma,
+    size_t tx_count, double tx_power_dbm, uint32_t bandwidth_hz, uint8_t spreading_factor,
+    uint16_t preamble_symbols, uint64_t uplinks, uint64_t airtime_ns, uint64_t rx_window_ns,
+    uint64_t downlink_ns_total, uint64_t mcu_ns_per_uplink, uint64_t total_ns,
+    double* out_energy_j, double* out_avg_current_ua) {
+    if (out_energy_j == nullptr || out_avg_current_ua == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    *out_energy_j = 0.0;
+    *out_avg_current_ua = 0.0;
+    if (bandwidth_hz != 125000u && bandwidth_hz != 250000u && bandwidth_hz != 500000u) {
+        return static_cast<int32_t>(lsim::lora::Status::InvalidBandwidth);
+    }
+    lsim::energy::Profile p{};
+    lsim::lora::Status st = energy_profile_mesure(
+        supply_v, rx_ma_125khz, rx_ma_250khz, rx_ma_500khz, sleep_ua, mcu_run_ma, tx_dbm,
+        tx_ma, tx_count, p);
+    if (st != lsim::lora::Status::Ok) {
+        return static_cast<int32_t>(st);
+    }
+    lsim::energy::Result r;
+    st = lsim::energy::device_energy_class_a(p, tx_power_dbm, to_bandwidth(bandwidth_hz),
+                                             spreading_factor, preamble_symbols, uplinks,
+                                             airtime_ns, rx_window_ns, downlink_ns_total,
+                                             mcu_ns_per_uplink, total_ns, r);
     if (st != lsim::lora::Status::Ok) {
         return static_cast<int32_t>(st);
     }

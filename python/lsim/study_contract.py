@@ -17,6 +17,7 @@ from typing import Literal, Optional
 TERRAIN_ID_PATTERN = r"^[a-z0-9_-]{1,64}$"  # identifiant de relief du catalogue serveur
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from lsim.materials import MATERIAL_NAMES
 
 MAX_NODES = 64                         # même borne que le mesh (kMaxGateways côté natif)
 # Obstacles par session de l'atelier. Le moteur en accepte 10 000 ; une session d'apprentissage
@@ -130,6 +131,33 @@ class GatewaySettings(_Strict):
     # quoi une passerelle posée depuis la palette resterait au seuil de référence sans
     # pouvoir en changer. `None` : aucun modèle appliqué, comportement d'avant.
     gateway_profile: Optional[GatewayProfileName] = None
+    # Antenne : même remarque que le modèle, ce n'est pas un réglage du CLI mais du
+    # matériel, et il se règle au même endroit. `None` explicite = retour à l'omnidirec-
+    # tionnelle ; champ absent = rien ne change.
+    antenna: Optional[AntennaSettings] = None
+
+
+class AntennaSettings(_Strict):
+    """Diagramme de rayonnement horizontal : la **forme** du lobe, jamais son gain.
+
+    Le gain de crête reste `antenna_gain_dbi`, déjà compté dans le bilan de liaison et
+    réglé ailleurs (au CLI). Le redéclarer ici donnerait deux sources à un même chiffre,
+    et le diagramme n'a de sens que relatif à un sommet.
+
+    `beamwidth_deg` : ouverture à −3 dB sur une directive, largeur du secteur servi au
+    gain maximal sur une sectorielle (60, 90 ou 120°). Une omnidirectionnelle ignore
+    `beamwidth_deg` et `front_to_back_db` : son diagramme est un cercle.
+
+    `pointing_deg` : azimut de l'axe du lobe, 0 = l'est, sens trigonométrique — le même
+    repère que le plan de l'atelier, pour que la flèche du formulaire et la zone tracée
+    désignent la même direction.
+    """
+
+    kind: Literal["omnidirectionnelle", "unidirectionnelle", "bidirectionnelle",
+                  "sectorielle"] = "omnidirectionnelle"
+    beamwidth_deg: float = Field(90.0, ge=5.0, le=360.0)
+    pointing_deg: float = 0.0
+    front_to_back_db: float = Field(20.0, ge=0.0, le=60.0)
 
 
 class Node(_Strict):
@@ -145,6 +173,10 @@ class Node(_Strict):
     # passe alors de 0 à 20 trames reçues sur 20. Les fiches qui ne publient pas le point
     # (SF et bande) ne décalent rien : le catalogue le dit, l'interface doit le redire.
     gateway_profile: Optional[GatewayProfileName] = None
+    # Antenne de la passerelle. `None` : omnidirectionnelle — le comportement d'avant,
+    # une zone circulaire. Comme le modèle, c'est du matériel : cela vit sur le nœud et
+    # se règle avec les autres réglages passerelle.
+    antenna: Optional[AntennaSettings] = None
 
     @model_validator(mode="after")
     def _gateway_profile_only_on_gateways(self) -> "Node":
@@ -154,6 +186,13 @@ class Node(_Strict):
             raise ValueError(
                 f"modèle de passerelle « {self.gateway_profile} » sur un équipement "
                 f"qui n'est pas une passerelle (kind={self.kind})")
+        return self
+
+    @model_validator(mode="after")
+    def _antenna_only_on_gateways(self) -> "Node":
+        if self.antenna is not None and self.kind not in ("relay", "border"):
+            raise ValueError(
+                f"antenne sur un équipement qui n'est pas une passerelle (kind={self.kind})")
         return self
 
     @model_validator(mode="after")
@@ -303,6 +342,30 @@ class Obstacle(_Strict):
         return self
 
 
+class MaterialCalibration(_Strict):
+    """Perte d'un matériau **mesurée**, en dB par mètre, à la place d'UIT-R P.2040-4.
+
+    À 868 MHz, 12 des 15 matériaux du catalogue sortent de la plage documentée du Tableau 3 :
+    la valeur de la table est alors extrapolée, et le moteur le dit. Une mesure vaut mieux
+    qu'une extrapolation — encore faut-il pouvoir la déclarer depuis l'atelier, sinon la
+    seule issue reste d'éditer le YAML à la main.
+
+    `provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un
+    chiffre sans origine se présente comme une donnée du moteur. C'est la contrepartie de
+    la mention « extrapolé » affichée sur la table — taire l'origine dans les deux sens
+    reviendrait au même.
+    """
+
+    loss_db_per_m: float = Field(ge=0, le=200)
+    provenance: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _provenance_non_vide(self) -> "MaterialCalibration":
+        if not self.provenance.strip():
+            raise ValueError("provenance : d'où vient cette mesure ?")
+        return self
+
+
 class EnvironmentSettings(_Strict):
     """Environnement radio d'une session.
 
@@ -316,11 +379,26 @@ class EnvironmentSettings(_Strict):
     gateway_height_m: float = Field(15.0, gt=0, le=1000)
     device_height_m: float = Field(1.5, gt=0, le=1000)
     obstacles: list[Obstacle] = Field(default_factory=list, max_length=MAX_OBSTACLES_ATELIER)
+    # Pertes mesurées par matériau, qui remplacent P.2040-4 pour les obstacles concernés.
+    # Vide : la table s'applique, exactement comme avant.
+    material_calibration: dict[str, MaterialCalibration] = Field(
+        default_factory=dict, max_length=len(MATERIAL_NAMES))
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentSettings":
+        # Refuser un matériau inconnu ici, et non au compile : une faute de frappe
+        # (« beton » pour « concrete ») produirait sinon une calibration silencieusement
+        # sans effet, et le mur resterait sur une valeur extrapolée.
+        for nom in self.material_calibration:
+            if nom not in MATERIAL_NAMES:
+                raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
 
     def est_vierge(self) -> bool:
         """Rien n'a été réglé : le scénario compilé n'émet alors aucun bloc `environment`."""
         return (not self.obstacles and self.shadowing_sigma_db == 0.0
-                and self.gateway_height_m == 15.0 and self.device_height_m == 1.5)
+                and self.gateway_height_m == 15.0 and self.device_height_m == 1.5
+                and not self.material_calibration)
 
 
 class EnvironmentChoice(_Strict):
@@ -331,6 +409,16 @@ class EnvironmentChoice(_Strict):
     gateway_height_m: Optional[float] = Field(None, gt=0, le=1000)
     device_height_m: Optional[float] = Field(None, gt=0, le=1000)
     obstacles: Optional[list[Obstacle]] = Field(None, max_length=MAX_OBSTACLES_ATELIER)
+    material_calibration: Optional[dict[str, MaterialCalibration]] = Field(
+        None, max_length=len(MATERIAL_NAMES))
+
+    @model_validator(mode="after")
+    def _materiaux_connus(self) -> "EnvironmentChoice":
+        if self.material_calibration:
+            for nom in self.material_calibration:
+                if nom not in MATERIAL_NAMES:
+                    raise ValueError(f"material_calibration : matériau inconnu : {nom!r}")
+        return self
 
 
 class SessionList(_Strict):
@@ -473,6 +561,67 @@ class SubmitResult(_Strict):
     criteria: list[CriterionResult] = Field(max_length=50)
 
 
+# Paliers de qualité d'une zone de couverture : marge (dB) au-dessus du seuil de
+# sensibilité exigée pour être classé dans ce palier. Trois niveaux, parce qu'une
+# zone uniforme ne dit pas où une liaison tient vraiment : entre « reçu juste » et
+# « reçu large » il y a toute la marge qui sépare un réseau qui fonctionne d'un
+# réseau qui fonctionnera.
+#
+# Les valeurs ne sont pas décoratives : chaque palier est une vraie portée, calculée
+# par le moteur avec un budget diminué de la marge. « Limite » est le bord de la zone
+# (marge nulle) ; « excellent » est l'endroit où la liaison garde 20 dB de réserve,
+# de quoi encaisser une saison de pluie et un camion devant l'antenne.
+COVERAGE_TIERS: tuple[tuple[str, float], ...] = (
+    ("excellent", 20.0),
+    ("bon", 10.0),
+    ("limite", 0.0),
+)
+# Nombre d'azimuts de la zone : le même que le calcul natif, pour qu'un rayon
+# publié soit un rayon calculé — l'interface n'interpole pas.
+COVERAGE_AZIMUTHS = 180
+
+
+class CoverageTier(_Strict):
+    """Une portée par azimut pour un palier de qualité.
+
+    `radii_m` compte `COVERAGE_AZIMUTHS` rayons, dans le sens trigonométrique à
+    partir de l'est (azimut 0 = index 0). Ces mètres sont ceux du plan de l'atelier
+    et de la carte : les deux vues partagent le repère, elles ne le convertissent pas.
+    """
+
+    qualite: Literal["excellent", "bon", "limite"]
+    marge_db: float
+    radii_m: list[float] = Field(min_length=COVERAGE_AZIMUTHS, max_length=COVERAGE_AZIMUTHS)
+
+
+class GatewayCoverage(_Strict):
+    """Zone de couverture d'une passerelle de la session."""
+
+    node_id: str = Field(pattern=ID_PATTERN)
+    # Modèle ayant produit les rayons : « log_distance » (formule seule) ou
+    # « environment » (relief et obstacles, calcul natif). Le dire, c'est permettre
+    # à l'interface d'annoncer ce que la zone vaut, au lieu d'un disque muet.
+    modele: Literal["log_distance", "environment"]
+    paliers: list[CoverageTier] = Field(min_length=1, max_length=8)
+    # L'antenne déclarée, rappelée telle quelle : la forme de la zone s'explique par
+    # elle, et l'interface n'a pas à la retrouver ailleurs.
+    antenna: Optional[AntennaSettings] = None
+
+
+class CoverageOut(_Strict):
+    """Couverture de toutes les passerelles d'une session.
+
+    `sf` et `tx_power_dbm` sont ceux du capteur de référence, et `source` dit d'où
+    ils viennent : une zone sans son capteur de référence ne veut rien dire — à
+    14 dBm en SF7 on ne couvre pas la même chose qu'en SF12.
+    """
+
+    sf: int = Field(ge=5, le=12)
+    tx_power_dbm: float = Field(ge=-10.0, le=30.0)
+    source: Literal["demande", "capteurs", "defaut"]
+    gateways: list[GatewayCoverage] = Field(max_length=MAX_NODES)
+
+
 MODELS: dict[str, type[BaseModel]] = {
     "study_session_create": SessionCreate,
     "study_session": SessionOut,
@@ -496,6 +645,29 @@ MODELS: dict[str, type[BaseModel]] = {
     "study_environment": EnvironmentSettings,
     "study_environment_choice": EnvironmentChoice,
     "study_obstacle": Obstacle,
+    # Une mesure par matériau, publiée pour elle-même : l'atelier la saisit seule, sans
+    # redéposer les murs.
+    "study_material_calibration": MaterialCalibration,
+    "study_antenna": AntennaSettings,
+    "study_coverage_tier": CoverageTier,
+    "study_gateway_coverage": GatewayCoverage,
+    "study_coverage": CoverageOut,
+    # Le reste du contrat, publié pour lui-même : un client qui lit un nœud, un état
+    # résumé, un critère ou un rebond de passerelle doit pouvoir le valider sans
+    # reconstruire la session entière.
+    "study_node": Node,
+    "study_node_state": NodeState,
+    "study_gateway_settings": GatewaySettings,
+    "study_downlink_settings": DownlinkSettings,
+    "study_gateway_link": GatewayLink,
+    "study_cli_error": CliError,
+    "study_session_summary": SessionSummary,
+    "study_adr_choice": AdrChoice,
+    "study_protocole_choice": ProtocoleChoice,
+    "study_terrain_choice": TerrainChoice,
+    "study_exercise_summary": ExerciseSummary,
+    "study_criterion_result": CriterionResult,
+    "study_attempt_out": AttemptOut,
 }
 
 

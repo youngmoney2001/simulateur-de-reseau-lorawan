@@ -312,7 +312,8 @@ def simulate_causal(devices, gateway, propagation, environment, radios, options,
             else _CGateway(gateway.x_m, gateway.y_m, gateway.antenna_gain_dbi))
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                             propagation.inter_sf == "sx1276")
     c_stats = (_CDeviceStats * n)()
     c_tot = _CSimStats()
     keep: list[object] = []

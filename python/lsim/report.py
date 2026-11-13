@@ -86,6 +86,10 @@ def _summary_rows(result: RunResult) -> list[tuple[str, object]]:
         ]
     if result.energy_profile is not None:
         rows.append((_ENERGY_SUMMARY_LABEL, profile_name(result.energy_profile)))
+    elif result.energy_provenance is not None:
+        # Un relevé : on nomme la provenance, pas un profil du catalogue. Afficher
+        # « rak4631 » ici ferait passer une mesure pour une fiche constructeur.
+        rows.append((_ENERGY_SUMMARY_LABEL, f"relevé — {result.energy_provenance}"))
     return rows
 
 
@@ -120,7 +124,8 @@ def write_xlsx(result: RunResult, path: Union[str, Path]) -> None:
     headers = ["Index", "Groupe", "Index dans le groupe", "x (m)", "y (m)", "SF",
                "Émises", "Reçues", "Pertes sensibilité", "Pertes collision", "PDR",
                "Temps d'antenne (ns)"]
-    with_energy = result.energy_profile is not None
+    with_energy = (result.energy_profile is not None
+                   or result.energy_provenance is not None)
     if with_energy:
         headers += ["Énergie par message (mJ)", "Courant moyen (µA)"]
     dv.append(headers)
@@ -161,7 +166,8 @@ def write_pdf(result: RunResult, path: Union[str, Path]) -> None:
     shown = result.rows[:200]
     story.append(Paragraph(f"Dispositifs ({len(shown)} sur {len(result.rows)} affichés)",
                            styles["Heading2"]))
-    with_energy = result.energy_profile is not None
+    with_energy = (result.energy_profile is not None
+                   or result.energy_provenance is not None)
     rows = [["Index", "Groupe", "SF", "Émises", "Reçues", "PDR"]]
     if with_energy:
         rows[0] += ["mJ/msg", "µA moy."]

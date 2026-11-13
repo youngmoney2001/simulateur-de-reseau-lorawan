@@ -502,6 +502,7 @@ int32_t lsim_simulate_uplinks(const lsim_end_device* devices, size_t device_coun
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -626,6 +627,7 @@ int32_t run_uplinks_env(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1282,6 +1284,7 @@ int32_t closed_loop_impl(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1436,6 +1439,7 @@ int32_t lsim_simulate_downlinks_env(const lsim_end_device* devices, const lsim_d
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1552,7 +1556,105 @@ int32_t lsim_coverage_radii(const lsim_gateway* gateway, const lsim_propagation*
             }
         }
         const auto st = lsim::env::coverage_radii_m(model, gateway->x_m, gateway->y_m, e,
-                                                    max_path_loss_db, step_m, azimuths, radii_out);
+                                                    max_path_loss_db, step_m, azimuths, radii_out,
+                                                    nullptr);
+        if (st != lsim::env::EnvStatus::Ok) {
+            return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(st);
+        }
+        return 0;
+    } catch (...) {
+        return LSIM_STATUS_INTERNAL;
+    }
+}
+
+// Conversion du diagramme ABI vers le type interne. Renvoie false sur un type inconnu ;
+// les valeurs hors bornes sont laissées telles quelles, `validate_pattern` les refuse.
+namespace {
+bool to_pattern(const lsim_antenna_pattern* in, lsim::antenna::Pattern& out) {
+    switch (in->kind) {
+        case LSIM_ANTENNA_OMNIDIRECTIONAL: out.kind = lsim::antenna::Kind::Omnidirectional; break;
+        case LSIM_ANTENNA_UNIDIRECTIONAL:  out.kind = lsim::antenna::Kind::Unidirectional;  break;
+        case LSIM_ANTENNA_BIDIRECTIONAL:   out.kind = lsim::antenna::Kind::Bidirectional;   break;
+        case LSIM_ANTENNA_SECTOR:          out.kind = lsim::antenna::Kind::Sector;          break;
+        default: return false;
+    }
+    out.peak_gain_dbi = in->peak_gain_dbi;
+    out.beamwidth_deg = in->beamwidth_deg;
+    out.pointing_deg = in->pointing_deg;
+    out.front_to_back_db = in->front_to_back_db;
+    return true;
+}
+}  // namespace
+
+int32_t lsim_antenna_validate(const lsim_antenna_pattern* pattern) {
+    if (pattern == nullptr) {
+        return 0;  // pas d'antenne = omnidirectionnelle implicite, toujours valide
+    }
+    try {
+        lsim::antenna::Pattern p;
+        if (!to_pattern(pattern, p)) {
+            return 1;
+        }
+        return lsim::antenna::validate_pattern(p) == lsim::antenna::AntennaStatus::Ok ? 0 : 1;
+    } catch (...) {
+        return 1;
+    }
+}
+
+double lsim_antenna_gain_offset_db(const lsim_antenna_pattern* pattern, double azimuth_deg) {
+    if (pattern == nullptr) {
+        return 0.0;
+    }
+    try {
+        lsim::antenna::Pattern p;
+        if (!to_pattern(pattern, p)) {
+            return 0.0;
+        }
+        return lsim::antenna::gain_offset_db(p, azimuth_deg);
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+int32_t lsim_antenna_coverage_radii(const lsim_gateway* gateway,
+                                    const lsim_antenna_pattern* antenna,
+                                    const lsim_propagation* prop, double max_path_loss_db,
+                                    const lsim_environment* env, double step_m, size_t azimuths,
+                                    double* radii_out) {
+    if (gateway == nullptr || prop == nullptr || radii_out == nullptr) {
+        return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+    }
+    lsim::antenna::Pattern pattern;
+    const lsim::antenna::Pattern* pp = nullptr;
+    if (antenna != nullptr) {
+        // Un diagramme fourni mais hors bornes est une erreur, pas une omnidirectionnelle
+        // silencieuse : mieux vaut refuser que de tracer une zone qui n'est pas celle
+        // de l'antenne déclarée.
+        if (!to_pattern(antenna, pattern)) {
+            return static_cast<int32_t>(lsim::lora::Status::NullOutput);
+        }
+        if (lsim::antenna::validate_pattern(pattern) != lsim::antenna::AntennaStatus::Ok) {
+            return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(lsim::env::EnvStatus::InvalidInput);
+        }
+        pp = &pattern;
+    }
+    try {
+        lsim::radio::LogDistanceModel model;
+        model.frequency_hz = prop->frequency_hz;
+        model.reference_distance_m = prop->reference_distance_m;
+        model.exponent = prop->exponent;
+        lsim::env::ElevationGrid grid;
+        std::vector<lsim::env::Obstacle> obstacles;
+        lsim::env::Environment e;
+        if (env != nullptr) {
+            const int32_t built = build_environment(env, grid, obstacles, e);
+            if (built != 0) {
+                return built;
+            }
+        }
+        const auto st = lsim::env::coverage_radii_m(model, gateway->x_m, gateway->y_m, e,
+                                                    max_path_loss_db, step_m, azimuths, radii_out,
+                                                    pp);
         if (st != lsim::env::EnvStatus::Ok) {
             return LSIM_STATUS_ENV_BASE + static_cast<int32_t>(st);
         }
@@ -1767,6 +1869,7 @@ int32_t lsim_simulate_uplinks_multi(const lsim_end_device* devices, size_t devic
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 
@@ -1902,6 +2005,7 @@ int32_t multi_dl_impl(const lsim_end_device* devices, size_t device_count,
         p.reference_distance_m = prop->reference_distance_m;
         p.exponent = prop->exponent;
         p.capture_threshold_db = prop->capture_threshold_db;
+        p.inter_sf_collisions = prop->inter_sf_collisions;
         p.shadowing_sigma_db = prop->shadowing_sigma_db;
         p.shadowing_seed = prop->shadowing_seed;
 

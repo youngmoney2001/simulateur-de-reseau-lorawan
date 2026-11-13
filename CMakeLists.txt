@@ -64,6 +64,7 @@ add_library(lsim_objects OBJECT
     core/src/environment.cpp
     core/src/mesh.cpp
     core/src/c_api_mesh.cpp
+    core/src/antenna.cpp
 )
 target_include_directories(lsim_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(lsim_objects PRIVATE mbedcrypto)
@@ -116,6 +117,7 @@ if(LSIM_BUILD_TESTS)
         core/tests/test_downlink.cpp
         core/tests/test_downlink_plan.cpp
         core/tests/test_environment.cpp
+        core/tests/test_antenna.cpp
         core/tests/test_materials.cpp
         core/tests/test_energy.cpp
         core/tests/test_mesh.cpp

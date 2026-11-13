@@ -312,6 +312,44 @@ scénario sans environnement reste celui d'avant, empreinte comprise.
 Le caractère extrapolé est affiché à côté du matériau, et l'atténuation saisie reste le chemin
 par défaut : à 868 MHz, seuls `air`, `wood` et `glass` sont dans la plage du Tableau 3.
 
+### 5 bis. Remplacer P.2040-4 par une mesure (`material_calibration`)
+
+Une mesure vaut mieux qu'une extrapolation. Elle se déclare dans l'environnement, matériau par
+matériau, en dB par mètre :
+
+```yaml
+environment:
+  material_calibration:
+    concrete:
+      loss_db_per_m: 60.0                        # mesure, dB/m
+      provenance: "campagne Douala, 2026-04, 14 murs"
+  obstacles:
+    - x_min_m: -1
+      y_min_m: -400
+      x_max_m: 1
+      y_max_m: 400
+      height_m: 20.0
+      material: concrete
+      thickness_m: 0.25                          # perte = 60,0 × 0,25 = 15,0 dB
+```
+
+Trois points, pour que le résultat reste interprétable :
+
+- la perte vaut `loss_db_per_m × thickness_m` : l'épaisseur reste celle de l'obstacle, seul le
+  coefficient change ;
+- la mesure **n'est pas une extrapolation**, et l'avertissement P.2040-4 ne la concerne donc
+  pas — le faire porter sur un relevé ferait douter d'une valeur solide ;
+- `provenance` est obligatoire, comme sur un relevé d'énergie : un chiffre sans origine se
+  présente comme une donnée du moteur ;
+- la perte est **plafonnée par le prix du contournement** (§2.1 de `RF_MODEL.md`) : le rayon
+  prend le meilleur des deux chemins, traverser ou contourner. Au-delà d'un certain seuil,
+  alourdir le matériau ne change plus rien — le mur se contourne. Une mesure ne se voit donc
+  que là où la marge est mince : sur un chantier à 2 km, aucune perte de matériau ne coupe
+  une liaison que le bilan ferme avec vingt décibels d'avance.
+
+Un obstacle qui déclare `attenuation_db` au lieu d'un matériau n'est pas concerné : la
+calibration porte sur un matériau, pas sur une valeur déjà saisie.
+
 **Annuler et rétablir** (barre d'outils, `Ctrl+Z` / `Ctrl+Maj+Z`). L'historique vit côté serveur,
 parce que le CLI y vit aussi : annuler « region US915 » restaure la configuration de l'équipement,
 pas seulement la case que l'interface affichait. Un geste par opération — ajout, retrait,
@@ -557,12 +595,42 @@ Une émission = un événement : sur `retransmissions_ack_tardif.yaml`, six ACK 
 
 ## 6. Limites connues
 
-Voir `docs/ROADMAP.md`. Points notables pour l'usage :
+Voir `docs/ROADMAP.md`. Points notables pour l'usage. Cette liste est vérifiée contre le
+moteur : une limite qui n'existe plus en est retirée, une limite levable par un réglage le dit.
 
-- collisions : même SF, capture à 6 dB ; une seule passerelle ;
-- protocole (`lsim.trace_events`) : passerelle mono-émetteur et demi-duplex (un downlink à la fois,
-  uplinks perdus pendant ses émissions) ; réception descendante par réciprocité avec 14 dBm en
-  passerelle et 0 dBi au dispositif ; sensibilité de référence SX1276 plus `device_rx_offset_db` ;
-- latence = temps d'antenne (ni file ni backhaul) ;
-- énergie : profils constructeur, pas de mesure terrain ;
-- pénétration : pertes par matériau selon UIT-R P.2040-4 (diélectriques), non calibrées sur mesures.
+- **collisions, même SF** : seuil de capture à 6 dB, réglable (`propagation.capture_threshold_db`).
+  Les SF différents sont **orthogonaux par défaut** : deux trames qui se chevauchent sur des SF
+  différents ne se gênent pas. Ce n'est pas une propriété d'un vrai récepteur, c'est un choix.
+- **collisions, SF différents** : `propagation.inter_sf: sx1276` lève l'hypothèse d'orthogonalité.
+  Le seuil vient de la table « LoRa Demodulator SNR » du SX1276 (datasheet Rev. 4) — la même que
+  l'ADR et la sensibilité : la trame voulue tolère un interférent d'autant plus fort que son SF
+  est élevé (−7,5 dB en SF7, −20 dB en SF12). **Ce seuil ne dépend que du SF voulu** : c'est
+  l'approximation de la littérature, pas une matrice d'isolement mesurée entre deux SF — celle-ci
+  viendrait d'une campagne de mesures, pas d'une datasheet. Le défaut `orthogonal` laisse un
+  scénario écrit avant l'introduction de l'option exactement ses chiffres **et** son empreinte.
+- **plusieurs passerelles : ce n'est plus une limite.** Le moteur compte les réceptions
+  passerelle par passerelle (charge, meilleure passerelle, masque de décodage) et le demi-duplex
+  s'applique à chacune. L'ancienne mention « une seule passerelle » était périmée : elle
+  détournait d'une fonctionnalité qui existe.
+- **protocole** (`lsim.trace_events`) : passerelle **mono-émetteur** et demi-duplex — un seul
+  downlink à la fois, et un uplink qui chevauche une de ses émissions est perdu. La réception
+  descendante est calculée par réciprocité à partir du RSSI montant, avec `gateway_tx_power_dbm`
+  (14 dBm par défaut) et le gain d'antenne du dispositif `device_antenna_gain_dbi` — 0 dBi par
+  défaut, **réglable de −10 à +10 dBi**, ce n'est pas une constante. Le seuil est la sensibilité
+  de référence SX1276 plus `device_rx_offset_db`, à renseigner depuis la fiche technique du
+  récepteur réel.
+- **latence** : ce qui est publié n'est **pas** le temps d'antenne. Côté montant, c'est
+  l'émission → la remise au LNS, saut mesh inclus ; côté descendant, c'est la demande →
+  l'émission effective, attente de la fenêtre RX comprise. Manquent le backhaul IP et les délais
+  du réseau fixe : la latence publiée est un **plancher**, pas un temps de bout en bout.
+- **énergie** : les deux profils (`rak4631`, `sx1262-stm32l072`) reprennent les courants des
+  fiches constructeur. **Aucune mesure de terrain n'a été faite par ce projet** — les valeurs
+  du moteur restent des fiches, et le dimensionnement d'une pile demande un relevé. Celui-ci
+  s'entre désormais dans le scénario (`energy.measured`, §4.1) : la limite n'est plus
+  l'absence de mesure possible, elle est que **le projet n'en fournit aucune**.
+- **pénétration** : la perte d'un matériau suit UIT-R P.2040-4 (diélectriques), non calibrée sur
+  mesures. À 868,1 MHz, **12 des 15 matériaux** sortent de la plage documentée : la valeur est
+  alors extrapolée, et le serveur le signale (`extrapolated`). Deux issues, selon ce dont on
+  dispose : un relevé d'atténuation se saisit directement (`attenuation_db` sur un obstacle),
+  et une mesure de matériau se déclare dans `environment.material_calibration` (§5 bis), qui
+  remplace P.2040-4 pour les obstacles concernés.

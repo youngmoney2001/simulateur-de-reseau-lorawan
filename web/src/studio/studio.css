@@ -66,6 +66,9 @@ th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); 
 .pdr-legend .lg-titre { font-weight:600; }
 .pdr-legend .lg-item { display:flex; align-items:center; gap:6px; }
 .phys-resultat dd { font-variant-numeric:tabular-nums; }
+/* Portées chiffrées de la même zone qu'on voit en couleurs : les nombres s'alignent, deux
+   paliers se comparent sans sauter d'une ligne à l'autre. */
+.phys-couverture dd { font-variant-numeric:tabular-nums; }
 /* Pastille de couleur : même pastille dans la légende de la carte et dans la fenêtre
    d'équipement, pour que le rapprochement se fasse sans le dire. */
 .lg-rond { display:inline-block; width:10px; height:10px; border-radius:50%; flex:0 0 auto;
@@ -450,6 +453,9 @@ table.runs th { color:var(--muted); font-weight:600; }
 #anim-layer .trail { stroke-width:2; stroke-opacity:.45; stroke-dasharray:4 3; }
 #anim-layer .frame { stroke:#fff; stroke-width:1; }
 #anim-layer .ring { fill:none; stroke-width:2; }
+/* Le lobe, lui, éclaire légèrement son secteur : un simple contour ne dit pas « c'est par
+   là que l'antenne émet », alors que c'est précisément ce qu'on veut lire. */
+#anim-layer .ring.lobe { fill-opacity:.10; stroke-width:2.5; }
 .player .journal { max-height:260px; overflow:auto; padding-left:0; list-style:none; font-size:.9em; }
 .journal-row { border-bottom:1px solid var(--line); padding:2px 0; }
 .journal-row.ok { border-left:3px solid #2e7d32; padding-left:6px; }
@@ -503,6 +509,30 @@ table.runs th { color:var(--muted); font-weight:600; }
   .plan-area { min-height:260px; }
 }
 
+/* --- Zones de couverture --------------------------------------------------------------- */
+/* Légende, visible sur les deux vues : mêmes pastilles que `pdr-legend`, donc même lecture
+   d'une vue à l'autre. */
+.cov-legend { position:absolute; left:10px; bottom:10px; z-index:5; display:flex;
+  flex-wrap:wrap; gap:4px 12px; align-items:center; max-width:calc(100% - 20px);
+  padding:6px 9px; border:1px solid var(--line); border-radius:6px;
+  background:color-mix(in srgb, var(--panel) 88%, transparent); font-size:11.5px; }
+.cov-legend .lg-source { flex:1 1 100%; color:var(--muted); font-size:10.5px; }
+.cov-legend[hidden] { display:none; }   /* display:flex écraserait hidden sinon */
+.cov-legend .lg-item { display:flex; align-items:center; gap:6px; }
+
+/* --- Zones de couverture (tracé) ------------------------------------------------------- */
+/* Trois qualités, trois teintes, toutes transparentes : une zone opaque effacerait le plan
+   qu'elle est censée expliquer. Seule la limite extérieure est soulignée — c'est elle qui
+   dit jusqu'où le signal tient, les paliers intermédiaires se lisent par leur teinte. */
+.couverture polygon.zone { fill-opacity:.13; stroke-opacity:0; stroke-width:1.5;
+  pointer-events:none; }
+/* Le palier « limite » est le bord de la zone : lui seul porte un trait, faute de quoi on
+   ne saurait pas où s'arrête la couverture. */
+.couverture polygon.zone-limite { stroke-opacity:.75; stroke-dasharray:7 4; }
+/* Aucune zone ne capte le pointeur : elle laisse passer le tracé d'un mur et le
+   déplacement d'un équipement. Ses chiffres sont donc donnés par la légende et par le
+   survol d'un équipement, pas par une infobulle qui volerait les gestes. */
+
 /* --- Obstacles : ce qui sépare deux équipements ---------------------------------------- */
 /* Hachurés, jamais pleins : un mur opaque masquerait le plan qu'il est censé expliquer, et
    ce sont les équipements de part et d'autre qu'on vient lire. */
@@ -521,3 +551,14 @@ rect.obstacle-trace { fill:#d9534f; fill-opacity:.10; stroke:#d9534f; stroke-wid
 .obstacle-ctrls select { max-width:130px; }
 .obstacle-ctrls button { font-size:11px; padding:1px 6px; }
 .obstacle-del { color:var(--danger); }
+/* Pertes mesurées : même mise en page que les murs, la provenance prenant la place
+   restante — un champ d'origine trop étroit invite à écrire « banc » au lieu de la
+   phrase qui permet de juger la mesure. */
+.calib-row { display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+  padding:4px 0; border-bottom:1px solid var(--line); }
+.calib-row > span:first-child { flex:1 1 100%; font-size:12px; }
+.calib-ctrls { display:flex; flex-wrap:wrap; gap:3px; align-items:center; }
+.calib-ctrls input, .calib-ctrls button { font-size:11px; padding:1px 4px; }
+.calib-ctrls .calib-db { width:62px; }
+.calib-ctrls .calib-prov { flex:1 1 140px; min-width:120px; }
+.calib-raz { color:var(--danger); }

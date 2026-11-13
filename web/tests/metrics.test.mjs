@@ -159,6 +159,42 @@ test("sans profil énergie, les trois indicateurs d'énergie sont absents", () =
   assert.ok(ids.includes("pdr"));
 });
 
+test("relevé mesuré : l'origine des courants est affichée, une seule fois", () => {
+  // Un relevé remplace la fiche constructeur. Sans cet indicateur, les grandeurs d'énergie
+  // s'afficheraient sans jamais dire d'où viennent les courants : des chiffres mesurés
+  // passeraient pour des valeurs du moteur.
+  const releve = { ...summary, energy_provenance: "relevé banc, 2026-03, pince Keysight" };
+  const i = parId(indicateursReseau(releve, devices));
+  assert.equal(i.provenance_energie.text, "relevé banc, 2026-03, pince Keysight");
+  assert.equal(i.provenance_energie.value, "relevé banc, 2026-03, pince Keysight");
+  // Une seule fois, et les grandeurs restent : la provenance les qualifie, elle ne les
+  // remplace pas. La répéter sous chacune des trois la noierait.
+  assert.equal(indicateursReseau(releve, devices).filter((x) => x.id === "provenance_energie").length, 1);
+  assert.ok(i.energie_message && i.energie_run && i.courant);
+});
+
+test("run de catalogue : aucune provenance affichée", () => {
+  // Le symétrique, et la règle elle-même : la provenance ne voyage qu'avec des courants
+  // mesurés. Le fixture porte `energy_profile: rak4631` et aucune provenance — l'afficher
+  // quand même habillerait une fiche constructeur en mesure.
+  const i = parId(indicateursReseau(summary, devices));
+  assert.ok(!i.provenance_energie);
+  assert.ok(i.energie_message);
+});
+
+test("provenance : un relevé sans énergie n'affiche pas un indicateur orphelin", () => {
+  // Une provenance ne se déclenche que si ses courants ont servi. Sans grandeur d'énergie
+  // à qualifier, l'indicateur serait une mention en l'air — il ne doit pas survivre au
+  // filtre des valeurs nulles.
+  const sansEnergie = devices.map(({ energy_per_message_j, average_current_ua, ...reste }) => reste);
+  const releve = { ...summary, energy_provenance: "relevé banc, 2026-03" };
+  const i = parId(indicateursReseau(releve, sansEnergie));
+  assert.ok(!i.energie_message);
+  // La provenance vient du résumé, pas des lignes : elle reste affichée, et c'est cohérent
+  // — le run a bien utilisé ce relevé, même si aucune grandeur n'en est sortie ici.
+  assert.equal(i.provenance_energie.text, "relevé banc, 2026-03");
+});
+
 test("indicateurs sur un run vide : aucun nombre fabriqué de zéro", () => {
   assert.deepEqual(indicateursReseau({}, []), []);
   assert.deepEqual(indicateursReseau({ totals: { sent: 0, received: 0 } }, []), []);

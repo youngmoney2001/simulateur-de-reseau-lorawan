@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "description": "Une périodicité de ping slot (classe B) : 0 à 7, du plus bavard au plus rare.\n\nL'intervalle entre deux slots vient du moteur, pas d'une table recopiée : la période de\nbalise est de 128 s, et une périodicité `k` ouvre `2**(7 - k)` slots par période.",
+  "properties": {
+    "intervalle_s": {
+      "exclusiveMinimum": 0,
+      "title": "Intervalle S",
+      "type": "number"
+    },
+    "slots_par_periode": {
+      "minimum": 1,
+      "title": "Slots Par Periode",
+      "type": "integer"
+    },
+    "value": {
+      "maximum": 7,
+      "minimum": 0,
+      "title": "Value",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "value",
+    "slots_par_periode",
+    "intervalle_s"
+  ],
+  "title": "PeriodiciteInfo",
+  "type": "object"
+}

@@ -380,7 +380,8 @@ def simulate_closed_loop_v3(
         c_gw.sensitivity_model = 0
     c_prop = _CPropagation(propagation.frequency_hz, propagation.reference_distance_m,
                            propagation.exponent, propagation.capture_threshold_db,
-                           propagation.shadowing_sigma_db, propagation.shadowing_seed)
+                           propagation.shadowing_sigma_db, propagation.shadowing_seed,
+                           propagation.inter_sf == "sx1276")
 
     c_radios = (_CPlanDevice * max(1, n))()
     for i, d in enumerate(radios):

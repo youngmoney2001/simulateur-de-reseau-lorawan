@@ -250,6 +250,18 @@ class _CEndDevice(ctypes.Structure):
     ]
 
 
+class _CAntennaPattern(ctypes.Structure):
+    """`lsim_antenna_pattern` : diagramme de rayonnement horizontal."""
+
+    _fields_ = [
+        ("kind", ctypes.c_uint32),
+        ("peak_gain_dbi", ctypes.c_double),
+        ("beamwidth_deg", ctypes.c_double),
+        ("pointing_deg", ctypes.c_double),
+        ("front_to_back_db", ctypes.c_double),
+    ]
+
+
 class _CGateway(ctypes.Structure):
     _fields_ = [
         ("x_m", ctypes.c_double),
@@ -347,6 +359,7 @@ class _CPropagation(ctypes.Structure):
         ("capture_threshold_db", ctypes.c_double),
         ("shadowing_sigma_db", ctypes.c_double),
         ("shadowing_seed", ctypes.c_uint64),
+        ("inter_sf_collisions", ctypes.c_bool),
     ]
 
 
@@ -630,6 +643,19 @@ LIB.lsim_energy_device_class_a.argtypes = [
     ctypes.c_uint32, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
     ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
     ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_measured.restype = ctypes.c_int32
+LIB.lsim_energy_device_measured.argtypes = [
+    ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+    ctypes.c_double, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.c_size_t, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, ctypes.c_uint64, _DBL, _DBL]
+LIB.lsim_energy_device_class_a_measured.restype = ctypes.c_int32
+LIB.lsim_energy_device_class_a_measured.argtypes = [
+    ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+    ctypes.c_double, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+    ctypes.c_size_t, ctypes.c_double, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint16,
+    ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,
+    ctypes.c_uint64, _DBL, _DBL]
 LIB.lsim_energy_tx_current_ma.restype = ctypes.c_int32
 LIB.lsim_energy_tx_current_ma.argtypes = [ctypes.c_uint32, ctypes.c_double, _DBL]
 LIB.lsim_energy_profile.restype = ctypes.c_int32
@@ -768,6 +794,17 @@ LIB.lsim_env_path_loss_matrix.argtypes = [
 LIB.lsim_coverage_radii.restype = ctypes.c_int32
 LIB.lsim_coverage_radii.argtypes = [
     ctypes.POINTER(_CGateway), ctypes.POINTER(_CPropagation), ctypes.c_double,
+    ctypes.POINTER(_CEnvironment), ctypes.c_double, ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_double)]
+LIB.lsim_antenna_validate.restype = ctypes.c_int32
+LIB.lsim_antenna_validate.argtypes = [ctypes.POINTER(_CAntennaPattern)]
+LIB.lsim_antenna_gain_offset_db.restype = ctypes.c_double
+LIB.lsim_antenna_gain_offset_db.argtypes = [ctypes.POINTER(_CAntennaPattern),
+                                            ctypes.c_double]
+LIB.lsim_antenna_coverage_radii.restype = ctypes.c_int32
+LIB.lsim_antenna_coverage_radii.argtypes = [
+    ctypes.POINTER(_CGateway), ctypes.POINTER(_CAntennaPattern),
+    ctypes.POINTER(_CPropagation), ctypes.c_double,
     ctypes.POINTER(_CEnvironment), ctypes.c_double, ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_double)]
 LIB.lsim_encode_join_request.restype = ctypes.c_int32

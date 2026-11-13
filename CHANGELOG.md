@@ -2,6 +2,156 @@
 
 ## 0.1.0 (non publiée)
 
+### Obstacles : un mur était payé deux fois
+
+Pénétration et diffraction s'additionnaient. Un mur traversé coûtait donc à la fois sa perte
+de matériau **et** la diffraction par-dessus son sommet — comme si l'onde devait traverser la
+dalle et contourner l'arête.
+
+La conséquence était sans appel : un mur réglé à **0 dB coupait quand même** la liaison. Un
+mur sans perte devenait un bloqueur parfait, quel que soit son matériau, et aucune mesure n'y
+pouvait rien changer — `material_calibration` était sans effet sur le run. C'est en cherchant
+à démontrer cette calibration que le défaut est apparu.
+
+Le rayon dispose de deux chemins et prend désormais le **meilleur** :
+
+```
+surplus = min(pénétration, contournement)
+```
+
+Un mur de 0 dB redevient transparent ; un mur opaque se contourne, et coûte exactement ce que
+coûte passer au-dessus. Deux conséquences assumées, décrites au §2.1 de `RF_MODEL.md` : la
+perte d'un obstacle est plafonnée — le matériau n'est pas un interrupteur — et la pénétration
+ne se voit que là où elle coûte moins cher que le contournement.
+
+**Ce changement modifie des chiffres publiés.** Tout scénario déclarant un obstacle voit son
+bilan évoluer, à la baisse. Sept tests encodaient l'ancienne arithmétique et ont été repris
+un par un, en vérifiant chaque fois que c'était l'attente qui était fausse et non le modèle ;
+leurs nouvelles valeurs sont mesurées, non ajustées. En particulier, la couverture derrière un
+mur de 40 m passe de 300 m à 310 m : la borne de 300 m correspondait au bord avant du mur,
+seule conséquence visible du double compte.
+
+Un test C vérifie la règle sur cinq atténuations, en lisant le prix du contournement au lieu
+de le recopier : 0, 5 et 12 dB se traversent (le surplus suit la perte), 60 et 200 dB se
+contournent (le surplus se cale sur la diffraction).
+
+### Atelier : une perte mesurée par matériau, sans quitter le plan
+
+La calibration existait dans le schéma de scénario, pas dans le contrat du chantier : depuis
+l'atelier, entrer une mesure obligeait à éditer le YAML. `EnvironmentSettings.material_calibration`
+ouvre le chemin, et l'interface propose une perte en dB/m pour chaque matériau **posé** — calibrer
+un matériau absent des murs n'aurait aucun effet, et afficher un réglage sans effet est le piège
+que le formulaire d'obstacle évite déjà entre atténuation et matériau.
+
+La note de compilation disait « matériaux UIT-R P.2040-4 ». Elle le dit toujours quand c'est
+vrai, et nomme les matériaux mesurés quand ça ne l'est plus.
+
+### Atelier : l'origine des courants, quand ils sont mesurés
+
+Un relevé remplace la fiche constructeur, mais l'atelier affichait ses grandeurs d'énergie sans
+jamais le dire. L'indicateur « Origine des courants » n'apparaît que dans ce cas : absent sur un
+run de catalogue, comme `energy_provenance` côté serveur.
+
+### API : un relevé d'énergie ne passait plus à travers le serveur
+
+Le calcul d'énergie de l'API ne se déclenchait que sur l'option de requête
+`energy_profile`. Un scénario déclarant `energy.measured` — sans option — rendait des
+dispositifs **sans aucun champ d'énergie**, et sans erreur : le client ne pouvait pas
+distinguer « ce scénario n'a pas de modèle » d'« oublié ». Le CLI, lui, calculait
+correctement. Le serveur publie désormais l'énergie dès qu'un relevé est déclaré, et
+expose `energy_provenance` dans le résumé du run.
+
+La règle de provenance est la même qu'au CLI, et partagée — elle vit maintenant dans
+`energy_report.provenance_energie`, au lieu d'être réécrite à côté : un `energy_profile`
+explicite dans la requête prime sur le relevé, et la provenance ne voyage **pas** avec le
+résultat. L'afficher en face de courants de catalogue habillerait une fiche constructeur
+en mesure, ce qui est exactement ce que le champ cherche à éviter.
+
+`GET /runs/{id}` reste volontairement sans énergie : son contrat (`RunStatus`) ne publie
+ni `energy_profile` ni `energy_provenance`. La provenance se lit sur le résumé du run et
+sur la liste des runs d'un chantier.
+
+Quatre tests couvrent le chemin, dont un qui **échoue sans le correctif** : sans lui, la
+première assertion du test ne passe pas.
+
+
+### Pénétration : remplacer P.2040-4 par une mesure
+
+Douze des quinze matériaux sortent de la plage documentée de la recommandation à
+868 MHz : la valeur était extrapolée, et le moteur le signalait sans proposer
+d'issue. `environment.material_calibration` en ouvre une : on déclare une perte
+mesurée en dB par mètre, matériau par matériau, et elle remplace la table pour les
+obstacles concernés.
+
+La conversion matériau -> dB se faisant deja en Python, le changement est confine :
+aucune structure C, aucun ABI touche.
+
+Une mesure n'est pas une extrapolation, et l'avertissement P.2040-4 ne la concerne
+donc plus : le laisser porter sur un releve ferait douter d'une valeur solide, comme
+le taire sur la table cacherait une approximation. La `provenance` est obligatoire,
+pour la meme raison que sur un releve d'energie : un chiffre sans origine se presente
+comme une donnee du moteur.
+
+Sans mesure declaree, l'empreinte ne bouge pas : un scenario ecrit avant garde
+exactement la sienne.
+
+
+### Énergie : un relevé peut remplacer la fiche constructeur
+
+Les deux profils du moteur venaient de fiches : utiles pour comparer deux architectures,
+insuffisants pour garantir une autonomie, et aucun moyen d'entrer une mesure. C'était la
+limite la plus sérieuse de la liste, et la seule qu'aucun réglage ne levait. `energy.measured`
+la lève : on déclare ses courants dans le scénario, et le rapport les utilise.
+
+Une garde-fou porte là où ça compte. La `provenance` est **obligatoire** : le résumé du
+rapport affiche « relevé — *votre texte* » au lieu du nom d'un profil, et un relevé sans
+provenance serait présenté comme une donnée du moteur. Deux pièges ont été fermés au
+passage, tous deux vérifiés par un test : le défaut du catalogue (`report` choisit
+`rak4631` sans option) écrasait la provenance et affichait « RAK4631 » en face de chiffres
+mesurés ; et un profil nommé explicitement doit primer sur le relevé, sinon
+`--energy-profile` serait ignoré en silence — la provenance ne voyage alors pas avec le
+résultat, puisque ce ne sont pas ces courants qui ont servi.
+
+La preuve que le nouveau chemin calcule la bonne grandeur tient en un chiffre : un relevé
+reproduisant exactement les courants du RAK4631 rend la même énergie à 1e-12 près, en
+classe A comme en bilan simple.
+
+
+### Les SF différents ne sont plus réputés orthogonaux — si on le demande
+
+Le moteur faisait comme si deux trames de spreading factors différents ne pouvaient pas se
+gêner : elles se croisaient sans se voir. C'était une limite annoncée, et fausse d'un vrai
+récepteur. `propagation.inter_sf: sx1276` la lève.
+
+Le seuil vient de la table « LoRa Demodulator SNR » du SX1276 (datasheet Rev. 4) — **la même
+que l'ADR et la sensibilité**, pas une table de plus : la trame voulue tolère un interférent
+d'autant plus fort que son SF est élevé (−7,5 dB en SF7, −20 dB en SF12). Deux réserves sont
+écrites dans `docs/RF_MODEL.md` §4.1 et ne doivent pas se perdre : le seuil ne dépend que du
+SF **voulu**, jamais de la paire ; et c'est l'approximation de la littérature, pas une
+mesure. Une matrice d'isolement crédible viendrait d'une campagne, pas d'une datasheet.
+
+Le défaut `orthogonal` conserve le comportement d'origine **au bit près** : les deux seuils
+sont évalués séparément, et la clé quitte le hachage quand elle vaut sa valeur par défaut —
+un scénario écrit avant l'introduction de l'option garde exactement ses chiffres **et** son
+empreinte. Vérifié par dix tests, dont un sur le chemin multi-passerelles, qui a sa propre
+boucle de collision et aurait pu diverger sans que rien ne le voie.
+
+La structure C `lsim_propagation` gagne un champ : 56 octets en x86-64, 52 en i386
+(valeurs mesurées au compilateur, pas déduites).
+
+### Limites connues : trois qui n'existaient plus, une qui est levable
+
+`docs/USAGE.md` §6 annonçait « une seule passerelle » : c'était périmé, le moteur évalue
+chaque passerelle pour elle-même depuis des versions. Mention corrigée dans `USAGE.md`,
+`API_CONTRACT.md` et `ROADMAP.md`, où elle détournait d'une fonctionnalité qui existe. Deux
+autres affirmations étaient fausses : le gain d'antenne du dispositif n'est pas bloqué à
+0 dBi (`device_antenna_gain_dbi`, réglable de −10 à +10), et la latence publiée n'est plus
+le temps d'antenne (elle couvre l'attente de fenêtre RX en descente et le saut mesh en
+montée ; le backhaul IP reste absent, donc la valeur est un plancher). Enfin, la pénétration
+n'était pas une impasse : une atténuation mesurée se saisit directement sur un obstacle
+(`attenuation_db`), sans passer par un matériau.
+
+
 ### Descentes à l'initiative du réseau — la classe d'écoute décide de l'attente
 
 Un scénario peut désormais dire « le serveur veut envoyer une commande à cet instant », et le

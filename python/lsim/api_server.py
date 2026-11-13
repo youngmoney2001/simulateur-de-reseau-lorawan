@@ -58,7 +58,8 @@ from lsim.api_contract import (
     ValidateResponse, list_energy_profiles, list_gateway_profiles, list_materials,
     list_regions,
 )
-from lsim.energy_report import device_energies_protocol
+from lsim.energy import MeasuredProfile
+from lsim.energy_report import device_energies_protocol, provenance_energie
 from lsim import study_exercises
 from lsim.trace_metrics import gateway_metrics, report_fields
 from lsim.study_contract import (
@@ -76,6 +77,7 @@ from lsim.trace_events import (
     ProtocolOptions, build_multi_trace, build_trace, downlink_airtime_by_device,
     mesh_payload_problem,
 )
+from lsim.geo import terrain_dem_document
 from lsim.frame_view import frames_for_run
 
 log = logging.getLogger("lsim.api")
@@ -109,6 +111,21 @@ def _sha256(text: str) -> str:
 
 def _problem(code: str, message: str, field_name: Optional[str] = None) -> dict[str, Any]:
     return Problem(code=code, message=message, field=field_name).model_dump(exclude_none=True)
+
+
+def _nombre(query: dict[str, list[str]], cle: str) -> Optional[float]:
+    """Un paramètre de requête numérique, absent ou `None`.
+
+    Refuse silencieusement une valeur illisible ? Non : elle est un paramètre invalide,
+    et la route décide du statut. Renvoyer `None` laisserait croire à une absence, donc
+    à un calcul sur le capteur de la session au lieu de l'erreur due à l'appelant.
+    """
+    if cle not in query:
+        return None
+    try:
+        return float(query[cle][0])
+    except (ValueError, IndexError, TypeError):
+        raise ApiError(422, "validation_error", f"{cle} doit être numérique", cle) from None
 
 
 def _validation_error(exc: ValidationError) -> ApiError:
@@ -381,6 +398,10 @@ class _Job:
     options: ProtocolOptions
     energy_profile: Optional[str]
     multi: bool
+    # Relevé mesuré déclaré dans le scénario (`energy.measured`). Porté par le job pour que
+    # le calcul ne dépende pas d'une option de requête : un relevé écrit dans le YAML est une
+    # demande de calcul, pas un réglage en attente d'être activé.
+    measured: Optional["MeasuredProfile"] = None
 
 
 def _mesh_report_fields(load) -> dict[str, Any]:
@@ -557,7 +578,8 @@ def _descentes_reseau(devices, scenario: Scenario) -> tuple[Optional[dict[str, A
 def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways,
                  energy_profile: Optional[str], lost_mesh: Optional[int] = None,
                  rx_matrix=None, event_kinds: Optional[dict[str, int]] = None,
-                 downlink: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                 downlink: Optional[dict[str, Any]] = None,
+                 energy_provenance: Optional[str] = None) -> dict[str, Any]:
     body = dict(
         run_id=run_id, scenario_sha256=scenario.sha256, seed=scenario.model.seed,
         totals=Totals(sent=totals.sent, received=totals.received,
@@ -566,6 +588,10 @@ def _summary_out(run_id: str, scenario: Scenario, totals, gateway_load, gateways
                       lost_gateway_busy=totals.lost_gateway_busy, lost_mesh=lost_mesh).model_dump(),
         pdr=(totals.received / totals.sent) if totals.sent else None,
         energy_profile=energy_profile,
+        # D'où viennent les courants, quand ce sont des courants mesurés. Absent sinon :
+        # publier une provenance pour des chiffres de catalogue habillerait une fiche
+        # constructeur en mesure.
+        energy_provenance=energy_provenance,
         duty_cycle=_duty_cycle_out(scenario),
         rx_matrix=rx_matrix,
         event_kinds=event_kinds or None,
@@ -621,7 +647,8 @@ class RunService:
         if problem is not None:
             raise ApiError(422, "validation_error", problem[1], problem[0])
         job = _Job(scenario=scenario, options=options,
-                   energy_profile=req.energy_profile, multi=req.scenario.gateways is not None)
+                   energy_profile=req.energy_profile, multi=req.scenario.gateways is not None,
+                   measured=scenario.measured_energy())
         with self._lock:
             owned = self._store.owner_runs(owner)
             if sum(1 for r in owned if r["state"] not in _TERMINAL) >= MAX_ACTIVE_PER_OWNER:
@@ -713,6 +740,7 @@ class RunService:
                 out["sent"] = totals.get("sent")
                 out["received"] = totals.get("received")
                 out["energy_profile"] = s.get("energy_profile")
+                out["energy_provenance"] = s.get("energy_provenance")
                 out["downlink"] = s.get("downlink")   # absent si le run n'en planifie pas
             return out
 
@@ -826,12 +854,17 @@ class RunService:
         # Les descentes se calculent quel que soit le chemin, et après lui : le passage ne
         # dépend ni de la trace ni du nombre de passerelles.
         descentes, dl_par = _descentes_reseau(devices, scenario)
-        if job.energy_profile is not None:
+        # Un relevé déclenche le calcul comme le ferait un profil nommé : sans lui, un
+        # scénario qui déclare `energy.measured` sans option de requête rendait des
+        # dispositifs sans énergie, en silence — le client ne pouvait pas distinguer
+        # « pas de modèle » d'« oublié ».
+        if job.energy_profile is not None or job.measured is not None:
             # Énergie depuis la trace : les descendantes reçues consomment de la réception.
             dl_airtime = downlink_airtime_by_device(scenario, events, job.options)
             energies = device_energies_protocol(devices, dl_airtime, [c.sent for c in per_device],
                                                 job.energy_profile,
-                                                [c.airtime_ns for c in per_device])
+                                                [c.airtime_ns for c in per_device],
+                                                measured=job.measured)
             energy_rows = {r.device_index: r for r in energies}
         if len(events) > MAX_TRACE_EVENTS_PER_RUN:
             raise ApiError(422, "limit_exceeded", "événements au-delà de la borne du run")
@@ -885,7 +918,9 @@ class RunService:
         summary = _summary_out(run_id, scenario, totals, gateway_load, gateways,
                                job.energy_profile, mesh_lost_total,
                                mt.rx_matrix if job.multi else None, event_kinds=natures,
-                               downlink=descentes)
+                               downlink=descentes,
+                               energy_provenance=provenance_energie(job.measured,
+                                                                    job.energy_profile))
         self._set(run_id, 0.95)
         # Sérialisation ici, hors verrou : `save_done` ne fait que des écritures SQL.
         return {
@@ -1196,6 +1231,66 @@ class _Handler(BaseHTTPRequestHandler):
             connus = svc.terrains.ids()
             return 200, self._study(lambda: study.set_terrain(
                 owner, m_terrain.group(1), req.terrain_id, connus)).model_dump()
+        # MNT de la session, pour que la carte de l'atelier montre le **vrai sol** et non
+        # une ellipsoïde plate. Le relief vient du catalogue serveur : le client ne fournit
+        # jamais de chemin. L'origine est celle que l'atelier affiche, passée en paramètre
+        # — elle vit côté client, c'est un repère d'affichage, pas une donnée de run.
+        m_dem = re.fullmatch(r"sessions/([^/]+)/dem", rest)
+        if m_dem is not None and method == "GET":
+            lat = _nombre(query, "lat")
+            lon = _nombre(query, "lon")
+            if lat is None or lon is None:
+                raise ApiError(422, "validation_error", "lat et lon sont requis", "lat")
+            sid_dem = m_dem.group(1)
+            terrain_id = self._study(lambda: study.topology(owner, sid_dem)).terrain_id
+            if terrain_id is None:
+                # Pas de relief choisi n'est pas une erreur : c'est un chantier à plat,
+                # et la carte doit pouvoir le distinguer d'un serveur sans catalogue.
+                return 200, {"terrain_id": None, "dem": None}
+            try:
+                relief = svc.terrains.get(terrain_id)
+            except ApiError:
+                return 200, {"terrain_id": terrain_id, "dem": None,
+                             "absent": "relief retiré du catalogue"}
+            try:
+                return 200, {"terrain_id": terrain_id,
+                             "dem": terrain_dem_document(relief, lat, lon)}
+            except ValueError as exc:
+                raise ApiError(422, "validation_error", str(exc)) from None
+        # Zone de couverture de chaque passerelle : rayons par azimut, par palier de
+        # qualité. Le calcul est entièrement dans le moteur — relief, obstacles et lobe
+        # d'antenne — parce que l'atelier ne sait pas faire un bilan de liaison, et qu'une
+        # zone qu'il devinerait serait une zone fausse.
+        # `sf` et `tx_power_dbm` : le capteur de référence. Facultatifs : sans eux, c'est le
+        # capteur le plus défavorable de la session, et la réponse le dit.
+        m_cov = re.fullmatch(r"sessions/([^/]+)/coverage", rest)
+        if m_cov is not None and method == "GET":
+            sid_cov = m_cov.group(1)
+            sf = _nombre(query, "sf")
+            tx = _nombre(query, "tx_power_dbm")
+            if sf is not None and not (5 <= sf <= 12):
+                raise ApiError(422, "validation_error", "sf doit être compris entre 5 et 12",
+                               "sf")
+            # Le SF est un entier et le natif le refuse en flottant : « 7.0 » dans
+            # l'URL doit valoir 7, pas échouer plus loin sur un ctypes bourru.
+            sf = None if sf is None else int(sf)
+            if tx is not None and not (-10.0 <= tx <= 30.0):
+                raise ApiError(422, "validation_error",
+                               "tx_power_dbm doit être compris entre -10 et 30", "tx_power_dbm")
+            # Le relief se résout ici : le catalogue est au service des runs, pas à celui
+            # de l'étude, qui ne doit pas connaître les fichiers du serveur. Un relief
+            # retiré du catalogue entre-temps ne fait pas échouer la zone : elle est
+            # calculée sans lui, ce qui reste vrai.
+            relief = None
+            terrain_id = self._study(lambda: study.topology(owner, sid_cov)).terrain_id
+            if terrain_id is not None:
+                try:
+                    relief = svc.terrains.get(terrain_id)
+                except ApiError:
+                    relief = None
+            return 200, self._study(
+                lambda: study.coverage(owner, sid_cov, sf=sf, tx_power_dbm=tx,
+                                       terrain=relief)).model_dump()
         # Environnement radio : obstacles tracés sur le plan, shadowing, hauteurs d'antennes.
         # Le matériau est vérifié côté service — un nom inconnu se refuse à la pose du mur.
         m_env = re.fullmatch(r"sessions/([^/]+)/environment", rest)

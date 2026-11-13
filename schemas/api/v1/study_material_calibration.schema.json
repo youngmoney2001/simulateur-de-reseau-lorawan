@@ -1,0 +1,24 @@
+{
+  "additionalProperties": false,
+  "description": "Perte d'un matériau **mesurée**, en dB par mètre, à la place d'UIT-R P.2040-4.\n\nÀ 868 MHz, 12 des 15 matériaux du catalogue sortent de la plage documentée du Tableau 3 :\nla valeur de la table est alors extrapolée, et le moteur le dit. Une mesure vaut mieux\nqu'une extrapolation — encore faut-il pouvoir la déclarer depuis l'atelier, sinon la\nseule issue reste d'éditer le YAML à la main.\n\n`provenance` est obligatoire, pour la même raison que sur un relevé d'énergie : un\nchiffre sans origine se présente comme une donnée du moteur. C'est la contrepartie de\nla mention « extrapolé » affichée sur la table — taire l'origine dans les deux sens\nreviendrait au même.",
+  "properties": {
+    "loss_db_per_m": {
+      "maximum": 200,
+      "minimum": 0,
+      "title": "Loss Db Per M",
+      "type": "number"
+    },
+    "provenance": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Provenance",
+      "type": "string"
+    }
+  },
+  "required": [
+    "loss_db_per_m",
+    "provenance"
+  ],
+  "title": "MaterialCalibration",
+  "type": "object"
+}

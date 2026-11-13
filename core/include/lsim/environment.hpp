@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "lsim/antenna.hpp"
 #include "lsim/link_budget.hpp"
 
 namespace lsim::env {
@@ -98,9 +99,16 @@ LSIM_API EnvStatus path_loss_db(const radio::LogDistanceModel& model, double tx_
 // Recherche par pas puis dichotomie entre le dernier succès et le premier échec
 // (le premier échec est retenu : pas de portée « trouée » surestimée).
 // Borne haute : la portée log-distance (les termes ajoutés ne font qu'augmenter la perte).
+//
+// `pattern` (nullable) applique un diagramme d'antenne : le budget est celui du gain de
+// crête, et chaque azimut ne dispose plus que de `max_path_loss_db + offset(θ)`, l'offset
+// étant négatif hors de l'axe. Sans diagramme, comportement identique à avant.
+// Attention : la borne haute log-distance reste valable (l'offset ne fait que retirer du
+// budget, jamais en ajouter), mais elle devient pessimiste hors axe.
 LSIM_API EnvStatus coverage_radii_m(const radio::LogDistanceModel& model, double gateway_x_m,
                                     double gateway_y_m, const Environment& e,
                                     double max_path_loss_db, double step_m,
-                                    std::size_t azimuths, double* radii_out);
+                                    std::size_t azimuths, double* radii_out,
+                                    const antenna::Pattern* pattern = nullptr);
 
 }  // namespace lsim::env

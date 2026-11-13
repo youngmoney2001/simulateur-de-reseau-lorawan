@@ -309,6 +309,9 @@ class SessionRunOut(_Strict):
     sent: Optional[int] = Field(default=None, ge=0)
     received: Optional[int] = Field(default=None, ge=0)
     energy_profile: Optional[str] = None
+    # Provenance du relevé mesuré, si ce sont ses courants qui ont servi. Même règle que
+    # `RunSummary.energy_provenance` : absent pour un profil du catalogue.
+    energy_provenance: Optional[str] = None
     # Attente des descentes réseau : présente seulement si le run en a planifié. Un run sans
     # commande du serveur n'a pas d'attente, et `0` dirait « livré instantanément ».
     downlink: Optional[DownlinkOut] = None
@@ -342,6 +345,10 @@ class RunSummary(_Strict):
     gateway: Optional[GatewayLoadOut] = None
     gateways: Optional[list[GatewayReportOut]] = Field(default=None, max_length=64)
     energy_profile: Optional[str] = None
+    # D'où viennent les courants quand un relevé mesuré a servi (`energy.measured` du
+    # scénario). Absent sinon : un profil du catalogue n'a pas de provenance à revendiquer,
+    # et un champ vide laisserait croire à une mesure qui n'a pas eu lieu.
+    energy_provenance: Optional[str] = None
     # Rapport cyclique par groupe. Absent si aucun groupe ne déclare de région : c'est le
     # cas de tout scénario écrit avant l'introduction du champ, dont l'empreinte ne bouge pas.
     duty_cycle: Optional[list[DutyCycleOut]] = Field(default=None, max_length=64)
@@ -690,9 +697,30 @@ _MODELS = {
     "trace_event": TraceEvent,
     "problem": Problem,
     "region_list": RegionList,
+    "region_info": RegionInfo,
     "device_class_list": DeviceClassList,
+    "device_class_info": DeviceClassInfo,
+    "periodicite_info": PeriodiciteInfo,
     "material_list": MaterialList,
+    "material_info": MaterialInfo,
     "terrain_list": TerrainList,
+    "terrain_info": TerrainInfo,
+    "protocol_options_in": ProtocolOptionsIn,
+    # Fragments publiés pour eux-mêmes : un client qui reçoit un résumé, une ligne de
+    # dispositif ou un rebond doit pouvoir les valider sans reconstruire le conteneur.
+    "totals": Totals,
+    "gateway_load_out": GatewayLoadOut,
+    "device_row_out": DeviceRowOut,
+    "mesh_inbound_out": MeshInboundOut,
+    "gateway_report_out": GatewayReportOut,
+    "duty_cycle_out": DutyCycleOut,
+    "downlink_out": DownlinkOut,
+    "session_run_out": SessionRunOut,
+    "hop": Hop,
+    "energy_profile_list": EnergyProfileList,
+    "energy_profile_info": EnergyProfileInfo,
+    "gateway_profile_list": GatewayProfileList,
+    "gateway_profile_info": GatewayProfileInfo,
     **_STUDY_MODELS,
 }
 

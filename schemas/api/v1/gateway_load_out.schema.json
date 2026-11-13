@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "busy_ns": {
+      "minimum": 0,
+      "title": "Busy Ns",
+      "type": "integer"
+    },
+    "observation_ns": {
+      "minimum": 0,
+      "title": "Observation Ns",
+      "type": "integer"
+    },
+    "peak_concurrent": {
+      "minimum": 0,
+      "title": "Peak Concurrent",
+      "type": "integer"
+    },
+    "utilization": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Utilization",
+      "type": "number"
+    }
+  },
+  "required": [
+    "busy_ns",
+    "peak_concurrent",
+    "observation_ns",
+    "utilization"
+  ],
+  "title": "GatewayLoadOut",
+  "type": "object"
+}
